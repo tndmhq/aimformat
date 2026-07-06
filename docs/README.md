@@ -31,9 +31,9 @@ file.
 
 **Naming:** `YYYY-MM-DD_HHMM_<type>_<slug>.md`, type ∈
 `plan | review | report | status | decision | event`, slug in kebab-case.
-`HHMM` is the 24h time of day in **CET/CEST (Europe/Rome)** — always that
-zone, regardless of where the agent runs — so entries sort chronologically
-even within the same day.
+`HHMM` is the 24h time of day in **UTC** — one fixed, DST-free zone for
+everyone, regardless of where the agent or contributor runs — so entries sort
+chronologically even within the same day.
 
 **Scaffolder** (creates the file + index row with the correct timestamp):
 

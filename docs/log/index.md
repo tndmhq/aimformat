@@ -9,3 +9,4 @@ required to add entries.)
 
 | Date | Type | Entry | Status | What |
 |---|---|---|---|---|
+| 2026-07-06 20:13 | decision | [utc-log-timestamps](2026-07-06_2013_decision_utc-log-timestamps.md) | active | All docs/log timestamps across tndmhq repos switch from CET/CEST to UTC — contributor-neutral and DST-free; scaffolders + conventions updated, the one pre-existing workspace entry renamed. |

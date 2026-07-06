@@ -3,7 +3,7 @@
 Scaffold a new episodic memory entry in ``docs/log/``.
 
 Creates ``docs/log/YYYY-MM-DD_HHMM_<type>_<slug>.md`` (time of day in
-CET/CEST, Europe/Rome — per the convention in ``docs/README.md``) with the
+UTC — per the convention in ``docs/README.md``) with the
 frontmatter skeleton, and inserts the matching row at the top of
 ``docs/log/index.md``. Refuses to overwrite an existing entry.
 
@@ -22,9 +22,8 @@ from __future__ import annotations
 import argparse
 import re
 import sys
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
-from zoneinfo import ZoneInfo
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 LOG_DIR = REPO_ROOT / "docs" / "log"
@@ -66,7 +65,7 @@ def main() -> int:
     if not SLUG_RE.match(args.slug):
         ap.error(f"slug {args.slug!r} is not kebab-case ([a-z0-9-])")
 
-    now = datetime.now(ZoneInfo("Europe/Rome"))
+    now = datetime.now(timezone.utc)
     date, hhmm, time_col = now.strftime("%Y-%m-%d"), now.strftime("%H%M"), now.strftime("%H:%M")
     name = f"{date}_{hhmm}_{args.type}_{args.slug}.md"
     path = LOG_DIR / name
