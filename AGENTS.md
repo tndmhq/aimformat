@@ -15,27 +15,36 @@ the pointer in `CLAUDE.md`.)
 
 `aimformat` — the open `.aim` document format: an AI-native format where AI
 proposals and human accept/reject are first-class file primitives. This repo
-will hold the spec, the Python SDK, the MCP server, the linter, the reference
-viewer, and the developer docs. **Status: pre-v0.1.** The spec is in progress
-and is *not* in this repo yet; do not invent spec content — open design
-questions (e.g. how the propose/accept lanes are physically represented) are
-decided by the maintainer, not inferred. Overview → [`README.md`](README.md).
+holds the **spec (v0.1 draft, [`spec.md`](spec.md))**, the Python SDK +
+verifier + CLI (`src/aimformat/`), the conformance suite, and the developer
+docs; the MCP server and reference viewer are planned. Open design questions
+(spec Appendix C) are decided by the maintainer, not inferred — propose,
+don't assume. Read
+[`docs/knowledge/architecture.md`](docs/knowledge/architecture.md) before
+touching code. Overview → [`README.md`](README.md).
 
 This is a public repo. It must contain **no business/strategy material** —
 technical content only (see Governance below).
 
 ## Layout
 
-- [`README.md`](README.md) — what `.aim` is; design goals; status.
+- [`README.md`](README.md) — what `.aim` is; quickstart; API tour.
+- [`spec.md`](spec.md) — the normative spec; every ` ```aim ` snippet is
+  linted in CI; Appendix A is generated from the registry (never hand-edit).
+- [`src/aimformat/`](src/aimformat/) — SDK, verifier, CLI, css generator,
+  ingest/export; [`registry.json`](src/aimformat/registry.json) is the
+  single source of truth for the vocabulary.
+- [`tests/`](tests/) — the suite; [`tests/fixtures/`](tests/fixtures/) is
+  the ok/nok conformance kit (regenerate via `scripts/gen_fixtures.py`).
+- [`examples/`](examples/) — SDK-generated (`scripts/gen_examples.py`).
 - [`AGENTS.md`](AGENTS.md) — this file; **canonical home of the shared
   conventions** below.
 - [`CONTRIBUTING.md`](CONTRIBUTING.md) — how humans and agents produce a
-  conforming PR.
+  conforming PR (dev setup, registry workflow).
 - [`docs/`](docs/README.md) — two-tier agent memory
-  ([`knowledge/`](docs/knowledge/) + [`log/`](docs/log/)).
-- [`scripts/new_log_entry.py`](scripts/new_log_entry.py) — log-entry
-  scaffolder.
-- Spec, SDK (`src/`), MCP server, linter, viewer — arrive with v0.1.
+  ([`knowledge/`](docs/knowledge/) + [`log/`](docs/log/));
+  [`scripts/new_log_entry.py`](scripts/new_log_entry.py) scaffolds entries.
+- MCP server and reference viewer — planned, not yet in-repo.
 
 ## Conventions (canonical — source of truth for all tndmhq repos)
 
