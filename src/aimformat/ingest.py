@@ -257,16 +257,18 @@ def from_docling(source: Any, *, title: Optional[str] = None,
             label = child.get("label", "")
             ref = child.get("self_ref", "")
             if label == "title":
-                if not child.get("text"):
-                    continue
-                if doc_title is None:
-                    doc_title = child.get("text")
-                blocks.append(f"<h1>{_text_of(child)}</h1>")
+                if child.get("text"):
+                    if doc_title is None:
+                        doc_title = child.get("text")
+                    blocks.append(f"<h1>{_text_of(child)}</h1>")
+                # DOCX-style hierarchical bodies parent section content
+                # under the heading node — the section must still walk
+                walk(child)
             elif label == "section_header":
-                if not child.get("text"):
-                    continue
-                level = min(int(child.get("level", 1)) + 1, _HEADING_CAP)
-                blocks.append(f"<h{level}>{_text_of(child)}</h{level}>")
+                if child.get("text"):
+                    level = min(int(child.get("level", 1)) + 1, _HEADING_CAP)
+                    blocks.append(f"<h{level}>{_text_of(child)}</h{level}>")
+                walk(child)
             elif label in ("text", "paragraph", "formula", "checkbox_selected",
                            "checkbox_unselected", "footnote", "reference",
                            "document_index"):

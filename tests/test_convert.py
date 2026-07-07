@@ -247,6 +247,22 @@ class TestDoclingWrappers:
         pytest.importorskip("docling")
         # covered end-to-end in the editor backend; here only the wiring
 
+    def test_hierarchical_body_descends_into_headings(self):
+        # docling's DOCX output parents section content UNDER the heading
+        # node; the walker must descend (found live 2026-07-07)
+        d = {"name": "x",
+             "body": {"children": [{"$ref": "#/texts/0"}]},
+             "texts": [
+                 {"self_ref": "#/texts/0", "label": "title", "text": "T",
+                  "children": [{"$ref": "#/texts/1"}]},
+                 {"self_ref": "#/texts/1", "label": "text",
+                  "text": "Body para", "children": []},
+             ],
+             "tables": [], "pictures": []}
+        doc = aim.from_docling(d)
+        assert [c.tag for c in doc.chunks] == ["h1", "p"]
+        assert doc.title == "T"
+
 
 @pytest.mark.filterwarnings("ignore")
 class TestToPdf:
