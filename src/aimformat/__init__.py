@@ -27,6 +27,8 @@ Quickstart::
 The format specification lives in ``spec.md`` at the repository root.
 """
 from .canonical import canonical_json, sha256_prefixed
+from .convert import (from_docx, from_markdown, from_path, from_pdf,
+                      from_text, to_html, to_markdown, to_pdf)
 from .css import css_stats, generate_aim_css
 from .document import (LAST, AimDocument, Anchor, Chunk, Proposal, load,
                        loads, new_document)
@@ -48,6 +50,8 @@ __all__ = [
     "lint", "lint_text", "lint_path",
     "human", "agent", "external",
     "from_docling", "to_docx",
+    "from_path", "from_text", "from_markdown", "from_docx", "from_pdf",
+    "to_markdown", "to_html", "to_pdf",
     "generate_aim_css", "css_stats",
     "canonical_json", "sha256_prefixed",
     "AimError", "ParseError", "TargetNotFound", "InvalidOperation",

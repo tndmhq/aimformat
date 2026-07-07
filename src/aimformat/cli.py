@@ -6,6 +6,8 @@
     aim show FILE           human-readable history / pending-lane overview
     aim flatten FILE        drop history (+embeddings) -> clean file
     aim css                 print the generated aim.css for this spec version
+    aim import IN -o F.aim  convert md/txt/docx/pdf to .aim
+    aim export F.aim -o OUT convert .aim to docx/md/html/pdf (by extension)
 
 Exit codes: 0 ok · 1 lint errors / verification failure · 2 usage.
 """
@@ -111,6 +113,62 @@ def _cmd_css(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_import(args: argparse.Namespace) -> int:
+    from .convert import from_path
+    out = Path(args.output)
+    if out.exists() and not args.force:
+        print(f"aim: {out} exists (use --force to overwrite)", file=sys.stderr)
+        return 2
+    try:
+        doc = from_path(args.input, title=args.title, lang=args.lang)
+    except ValueError as exc:
+        print(f"aim: {exc}", file=sys.stderr)
+        return 2
+    doc.save(out)
+    print(f"wrote {out} ({len(doc.chunks)} chunks)")
+    return 0
+
+
+# per-format pending defaults and what each exporter understands
+_EXPORT_PENDING = {
+    ".docx": ("tracked", ("tracked", "accept-all", "reject-all")),
+    ".md": ("drop", ("drop", "criticmarkup")),
+    ".html": ("keep", ("keep", "accept-all", "reject-all")),
+    ".pdf": ("keep", ("keep", "accept-all", "reject-all")),
+}
+
+
+def _cmd_export(args: argparse.Namespace) -> int:
+    out = Path(args.output)
+    suffix = out.suffix.lower()
+    if suffix not in _EXPORT_PENDING:
+        print(f"aim: unsupported export format {suffix!r} "
+              f"(supported: {', '.join(sorted(_EXPORT_PENDING))})",
+              file=sys.stderr)
+        return 2
+    default, allowed = _EXPORT_PENDING[suffix]
+    pending = args.pending or default
+    if pending not in allowed:
+        print(f"aim: --pending {pending!r} not valid for {suffix} "
+              f"(allowed: {', '.join(allowed)})", file=sys.stderr)
+        return 2
+    doc = AimDocument.load(args.input)
+    if suffix == ".docx":
+        from .export_docx import to_docx
+        to_docx(doc, out, pending=pending)
+    elif suffix == ".md":
+        from .convert import to_markdown
+        out.write_text(to_markdown(doc, pending=pending), "utf-8")
+    elif suffix == ".html":
+        from .convert import to_html
+        out.write_text(to_html(doc, pending=pending), "utf-8")
+    else:
+        from .convert import to_pdf
+        to_pdf(doc, out, pending=pending)
+    print(f"wrote {out}")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="aim",
@@ -155,6 +213,26 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("css", help="print the generated aim.css")
     p.add_argument("--stats", action="store_true")
     p.set_defaults(func=_cmd_css)
+
+    p = sub.add_parser("import",
+                       help="convert md/txt/docx/pdf to .aim (by extension)")
+    p.add_argument("input")
+    p.add_argument("-o", "--output", required=True)
+    p.add_argument("--title", help="document title (default: derived from "
+                                   "content or filename)")
+    p.add_argument("--lang", default="en")
+    p.add_argument("--force", action="store_true",
+                   help="overwrite an existing file")
+    p.set_defaults(func=_cmd_import)
+
+    p = sub.add_parser("export",
+                       help="convert .aim to docx/md/html/pdf (by extension)")
+    p.add_argument("input")
+    p.add_argument("-o", "--output", required=True)
+    p.add_argument("--pending",
+                   help="pending-lane fate; per-format default: "
+                        "docx=tracked, md=drop, html/pdf=keep")
+    p.set_defaults(func=_cmd_export)
     return parser
 
 
