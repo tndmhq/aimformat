@@ -416,11 +416,15 @@ is never load-bearing for existence.
 
 `{container, after}` where `container` is `body`, a slide id, or a
 list/table container id, and `after` is a chunk id or `null` = first
-position. Inside slides, sibling order defines **reading order only**;
-stacking MUST use explicit `z-index`. Slides are themselves anchored in the
-body sequence — adding/moving/deleting a slide is an ordinary event
-targeting the container, whose payloads are the container's whole subtree
-serialization.
+position. For rows in table containers the anchor additionally carries
+`shell` (`thead` | `tbody` | `tfoot`) naming the row section the position
+resolves in — required for invertibility, since "first position" is
+otherwise ambiguous across row sections (a deleted first body row must not
+un-delete into the header). Inside slides, sibling order defines **reading
+order only**; stacking MUST use explicit `z-index`. Slides are themselves
+anchored in the body sequence — adding/moving/deleting a slide is an
+ordinary event targeting the container, whose payloads are the container's
+whole subtree serialization.
 
 ### 6.5 Targets
 

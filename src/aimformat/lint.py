@@ -175,8 +175,6 @@ class _Linter:
                 visit(el, cont or inside_container)
                 prev = cid
 
-        for top in self.state.constructs():
-            pass  # coverage handled below; runs walked from body
         visit(self.state.body, None)
 
         dup = seen_container & set(seen_parent)

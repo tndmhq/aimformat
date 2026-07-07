@@ -49,17 +49,27 @@ def _now_iso() -> str:
 @dataclass(frozen=True)
 class Anchor:
     """A position: *container* (``body``, a slide, a list/table container id)
-    plus the id to sit *after* (``None`` = first position)."""
+    plus the id to sit *after* (``None`` = first position).
+
+    For rows in table containers the anchor also carries the *shell*
+    (``thead``/``tbody``/``tfoot``) the position resolves in — without it,
+    "first position" is ambiguous across row sections and a delete of the
+    first body row would un-delete into the header (spec §6.4)."""
 
     container: str
     after: Optional[str] = None
+    shell: Optional[str] = None
 
     def to_obj(self) -> dict:
-        return {"container": self.container, "after": self.after}
+        obj: dict = {"container": self.container, "after": self.after}
+        if self.shell is not None:
+            obj["shell"] = self.shell
+        return obj
 
     @classmethod
     def from_obj(cls, obj: dict) -> "Anchor":
-        return cls(container=obj["container"], after=obj.get("after"))
+        return cls(container=obj["container"], after=obj.get("after"),
+                   shell=obj.get("shell"))
 
 
 @dataclass(frozen=True)
@@ -242,10 +252,18 @@ class DocState:
         if cont is None:
             raise TargetNotFound(f"container {anchor.container!r} not found")
         if anchor.after is None:
+            if anchor.shell is not None:
+                shell = next((e for e in cont.elements()
+                              if e.tag == anchor.shell), None)
+                if shell is None:
+                    raise TargetNotFound(
+                        f"shell <{anchor.shell}> not found in "
+                        f"{anchor.container!r}")
+                shell.children[0:0] = list(nodes)
+                return
             first = cont.find(lambda e: e.chunk_id is not None and e is not cont)
             if first is None:
-                shell = cont
-                shell.children[0:0] = list(nodes)
+                cont.children[0:0] = list(nodes)
             else:
                 parent, _ = self.find_chunk(first.chunk_id)
                 idx = parent.children.index(first)
@@ -734,7 +752,8 @@ class AimDocument:
                 break
             if sib.chunk_id and sib.chunk_id != target:
                 prev_id = sib.chunk_id
-        return Anchor(container, prev_id)
+        shell = parent.tag if parent.tag in REGISTRY.table_shells else None
+        return Anchor(container, prev_id, shell=shell)
 
     # -- checkpoints / undo ----------------------------------------------------------------
     def checkpoint(self, label: str, *, at: Optional[str] = None) -> str:
@@ -756,24 +775,28 @@ class AimDocument:
         return self._append_event(inverse)
 
     def redo(self, *, author: Actor, at: Optional[str] = None) -> Event:
-        """Re-apply the most recent undo (only valid directly after undos)."""
-        events = self.history
-        undone = 0
+        """Re-apply the most recent not-yet-redone undo.
+
+        Walking back through the trailing undo/redo zone, each redo cancels
+        the nearest earlier undo (stack semantics); the first uncancelled
+        undo is the redo target. Any original edit ends the zone.
+        """
+        redos_pending = 0
         candidate: Optional[Event] = None
-        for ev in reversed(events):
+        for ev in reversed(self.history):
             if not ev.state_changing:
                 continue
-            if ev.origin == "undo":
-                undone += 1
-                if candidate is None:
+            if ev.origin == "redo":
+                redos_pending += 1
+            elif ev.origin == "undo":
+                if redos_pending > 0:
+                    redos_pending -= 1
+                else:
                     candidate = ev
-            elif ev.origin == "redo":
-                undone -= 1
-                if undone <= 0:
                     break
             else:
                 break
-        if candidate is None or undone <= 0:
+        if candidate is None:
             raise InvalidOperation("nothing to redo")
         redo_data = self._inverse_data(candidate)
         redo_data.update({"seq": self.seq + 1, "kind": "direct_edit",
@@ -783,16 +806,23 @@ class AimDocument:
         return self._append_event(redo_data)
 
     def _undo_candidate(self) -> Optional[Event]:
-        skip = 0
+        """The most recent edit that is not currently undone.
+
+        Walk the trailing undo/redo zone backwards. Each undo cancels one
+        earlier event (an original edit, or a redo's re-application); each
+        redo cancels one earlier undo — so `pending` may dip negative while
+        a redo waits for the undo it cancelled.
+        """
+        pending_undos = 0
         for ev in reversed(self.history):
             if not ev.state_changing:
                 continue
             if ev.origin == "undo":
-                skip += 1
+                pending_undos += 1
             elif ev.origin == "redo":
-                skip -= 1
-            elif skip > 0:
-                skip -= 1
+                pending_undos -= 1
+            elif pending_undos > 0:
+                pending_undos -= 1  # this edit is already undone; skip it
             else:
                 return ev
         return None
@@ -800,15 +830,17 @@ class AimDocument:
     def _inverse_data(self, ev: Event) -> dict:
         action, target = ev.action, ev.target
         if action == "modify":
-            after = ev.applied_payload
-            base = {"target": target, "action": "modify",
-                    "before": after, "after": ev.get("before")}
-            if ev.get("before") is None:  # theme introduction
-                base = {"target": target, "action": "modify", "before": after,
-                        "after": None}
-            return {k: v for k, v in base.items() if v is not None} | (
-                {} if ev.get("before") is not None or target != "aim:theme"
-                else {"x_remove": True})
+            inv: dict = {"target": target, "action": "modify",
+                         "before": ev.applied_payload}
+            if ev.get("before") is not None:
+                inv["after"] = ev.get("before")
+            else:
+                # introduction of addressable state (aim:theme with no
+                # `before`): the inverse removes the block. x_remove is an
+                # apply-time flag only — _apply_data pops it before the
+                # event is appended, so it never reaches the log.
+                inv["x_remove"] = True
+            return inv
         if action == "add":
             return {"target": target, "action": "delete",
                     "before": ev.applied_payload,
@@ -898,12 +930,15 @@ class AimDocument:
             raise TargetNotFound(f"no pending proposal {pid!r}")
         return card
 
+    def _new_proposal_id(self) -> str:
+        taken = self._taken_ids() | {p.id for p in self.proposals}
+        return ids.new_proposal_id(taken)
+
     def _new_card(self, *, action: str, author: Actor, target: Optional[str],
                   payload: Optional[str], anchor: Optional[Anchor],
                   explanation: Optional[str], depends_on: Optional[str],
-                  at: Optional[str]) -> Proposal:
-        taken = self._taken_ids() | {p.id for p in self.proposals}
-        pid = ids.new_proposal_id(taken)
+                  at: Optional[str], pid: Optional[str] = None) -> Proposal:
+        pid = pid or self._new_proposal_id()
         attrs: list[tuple[str, Optional[str]]] = [("id", pid),
                                                   ("data-action", action)]
         if anchor is not None:
@@ -931,12 +966,12 @@ class AimDocument:
         self._proposals_section().children.append(card)
         return self.proposal(pid)
 
-    def _supersede_if_pending(self, target: str, new_pid_hint: str,
+    def _supersede_if_pending(self, target: str, new_pid: str,
                               author: Actor, at: Optional[str]) -> None:
         for p in self.proposals:
             if p.target == target and p.action in ("modify", "delete"):
                 self._resolve(p, decision="superseded", decided_by=author,
-                              superseded_by=new_pid_hint, at=at)
+                              superseded_by=new_pid, at=at)
 
     def propose_modify(self, target: str, markup: str, *, author: Actor,
                        explanation: Optional[str] = None,
@@ -945,14 +980,15 @@ class AimDocument:
         if not self._state.exists(target):
             raise TargetNotFound(f"no chunk {target!r}")
         _, payload = self._normalize_payload(markup, expect_id=target) \
-            if target != "aim:theme" else (target, markup)
-        self._supersede_if_pending(target, "(new)", author, at)
-        prop = self._new_card(action="modify", author=author, target=target,
-                              payload=payload, anchor=None,
-                              explanation=explanation, depends_on=depends_on,
-                              at=at)
-        self._fix_superseded_by(prop.id)
-        return prop
+            if target != "aim:theme" \
+            else (target, self._validated_theme_markup(markup))
+        pid = self._new_proposal_id()
+        with self.batch():  # the supersede + the new card are one intention
+            self._supersede_if_pending(target, pid, author, at)
+            return self._new_card(action="modify", author=author,
+                                  target=target, payload=payload, anchor=None,
+                                  explanation=explanation,
+                                  depends_on=depends_on, at=at, pid=pid)
 
     def propose_theme(self, slots: dict[str, str], *, author: Actor,
                       explanation: Optional[str] = None,
@@ -963,13 +999,13 @@ class AimDocument:
                 raise InvalidOperation(f"unknown theme slot {name!r}")
         body = "; ".join(f"{k}:{v}" for k, v in sorted(slots.items()))
         markup = f"<style data-aim-theme>:root{{{body}}}</style>"
-        self._supersede_if_pending("aim:theme", "(new)", author, at)
-        prop = self._new_card(action="modify", author=author,
-                              target="aim:theme", payload=markup, anchor=None,
-                              explanation=explanation, depends_on=depends_on,
-                              at=at)
-        self._fix_superseded_by(prop.id)
-        return prop
+        pid = self._new_proposal_id()
+        with self.batch():
+            self._supersede_if_pending("aim:theme", pid, author, at)
+            return self._new_card(action="modify", author=author,
+                                  target="aim:theme", payload=markup,
+                                  anchor=None, explanation=explanation,
+                                  depends_on=depends_on, at=at, pid=pid)
 
     def propose_add(self, markup: str, *, author: Actor, container: str = "body",
                     after: AnchorAfter = LAST, explanation: Optional[str] = None,
@@ -995,12 +1031,13 @@ class AimDocument:
                        at: Optional[str] = None) -> Proposal:
         if not self._state.exists(target):
             raise TargetNotFound(f"no chunk {target!r}")
-        self._supersede_if_pending(target, "(new)", author, at)
-        prop = self._new_card(action="delete", author=author, target=target,
-                              payload=None, anchor=None,
-                              explanation=explanation, depends_on=None, at=at)
-        self._fix_superseded_by(prop.id)
-        return prop
+        pid = self._new_proposal_id()
+        with self.batch():
+            self._supersede_if_pending(target, pid, author, at)
+            return self._new_card(action="delete", author=author,
+                                  target=target, payload=None, anchor=None,
+                                  explanation=explanation, depends_on=None,
+                                  at=at, pid=pid)
 
     def propose_move(self, target: str, *, author: Actor, container: str,
                      after: AnchorAfter = LAST,
@@ -1012,14 +1049,6 @@ class AimDocument:
         return self._new_card(action="move", author=author, target=target,
                               payload=None, anchor=anchor,
                               explanation=explanation, depends_on=None, at=at)
-
-    def _fix_superseded_by(self, real_pid: str) -> None:
-        """Patch the '(new)' placeholder in the just-written supersede event."""
-        el = self._state.script("history")
-        if el is None or not el.raw:
-            return
-        el.raw = el.raw.replace('"superseded_by":"(new)"',
-                                f'"superseded_by":"{real_pid}"')
 
     # -- resolution ---------------------------------------------------------------------------
     def accept(self, pid: str, *, decided_by: Actor,
@@ -1034,7 +1063,7 @@ class AimDocument:
             if applied is not None:
                 expect = prop.target if prop.action == "modify" else None
                 if prop.target == "aim:theme":
-                    applied_payload = applied
+                    applied_payload = self._validated_theme_markup(applied)
                 else:
                     _, applied_payload = self._normalize_payload(
                         applied, expect_id=expect,
@@ -1051,6 +1080,22 @@ class AimDocument:
         orig_nodes = [n for n in parse_fragment(original) if isinstance(n, Element)]
         keep = orig_nodes[0].chunk_id or orig_nodes[0].container_id
         return self._normalize_payload(replacement, expect_id=keep)
+
+    def _validated_theme_markup(self, markup: str) -> str:
+        """Validate + canonicalize a whole-theme-block payload."""
+        nodes = [n for n in parse_fragment(markup) if isinstance(n, Element)]
+        el = nodes[0] if len(nodes) == 1 else None
+        if el is None or el.tag != "style" or not el.has("data-aim-theme"):
+            raise InvalidOperation(
+                "theme payload must be a single <style data-aim-theme> block")
+        m = re.fullmatch(r"\s*:root\{([^{}]*)\}\s*", el.raw or "")
+        if m is None:
+            raise InvalidOperation("theme payload must be one :root{…} rule")
+        for piece in filter(None, (p.strip() for p in m.group(1).split(";"))):
+            name = piece.split(":", 1)[0].strip()
+            if name not in REGISTRY.theme_slots:
+                raise InvalidOperation(f"unknown theme slot {name!r}")
+        return serialize(el)
 
     def reject(self, pid: str, *, decided_by: Actor,
                explanation: Optional[str] = None,
