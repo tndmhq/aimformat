@@ -1,0 +1,230 @@
+{
+  "spec_version": "0.1",
+  "ids": {
+    "chunk_pattern": "^[a-z0-9][a-z0-9_-]{0,63}$",
+    "proposal_pattern": "^p-[a-z0-9][a-z0-9_-]{0,63}$",
+    "asset_pattern": "^asset-[0-9a-f]{12}$",
+    "reserved_targets": ["body", "aim:theme", "aim:doc"],
+    "default_length": 8
+  },
+  "sections": {
+    "body_order": ["content", "aim-proposals", "aim-assets", "history", "embeddings"],
+    "script_types": {
+      "meta": "application/aim-meta+json",
+      "history": "application/aim-history+jsonl",
+      "embeddings": "application/aim-embeddings+jsonl"
+    }
+  },
+  "elements": {
+    "block_carriers": ["h1", "h2", "h3", "h4", "h5", "h6", "p", "section", "blockquote", "figure", "pre", "div", "hr", "ul", "ol", "table"],
+    "item_carriers": {"li": ["ul", "ol"], "tr": ["table"]},
+    "containers": ["ul", "ol", "table", "aim-slide"],
+    "table_shells": ["thead", "tbody", "tfoot"],
+    "chunk_content": ["h1", "h2", "h3", "h4", "h5", "h6", "p", "section", "blockquote", "figure", "figcaption", "pre", "div", "hr", "ul", "ol", "li", "table", "thead", "tbody", "tfoot", "tr", "td", "th", "img", "svg", "use", "code", "a", "strong", "em", "b", "i", "u", "s", "sub", "sup", "mark", "br", "span"],
+    "asset_registry_content": ["svg", "symbol", "image", "rect", "circle", "ellipse", "path", "g"],
+    "void": ["meta", "img", "br", "hr", "link", "input"],
+    "forbidden": ["iframe", "object", "embed", "form", "input", "button", "select", "textarea", "video", "audio", "canvas", "base", "frame", "frameset", "applet", "math"]
+  },
+  "attributes": {
+    "global": ["class", "style", "dir", "lang", "title"],
+    "chunk_marker": "data-aim",
+    "container_marker": "data-aim-container",
+    "per_element": {
+      "a": ["href"],
+      "img": ["src", "alt"],
+      "td": ["colspan", "rowspan"],
+      "th": ["colspan", "rowspan"],
+      "svg": ["role", "aria-label", "aria-hidden", "width", "height"],
+      "use": ["href"],
+      "symbol": ["id", "viewBox"],
+      "image": ["href", "width", "height"],
+      "rect": ["x", "y", "width", "height", "rx", "ry", "fill", "stroke", "stroke-width"],
+      "circle": ["cx", "cy", "r", "fill", "stroke", "stroke-width"],
+      "ellipse": ["cx", "cy", "rx", "ry", "fill", "stroke", "stroke-width"],
+      "path": ["d", "fill", "stroke", "stroke-width", "fill-rule"],
+      "g": ["fill", "stroke", "transform"],
+      "html": ["data-aim-version", "lang"],
+      "script": ["type"],
+      "style": ["data-aim-css", "data-aim-theme"],
+      "aim-slide": ["data-aim-container", "style"],
+      "aim-proposal": ["id", "data-for", "data-action", "data-batch", "data-author", "data-author-id", "data-author-model", "data-at", "data-anchor-container", "data-anchor-after", "data-depends-on", "data-explanation"]
+    },
+    "url_schemes": {
+      "a.href": ["https", "http", "mailto", "#"],
+      "img.src": ["https", "http", "data:image/"],
+      "use.href": ["#"],
+      "image.href": ["data:image/"]
+    }
+  },
+  "style_props": {
+    "order": ["left", "top", "width", "height", "transform", "z-index"],
+    "patterns": {
+      "left": "^-?\\d+(\\.\\d+)?px$",
+      "top": "^-?\\d+(\\.\\d+)?px$",
+      "width": "^\\d+(\\.\\d+)?px$",
+      "height": "^\\d+(\\.\\d+)?px$",
+      "transform": "^(rotate\\(-?\\d+(\\.\\d+)?deg\\)|translate\\(-?\\d+(\\.\\d+)?px, ?-?\\d+(\\.\\d+)?px\\)|scale\\(\\d+(\\.\\d+)?\\))( (rotate\\(-?\\d+(\\.\\d+)?deg\\)|translate\\(-?\\d+(\\.\\d+)?px, ?-?\\d+(\\.\\d+)?px\\)|scale\\(\\d+(\\.\\d+)?\\)))*$",
+      "z-index": "^-?\\d+$"
+    }
+  },
+  "theme_slots": {
+    "--aim-brand-1": {"type": "color", "default": "#1d4ed8"},
+    "--aim-brand-2": {"type": "color", "default": "#0f766e"},
+    "--aim-brand-3": {"type": "color", "default": "#b45309"},
+    "--aim-brand-4": {"type": "color", "default": "#6d28d9"},
+    "--aim-font-heading": {"type": "font-stack", "default": "system-ui, -apple-system, 'Segoe UI', sans-serif"},
+    "--aim-font-body": {"type": "font-stack", "default": "system-ui, -apple-system, 'Segoe UI', sans-serif"},
+    "--aim-font-mono": {"type": "font-stack", "default": "ui-monospace, 'SF Mono', Menlo, Consolas, monospace"}
+  },
+  "theme_value_patterns": {
+    "color": "^(#[0-9a-f]{3}|#[0-9a-f]{6}|rgb\\(\\d{1,3}, ?\\d{1,3}, ?\\d{1,3}\\))$",
+    "font-stack": "^[A-Za-z0-9 ,'\\-]+$"
+  },
+  "classes": {
+    "type_scale": {
+      "xs": ["0.75rem", "1rem"], "sm": ["0.875rem", "1.25rem"],
+      "base": ["1rem", "1.5rem"], "lg": ["1.125rem", "1.75rem"],
+      "xl": ["1.25rem", "1.75rem"], "2xl": ["1.5rem", "2rem"],
+      "3xl": ["1.875rem", "2.25rem"], "4xl": ["2.25rem", "2.5rem"],
+      "5xl": ["3rem", "1.15"], "6xl": ["3.75rem", "1.1"]
+    },
+    "font_weights": {"normal": "400", "medium": "500", "semibold": "600", "bold": "700"},
+    "leadings": {"tight": "1.25", "snug": "1.375", "normal": "1.5", "relaxed": "1.625"},
+    "alignments": ["left", "center", "right"],
+    "palette": {
+      "gray": {"50": "#f9fafb", "100": "#f3f4f6", "200": "#e5e7eb", "300": "#d1d5db", "400": "#9ca3af", "500": "#6b7280", "600": "#4b5563", "700": "#374151", "800": "#1f2937", "900": "#111827"},
+      "red": {"50": "#fef2f2", "600": "#dc2626"},
+      "green": {"50": "#f0fdf4", "600": "#16a34a"},
+      "amber": {"50": "#fffbeb", "600": "#d97706"}
+    },
+    "brand_slot_count": 4,
+    "color_utilities": ["text", "bg", "border"],
+    "spacing_scale": {"0": "0", "1": "0.25rem", "2": "0.5rem", "3": "0.75rem", "4": "1rem", "6": "1.5rem", "8": "2rem", "10": "2.5rem", "12": "3rem", "16": "4rem"},
+    "spacing_props": {
+      "m": ["margin"], "mt": ["margin-top"], "mb": ["margin-bottom"], "ml": ["margin-left"], "mr": ["margin-right"],
+      "mx": ["margin-left", "margin-right"], "my": ["margin-top", "margin-bottom"],
+      "p": ["padding"], "pt": ["padding-top"], "pb": ["padding-bottom"], "pl": ["padding-left"], "pr": ["padding-right"],
+      "px": ["padding-left", "padding-right"], "py": ["padding-top", "padding-bottom"]
+    },
+    "singles": {
+      "italic": "font-style:italic",
+      "underline": "text-decoration:underline",
+      "line-through": "text-decoration:line-through",
+      "uppercase": "text-transform:uppercase",
+      "tracking-tight": "letter-spacing:-.025em",
+      "tracking-wide": "letter-spacing:.025em",
+      "font-heading": "font-family:var(--aim-font-heading)",
+      "font-body": "font-family:var(--aim-font-body)",
+      "font-mono": "font-family:var(--aim-font-mono)",
+      "text-white": "color:#fff",
+      "bg-white": "background-color:#fff",
+      "border": "border:1px solid #e5e7eb",
+      "border-t": "border-top:1px solid #e5e7eb",
+      "border-b": "border-bottom:1px solid #e5e7eb",
+      "rounded": "border-radius:.25rem",
+      "rounded-md": "border-radius:.375rem",
+      "rounded-lg": "border-radius:.5rem",
+      "rounded-full": "border-radius:9999px",
+      "shadow": "box-shadow:0 1px 3px rgba(0,0,0,.12)",
+      "list-none": "list-style:none;padding-left:0",
+      "list-disc": "list-style:disc",
+      "list-decimal": "list-style:decimal"
+    }
+  },
+  "events": {
+    "kinds": ["direct_edit", "resolution", "checkpoint"],
+    "actions": ["add", "modify", "delete", "move"],
+    "decisions": ["accepted", "rejected", "superseded"],
+    "origins": ["user", "undo", "redo", "reconcile"],
+    "actor_types": ["human", "agent", "external"],
+    "fields": {
+      "direct_edit": {
+        "required": ["seq", "kind", "t", "target", "action", "author", "batch"],
+        "optional": ["before", "after", "anchor", "from", "to", "origin", "explanation", "source"]
+      },
+      "resolution": {
+        "required": ["seq", "kind", "t", "proposal", "target", "action", "decision", "proposed_by", "proposed_at", "decided_by", "batch"],
+        "optional": ["before", "proposed", "applied", "anchor", "superseded_by", "explanation", "source"]
+      },
+      "checkpoint": {
+        "required": ["seq", "kind", "t", "label", "doc_hash"],
+        "optional": []
+      }
+    }
+  },
+  "proposal_actions": {
+    "add": {"payload": true, "requires": ["data-anchor-container"]},
+    "modify": {"payload": true, "requires": ["data-for"]},
+    "delete": {"payload": false, "requires": ["data-for"]},
+    "move": {"payload": false, "requires": ["data-for", "data-anchor-container"]}
+  },
+  "attr_order": {
+    "first": ["data-aim", "data-aim-container", "id", "class", "style"],
+    "last": ["src", "href"]
+  },
+  "svg_case_adjust": {"viewbox": "viewBox", "preserveaspectratio": "preserveAspectRatio"},
+  "lint_rules": {
+    "S000": ["error", "document does not parse as HTML"],
+    "S001": ["error", "<html> missing data-aim-version"],
+    "S002": ["warning", "document targets a different spec version"],
+    "S003": ["error", "head missing <meta charset=\"utf-8\">"],
+    "S004": ["error", "head missing <title>"],
+    "S005": ["warning", "no embedded aim.css stylesheet"],
+    "S006": ["warning", "embedded aim.css targets a different spec version"],
+    "S007": ["error", "comment in <body> (head-only)"],
+    "S008": ["error", "stray text as a <body> child"],
+    "S010": ["error", "unexpected script type in <body>"],
+    "S011": ["error", "body child is neither chunk nor container"],
+    "S012": ["error", "element is both chunk and container"],
+    "S013": ["error", "duplicate body section"],
+    "S014": ["error", "body section order violated"],
+    "S015": ["error", "invalid chunk/container id"],
+    "S016": ["error", "chunk id appears under multiple parents"],
+    "S017": ["error", "run members not consecutive"],
+    "S018": ["error", "duplicate container id"],
+    "S019": ["error", "id used as both chunk and container id"],
+    "S020": ["error", "uncovered slide child"],
+    "S021": ["error", "table row without data-aim in a container"],
+    "S022": ["error", "item chunk inside the wrong container kind"],
+    "S023": ["error", "uncovered container child"],
+    "V001": ["error", "element not allowed in the asset registry"],
+    "V002": ["error", "element outside the vocabulary"],
+    "V003": ["error", "attribute not allowed on this element"],
+    "V004": ["error", "arbitrary-value class"],
+    "V005": ["error", "unknown class"],
+    "V006": ["error", "malformed style declaration"],
+    "V007": ["error", "style property outside the geometry whitelist"],
+    "V008": ["error", "style value does not match the property grammar"],
+    "V009": ["error", "URL scheme not allowed for this attribute"],
+    "V010": ["error", "theme block is not a single :root rule"],
+    "V011": ["error", "unregistered theme slot"],
+    "V012": ["error", "theme slot value does not match its grammar"],
+    "X001": ["error", "forbidden element"],
+    "X002": ["error", "event-handler attribute"],
+    "X003": ["error", "dangerous URL (javascript:/data:text)"],
+    "X004": ["error", "executable or unknown <script>"],
+    "X005": ["error", "free <style> block"],
+    "P001": ["error", "unexpected element inside <aim-proposals>"],
+    "P002": ["error", "invalid proposal id"],
+    "P003": ["error", "unknown proposal action"],
+    "P004": ["error", "proposal missing data-for"],
+    "P005": ["error", "proposal missing data-anchor-container"],
+    "P006": ["error", "proposal missing its payload template"],
+    "P007": ["error", "payloadless action carries a payload"],
+    "P008": ["error", "proposal targets an unknown chunk"],
+    "P009": ["error", "second pending modify/delete on one target"],
+    "P010": ["error", "payload id does not match data-for"],
+    "P011": ["error", "add anchor is neither a chunk nor a pending proposal"],
+    "P012": ["warning", "data-depends-on does not reference a pending proposal"],
+    "P013": ["error", "data-at is not ISO-8601"],
+    "H001": ["warning", "no history block (flattened document)"],
+    "H002": ["error", "unparseable history line"],
+    "H003": ["error", "event violates its field schema"],
+    "H004": ["warning", "history starts above seq 1 (pruned)"],
+    "H005": ["error", "history line is not canonical JSON"],
+    "H006": ["error", "history chain verification failed"],
+    "M001": ["warning", "summary cache is stale"],
+    "M002": ["warning", "embedding is stale or orphaned"],
+    "C001": ["error", "file is not in canonical form"]
+  }
+}

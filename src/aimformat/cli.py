@@ -1,0 +1,162 @@
+"""The ``aim`` command-line tool.
+
+    aim lint FILE...        verify documents (all findings in one run)
+    aim hash FILE           print the current doc_hash
+    aim new -o FILE         scaffold a minimal valid document
+    aim show FILE           human-readable history / pending-lane overview
+    aim flatten FILE        drop history (+embeddings) -> clean file
+    aim css                 print the generated aim.css for this spec version
+
+Exit codes: 0 ok · 1 lint errors / verification failure · 2 usage.
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import sys
+from pathlib import Path
+
+from . import __version__
+from .css import css_stats, generate_aim_css
+from .document import AimDocument, new_document
+from .errors import AimError
+from .lint import lint_path
+from .registry import REGISTRY
+
+
+def _cmd_lint(args: argparse.Namespace) -> int:
+    total_errors = 0
+    payload = []
+    for path in args.files:
+        findings = lint_path(path)
+        errors = [f for f in findings if f.level == "error"]
+        warnings = [f for f in findings if f.level == "warning"]
+        total_errors += len(errors)
+        if args.format == "json":
+            payload.append({"file": str(path),
+                            "errors": len(errors), "warnings": len(warnings),
+                            "findings": [f.__dict__ for f in findings]})
+            continue
+        if not args.quiet or errors:
+            print(f"== {path}")
+            for f in findings:
+                if args.quiet and f.level != "error":
+                    continue
+                print(f"  {f}")
+            status = "PASS" if not errors else "FAIL"
+            print(f"  {status} ({len(errors)} errors, {len(warnings)} warnings)")
+    if args.format == "json":
+        print(json.dumps(payload, indent=2))
+    return 1 if total_errors else 0
+
+
+def _cmd_hash(args: argparse.Namespace) -> int:
+    doc = AimDocument.load(args.file)
+    print(doc.doc_hash)
+    return 0
+
+
+def _cmd_new(args: argparse.Namespace) -> int:
+    doc = new_document(title=args.title, lang=args.lang)
+    out = Path(args.output)
+    doc.save(out)
+    print(f"wrote {out}")
+    return 0
+
+
+def _cmd_show(args: argparse.Namespace) -> int:
+    doc = AimDocument.load(args.file)
+    print(f"{doc.title!r} — spec {doc.spec_version}, seq {doc.seq}, "
+          f"{len(doc.chunks)} chunks, {len(doc.proposals)} pending")
+    print(f"doc_hash {doc.doc_hash}")
+    if doc.proposals:
+        print("pending:")
+        for p in doc.proposals:
+            tgt = p.target or f"into {p.anchor_container}"
+            print(f"  {p.id:>10}  {p.action:<7} {tgt:<12} "
+                  f"{p.author.type:<6} {p.explanation or ''}")
+    if doc.history:
+        print("history:")
+        for ev in doc.history:
+            what = ev.kind if ev.kind != "direct_edit" else ev.action
+            extra = ev.get("label") or ev.decision or ""
+            print(f"  {ev.seq:>4}  {what:<10} {ev.target or '':<12} {extra}")
+    return 0
+
+
+def _cmd_flatten(args: argparse.Namespace) -> int:
+    doc = AimDocument.load(args.file)
+    doc.flatten(drop_embeddings=not args.keep_embeddings)
+    out = Path(args.output or args.file)
+    doc.save(out)
+    print(f"wrote {out}")
+    return 0
+
+
+def _cmd_css(args: argparse.Namespace) -> int:
+    if args.stats:
+        s = css_stats()
+        print(f"rules {s['rules']}  raw {s['raw_bytes'] / 1024:.1f} KB  "
+              f"gzip {s['gzip_bytes'] / 1024:.1f} KB")
+        return 0
+    sys.stdout.write(generate_aim_css())
+    return 0
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="aim",
+        description=f"Reference tooling for the .aim document format "
+                    f"(spec {REGISTRY.spec_version}).")
+    parser.add_argument("--version", action="version",
+                        version=f"aimformat {__version__} "
+                                f"(spec {REGISTRY.spec_version})")
+    sub = parser.add_subparsers(dest="command", required=True)
+
+    p = sub.add_parser("lint", help="verify .aim documents")
+    p.add_argument("files", nargs="+")
+    p.add_argument("--format", choices=["text", "json"], default="text")
+    p.add_argument("--quiet", action="store_true",
+                   help="print errors only")
+    p.set_defaults(func=_cmd_lint)
+
+    p = sub.add_parser("hash", help="print a document's doc_hash")
+    p.add_argument("file")
+    p.set_defaults(func=_cmd_hash)
+
+    p = sub.add_parser("new", help="scaffold a minimal valid document")
+    p.add_argument("-o", "--output", required=True)
+    p.add_argument("--title", default="Untitled")
+    p.add_argument("--lang", default="en")
+    p.set_defaults(func=_cmd_new)
+
+    p = sub.add_parser("show", help="overview: chunks, pending lane, history")
+    p.add_argument("file")
+    p.set_defaults(func=_cmd_show)
+
+    p = sub.add_parser("flatten", help="drop history (and embeddings)")
+    p.add_argument("file")
+    p.add_argument("-o", "--output")
+    p.add_argument("--keep-embeddings", action="store_true")
+    p.set_defaults(func=_cmd_flatten)
+
+    p = sub.add_parser("css", help="print the generated aim.css")
+    p.add_argument("--stats", action="store_true")
+    p.set_defaults(func=_cmd_css)
+    return parser
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = build_parser().parse_args(argv)
+    try:
+        return args.func(args)
+    except FileNotFoundError as exc:
+        print(f"aim: {exc}", file=sys.stderr)
+        return 2
+    except AimError as exc:
+        print(f"aim: {exc}", file=sys.stderr)
+        return 1
+
+
+if __name__ == "__main__":  # pragma: no cover
+    sys.exit(main())

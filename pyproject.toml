@@ -1,0 +1,44 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "aimformat"
+version = "0.1.0"
+description = "Reference SDK and verifier for the .aim document format — AI proposals and human accept/reject as file primitives"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.10"
+authors = [{ name = "Luca Campanella" }]
+keywords = ["aim", "document-format", "llm", "track-changes", "html"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Intended Audience :: Developers",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Topic :: Text Processing :: Markup :: HTML",
+]
+# Zero runtime dependencies — stdlib only, by design.
+dependencies = []
+
+[project.optional-dependencies]
+# DOCX export (aim.to_docx); the core package stays dependency-free
+docx = ["python-docx==1.2.0"]
+dev = ["pytest==9.1.1", "python-docx==1.2.0", "docling-core==2.86.0"]
+
+[project.scripts]
+aim = "aimformat.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/tndmhq/aimformat"
+Specification = "https://github.com/tndmhq/aimformat/blob/main/spec.md"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/aimformat"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
