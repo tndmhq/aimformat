@@ -55,7 +55,7 @@ codes bidirectionally in sync with what `lint.py` can actually emit.
 python3 scripts/gen_spec_appendix.py   # after registry changes
 python3 scripts/gen_fixtures.py        # after lint/canonical changes
 python3 scripts/gen_examples.py        # after SDK-visible changes
-python3 -m pytest                      # 260+ tests, a few seconds
+python3 -m pytest                      # 300+ tests, a few seconds
 ```
 
 ## Dependency pins (search-then-pin convention)
@@ -63,3 +63,24 @@ python3 -m pytest                      # 260+ tests, a few seconds
 Runtime: none. Extras/dev: `python-docx==1.2.0`, `docling-core==2.86.0`
 (tests only), `pytest==9.1.1`. docling-core is used solely to build
 fixture DoclingDocuments in `tests/test_ingest_export.py`.
+
+## Lessons from the v0.1 post-ship review (2026-07-07)
+
+Full findings: `docs/log/2026-07-07_1921_review_v01-deep-self-review.md`.
+The two rules below exist because breaking them produced five criticals:
+
+1. **Anchor/target resolution goes through validated primitives only**
+   (`DocState.resolve_insert_point`, `_resolve_end_anchor`,
+   `_direct_members`) — container-scoped, shell-aware, target-excluded, and
+   ALL lookups happen before the FIRST mutation. Never resolve an id
+   globally when an operation names its context.
+2. **The serializer is a normal form, not an echo.** If two spellings of
+   the same logical construct can round-trip, `doc_hash` forks and chain
+   verification diverges across tools. Any change here ⇒ regenerate
+   fixtures/examples and expect checkpoint hashes to move.
+
+Also load-bearing: `lint_text` never raises (hostile input becomes
+findings); nok fixtures trip exactly their named code (the generator's
+sanity check enforces it); when adding a public operation, end its test
+with `lint(dumps()) == []` — three review findings would have been caught
+mechanically by that one assertion.

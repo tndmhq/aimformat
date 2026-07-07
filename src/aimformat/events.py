@@ -131,9 +131,13 @@ class Event:
     @classmethod
     def from_json(cls, line: str) -> "Event":
         try:
-            return cls(json.loads(line))
+            obj = json.loads(line)
         except json.JSONDecodeError as exc:
             raise HistoryError(f"unparseable history line: {exc}") from exc
+        if not isinstance(obj, dict):
+            raise HistoryError(
+                f"history line is not a JSON object: {line[:60]!r}")
+        return cls(obj)
 
     def validate(self) -> list[str]:
         """Field-level problems with this event (empty when well-formed)."""

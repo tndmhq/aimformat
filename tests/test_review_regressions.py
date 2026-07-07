@@ -133,3 +133,278 @@ class TestSupersededByIntegrity:
                  if e.get("decision") == "superseded"]
         assert len(chain) == 2 and all(chain)
         assert basic_doc.verify() == []
+
+
+# ===========================================================================
+# Wave 2: findings from the three independent review agents
+# ===========================================================================
+
+class TestAnchorResolutionFamily:
+    """The systemic family: resolution must honor the context it claims."""
+
+    def test_move_to_last_when_already_last_is_a_noop_error(self, basic_doc):
+        with pytest.raises(InvalidOperation):
+            basic_doc.move_chunk("intro", author=ME, at=ts(10))  # already last
+        basic_doc.chunk("intro")  # still present, tree unharmed
+        assert basic_doc.verify() == []
+
+    def test_failed_move_never_mutates(self, rich_doc):
+        before = rich_doc.doc_hash
+        with pytest.raises(aim.TargetNotFound):
+            rich_doc.move_chunk("li1", container="list", after="ghost",
+                                author=ME, at=ts(30))
+        assert rich_doc.doc_hash == before and rich_doc.verify() == []
+
+    def test_delete_after_nested_container_records_container_anchor(self):
+        doc = aim.new_document(title="T")
+        doc.add_chunk('<aim-slide data-aim-container="s1" '
+                      'style="width:1920px; height:1080px">'
+                      '<ul data-aim-container="lst" '
+                      'style="left:10px; top:10px; width:100px">'
+                      '<li data-aim="i1">a</li></ul>'
+                      '<p data-aim="x" style="left:10px; top:200px">after</p>'
+                      "</aim-slide>", author=ME, at=ts(0))
+        doc.checkpoint("cp", at=ts(1))
+        doc.delete_chunk("x", author=ME, at=ts(2))
+        ev = doc.history[-1]
+        assert ev.get("anchor")["after"] == "lst"
+        doc.undo(author=ME, at=ts(3))
+        assert doc.verify() == []
+        past = doc.state_at(1)
+        slide_kids = [e.chunk_id or e.container_id for e in
+                      past._state.container_node("s1").elements()]
+        assert slide_kids == ["lst", "x"]
+
+    def test_delete_of_nested_container_itself_round_trips(self):
+        doc = aim.new_document(title="T")
+        doc.add_chunk('<aim-slide data-aim-container="s1" '
+                      'style="width:1920px; height:1080px">'
+                      '<h2 data-aim="t" style="left:10px; top:10px">T</h2>'
+                      '<ul data-aim-container="lst" '
+                      'style="left:10px; top:100px; width:100px">'
+                      '<li data-aim="i1">a</li></ul></aim-slide>',
+                      author=ME, at=ts(0))
+        h0 = doc.doc_hash
+        doc.delete_chunk("lst", author=ME, at=ts(1))
+        doc.undo(author=ME, at=ts(2))
+        assert doc.doc_hash == h0 and doc.verify() == []
+
+    def test_insert_anchor_must_live_in_stated_container(self, rich_doc):
+        rich_doc.add_chunk('<ul data-aim-container="lb">'
+                           '<li data-aim="b1">x</li></ul>', author=ME,
+                           at=ts(30))
+        with pytest.raises(aim.TargetNotFound):
+            rich_doc.add_chunk("<li>stray</li>", author=ME, container="list",
+                               after="b1", at=ts(31))
+
+    def test_last_in_slide_ignores_items_of_nested_containers(self):
+        doc = aim.new_document(title="T")
+        doc.add_chunk('<aim-slide data-aim-container="s1" '
+                      'style="width:1920px; height:1080px">'
+                      '<ul data-aim-container="lst" '
+                      'style="left:10px; top:10px; width:100px">'
+                      '<li data-aim="i1">a</li></ul></aim-slide>',
+                      author=ME, at=ts(0))
+        c = doc.add_chunk('<p data-aim="cap" style="left:10px; top:400px">'
+                          "caption</p>", author=ME, container="s1", at=ts(1))
+        slide = doc._state.container_node("s1")
+        assert [e.chunk_id or e.container_id for e in slide.elements()] == \
+            ["lst", "cap"]
+        assert doc.history[-1].get("anchor") == \
+            {"after": "lst", "container": "s1"}
+
+    def test_public_add_first_into_table_defaults_to_tbody(self, table_doc):
+        doc = table_doc
+        doc.add_chunk('<tr data-aim="r0"><td>zero</td></tr>', author=ME,
+                      container="tbl", after=None, at=ts(1))
+        html = doc._state.serial("tbl")
+        thead = html[html.index("<thead>"):html.index("</thead>")]
+        assert "r0" not in thead and doc.verify() == []
+        assert doc.history[-1].get("anchor")["shell"] == "tbody"
+
+    def test_chunk_ids_with_proposal_prefix_are_reassigned(self, basic_doc):
+        c = basic_doc.add_chunk('<p data-aim="p-note1">n</p>', author=ME,
+                                at=ts(10))
+        assert not c.id.startswith("p-")
+
+
+class TestPayloadAndIdIntegrity:
+    def test_modify_container_keeps_marker_and_covers_new_items(self, rich_doc):
+        got = rich_doc.modify_chunk(
+            "list", '<ul data-aim-container="list">'
+                    '<li data-aim="li1">First</li><li>NEW ITEM</li></ul>',
+            author=ME, at=ts(30))
+        assert got.id == "list"
+        assert "list" in rich_doc.containers
+        html = rich_doc._state.serial("list")
+        assert 'data-aim-container="list"' in html
+        assert html.count("data-aim=") == 2  # li1 kept + NEW ITEM covered
+        assert not [f for f in aim.lint(rich_doc) if f.level == "error"]
+
+    def test_modify_container_with_chunk_marker_rejected(self, rich_doc):
+        with pytest.raises(InvalidOperation):
+            rich_doc.modify_chunk("list",
+                                  '<ul data-aim="list"><li>x</li></ul>',
+                                  author=ME, at=ts(30))
+
+    def test_payload_only_ids_stay_burned(self):
+        doc = aim.new_document(title="T")
+        doc.add_chunk('<ul data-aim-container="lst">'
+                      '<li data-aim="item1">a</li></ul>', author=ME, at=ts(0))
+        doc.delete_chunk("lst", author=ME, at=ts(1))
+        c = doc.add_chunk('<p data-aim="item1">new life</p>', author=ME,
+                          at=ts(2))
+        assert c.id != "item1"
+
+    def test_accepted_move_resolution_passes_event_schema(self, basic_doc):
+        pr = basic_doc.propose_move("intro", container="body", after=None,
+                                    author=BOT, at=ts(10))
+        basic_doc.accept(pr.id, decided_by=ME, at=ts(11))
+        ev = basic_doc.history[-1]
+        assert ev.get("from") and ev.get("to")
+        assert ev.validate() == []
+        assert not [f for f in aim.lint(basic_doc) if f.level == "error"]
+
+    def test_theme_value_grammar_enforced_on_write(self, basic_doc):
+        with pytest.raises(InvalidOperation):
+            basic_doc.set_theme(
+                {"--aim-brand-1": 'url("https://evil.example/x")'},
+                author=ME, at=ts(10))
+        with pytest.raises(InvalidOperation):
+            basic_doc.propose_theme({"--aim-font-body": "x;}body{color:red"},
+                                    author=BOT, at=ts(11))
+
+    def test_pack_assets_atomic_on_undecodable_image(self):
+        from test_css_assets_meta import DATA_URI
+        doc = aim.new_document(title="T")
+        doc.add_chunk(f'<figure data-aim="f"><img alt="ok" src="{DATA_URI}">'
+                      '<img alt="bad" src="data:image/svg+xml,<svg/>">'
+                      "</figure>", author=ME, at=ts(0))
+        h0 = doc.doc_hash
+        with pytest.raises(InvalidOperation):
+            doc.pack_assets(author=aim.external("packer"), at=ts(1))
+        assert doc.doc_hash == h0 and doc.verify() == []
+
+    def test_pack_assets_events_share_one_batch(self):
+        from test_css_assets_meta import DATA_URI
+        doc = aim.new_document(title="T")
+        for i, cid in enumerate(("f1", "f2")):
+            doc.add_chunk(f'<figure data-aim="{cid}">'
+                          f'<img alt="a" src="{DATA_URI}"></figure>',
+                          author=ME, at=ts(i))
+        doc.pack_assets(author=aim.external("packer"), at=ts(5))
+        packs = [e for e in doc.history if e.action == "modify"]
+        assert len({e.batch for e in packs}) == 1
+
+    def test_prune_refuses_to_drop_everything(self, rich_doc):
+        with pytest.raises(InvalidOperation):
+            rich_doc.prune(before=10_000)
+
+
+class TestVerifierHardening:
+    """lint_text must convert hostile input into findings, never raise."""
+
+    HOSTILE_META = ('<script type="application/aim-meta+json">\n{not json]\n'
+                    "</script>\n")
+
+    def hostile(self, basic_doc, mutate):
+        return mutate(basic_doc.dumps())
+
+    @pytest.mark.parametrize("mutate", [
+        lambda t: t.replace("<title>", TestVerifierHardening.HOSTILE_META
+                            + "<title>"),
+        lambda t: t.replace("</body>", '<script type="application/'
+                            'aim-embeddings+jsonl">\n[1,2,3]\n</script>\n'
+                            "</body>"),
+        lambda t: t.replace('{"action":"add"', "42 ", 1),
+        lambda t: t.replace("</body>", '<script type="application/'
+                            'aim-meta+json">\n{"summary":"a string"}\n'
+                            "</script>\n</body>"),
+    ], ids=["malformed-meta", "embeddings-array", "history-non-object",
+            "summary-not-dict"])
+    def test_never_raises_on_hostile_caches(self, basic_doc, mutate):
+        findings = aim.lint_text(self.hostile(basic_doc, mutate))
+        assert any(f.level == "error" for f in findings)
+
+    def test_meta_missing_summary_is_M004(self, basic_doc):
+        text = basic_doc.dumps().replace(
+            "<title>", '<script type="application/aim-meta+json">\n'
+            '{"toc":[]}\n</script>\n<title>')
+        assert "M004" in {f.code for f in aim.lint_text(text)}
+
+    def test_asset_registry_not_exempt_from_security(self, basic_doc):
+        text = basic_doc.dumps().replace(
+            "</body>",
+            "<aim-assets>\n"
+            '<svg aria-hidden="true" height="0" width="0">\n'
+            '<symbol id="asset-aaaaaaaaaaaa" viewBox="0 0 10 10">'
+            '<image height="10" width="10" '
+            'href="javascript:alert(1)"/></symbol>\n'
+            "</svg>\n</aim-assets>\n</body>")
+        codes = {f.code for f in aim.lint_text(text) if f.level == "error"}
+        assert codes & {"X003", "V009"}
+
+    def test_container_modify_proposal_lints_clean(self, rich_doc):
+        rich_doc.propose_modify(
+            "list", '<ul data-aim-container="list">'
+                    '<li data-aim="li1">First</li></ul>',
+            author=BOT, at=ts(30))
+        assert not [f for f in aim.lint_text(rich_doc.dumps())
+                    if f.level == "error"]
+
+    def test_nested_chunk_is_S024(self, basic_doc):
+        text = basic_doc.dumps().replace(
+            '<p data-aim="intro">Intro paragraph.</p>',
+            '<section data-aim="intro"><p data-aim="inner">x</p></section>')
+        assert "S024" in {f.code for f in aim.lint_text(text)}
+
+    def test_add_anchor_cycle_is_P015(self, basic_doc):
+        basic_doc.propose_add("<p>one</p>", author=BOT, at=ts(10))
+        text = basic_doc.dumps()
+        card = text[text.index("<aim-proposal "):
+                    text.index("</aim-proposal>") + len("</aim-proposal>")]
+        pid = card.split('id="')[1].split('"')[0]
+        looped = card.replace('data-anchor-after="intro"',
+                              'data-anchor-after="p-zzzz"')
+        twin = card.replace(pid, "p-zzzz").replace(
+            'data-anchor-after="intro"', f'data-anchor-after="{pid}"')
+        text = text.replace(card, looped + "\n" + twin)
+        assert "P015" in {f.code for f in aim.lint_text(text)}
+
+
+class TestNormalFormHardening:
+    def test_doc_hash_single_valued_for_void_and_style_spellings(self):
+        a = aim.loads(_mini('<p data-aim="x" style="left:3px; top:5px">t<br>'
+                            "</p>"))
+        b = aim.loads(_mini('<p data-aim="x" style="top:5px;left:3px">t<br/>'
+                            "</p>"))
+        assert a.doc_hash == b.doc_hash
+
+    def test_c001_rejects_non_normal_style_order(self, basic_doc):
+        basic_doc.add_chunk('<aim-slide data-aim-container="s" '
+                            'style="width:1920px; height:1080px">'
+                            '<p data-aim="q" style="left:1px; top:2px">x</p>'
+                            "</aim-slide>", author=ME, at=ts(10))
+        text = basic_doc.dumps().replace("left:1px; top:2px",
+                                         "top:2px;left:1px")
+        assert "C001" in {f.code for f in aim.lint_text(text)}
+
+    def test_class_tokens_deduped(self):
+        doc = aim.new_document(title="T")
+        c = doc.add_chunk('<p class="font-bold font-bold text-lg">x</p>',
+                          author=ME, at=ts(0))
+        assert 'class="font-bold text-lg"' in c.html
+
+    def test_duplicate_style_props_last_wins(self):
+        doc = aim.new_document(title="T")
+        doc.add_chunk('<aim-slide data-aim-container="s" '
+                      'style="width:1920px; height:1080px">'
+                      '<p data-aim="q" style="left:1px; left:9px; top:2px">x'
+                      "</p></aim-slide>", author=ME, at=ts(0))
+        assert 'style="left:9px; top:2px"' in doc._state.serial("q")
+
+
+def _mini(construct: str) -> str:
+    doc = aim.new_document(title="mini")
+    text = doc.dumps()
+    return text.replace("<body>", "<body>\n" + construct)

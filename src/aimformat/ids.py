@@ -22,8 +22,15 @@ RESERVED_TARGETS = frozenset(REGISTRY.raw["ids"]["reserved_targets"])
 
 
 def is_valid_chunk_id(value: str) -> bool:
-    """True if *value* is a legal chunk/container id (and not reserved)."""
-    return bool(CHUNK_ID_RE.match(value)) and value not in RESERVED_TARGETS
+    """True if *value* is a legal chunk/container id.
+
+    Reserved targets and the ``p-`` prefix are excluded — proposal ids own
+    that namespace, and sharing it would make anchor references ambiguous
+    (a chained add's ``after`` must dispatch on the id alone).
+    """
+    return (bool(CHUNK_ID_RE.match(value))
+            and value not in RESERVED_TARGETS
+            and not value.startswith("p-"))
 
 
 def is_valid_proposal_id(value: str) -> bool:

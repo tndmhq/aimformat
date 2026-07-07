@@ -2,7 +2,7 @@
 <html data-aim-version="0.1" lang="en">
 <head>
 <meta charset="utf-8">
-<title>Pilot read-out</title>
+<title>Conformance fixture</title>
 <style data-aim-css="0.1">
 :root{--aim-brand-1:#1d4ed8;--aim-brand-2:#0f766e;--aim-brand-3:#b45309;--aim-brand-4:#6d28d9;--aim-font-heading:system-ui, -apple-system, 'Segoe UI', sans-serif;--aim-font-body:system-ui, -apple-system, 'Segoe UI', sans-serif;--aim-font-mono:ui-monospace, 'SF Mono', Menlo, Consolas, monospace}
 html{-webkit-text-size-adjust:100%}
@@ -282,20 +282,13 @@ aim-proposal[data-action=add]{border-left-color:#16a34a}
 aim-proposal[data-action=move]{border-left-color:#d97706}
 aim-assets{display:none}
 </style>
-<style data-aim-theme>:root{--aim-brand-1:#7c3aed}</style>
+<style data-aim-theme>:root{--aim-brand-1:#1a73e8}</style>
 </head>
 <body>
-<aim-slide data-aim-container="s1" style="width:1920px; height:1080px"><div data-aim="band" class="bg-brand-1" style="left:0px; top:880px; width:1920px; height:200px; z-index:1"></div><h2 data-aim="t1" class="font-bold text-6xl" style="left:120px; top:340px; width:1400px; z-index:2">Documents that review themselves</h2><p data-aim="st1" class="text-2xl text-gray-600" style="left:120px; top:520px; width:1200px; z-index:2">Pilot read-out — July 2026</p></aim-slide>
-<aim-slide data-aim-container="s2" style="width:1920px; height:1080px"><h2 data-aim="t2" class="font-bold text-5xl" style="left:120px; top:100px; width:1000px">Next steps</h2><p data-aim="b2" class="text-3xl" style="left:120px; top:300px; width:1400px">Extend the pilot to the briefs team for Q4.</p></aim-slide>
+<h1 data-aim="h1" class="font-bold text-3xl">Fixture</h1>
+<p data-aim="p1">One paragraph &amp; some text.</p>
+<ul data-aim-container="l1"><li data-aim="i1">First</li><li data-aim="i2">Run…</li><li data-aim="i2">…run</li></ul>
 <aim-proposals>
-<aim-proposal id="p-7e0nqie0" data-action="modify" data-at="2026-07-07T14:00:05Z" data-author="agent" data-author-model="claude-opus-4-8" data-batch="b3" data-explanation="Name the date." data-for="b2"><template><p data-aim="b2" class="text-3xl" style="left:120px; top:300px; width:1400px">Extend the pilot to the briefs team for Q4; decision review on 15 August.</p></template></aim-proposal>
 </aim-proposals>
-<script type="application/aim-history+jsonl">
-
-
-{"action":"add","after":"<aim-slide data-aim-container=\"s1\" style=\"width:1920px; height:1080px\"><div data-aim=\"band\" class=\"bg-brand-1\" style=\"left:0px; top:880px; width:1920px; height:200px; z-index:1\"><\/div><h2 data-aim=\"t1\" class=\"font-bold text-6xl\" style=\"left:120px; top:340px; width:1400px; z-index:2\">Documents that review themselves<\/h2><p data-aim=\"st1\" class=\"text-2xl text-gray-600\" style=\"left:120px; top:520px; width:1200px; z-index:2\">Pilot read-out — July 2026<\/p><\/aim-slide>","anchor":{"after":null,"container":"body"},"author":{"model":"claude-opus-4-8","type":"agent"},"batch":"b1","explanation":"Deck scaffold.","kind":"direct_edit","seq":1,"t":"2026-07-07T14:00:00Z","target":"s1"}
-{"action":"add","after":"<aim-slide data-aim-container=\"s2\" style=\"width:1920px; height:1080px\"><h2 data-aim=\"t2\" class=\"font-bold text-5xl\" style=\"left:120px; top:100px; width:1000px\">Next steps<\/h2><p data-aim=\"b2\" class=\"text-3xl\" style=\"left:120px; top:300px; width:1400px\">Extend the pilot to the briefs team for Q4.<\/p><\/aim-slide>","anchor":{"after":"s1","container":"body"},"author":{"model":"claude-opus-4-8","type":"agent"},"batch":"b2","kind":"direct_edit","seq":2,"t":"2026-07-07T14:00:01Z","target":"s2"}
-{"doc_hash":"sha256:9b6b4740bdfb7b2ecaaf0a09d085a865290342d6fdcd90fb1d53b7e7838c386f","kind":"checkpoint","label":"design-review","seq":3,"t":"2026-07-07T14:00:06Z"}
-</script>
 </body>
 </html>

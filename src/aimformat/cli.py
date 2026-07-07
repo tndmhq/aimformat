@@ -25,6 +25,11 @@ from .registry import REGISTRY
 
 
 def _cmd_lint(args: argparse.Namespace) -> int:
+    missing = [p for p in args.files if not Path(p).is_file()]
+    if missing:
+        for p in missing:
+            print(f"aim: not a file: {p}", file=sys.stderr)
+        return 2
     total_errors = 0
     payload = []
     for path in args.files:
@@ -57,8 +62,11 @@ def _cmd_hash(args: argparse.Namespace) -> int:
 
 
 def _cmd_new(args: argparse.Namespace) -> int:
-    doc = new_document(title=args.title, lang=args.lang)
     out = Path(args.output)
+    if out.exists() and not args.force:
+        print(f"aim: {out} exists (use --force to overwrite)", file=sys.stderr)
+        return 2
+    doc = new_document(title=args.title, lang=args.lang)
     doc.save(out)
     print(f"wrote {out}")
     return 0
@@ -128,13 +136,17 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("-o", "--output", required=True)
     p.add_argument("--title", default="Untitled")
     p.add_argument("--lang", default="en")
+    p.add_argument("--force", action="store_true",
+                   help="overwrite an existing file")
     p.set_defaults(func=_cmd_new)
 
     p = sub.add_parser("show", help="overview: chunks, pending lane, history")
     p.add_argument("file")
     p.set_defaults(func=_cmd_show)
 
-    p = sub.add_parser("flatten", help="drop history (and embeddings)")
+    p = sub.add_parser("flatten",
+                       help="drop history (and embeddings); modifies the "
+                            "file in place unless -o is given")
     p.add_argument("file")
     p.add_argument("-o", "--output")
     p.add_argument("--keep-embeddings", action="store_true")
@@ -147,12 +159,17 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
+    if hasattr(sys.stdout, "reconfigure"):  # survive non-UTF8 pipes
+        sys.stdout.reconfigure(errors="replace")
     args = build_parser().parse_args(argv)
     try:
         return args.func(args)
-    except FileNotFoundError as exc:
+    except (FileNotFoundError, IsADirectoryError, PermissionError) as exc:
         print(f"aim: {exc}", file=sys.stderr)
         return 2
+    except UnicodeDecodeError as exc:
+        print(f"aim: not a UTF-8 text file: {exc}", file=sys.stderr)
+        return 1
     except AimError as exc:
         print(f"aim: {exc}", file=sys.stderr)
         return 1

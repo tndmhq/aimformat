@@ -35,21 +35,30 @@ Mapping (docling label → .aim):
 ``text``/``paragraph`` ``<p>`` chunk
 ``code``              ``<pre><code>`` chunk
 ``formula``           ``<p>`` chunk (TeX source as text)
-``list`` group        ``<ul>`` container; items → ``<li>`` chunks
-``ordered_list``      ``<ol>`` container; items → ``<li>`` chunks
+``list`` group        ``<ul>``/``<ol>`` container (orderedness read from the
+                      items' ``enumerated`` flags); items → ``<li>`` chunks;
+                      groups nested directly under a group become a nested
+                      list inside the preceding item
 ``table``             ``<table>`` container; grid rows → ``<tr>`` chunks
-                      (header rows → ``<thead>``/``<th>``, spans kept)
-``picture``           ``<figure>`` chunk (data-URI ``<img>`` when the
-                      conversion embedded images, else alt-text only)
+                      (header rows → ``<thead>``/``<th>``, row/col spans
+                      kept — cells belong to the row where they *start*);
+                      a table caption follows as an ``<em>`` paragraph
+``picture``           ``<figure>`` chunk (attribute-escaped data-URI
+                      ``<img>`` when the conversion embedded images, else an
+                      alt-text placeholder; attached text becomes ``<p>``)
 ``caption``           ``<figcaption>`` inside the owning figure
+other grouping nodes  descended (``sheet``, ``form_area``, chapters, …) —
+                      a subtree with content is never silently dropped
 furniture layer       skipped (page headers/footers are not content)
 ====================  =====================================================
 
 Page provenance (``prov.page_no``) is dropped: .aim v0.1 has no pagination
-model. Nested list groups flatten into their parent item's content.
+model. Tables and lists nested inside a list item become that item's inline
+content.
 """
 from __future__ import annotations
 
+import re
 from typing import Any, Optional, Union
 
 from .canonical import escape_attr, escape_text
@@ -107,15 +116,40 @@ def _list_tag(res: _Resolver, group: dict) -> str:
 
 
 def _li_markup(res: _Resolver, item: dict) -> str:
-    """One list item, flattening nested list groups into its content."""
+    """One list item; nested lists and tables become its inline content."""
     inner = _text_of(item)
     for child in res.children(item):
-        if child.get("label") in ("list", "ordered_list"):
+        label = child.get("label")
+        if label in ("list", "ordered_list"):
             tag = _list_tag(res, child)
-            nested = "".join(_li_markup(res, li) for li in res.children(child)
-                             if li.get("label") == "list_item")
+            nested = _list_items_markup(res, child)
             inner += f"<{tag}>{nested}</{tag}>"
+        elif label == "table":
+            nested_table = _table_markup(child)
+            if nested_table:
+                inner += nested_table
+        elif label in ("text", "paragraph") and child.get("text"):
+            inner += f"<p>{_text_of(child)}</p>"
     return f"<li>{inner}</li>"
+
+
+def _list_items_markup(res: _Resolver, group: dict) -> str:
+    """A list group's items — including sub-groups docling parents directly
+    on the group (not on an item), which become a nested list inside the
+    preceding item (or a wrapper item when they lead)."""
+    parts: list[str] = []
+    for child in res.children(group):
+        label = child.get("label")
+        if label == "list_item":
+            parts.append(_li_markup(res, child))
+        elif label in ("list", "ordered_list"):
+            tag = _list_tag(res, child)
+            nested = f"<{tag}>{_list_items_markup(res, child)}</{tag}>"
+            if parts:
+                parts[-1] = parts[-1][:-len("</li>")] + nested + "</li>"
+            else:
+                parts.append(f"<li>{nested}</li>")
+    return "".join(parts)
 
 
 def _table_markup(table: dict) -> Optional[str]:
@@ -124,19 +158,24 @@ def _table_markup(table: dict) -> Optional[str]:
     if not grid:
         return None
     head_rows, body_rows = [], []
-    for row in grid:
-        header = all(c.get("column_header") for c in row) and bool(row)
-        cells = []
-        emitted: set[tuple[int, int]] = set()
+    for ri, row in enumerate(grid):
+        # a cell belongs to the row where it STARTS; the grid repeats
+        # spanning cells in every row/column they cover
+        own: list[dict] = []
+        seen_cols: set[int] = set()
         for cell in row:
-            key = (cell.get("start_row_offset_idx", 0),
-                   cell.get("start_col_offset_idx", 0))
-            if key in emitted:
-                continue  # spanned cells repeat in the grid; emit once
-            emitted.add(key)
-            if cell.get("start_row_offset_idx") != row[0].get(
-                    "start_row_offset_idx"):
-                continue  # continuation of a rowspan from an earlier row
+            if cell.get("start_row_offset_idx", ri) != ri:
+                continue  # rowspan continuation from an earlier row
+            col = cell.get("start_col_offset_idx", 0)
+            if col in seen_cols:
+                continue  # colspan repeat within this row
+            seen_cols.add(col)
+            own.append(cell)
+        if not own:
+            continue  # row consists entirely of continuations
+        header = all(c.get("column_header") for c in own)
+        cells = []
+        for cell in own:
             tag = "th" if cell.get("column_header") or cell.get("row_header") \
                 else "td"
             attrs = ""
@@ -167,15 +206,24 @@ def _caption_text(res: _Resolver, node: dict) -> str:
     return " ".join(parts)
 
 
+_DATA_IMAGE_RE = re.compile(r"^data:image/[a-z+.-]+;base64,[A-Za-z0-9+/=\s]+$")
+
+
 def _picture_markup(res: _Resolver, pic: dict) -> str:
     caption = _caption_text(res, pic)
     image = pic.get("image") or {}
     uri = image.get("uri") or ""
     alt = caption or "Imported picture"
-    if isinstance(uri, str) and uri.startswith("data:image/"):
-        body = f'<img alt="{escape_attr(alt)}" src="{uri}">'
-    else:  # no embedded bytes: keep an honest textual placeholder
+    if isinstance(uri, str) and _DATA_IMAGE_RE.match(uri):
+        # attribute-escaped AND grammar-checked: a quote or markup smuggled
+        # into the URI must not become attributes or elements
+        body = f'<img alt="{escape_attr(alt)}" src="{escape_attr(uri)}">'
+    else:  # no (usable) embedded bytes: keep an honest textual placeholder
         body = f"<p><em>[picture: {escape_text(alt)}]</em></p>"
+    for child in res.children(pic):  # picture-attached text (not captions)
+        if child.get("label") in ("text", "paragraph") and child.get("text") \
+                and _is_body(child):
+            body += f"<p>{_text_of(child)}</p>"
     if caption:
         body += f"<figcaption>{escape_text(caption)}</figcaption>"
     return f"<figure>{body}</figure>"
@@ -209,14 +257,19 @@ def from_docling(source: Any, *, title: Optional[str] = None,
             label = child.get("label", "")
             ref = child.get("self_ref", "")
             if label == "title":
+                if not child.get("text"):
+                    continue
                 if doc_title is None:
-                    doc_title = child.get("text") or None
+                    doc_title = child.get("text")
                 blocks.append(f"<h1>{_text_of(child)}</h1>")
             elif label == "section_header":
+                if not child.get("text"):
+                    continue
                 level = min(int(child.get("level", 1)) + 1, _HEADING_CAP)
                 blocks.append(f"<h{level}>{_text_of(child)}</h{level}>")
             elif label in ("text", "paragraph", "formula", "checkbox_selected",
-                           "checkbox_unselected", "footnote"):
+                           "checkbox_unselected", "footnote", "reference",
+                           "document_index"):
                 if child.get("text"):
                     blocks.append(f"<p>{_text_of(child)}</p>")
             elif label == "caption":
@@ -226,8 +279,7 @@ def from_docling(source: Any, *, title: Optional[str] = None,
                 blocks.append(f"<pre><code>{_text_of(child)}</code></pre>")
             elif label in ("list", "ordered_list"):
                 tag = _list_tag(res, child)
-                items = "".join(_li_markup(res, li) for li in res.children(child)
-                                if li.get("label") == "list_item")
+                items = _list_items_markup(res, child)
                 if items:
                     blocks.append(f"<{tag}>{items}</{tag}>")
             elif label == "list_item":  # stray item outside a group
@@ -236,12 +288,17 @@ def from_docling(source: Any, *, title: Optional[str] = None,
                 markup = _table_markup(child)
                 if markup:
                     blocks.append(markup)
+                caption = _caption_text(res, child)
+                if caption:  # tables cannot wrap a figcaption; keep the
+                    blocks.append(f"<p><em>{escape_text(caption)}</em></p>")
             elif label == "picture":
                 blocks.append(_picture_markup(res, child))
-            elif label in ("group", "unspecified", "chapter", "section",
-                           "inline"):
+            elif child.get("children"):
+                # any grouping construct (group/chapter/section/inline, but
+                # also sheet/form_area/key_value_area/…) — descend rather
+                # than silently dropping a subtree of real content
                 walk(child)
-            # unknown labels are skipped deliberately: forward compatibility
+            # childless unknown labels are skipped: forward compatibility
 
     walk(body)
 

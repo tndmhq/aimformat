@@ -47,7 +47,7 @@
       "script": ["type"],
       "style": ["data-aim-css", "data-aim-theme"],
       "aim-slide": ["data-aim-container", "style"],
-      "aim-proposal": ["id", "data-for", "data-action", "data-batch", "data-author", "data-author-id", "data-author-model", "data-at", "data-anchor-container", "data-anchor-after", "data-depends-on", "data-explanation"]
+      "aim-proposal": ["id", "data-for", "data-action", "data-batch", "data-author", "data-author-id", "data-author-model", "data-at", "data-anchor-container", "data-anchor-after", "data-anchor-shell", "data-depends-on", "data-explanation"]
     },
     "url_schemes": {
       "a.href": ["https", "http", "mailto", "#"],
@@ -144,7 +144,7 @@
       },
       "resolution": {
         "required": ["seq", "kind", "t", "proposal", "target", "action", "decision", "proposed_by", "proposed_at", "decided_by", "batch"],
-        "optional": ["before", "proposed", "applied", "anchor", "superseded_by", "explanation", "source"]
+        "optional": ["before", "proposed", "applied", "anchor", "from", "to", "superseded_by", "explanation", "source"]
       },
       "checkpoint": {
         "required": ["seq", "kind", "t", "label", "doc_hash"],
@@ -187,6 +187,10 @@
     "S021": ["error", "table row without data-aim in a container"],
     "S022": ["error", "item chunk inside the wrong container kind"],
     "S023": ["error", "uncovered container child"],
+    "S024": ["error", "chunk or container nested inside a chunk"],
+    "S025": ["error", "stray text inside a container"],
+    "S026": ["error", "aim-slide nested inside a slide"],
+    "S027": ["error", "more than one aim-meta script in the head"],
     "V001": ["error", "element not allowed in the asset registry"],
     "V002": ["error", "element outside the vocabulary"],
     "V003": ["error", "attribute not allowed on this element"],
@@ -217,6 +221,8 @@
     "P011": ["error", "add anchor is neither a chunk nor a pending proposal"],
     "P012": ["warning", "data-depends-on does not reference a pending proposal"],
     "P013": ["error", "data-at is not ISO-8601"],
+    "P014": ["error", "empty aim-proposals section"],
+    "P015": ["error", "pending adds anchor on each other in a cycle"],
     "H001": ["warning", "no history block (flattened document)"],
     "H002": ["error", "unparseable history line"],
     "H003": ["error", "event violates its field schema"],
@@ -225,6 +231,8 @@
     "H006": ["error", "history chain verification failed"],
     "M001": ["warning", "summary cache is stale"],
     "M002": ["warning", "embedding is stale or orphaned"],
+    "M003": ["error", "cache block is not valid JSON of the required shape"],
+    "M004": ["error", "aim-meta block present but missing its summary"],
     "C001": ["error", "file is not in canonical form"]
   }
 }

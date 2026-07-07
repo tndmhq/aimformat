@@ -193,7 +193,9 @@ statically against the versioned stylesheet; values resolve dynamically
 
 The allowed elements are a closed registry (Appendix A). Unknown elements
 are conformance errors — a finite vocabulary is what keeps output stable
-across models and tools.
+across models and tools. Attributes are likewise registry-listed per
+element; `data-x-*` is the vendor-extension escape hatch (ignored by
+conformance, mirroring `x_*` in JSON).
 
 ### 3.2 Class vocabulary
 
@@ -276,7 +278,9 @@ containment happens only through containers.
 ### 4.4 Ids
 
 Ids are opaque strings unique within the document, matching
-`[a-z0-9][a-z0-9_-]{0,63}`; proposal ids are the same with a `p-` prefix.
+`[a-z0-9][a-z0-9_-]{0,63}`; proposal ids are the same with a `p-` prefix,
+and the `p-` prefix is therefore **reserved** — chunk and container ids
+MUST NOT use it, so an anchor reference dispatches on the id alone.
 `body`, `aim:theme`, and `aim:doc` are reserved. **Ids are tooling's job**:
 models choose boundaries (emitting placeholder ids at most); the SDK
 assigns real ids at write time. The reference tooling assigns 8-character
@@ -332,7 +336,8 @@ state, including its `data-aim`.
 `move` carry an anchor: `data-anchor-container` (a container id or `body`)
 plus `data-anchor-after` — a chunk id, the id of another *pending add*
 (chains), or **omitted, meaning first position** (the attribute spelling of
-JSON `after: null`).
+JSON `after: null`) — plus, for rows in table containers,
+`data-anchor-shell` mirroring the event anchor's `shell` (§6.4).
 
 ### 5.3 Attribution
 
@@ -385,7 +390,7 @@ find-in-page, or the accessibility tree.
 | kind | required fields | optional fields | state-changing |
 |---|---|---|---|
 | `direct_edit` | `seq, kind, t, target, action, author, batch` | `before, after, anchor, from, to, origin, explanation, source` | yes |
-| `resolution` | `seq, kind, t, proposal, target, action, decision, proposed_by, proposed_at, decided_by, batch` | `before, proposed, applied, anchor, superseded_by, explanation, source` | only if `decision:"accepted"` |
+| `resolution` | `seq, kind, t, proposal, target, action, decision, proposed_by, proposed_at, decided_by, batch` | `before, proposed, applied, anchor, from, to, superseded_by, explanation, source` | only if `decision:"accepted"` |
 | `checkpoint` | `seq, kind, t, label, doc_hash` | | no |
 
 `action` ∈ `add | modify | delete | move`; `decision` ∈ `accepted |
@@ -794,14 +799,14 @@ Total registered utilities: **243**.
 
 ### A.5 Proposal attributes and event fields
 
-- `aim-proposal` attributes: `id` `data-for` `data-action` `data-batch` `data-author` `data-author-id` `data-author-model` `data-at` `data-anchor-container` `data-anchor-after` `data-depends-on` `data-explanation`
+- `aim-proposal` attributes: `id` `data-for` `data-action` `data-batch` `data-author` `data-author-id` `data-author-model` `data-at` `data-anchor-container` `data-anchor-after` `data-anchor-shell` `data-depends-on` `data-explanation`
 - `add`: payload; requires `data-anchor-container`
 - `modify`: payload; requires `data-for`
 - `delete`: payloadless; requires `data-for`
 - `move`: payloadless; requires `data-for` `data-anchor-container`
 
 - `direct_edit` events — required: `seq` `kind` `t` `target` `action` `author` `batch`; optional: `before` `after` `anchor` `from` `to` `origin` `explanation` `source`
-- `resolution` events — required: `seq` `kind` `t` `proposal` `target` `action` `decision` `proposed_by` `proposed_at` `decided_by` `batch`; optional: `before` `proposed` `applied` `anchor` `superseded_by` `explanation` `source`
+- `resolution` events — required: `seq` `kind` `t` `proposal` `target` `action` `decision` `proposed_by` `proposed_at` `decided_by` `batch`; optional: `before` `proposed` `applied` `anchor` `from` `to` `superseded_by` `explanation` `source`
 - `checkpoint` events — required: `seq` `kind` `t` `label` `doc_hash`
 
 ### A.6 Verifier rule codes
@@ -831,6 +836,10 @@ Total registered utilities: **243**.
 | S021 | error | table row without data-aim in a container |
 | S022 | error | item chunk inside the wrong container kind |
 | S023 | error | uncovered container child |
+| S024 | error | chunk or container nested inside a chunk |
+| S025 | error | stray text inside a container |
+| S026 | error | aim-slide nested inside a slide |
+| S027 | error | more than one aim-meta script in the head |
 | V001 | error | element not allowed in the asset registry |
 | V002 | error | element outside the vocabulary |
 | V003 | error | attribute not allowed on this element |
@@ -861,6 +870,8 @@ Total registered utilities: **243**.
 | P011 | error | add anchor is neither a chunk nor a pending proposal |
 | P012 | warning | data-depends-on does not reference a pending proposal |
 | P013 | error | data-at is not ISO-8601 |
+| P014 | error | empty aim-proposals section |
+| P015 | error | pending adds anchor on each other in a cycle |
 | H001 | warning | no history block (flattened document) |
 | H002 | error | unparseable history line |
 | H003 | error | event violates its field schema |
@@ -869,6 +880,8 @@ Total registered utilities: **243**.
 | H006 | error | history chain verification failed |
 | M001 | warning | summary cache is stale |
 | M002 | warning | embedding is stale or orphaned |
+| M003 | error | cache block is not valid JSON of the required shape |
+| M004 | error | aim-meta block present but missing its summary |
 | C001 | error | file is not in canonical form |
 <!-- END GENERATED REGISTRY REFERENCE -->
 

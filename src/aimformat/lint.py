@@ -28,7 +28,7 @@ from .canonical import document_text, serialize, sha256_prefixed, sort_class_tok
 from .document import AimDocument
 from .dom import Comment, Element, Text
 from .errors import AimError, HistoryError, ParseError
-from .events import Event
+from .events import _ISO_RE, Event
 from .registry import REGISTRY
 
 __all__ = ["Finding", "lint", "lint_text", "lint_path"]
@@ -94,6 +94,11 @@ class _Linter:
             self.add("S006", WARNING,
                      f"embedded aim.css targets {css.get('data-aim-css')!r}, "
                      f"expected {REGISTRY.spec_version!r}")
+        metas = [e for e in head.elements() if e.tag == "script"
+                 and e.get("type") == REGISTRY.script_types["meta"]]
+        if len(metas) > 1:
+            self.add("S027", ERROR,
+                     "more than one aim-meta script in <head>")
         for node in self.state.body.children:
             if isinstance(node, Comment):
                 self.add("S007", ERROR, "comments are not allowed in <body> "
@@ -112,11 +117,13 @@ class _Linter:
             elif el.tag == "aim-assets":
                 rank = 2
             elif el.tag == "script":
-                stype = el.get("type") or ""
+                stype = el.get("type")
                 if stype == REGISTRY.script_types["history"]:
                     rank = 3
                 elif stype == REGISTRY.script_types["embeddings"]:
                     rank = 4
+                elif stype is None:
+                    continue  # executable script: security() reports X004
                 else:
                     self.add("S010", ERROR,
                              f"unexpected script type {stype!r} in <body>")
@@ -146,12 +153,17 @@ class _Linter:
         seen_parent: dict[str, Element] = {}
         seen_container: set[str] = set()
 
-        def visit(parent: Element, inside_container: Optional[str]) -> None:
+        def visit(parent: Element, *, in_chunk: bool) -> None:
             prev: Optional[str] = None
             for el in parent.elements():
                 if el.tag == "template":
                     continue
                 cid, cont = el.chunk_id, el.container_id
+                if (cid or cont) and in_chunk:
+                    self.add("S024", ERROR,
+                             f"{'chunk' if cid else 'container'} "
+                             f"{cid or cont!r} is nested inside another "
+                             "chunk — chunks never nest (§4.3)", cid or cont)
                 if cid:
                     if not ids.is_valid_chunk_id(cid):
                         self.add("S015", ERROR, f"invalid chunk id {cid!r}", cid)
@@ -172,10 +184,10 @@ class _Linter:
                                  f"duplicate container id {cont!r}", cont)
                     seen_container.add(cont)
                     self.check_container(el)
-                visit(el, cont or inside_container)
+                visit(el, in_chunk=in_chunk or bool(cid))
                 prev = cid
 
-        visit(self.state.body, None)
+        visit(self.state.body, in_chunk=False)
 
         dup = seen_container & set(seen_parent)
         for d in dup:
@@ -184,15 +196,28 @@ class _Linter:
 
     def check_container(self, cont: Element) -> None:
         cid = cont.container_id or ""
+        for node in cont.children:
+            if isinstance(node, Text) and node.data.strip():
+                self.add("S025", ERROR,
+                         f"stray text inside container {cid!r}: "
+                         f"{node.data.strip()[:40]!r}", cid)
         if cont.tag == "aim-slide":
             for child in cont.elements():
-                if not child.chunk_id and not child.container_id:
+                if child.tag == "aim-slide":
+                    self.add("S026", ERROR,
+                             "aim-slide nested inside a slide", cid)
+                elif not child.chunk_id and not child.container_id:
                     self.add("S020", ERROR,
                              f"slide child <{child.tag}> is uncovered "
                              "(needs data-aim or data-aim-container)", cid)
             return
         for child in cont.elements():
-            if child.tag in REGISTRY.table_shells:
+            if child.tag in REGISTRY.table_shells and cont.tag == "table":
+                for node in child.children:
+                    if isinstance(node, Text) and node.data.strip():
+                        self.add("S025", ERROR,
+                                 f"stray text inside container {cid!r}: "
+                                 f"{node.data.strip()[:40]!r}", cid)
                 for row in child.elements():
                     if not row.chunk_id:
                         self.add("S021", ERROR,
@@ -222,6 +247,11 @@ class _Linter:
                 if el.tag not in REGISTRY.asset_content:
                     self.add("V001", ERROR,
                              f"<{el.tag}> is not allowed in the asset registry")
+                else:
+                    # the registry is not exempt from the security layer:
+                    # attribute allowlists, on*, and URL schemes apply here too
+                    self.check_element(el, context="assets",
+                                       where=el.get("id") or "aim-assets")
         sec = self.state.section("aim-proposals")
         if sec is not None:
             for card in sec.elements():
@@ -254,9 +284,19 @@ class _Linter:
                 self.add("X002", ERROR,
                          f"event-handler attribute {name!r} is forbidden", loc)
                 continue
-            if name not in allowed and not name.startswith("data-x-"):
+            # the tokenizer lowercases attribute names; compare against the
+            # allowlist in the re-adjusted foreign-content spelling
+            canonical_name = REGISTRY.svg_case_adjust.get(name, name)
+            if name not in allowed and canonical_name not in allowed \
+                    and not name.startswith("data-x-"):
                 self.add("V003", ERROR,
-                         f"attribute {name!r} is not allowed on <{tag}>", loc)
+                         f"attribute {canonical_name!r} is not allowed on "
+                         f"<{tag}>", loc)
+                continue
+            if name in ("fill", "stroke") and value and "url(" in value:
+                self.add("X003", ERROR,
+                         f"url() is not allowed in {tag}@{name}: "
+                         f"{value[:40]!r}", loc)
                 continue
             if name == "class" and value:
                 for token in value.split():
@@ -355,12 +395,22 @@ class _Linter:
         sec = self.state.section("aim-proposals")
         if sec is None:
             return
+        if not sec.elements():
+            self.add("P014", ERROR,
+                     "empty <aim-proposals> section (remove it when the "
+                     "pending lane is empty)")
         pending_md: dict[str, str] = {}
         pending_ids: set[str] = set()
         for node in sec.children:
             if isinstance(node, Element) and node.tag != "aim-proposal":
                 self.add("P001", ERROR,
                          f"unexpected <{node.tag}> inside <aim-proposals>")
+            elif isinstance(node, Element):
+                for child in node.elements():
+                    if child.tag != "template":
+                        self.add("P001", ERROR,
+                                 f"unexpected <{child.tag}> inside a proposal "
+                                 "card", node.get("id") or "")
         for p in self.doc.proposals:
             pending_ids.add(p.id)
         for p in self.doc.proposals:
@@ -402,9 +452,12 @@ class _Linter:
                                    p.payload_html.strip())
                     self.check_theme_block(inner, where)
                 else:
-                    root = p.payload_html
-                    m = re.search(r'data-aim="([^"]+)"', root)
-                    if not m or m.group(1) != p.target:
+                    from .dom import parse_fragment
+                    roots = [n for n in parse_fragment(p.payload_html)
+                             if isinstance(n, Element)]
+                    root_id = (roots[0].chunk_id or roots[0].container_id
+                               if roots else None)
+                    if root_id != p.target:
                         self.add("P010", ERROR,
                                  "modify payload id must equal data-for", where)
             if p.action == "add" and p.anchor_after:
@@ -418,9 +471,24 @@ class _Linter:
                 self.add("P012", WARNING,
                          f"data-depends-on {p.depends_on!r} is not pending",
                          where)
-            if p.at and not re.match(r"^\d{4}-\d{2}-\d{2}T", p.at):
-                self.add("P013", ERROR, f"data-at is not ISO-8601: {p.at!r}",
-                         where)
+            if p.at and not _ISO_RE.match(p.at):
+                self.add("P013", ERROR,
+                         f"data-at is not ISO-8601 UTC: {p.at!r}", where)
+        # chained adds must form chains, not cycles — a cycle can never
+        # resolve (accept order does not exist)
+        add_anchor = {p.id: p.anchor_after for p in self.doc.proposals
+                      if p.action == "add"}
+        for start in add_anchor:
+            seen = {start}
+            nxt = add_anchor[start]
+            while nxt in add_anchor:
+                if nxt in seen:
+                    self.add("P015", ERROR,
+                             "pending adds anchor on each other in a cycle",
+                             start)
+                    break
+                seen.add(nxt)
+                nxt = add_anchor[nxt]
 
     # -- H: history --------------------------------------------------------------------------------
     def history(self) -> None:
@@ -455,22 +523,36 @@ class _Linter:
                 self.add("H005", ERROR,
                          f"seq {obj.get('seq')}: history line is not canonical "
                          "JSON (sorted keys, compact, <\\/ escape)")
-        for problem in self.doc.verify():
-            self.add("H006", ERROR, problem)
+        try:
+            for problem in self.doc.verify():
+                self.add("H006", ERROR, problem)
+        except HistoryError as exc:
+            self.add("H002", ERROR, str(exc))
 
     # -- caches ------------------------------------------------------------------------------------------
     def caches(self) -> None:
-        meta = self.doc.meta
+        try:
+            meta = self.doc.meta
+        except ParseError as exc:
+            self.add("M003", ERROR, f"aim-meta cache: {exc}")
+            meta = None
         if meta is not None:
             summary = meta.get("summary")
-            if summary and summary.get("doc_hash") not in (None,
-                                                           self.doc.doc_hash):
+            if summary is None:
+                self.add("M004", ERROR,
+                         "aim-meta block present but has no summary (§8.1)")
+            elif not isinstance(summary, dict):
+                self.add("M003", ERROR, "aim-meta summary is not an object")
+            elif summary.get("doc_hash") not in (None, self.doc.doc_hash):
                 self.add("M001", WARNING,
                          "aim-meta summary is stale (doc_hash mismatch)")
-        for emb in self.doc.stale_embeddings():
-            self.add("M002", WARNING,
-                     f"embedding for chunk {emb.get('chunk')!r} is stale or "
-                     "orphaned", str(emb.get("chunk")))
+        try:
+            for emb in self.doc.stale_embeddings():
+                self.add("M002", WARNING,
+                         f"embedding for chunk {emb.get('chunk')!r} is stale "
+                         "or orphaned", str(emb.get("chunk")))
+        except ParseError as exc:
+            self.add("M003", ERROR, f"embeddings cache: {exc}")
 
     # -- C: canonical form ----------------------------------------------------------------------------------
     def canonical_form(self) -> None:
@@ -499,12 +581,23 @@ def lint(doc: AimDocument, *, source_text: Optional[str] = None) -> list[Finding
 
 
 def lint_text(text: str) -> list[Finding]:
+    """Lint document text. Never raises: hostile input becomes findings."""
     try:
         doc = AimDocument.loads(text)
     except (ParseError, AimError) as exc:
         return [Finding("S000", ERROR, f"parse failed: {exc}")]
-    return lint(doc, source_text=text)
+    try:
+        return lint(doc, source_text=text)
+    except Exception as exc:  # last-resort net: a crash is a verifier bug,
+        # but the caller still deserves a finding, not a traceback
+        return [Finding("S000", ERROR,
+                        f"verifier internal error (please report): "
+                        f"{type(exc).__name__}: {exc}")]
 
 
 def lint_path(path: Union[str, Path]) -> list[Finding]:
-    return lint_text(Path(path).read_text("utf-8"))
+    try:
+        text = Path(path).read_text("utf-8")
+    except (OSError, UnicodeDecodeError) as exc:
+        return [Finding("S000", ERROR, f"cannot read {path}: {exc}")]
+    return lint_text(text)

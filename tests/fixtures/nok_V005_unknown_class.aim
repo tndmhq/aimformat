@@ -288,12 +288,5 @@ aim-assets{display:none}
 <h1 data-aim="h1" class="text-glow">Fixture</h1>
 <p data-aim="p1">One paragraph &amp; some text.</p>
 <ul data-aim-container="l1"><li data-aim="i1">First</li><li data-aim="i2">Run…</li><li data-aim="i2">…run</li></ul>
-<script type="application/aim-history+jsonl">
-
-
-{"action":"add","after":"<h1 data-aim=\"h1\" class=\"font-bold text-3xl\">Fixture<\/h1>","anchor":{"after":null,"container":"body"},"author":{"model":"claude-opus-4-8","type":"agent"},"batch":"b1","kind":"direct_edit","seq":1,"t":"2026-07-07T12:00:00Z","target":"h1"}
-{"action":"add","after":"<p data-aim=\"p1\">One paragraph &amp; some text.<\/p>","anchor":{"after":"h1","container":"body"},"author":{"model":"claude-opus-4-8","type":"agent"},"batch":"b2","kind":"direct_edit","seq":2,"t":"2026-07-07T12:00:01Z","target":"p1"}
-{"action":"add","after":"<ul data-aim-container=\"l1\"><li data-aim=\"i1\">First<\/li><li data-aim=\"i2\">Run…<\/li><li data-aim=\"i2\">…run<\/li><\/ul>","anchor":{"after":"p1","container":"body"},"author":{"model":"claude-opus-4-8","type":"agent"},"batch":"b3","kind":"direct_edit","seq":3,"t":"2026-07-07T12:00:02Z","target":"l1"}
-</script>
 </body>
 </html>

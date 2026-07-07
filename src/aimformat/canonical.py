@@ -42,7 +42,28 @@ def escape_attr(s: str) -> str:
 
 
 def sort_class_tokens(value: str) -> str:
-    return " ".join(sorted(value.split()))
+    """Class tokens sorted and de-duplicated (a set, canonically spelled)."""
+    return " ".join(sorted(set(value.split())))
+
+
+def normalize_style(value: str) -> str:
+    """Inline style as a normal form: whitelist properties in registry
+    order, later duplicates win, `; `-separated, no trailing semicolon.
+    Unknown properties (a lint error anyway) keep authored order at the
+    end so the violation stays visible rather than being reshuffled."""
+    known: dict[str, str] = {}
+    unknown: list[tuple[str, str]] = []
+    for piece in value.split(";"):
+        piece = piece.strip()
+        if not piece or ":" not in piece:
+            continue
+        prop, val = (s.strip() for s in piece.split(":", 1))
+        if prop in REGISTRY.style_prop_order:
+            known[prop] = val
+        else:
+            unknown.append((prop, val))
+    ordered = [(p, known[p]) for p in REGISTRY.style_prop_order if p in known]
+    return "; ".join(f"{p}:{v}" for p, v in ordered + unknown)
 
 
 def canonical_attrs(el: Element, *, in_svg: bool) -> str:
@@ -61,8 +82,14 @@ def canonical_attrs(el: Element, *, in_svg: bool) -> str:
 
     parts = []
     for k, v in ordered:
-        if k == "class" and v:
+        if k == "class" and v is not None:
             v = sort_class_tokens(v)
+            if not v:
+                continue  # empty class has no canonical spelling
+        if k == "style" and v is not None:
+            v = normalize_style(v)
+            if not v:
+                continue
         parts.append(fix(k) if v is None else f'{fix(k)}="{escape_attr(v)}"')
     return (" " + " ".join(parts)) if parts else ""
 
@@ -78,17 +105,23 @@ def _is_registry_svg(el: Element) -> bool:
 
 
 def serialize(node: Nodeish, *, in_svg: bool = False) -> str:
-    """Inline canonical serialization of one node (no trailing newline)."""
+    """Inline canonical serialization of one node (no trailing newline).
+
+    A normal form, not an echo: HTML void elements never carry a slash
+    however they were written, and foreign (SVG-context) elements with no
+    content always self-close (spec §11.1)."""
     if isinstance(node, Text):
         return escape_text(node.data)
     if isinstance(node, Comment):
         return f"<!--{node.data}-->"
     svg_here = in_svg or node.tag == "svg"
     open_tag = f"<{node.tag}{canonical_attrs(node, in_svg=svg_here)}"
+    if node.tag in REGISTRY.void_elements and not svg_here:
+        return open_tag + ">"
+    if svg_here and not node.children and node.raw is None:
+        return open_tag + "/>"
     if node.self_closing:
         return open_tag + "/>"
-    if node.tag in REGISTRY.void_elements:
-        return open_tag + ">"
     if node.raw is not None:
         return f"{open_tag}>{node.raw}</{node.tag}>"
     inner = "".join(serialize(c, in_svg=svg_here) for c in node.children)
