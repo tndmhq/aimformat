@@ -1,9 +1,15 @@
 ---
 date: 2026-07-07 22:43
 type: plan
-status: active
+status: done
 related: []
 ---
+
+> **Outcome (2026-07-08):** shipped on this branch as planned — 29 tests,
+> full suite green; plus a real `from_docling` fix found live (heading
+> nodes parent their section content in DOCX output; walker now descends).
+> The tndm editor consumes all of it end-to-end (upload docx/pdf/md/txt,
+> export docx/md/html/pdf). Awaiting maintainer review before merge.
 
 # Plan: format converters (`aimformat.convert`)
 
