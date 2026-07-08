@@ -9,6 +9,7 @@ required to add entries.)
 
 | Date | Type | Entry | Status | What |
 |---|---|---|---|---|
+| 2026-07-08 06:26 | plan | [reconcile](2026-07-08_0626_plan_reconcile.md) | done | Implement AimDocument.reconcile() + aim reconcile CLI verb (spec §6.8): detect out-of-band body edits against the full history and synthesize origin:reconcile events so the file verifies again — shipped same day with 30 tests |
 | 2026-07-07 22:43 | plan | [converters](2026-07-07_2243_plan_converters.md) | done | Format converters: md/txt importers, docling wrappers, md/html/pdf exporters, aim import/export CLI — deps as optional extras |
 | 2026-07-07 19:21 | review | [v01-deep-self-review](2026-07-07_1921_review_v01-deep-self-review.md) | done | Post-ship adversarial review of the v0.1 toolkit (own pass + three independent reproduce-before-report agents): 38 findings (5 critical, 16 major), all fixed with regression tests; anchor resolution rebuilt around context-validated primitives, serializer made a true normal form, verifier crash-proofed, tracked DOCX export completed for containers; 313 tests green. |
 | 2026-07-07 16:59 | report | [v01-shipped](2026-07-07_1659_report_v01-shipped.md) | done | spec.md v0.1 + reference toolkit shipped: registry-driven spec with executable snippets, stdlib-only SDK (ops/proposals/history/verify/time-travel/assets/caches), aim CLI, aim.css generator, docling ingestor, DOCX exporter with tracked changes, 270+ tests incl. ok/nok conformance suite, README/guide/CONTRIBUTING/CHANGELOG/CI. |

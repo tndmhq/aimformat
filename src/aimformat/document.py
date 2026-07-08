@@ -577,8 +577,9 @@ class AimDocument:
     # -- payload plumbing ------------------------------------------------------------
     _PAYLOAD_ID_RE = re.compile(r'data-aim(?:-container)?="([^"]+)"')
 
-    def _taken_ids(self) -> set[str]:
-        taken = self._state.all_ids()
+    def _recorded_ids(self) -> set[str]:
+        """Ids mentioned by history or the pending lane (live or burned)."""
+        taken: set[str] = set()
         for ev in self.history:  # ids are never reused, deleted ones stay burned
             for key in ("target", "proposal"):
                 v = ev.get(key)
@@ -595,6 +596,9 @@ class AimDocument:
             if p.payload_html:
                 taken.update(self._PAYLOAD_ID_RE.findall(p.payload_html))
         return taken
+
+    def _taken_ids(self) -> set[str]:
+        return self._state.all_ids() | self._recorded_ids()
 
     def _normalize_payload(self, markup: str, *, expect_id: Optional[str] = None,
                            expect_marker: Optional[str] = None,
@@ -1485,6 +1489,28 @@ class AimDocument:
             el.raw = ("\n" + "\n".join(e.to_json() for e in kept) + "\n"
                       if kept else "\n")
         return dropped
+
+    def reconcile(self, *, author: Optional[Actor] = None,
+                  at: Optional[str] = None,
+                  dry_run: bool = False) -> "ReconcileReport":
+        """Detect out-of-band edits and repair the history (spec §6.8).
+
+        Compares the body against the state the full log reconstructs and
+        appends the difference as ``direct_edit`` events with
+        ``origin: "reconcile"`` (*author* defaults to ``{type: external}``),
+        declaring the current body truth going forward. Unmarked or
+        conflicting ids are fixed up first (ids are tooling's job), and
+        pending proposals whose target vanished are rejected. Also the
+        adoption path for hand-written files with no history at all.
+
+        With ``dry_run=True`` nothing is mutated — the returned
+        :class:`ReconcileReport` describes what *would* be done. Raises
+        :class:`HistoryError` when the log itself is damaged or pruned
+        (reconcile repairs bodies, not histories). See
+        :mod:`aimformat.reconcile` for the full contract.
+        """
+        from .reconcile import reconcile_document
+        return reconcile_document(self, author=author, at=at, dry_run=dry_run)
 
     # -- caches: summary / toc / embeddings ------------------------------------------------------------
     def set_summary(self, text: str, *, model: str) -> None:

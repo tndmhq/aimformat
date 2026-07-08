@@ -474,8 +474,10 @@ back travel goes, trivially safe), resolve-all-pending on export
 last consistent state, then synthesize `direct_edit` events with
 `author: {type: external}`, `origin: reconcile`; fuzzy matching lives in
 the tool, and whatever it declares becomes truth going forward — also the
-adoption path for hand-edited files). Reference implementation status:
-reconcile ships after v0.1.0.
+adoption path for hand-edited files). The reference toolkit implements
+reconcile as `AimDocument.reconcile()` / `aim reconcile`; it requires the
+full retained log (reconciling a pruned history is an error there — the
+baseline below the prune floor is unrecoverable).
 
 ---
 
@@ -908,5 +910,5 @@ headers/footers, margins); slide masters/layouts and transitions; an
 `.aimx` ZIP container for asset-heavy documents; multi-writer merge
 semantics (v0.1 is single-writer; divergence is detectable via payload
 equality and checkpoint hashes); `aim:doc` settings; signing on top of the
-hash-anchored history; media-type registration; fonts as assets;
-`aim reconcile` and `aim open` reference implementations.
+hash-anchored history; media-type registration; fonts as assets; an
+`aim open` reference implementation.

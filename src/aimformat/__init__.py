@@ -38,6 +38,7 @@ from .events import Actor, Event, agent, external, human
 from .export_docx import to_docx
 from .ingest import from_docling
 from .lint import Finding, lint, lint_path, lint_text
+from .reconcile import ReconcileReport
 from .registry import REGISTRY
 
 __version__ = "0.1.0"
@@ -45,7 +46,7 @@ SPEC_VERSION = REGISTRY.spec_version
 
 __all__ = [
     "AimDocument", "Anchor", "Chunk", "Proposal", "Event", "Actor",
-    "Finding", "LAST", "SPEC_VERSION", "__version__",
+    "Finding", "LAST", "ReconcileReport", "SPEC_VERSION", "__version__",
     "load", "loads", "new_document",
     "lint", "lint_text", "lint_path",
     "human", "agent", "external",

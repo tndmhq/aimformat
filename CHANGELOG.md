@@ -3,6 +3,18 @@
 All notable changes to the spec and the reference toolkit. The package
 version tracks the spec version it implements (0.x minors may break).
 
+## Unreleased
+
+- **Reconcile** (spec §6.8): `AimDocument.reconcile()` and `aim reconcile
+  FILE [-o OUT] [--check]` detect out-of-band edits — hand edits,
+  corruption, files that never had history — and repair the document by
+  appending `origin:"reconcile"` events (external author) that declare the
+  current body truth, so `verify()` passes again. Assigns ids where missing
+  or conflicting, rejects pending proposals whose target vanished, reports
+  unrepairable log damage as `residual`. Also the adoption path for
+  hand-written `.aim` files. Refuses pruned or damaged logs
+  (`HistoryError`) rather than guessing at an unrecoverable baseline.
+
 ## 0.1.0 — 2026-07-07
 
 First published draft of the specification and the reference toolkit.

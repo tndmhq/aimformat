@@ -5,6 +5,7 @@
     aim new -o FILE         scaffold a minimal valid document
     aim show FILE           human-readable history / pending-lane overview
     aim flatten FILE        drop history (+embeddings) -> clean file
+    aim reconcile FILE      detect out-of-band edits; append reconcile events
     aim css                 print the generated aim.css for this spec version
     aim import IN -o F.aim  convert md/txt/docx/pdf to .aim
     aim export F.aim -o OUT convert .aim to docx/md/html/pdf (by extension)
@@ -101,6 +102,27 @@ def _cmd_flatten(args: argparse.Namespace) -> int:
     doc.save(out)
     print(f"wrote {out}")
     return 0
+
+
+def _cmd_reconcile(args: argparse.Namespace) -> int:
+    from .events import external
+    doc = AimDocument.load(args.file)
+    report = doc.reconcile(author=external("aim-reconcile"),
+                           dry_run=args.check)
+    for old, new in report.assigned_ids:
+        print(f"  id assigned: {old or '(unmarked)'} -> {new}")
+    for pid in report.rejected_proposals:
+        print(f"  proposal rejected (target gone): {pid}")
+    print(report.summary())
+    for problem in report.residual:
+        print(f"aim: unrepairable: {problem}", file=sys.stderr)
+    if args.check:
+        return 1 if (report.changed or report.residual) else 0
+    if report.changed or args.output:
+        out = Path(args.output or args.file)
+        doc.save(out)
+        print(f"wrote {out}")
+    return 1 if report.residual else 0
 
 
 def _cmd_css(args: argparse.Namespace) -> int:
@@ -214,6 +236,17 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("-o", "--output")
     p.add_argument("--keep-embeddings", action="store_true")
     p.set_defaults(func=_cmd_flatten)
+
+    p = sub.add_parser("reconcile",
+                       help="detect out-of-band edits and append reconcile "
+                            "events; modifies the file in place unless -o "
+                            "is given")
+    p.add_argument("file")
+    p.add_argument("-o", "--output")
+    p.add_argument("--check", action="store_true",
+                   help="report drift without modifying anything; "
+                        "exit 1 when drift is found")
+    p.set_defaults(func=_cmd_reconcile)
 
     p = sub.add_parser("css", help="print the generated aim.css")
     p.add_argument("--stats", action="store_true")

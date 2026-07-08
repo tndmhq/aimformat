@@ -30,6 +30,7 @@ codes bidirectionally in sync with what `lint.py` can actually emit.
 | `document.py` | `AimDocument`: ops, pending lane, verify, time travel, assets | every state change mutates the tree AND appends the matching event — never one without the other; replay/verify always run on a deep copy (`DocState` over a clone), never the live tree |
 | `events.py` | `Actor`/`Event` over canonical dicts | unknown fields ignored; `x_*` reserved |
 | `lint.py` | the verifier; stable codes S/V/X/P/H/M/C | collects all findings in one run; `C001` byte-compares the source against the canonical serialization |
+| `reconcile.py` | repair out-of-band edits; adoption path for hand-written files | edit script from expected state E (forward replay of the FULL log) to actual body A, appended as `origin:"reconcile"` events — so `verify()` passes by construction; refuses pruned/damaged logs; never rewrites body content (only ids) |
 | `css.py` | deterministic stylesheet | budget guarded by tests (<40 KB raw) |
 | `ingest.py` | DoclingDocument dict → chunks | dict-shaped input only — docling never becomes a dependency |
 | `export_docx.py` | .aim → Word incl. `w:ins`/`w:del` tracked changes | `accept-all`/`reject-all` resolve a throwaway copy through the real accept/reject machinery |
