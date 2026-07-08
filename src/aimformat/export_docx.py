@@ -522,6 +522,10 @@ def _resolve_copy(doc: AimDocument, decision: str) -> AimDocument:
             raise InvalidOperation(
                 "pending adds anchor on each other in a cycle — the file is "
                 "corrupt (aim lint reports P015)")
+        # deletes go last within a round: an add anchored on a chunk that a
+        # sibling delete card targets must land while the anchor still
+        # exists (accept order must not depend on card order)
+        ready.sort(key=lambda p: p.action == "delete")
         for p in ready:
             if decision == "accept-all":
                 clone.accept(p.id, decided_by=decider)

@@ -116,24 +116,6 @@ class _Walker:
         self.i = 0
         self.first_heading: Optional[str] = None
 
-    def _until(self, close_type: str) -> list[Any]:
-        """Collect the token slice up to (not including) *close_type* at the
-        current nesting level, consuming the closer."""
-        depth = 0
-        start = self.i
-        while self.i < len(self.toks):
-            tok = self.toks[self.i]
-            if tok.type == close_type and depth == 0:
-                slice_ = self.toks[start:self.i]
-                self.i += 1
-                return slice_
-            if tok.type.endswith("_open"):
-                depth += 1
-            elif tok.type.endswith("_close"):
-                depth -= 1
-            self.i += 1
-        return self.toks[start:self.i]
-
     # ------------------------------------------------------------------
     def blocks(self, stop: Optional[str] = None) -> list[str]:
         out: list[str] = []
@@ -221,6 +203,18 @@ class _Walker:
             elif t == "blockquote_open":
                 inner = self.blocks(stop="blockquote_close")
                 parts.append("<blockquote>" + "".join(inner) + "</blockquote>")
+            elif t == "heading_open":
+                inline = self.toks[self.i]
+                self.i += 2  # inline + heading_close
+                content = _inline(inline.children)
+                if content:  # headings demote to a bold line inside items
+                    parts.append(f"<p><strong>{content}</strong></p>")
+            elif t == "html_block":
+                text = escape_text(tok.content.strip())
+                if text:
+                    parts.append(f"<p>{text}</p>")
+            elif t == "hr":
+                parts.append("<hr>")
         return "<li>" + "".join(parts) + "</li>"
 
     # ------------------------------------------------------------------

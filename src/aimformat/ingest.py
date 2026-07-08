@@ -249,8 +249,15 @@ def from_docling(source: Any, *, title: Optional[str] = None,
         for ref in table.get("captions", []):
             seen_caption_refs.add(ref["$ref"] if isinstance(ref, dict) else ref)
 
+    visited: set[str] = set()  # $ref graphs from hostile input may cycle
+
     def walk(node: dict) -> None:
         nonlocal doc_title
+        node_ref = node.get("self_ref", "")
+        if node_ref:
+            if node_ref in visited:
+                return
+            visited.add(node_ref)
         for child in res.children(node):
             if not _is_body(child):
                 continue

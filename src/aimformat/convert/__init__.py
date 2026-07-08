@@ -68,9 +68,11 @@ def _docling_document(path: Union[str, Path]):
 def from_docx(path: Union[str, Path], *, title: Optional[str] = None,
               lang: str = "en", author: Optional[Actor] = None,
               theme: Optional[dict[str, str]] = None) -> AimDocument:
-    """DOCX → .aim via docling (extra ``ingest``)."""
+    """DOCX → .aim via docling (extra ``ingest``). An explicit ``title``
+    wins; otherwise the document's own title node does (docling exports the
+    file stem as ``name``, which is the final fallback)."""
     return from_docling(
-        _docling_document(path), title=title or Path(path).stem, lang=lang,
+        _docling_document(path), title=title, lang=lang,
         author=author or external("docx-import"), theme=theme)
 
 
@@ -79,7 +81,7 @@ def from_pdf(path: Union[str, Path], *, title: Optional[str] = None,
              theme: Optional[dict[str, str]] = None) -> AimDocument:
     """PDF → .aim via docling (extra ``ingest``; OCR per docling defaults)."""
     return from_docling(
-        _docling_document(path), title=title or Path(path).stem, lang=lang,
+        _docling_document(path), title=title, lang=lang,
         author=author or external("pdf-import"), theme=theme)
 
 
@@ -104,15 +106,13 @@ def from_path(path: Union[str, Path], *, title: Optional[str] = None,
                          f"(supported: {', '.join(sorted(_DISPATCH))})")
     if kind == "aim":
         return AimDocument.load(p)
-    default_title = title or p.stem
-    if kind == "markdown":
-        return from_markdown(p.read_text("utf-8"), title=title, lang=lang,
-                             author=author, theme=theme)
+    if kind == "markdown":  # utf-8-sig: a Windows BOM must not become text
+        return from_markdown(p.read_text("utf-8-sig"), title=title,
+                             lang=lang, author=author, theme=theme)
     if kind == "text":
-        return from_text(p.read_text("utf-8"), title=default_title,
+        return from_text(p.read_text("utf-8-sig"), title=title or p.stem,
                          lang=lang, author=author, theme=theme)
     if kind == "docx":
-        return from_docx(p, title=default_title, lang=lang, author=author,
+        return from_docx(p, title=title, lang=lang, author=author,
                          theme=theme)
-    return from_pdf(p, title=default_title, lang=lang, author=author,
-                    theme=theme)
+    return from_pdf(p, title=title, lang=lang, author=author, theme=theme)

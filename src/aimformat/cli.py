@@ -121,6 +121,8 @@ def _cmd_import(args: argparse.Namespace) -> int:
         return 2
     try:
         doc = from_path(args.input, title=args.title, lang=args.lang)
+    except UnicodeDecodeError:  # ValueError subclass: main() handles it
+        raise
     except ValueError as exc:
         print(f"aim: {exc}", file=sys.stderr)
         return 2
@@ -140,6 +142,9 @@ _EXPORT_PENDING = {
 
 def _cmd_export(args: argparse.Namespace) -> int:
     out = Path(args.output)
+    if out.exists() and not args.force:
+        print(f"aim: {out} exists (use --force to overwrite)", file=sys.stderr)
+        return 2
     suffix = out.suffix.lower()
     if suffix not in _EXPORT_PENDING:
         print(f"aim: unsupported export format {suffix!r} "
@@ -232,6 +237,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--pending",
                    help="pending-lane fate; per-format default: "
                         "docx=tracked, md=drop, html/pdf=keep")
+    p.add_argument("--force", action="store_true",
+                   help="overwrite an existing file")
     p.set_defaults(func=_cmd_export)
     return parser
 

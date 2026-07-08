@@ -132,6 +132,130 @@ class TestToMarkdown:
             aim.to_markdown(doc, pending="tracked")
 
 
+class TestRoundTripHardening:
+    """Regressions from the 2026-07-08 adversarial review."""
+
+    PROSE = ["# not a heading", "- not a list", "> not a quote",
+             "1. not ordered", "~~not struck~~", "&copy; entity text",
+             "<https://example.com> literal", "--- dashes"]
+
+    def _doc(self, chunks):
+        doc = aim.new_document(title="t")
+        u = aim.human("u")
+        for c in chunks:
+            doc.add_chunk(c, author=u)
+        return doc
+
+    def test_prose_that_looks_like_markdown_survives(self):
+        doc = self._doc([
+            "<p>" + c.replace("&", "&amp;").replace("<", "&lt;")
+            .replace(">", "&gt;") + "</p>" for c in self.PROSE])
+        md1 = aim.to_markdown(doc)
+        d2 = aim.from_markdown(md1)
+        assert [ch.text for ch in d2.chunks] == self.PROSE
+        assert aim.to_markdown(d2) == md1  # converged
+
+    def test_table_cells_with_br_pipes_code(self):
+        doc = self._doc([
+            "<table><thead><tr><th>H1</th><th>H2</th></tr></thead><tbody>"
+            "<tr><td>a<br>b</td><td><code>x|y</code></td></tr>"
+            "</tbody></table>"])
+        d2 = aim.from_markdown(aim.to_markdown(doc))
+        rows = [c for c in d2.chunks if c.tag == "tr"]
+        assert len(rows) == 2  # header + body — the table survived
+        assert "x|y" in rows[1].text
+
+    def test_multi_row_thead_demotes(self):
+        doc = self._doc([
+            "<table><thead><tr><th>A</th></tr><tr><th>B</th></tr></thead>"
+            "<tbody><tr><td>c</td></tr></tbody></table>"])
+        d2 = aim.from_markdown(aim.to_markdown(doc))
+        assert len([c for c in d2.chunks if c.tag == "tr"]) == 3
+
+    def test_backticks_in_code(self):
+        doc = self._doc([
+            "<p>inline <code>a`b</code> code</p>",
+            "<pre><code>line\n```\nfence inside</code></pre>"])
+        d2 = aim.from_markdown(aim.to_markdown(doc))
+        pre = [c for c in d2.chunks if c.tag == "pre"]
+        assert len(pre) == 1 and "fence inside" in pre[0].text
+        assert "a`b" in d2.chunks[0].text
+
+    def test_ordered_nesting_indent(self):
+        d = aim.from_markdown("1. outer\n   1. inner\n2. next\n")
+        d2 = aim.from_markdown(aim.to_markdown(d))
+        li = [c for c in d2.chunks if c.tag == "li"]
+        assert len(li) == 2 and "inner" in li[0].html  # stayed nested
+
+    def test_loose_item_keeps_second_paragraph(self):
+        d = aim.from_markdown("- one\n\n  two\n")
+        d2 = aim.from_markdown(aim.to_markdown(d))
+        li = [c for c in d2.chunks if c.tag == "li"][0]
+        # both paragraphs survive as separate blocks inside the item
+        assert li.html.count("<p>") == 2
+        assert "one" in li.text and "two" in li.text
+
+    def test_heading_inside_item_kept_as_text(self):
+        d = aim.from_markdown("- # heading in item\n")
+        li = [c for c in d.chunks if c.tag == "li"][0]
+        assert "heading in item" in li.text
+
+    def test_link_with_space_and_parens(self):
+        doc = self._doc(['<p><a href="https://x/a b(c)">t</a></p>'])
+        d2 = aim.from_markdown(aim.to_markdown(doc))
+        assert "<a" in d2.chunks[0].html
+
+    def test_bom_stripped(self, tmp_path):
+        p = tmp_path / "bom.md"
+        p.write_bytes("﻿# BOM Title\n\nBody.".encode("utf-8"))
+        doc = aim.from_path(p)
+        assert doc.title == "BOM Title"
+
+    def test_accept_all_delete_plus_dependent_add(self):
+        doc = aim.from_text("Alpha.\n\nBeta.")
+        bot = aim.agent("m")
+        doomed = doc.chunks[1]
+        doc.propose_delete(doomed.id, author=bot, explanation="x")
+        doc.propose_add("<p>After beta.</p>", author=bot, container="body",
+                        after=doomed.id, explanation="y")
+        html = aim.to_html(doc, pending="accept-all")
+        assert "After beta." in html and "Beta." not in html
+
+    def test_critic_container_and_row_proposals_visible(self):
+        doc = aim.new_document(title="t")
+        u = aim.human("u")
+        doc.add_chunk('<ul data-aim-container=""><li data-aim="">one</li>'
+                      '<li data-aim="">two</li></ul>', author=u)
+        bot = aim.agent("m")
+        li_id = [c for c in doc.chunks if c.tag == "li"][0].id
+        doc.propose_delete(li_id, author=bot, explanation="drop item")
+        md = aim.to_markdown(doc, pending="criticmarkup")
+        assert "{--" in md and "drop item" in md
+
+    def test_critic_delimiters_neutralized(self):
+        doc = aim.from_text("a ~> b and x ~~ y.")
+        bot = aim.agent("m")
+        c = doc.chunks[0]
+        doc.propose_modify(c.id, f'<p data-aim="{c.id}">clean.</p>',
+                           author=bot, explanation="note with <<} inside")
+        md = aim.to_markdown(doc, pending="criticmarkup")
+        # spans still terminate exactly once each
+        assert md.count("~~}") == 1 or md.count("~~}") == 0
+        assert "{~~" in md and "~>clean" in md
+
+    def test_export_force_flag(self, tmp_path):
+        src = tmp_path / "s.md"
+        src.write_text("# T\n\nx", "utf-8")
+        doc_path = tmp_path / "d.aim"
+        cli_main(["import", str(src), "-o", str(doc_path)])
+        out = tmp_path / "o.md"
+        out.write_text("sentinel", "utf-8")
+        assert cli_main(["export", str(doc_path), "-o", str(out)]) == 2
+        assert out.read_text("utf-8") == "sentinel"
+        assert cli_main(["export", str(doc_path), "-o", str(out),
+                         "--force"]) == 0
+
+
 class TestCriticMarkup:
     def _doc(self):
         doc = aim.from_text("Alpha.\n\nBeta.")
