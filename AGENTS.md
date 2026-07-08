@@ -79,12 +79,7 @@ technical content only (see Governance below).
    log entry's `status`, update its index row, and promote durable,
    non-discoverable lessons into the right `docs/knowledge/` file.
 
-5. **Git — no autonomous commits in local checkouts.** In a user's local
-   checkout, prepare changes and let the user review/commit (or commit only
-   when explicitly asked). In cloud/sandboxed environments (disposable
-   worktrees, CI), committing as part of the work is fine.
-
-6. **Agent-friendliness.** Proactively look for ways to make the repo easier
+5. **Agent-friendliness.** Proactively look for ways to make the repo easier
    for future agents — missing or stale knowledge entries, pointers worth
    adding to `AGENTS.md`, conventions worth codifying, reusable tooling — and
    suggest them; fold accepted ones into `docs/knowledge/` or `AGENTS.md`.
