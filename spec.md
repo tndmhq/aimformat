@@ -842,6 +842,8 @@ Total registered utilities: **243**.
 | S025 | error | stray text inside a container |
 | S026 | error | aim-slide nested inside a slide |
 | S027 | error | more than one aim-meta script in the head |
+| S028 | error | markup outside the single <html> document element |
+| S029 | error | element not allowed in the head vocabulary |
 | V001 | error | element not allowed in the asset registry |
 | V002 | error | element outside the vocabulary |
 | V003 | error | attribute not allowed on this element |
@@ -859,6 +861,7 @@ Total registered utilities: **243**.
 | X003 | error | dangerous URL (javascript:/data:text) |
 | X004 | error | executable or unknown <script> |
 | X005 | error | free <style> block |
+| X006 | error | embedded aim.css does not match the generated stylesheet |
 | P001 | error | unexpected element inside <aim-proposals> |
 | P002 | error | invalid proposal id |
 | P003 | error | unknown proposal action |
@@ -874,6 +877,8 @@ Total registered utilities: **243**.
 | P013 | error | data-at is not ISO-8601 |
 | P014 | error | empty aim-proposals section |
 | P015 | error | pending adds anchor on each other in a cycle |
+| P016 | error | add proposal anchor is not valid in its container |
+| P017 | error | duplicate pending proposal id |
 | H001 | warning | no history block (flattened document) |
 | H002 | error | unparseable history line |
 | H003 | error | event violates its field schema |

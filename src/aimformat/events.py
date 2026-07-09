@@ -174,7 +174,47 @@ class Event:
                 if not isinstance(obj, dict) or obj.get("type") not in \
                         REGISTRY.raw["events"]["actor_types"]:
                     problems.append(f"{role} is not a valid actor object")
+        problems += self._replay_field_problems(kind, act)
         return problems
+
+    def _replay_field_problems(self, kind: Optional[str],
+                               act: Optional[str]) -> list[str]:
+        """Action-specific fields that forward replay / inverse verification
+        need. Without these an event can be well-typed yet non-replayable —
+        a latent break the chain verifier would otherwise hit as a crash
+        (spec §7 event payloads; review finding AIM-05)."""
+        if not act:
+            return []
+        out: list[str] = []
+
+        def require(field: str, label: str) -> None:
+            if self.data.get(field) is None:
+                out.append(f"{label} missing {field!r}")
+
+        if kind == "direct_edit":
+            if act == "add":
+                require("anchor", "add direct edit")
+                require("after", "add direct edit")
+            elif act == "modify":
+                # a theme removal (undo of a theme introduction) legitimately
+                # carries no 'after'; every other modify must
+                if self.data.get("target") != "aim:theme":
+                    require("after", "modify direct edit")
+            elif act == "delete":
+                require("before", "delete direct edit")
+                require("anchor", "delete direct edit")
+            elif act == "move":
+                require("from", "move direct edit")
+                require("to", "move direct edit")
+        elif kind == "resolution" and self.data.get("decision") == "accepted":
+            if act == "add":
+                require("anchor", "accepted add resolution")
+            elif act == "delete":
+                require("anchor", "accepted delete resolution")
+            elif act == "move":
+                require("from", "accepted move resolution")
+                require("to", "accepted move resolution")
+        return out
 
     def __repr__(self) -> str:
         bits = [f"seq={self.data.get('seq')}", self.data.get("kind", "?")]

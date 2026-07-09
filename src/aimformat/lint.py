@@ -25,9 +25,11 @@ from typing import Optional, Union
 
 from . import ids
 from .canonical import document_text, serialize, sha256_prefixed, sort_class_tokens
-from .document import AimDocument
+from .css import generate_aim_css
+from .document import AimDocument, Anchor
 from .dom import Comment, Element, Text
-from .errors import AimError, HistoryError, ParseError
+from .errors import (AimError, HistoryError, InvalidOperation, ParseError,
+                     TargetNotFound)
 from .events import _ISO_RE, Event
 from .registry import REGISTRY
 
@@ -61,6 +63,7 @@ class _Linter:
 
     def run(self) -> list[Finding]:
         self.structure()
+        self.document_shell()
         self.body_sections()
         self.chunks_and_runs()
         self.vocabulary()
@@ -106,6 +109,82 @@ class _Linter:
             elif isinstance(node, Text) and node.data.strip():
                 self.add("S008", ERROR,
                          f"stray text in <body>: {node.data.strip()[:40]!r}")
+
+    def document_shell(self) -> None:
+        """Validate the whole parsed fragment, not just the modeled `<html>`:
+        a `.aim` file is exactly one `<html>` document element and nothing
+        else at the top level, its `<head>` carries a closed child
+        vocabulary, and the structural chrome (`<html>`, `<head>`, `<body>`,
+        `<aim-proposals>`/`<aim-proposal>`, `<aim-assets>`) is not exempt from
+        the security layer. Without this, forbidden markup that sits *outside*
+        the modeled body — a trailing top-level `<script>`, a `<head>` child,
+        an `on*` handler on a proposal card — lints clean (review AIM-01)."""
+        html_count = 0
+        for node in self.doc._fragment.children:
+            if isinstance(node, Element):
+                if node.tag == "html":
+                    html_count += 1
+                else:
+                    self.add("S028", ERROR,
+                             f"unexpected top-level <{node.tag}> outside the "
+                             "<html> document element")
+            elif isinstance(node, Comment):
+                self.add("S028", ERROR,
+                         "comment outside the <html> document element")
+            elif isinstance(node, Text) and node.data.strip():
+                self.add("S028", ERROR,
+                         "stray text outside the <html> document element: "
+                         f"{node.data.strip()[:40]!r}")
+        if html_count > 1:
+            self.add("S028", ERROR, "more than one top-level <html> element")
+
+        # structural chrome: no event handlers on <html>/<body>
+        self._forbid_handlers(self.state.html, "html")
+        self._forbid_handlers(self.state.body, "body")
+
+        # <head>: closed child vocabulary + a forbidden-element / handler sweep
+        # (vocabulary() never visits the head)
+        for el in self.state.head.elements():
+            if el.tag not in ("meta", "title", "style", "script"):
+                self.add("S029", ERROR,
+                         f"<{el.tag}> is not allowed in <head>", "head")
+        for el in self.state.head.iter():
+            if el is self.state.head:
+                continue
+            if el.tag in REGISTRY.forbidden_elements:
+                self.add("X001", ERROR,
+                         f"<{el.tag}> is forbidden in .aim documents", "head")
+            self._forbid_handlers(el, "head")
+
+        # <aim-proposals> wrapper + each card's own attributes (vocabulary()
+        # only reaches the payload templates, never the card chrome)
+        sec = self.state.section("aim-proposals")
+        if sec is not None:
+            self._forbid_handlers(sec, "aim-proposals")
+            allowed = REGISTRY.allowed_attrs("aim-proposal")
+            for card in sec.elements():
+                if card.tag != "aim-proposal":
+                    continue
+                where = card.get("id") or "aim-proposals"
+                for name, _ in card.attrs:
+                    if name.startswith("on"):
+                        self.add("X002", ERROR,
+                                 f"event-handler attribute {name!r} is "
+                                 "forbidden", where)
+                    elif name not in allowed and not name.startswith("data-x-"):
+                        self.add("V003", ERROR,
+                                 f"attribute {name!r} is not allowed on "
+                                 "<aim-proposal>", where)
+        assets = self.state.section("aim-assets")
+        if assets is not None:
+            self._forbid_handlers(assets, "aim-assets")
+
+    def _forbid_handlers(self, el: Element, where: str) -> None:
+        for name, _ in el.attrs:
+            if name.startswith("on"):
+                self.add("X002", ERROR,
+                         f"event-handler attribute {name!r} is forbidden",
+                         where)
 
     def body_sections(self) -> None:
         rank_of = {"aim-proposals": 1, "aim-assets": 2}
@@ -340,10 +419,21 @@ class _Linter:
             self.add("X003", ERROR, f"dangerous URL in {tag}@{attr}: "
                      f"{value[:40]!r}", loc)
             return
-        if not any(low.startswith(s.lower()) for s in schemes):
-            self.add("V009", ERROR,
-                     f"{tag}@{attr} must start with one of {schemes}: "
-                     f"{value[:60]!r}", loc)
+        # match by scheme, not raw prefix: a bare scheme token (http, https,
+        # mailto) must be the value's actual scheme — the text before the
+        # first ':' — so `httpjavascript:` / `mailtox:` no longer sneak past a
+        # prefix test; '#' is fragment-only; tokens carrying a ':' (data:image/)
+        # stay exact prefixes (review AIM-06)
+        bare = {s.lower() for s in schemes if ":" not in s and s != "#"}
+        prefixes = [s.lower() for s in schemes if ":" in s]
+        if "#" in schemes and low.startswith("#"):
+            return
+        if any(low.startswith(p) for p in prefixes):
+            return
+        if ":" in low and low.split(":", 1)[0] in bare:
+            return
+        self.add("V009", ERROR,
+                 f"{tag}@{attr} must use one of {schemes}: {value[:60]!r}", loc)
 
     # -- X: security (script blocks) -----------------------------------------------------
     def security(self) -> None:
@@ -359,6 +449,22 @@ class _Linter:
                     self.add("X005", ERROR,
                              "free <style> blocks are forbidden (only the "
                              "embedded aim.css and the theme block)")
+        # aim.css is machine-managed and excluded from doc_hash (spec §10), so
+        # its content is trusted at the raw tier — verify it byte-equals the
+        # generated stylesheet for this spec version rather than letting an
+        # arbitrary (e.g. @import) replacement pass lint-clean (review AIM-02)
+        css = self.state.css_el()
+        if css is not None and css.get("data-aim-css") == REGISTRY.spec_version:
+            raw = css.raw or ""
+            # an inert placeholder (empty or comments-only, as the spec's
+            # illustrative snippets use) carries no declarations and can do no
+            # harm; any real CSS must be exactly the generated stylesheet
+            inert = not re.sub(r"/\*.*?\*/", "", raw, flags=re.S).strip()
+            if not inert and raw.strip("\n") != generate_aim_css().strip("\n"):
+                self.add("X006", ERROR,
+                         "embedded aim.css does not match the generated "
+                         "stylesheet for this spec version (it is "
+                         "machine-managed; regenerate via dumps())")
 
     # -- theme -----------------------------------------------------------------------------
     def check_theme_block(self, raw: str, where: str) -> None:
@@ -412,6 +518,11 @@ class _Linter:
                                  f"unexpected <{child.tag}> inside a proposal "
                                  "card", node.get("id") or "")
         for p in self.doc.proposals:
+            # duplicate ids make accept/reject ambiguous — one card shadows
+            # the other and resolution silently touches only the first (AIM-04)
+            if p.id in pending_ids:
+                self.add("P017", ERROR,
+                         f"duplicate pending proposal id {p.id!r}", p.id)
             pending_ids.add(p.id)
         for p in self.doc.proposals:
             where = p.id
@@ -467,6 +578,31 @@ class _Linter:
                     self.add("P011", ERROR,
                              f"add anchor {p.anchor_after!r} is neither a chunk "
                              "nor a pending proposal", where)
+                elif p.anchor_after in pending_ids:
+                    # chained add: the add it anchors on must target the same
+                    # container, or the resolved anchor lands elsewhere and the
+                    # proposal cannot be accepted (AIM-03)
+                    anchor_prop = next((q for q in self.doc.proposals
+                                        if q.id == p.anchor_after), None)
+                    if anchor_prop is not None and \
+                            (anchor_prop.anchor_container or "body") != \
+                            (p.anchor_container or "body"):
+                        self.add("P016", ERROR,
+                                 f"add anchors on pending {p.anchor_after!r} "
+                                 "in a different container", where)
+                else:
+                    # existing anchor: must be a legal insertion point in this
+                    # proposal's own container, not merely exist somewhere in
+                    # the document (AIM-03)
+                    try:
+                        self.state.resolve_insert_point(
+                            Anchor(p.anchor_container or "body",
+                                   p.anchor_after, shell=p.anchor_shell))
+                    except (TargetNotFound, InvalidOperation):
+                        self.add("P016", ERROR,
+                                 f"add anchor {p.anchor_after!r} is not a valid "
+                                 f"position in "
+                                 f"{p.anchor_container or 'body'!r}", where)
             if p.depends_on and p.depends_on not in pending_ids:
                 self.add("P012", WARNING,
                          f"data-depends-on {p.depends_on!r} is not pending",
@@ -507,6 +643,10 @@ class _Linter:
                          str(ev.data.get("seq")))
         if not events:
             return
+        if any(not isinstance(e.data.get("seq"), int) for e in events):
+            return  # a malformed seq is already reported as H003; the
+            # seq-ordering and chain checks below need well-formed seqs
+            # and would otherwise crash into a generic S000 (AIM-05)
         seqs = [e.seq for e in events]
         if seqs[0] != 1:
             self.add("H004", WARNING,

@@ -4,6 +4,8 @@ Each test pins a bug that shipped in the initial 0.1.0 commit and was found
 during the post-ship review (docs/log review entry). Keep them even when
 they look redundant with broader tests — they encode the exact failure.
 """
+import re
+
 import pytest
 
 import aimformat as aim
@@ -402,6 +404,179 @@ class TestNormalFormHardening:
                       '<p data-aim="q" style="left:1px; left:9px; top:2px">x'
                       "</p></aim-slide>", author=ME, at=ts(0))
         assert 'style="left:9px; top:2px"' in doc._state.serial("q")
+
+
+# ===========================================================================
+# Wave 3: findings from the Codex deep code review (2026-07-08)
+# ===========================================================================
+
+
+class TestFragmentIsTheTrustBoundary:
+    """AIM-01: lint validates the whole parsed file, not just the first
+    <html>. Forbidden markup outside the modeled body must not lint clean."""
+
+    def test_top_level_script_after_html_is_S028(self, basic_doc):
+        text = basic_doc.dumps() + "<script>alert(1)</script>\n"
+        assert "S028" in {f.code for f in aim.lint_text(text)}
+
+    def test_top_level_element_after_html_is_S028(self, basic_doc):
+        text = basic_doc.dumps() + "<p>loose</p>\n"
+        assert "S028" in {f.code for f in aim.lint_text(text)}
+
+    def test_second_html_element_is_S028(self, basic_doc):
+        text = basic_doc.dumps() + '<html data-aim-version="0.1"></html>\n'
+        assert "S028" in {f.code for f in aim.lint_text(text)}
+
+    def test_forbidden_head_child_is_flagged(self, basic_doc):
+        text = basic_doc.dumps().replace(
+            "</title>",
+            '</title>\n<iframe src="https://evil.example"></iframe>')
+        codes = {f.code for f in aim.lint_text(text)}
+        assert codes & {"S029", "X001"}
+
+    def test_event_handler_on_proposal_card_is_X002(self, basic_doc):
+        basic_doc.propose_delete("intro", author=BOT, at=ts(10))
+        canon = aim.loads(basic_doc.dumps().replace(
+            "<aim-proposal ", '<aim-proposal onclick="alert(1)" ', 1)).dumps()
+        assert "X002" in {f.code for f in aim.lint_text(canon)}
+
+
+class TestEmbeddedCssIsVerified:
+    """AIM-02: the machine-managed aim.css block is trusted at the raw tier,
+    so lint must pin it to the generated stylesheet."""
+
+    def test_tampered_aim_css_is_X006(self, basic_doc):
+        bad = re.sub(
+            r'<style data-aim-css="0.1">[\s\S]*?</style>',
+            '<style data-aim-css="0.1">\n@import url(https://evil.example/x'
+            '.css);\nbody{background:red}\n</style>', basic_doc.dumps())
+        assert "X006" in {f.code for f in aim.lint_text(bad)}
+
+    def test_generated_css_lints_clean(self, basic_doc):
+        assert "X006" not in {f.code for f in aim.lint_text(basic_doc.dumps())}
+
+
+class TestProposalAnchorsAreContainerScoped:
+    """AIM-03: proposal anchors resolve container-scoped, like direct ops —
+    a proposal that can never be accepted must never be created or lint clean."""
+
+    def test_propose_add_cross_container_anchor_raises(self, rich_doc):
+        with pytest.raises(aim.TargetNotFound):
+            rich_doc.propose_add("<li>x</li>", author=BOT, container="list",
+                                 after="intro", at=ts(30))
+
+    def test_propose_move_to_foreign_anchor_raises(self, rich_doc):
+        with pytest.raises(aim.TargetNotFound):
+            rich_doc.propose_move("li1", author=BOT, container="body",
+                                  after="row1", at=ts(30))
+
+    def test_cross_container_add_anchor_is_P016(self, rich_doc):
+        rich_doc.propose_add('<li data-aim="x">new</li>', author=BOT,
+                             container="list", after="li1", at=ts(30))
+        text = rich_doc.dumps().replace('data-anchor-after="li1"',
+                                        'data-anchor-after="intro"')
+        assert "P016" in {f.code for f in aim.lint_text(text)}
+
+
+class TestDuplicateProposalIds:
+    """AIM-04: duplicate pending ids are rejected, not silently shadowed."""
+
+    def test_duplicate_ids_are_P017(self, basic_doc):
+        basic_doc.propose_add("<p>one</p>", author=BOT, at=ts(10))
+        p2 = basic_doc.propose_add("<p>two</p>", author=BOT, at=ts(11))
+        p1_id = basic_doc.proposals[0].id
+        text = basic_doc.dumps().replace(p2.id, p1_id)
+        assert "P017" in {f.code for f in aim.lint_text(text)}
+
+    def test_accept_on_duplicate_id_raises(self, basic_doc):
+        basic_doc.propose_add("<p>one</p>", author=BOT, at=ts(10))
+        p2 = basic_doc.propose_add("<p>two</p>", author=BOT, at=ts(11))
+        p1_id = basic_doc.proposals[0].id
+        dup = aim.loads(basic_doc.dumps().replace(p2.id, p1_id))
+        with pytest.raises(InvalidOperation):
+            dup.accept(p1_id, decided_by=ME, at=ts(12))
+
+
+class TestHistoryValidationIsActionAware:
+    """AIM-05: malformed history yields targeted H-findings, never a generic
+    S000 verifier crash."""
+
+    def _move_doc(self, basic_doc):
+        basic_doc.move_chunk("h1", author=ME, container="body", after="intro",
+                             at=ts(10))
+        return basic_doc.dumps()
+
+    def test_move_missing_to_is_H003_not_S000(self, basic_doc):
+        broken = re.sub(r',"to":\{[^}]*?\}', "", self._move_doc(basic_doc),
+                        count=1)
+        codes = {f.code for f in aim.lint_text(broken)}
+        assert "H003" in codes and "S000" not in codes
+
+    def test_move_missing_from_is_not_S000(self, basic_doc):
+        broken = re.sub(r'"from":\{[^}]*?\},', "", self._move_doc(basic_doc),
+                        count=1)
+        codes = {f.code for f in aim.lint_text(broken)}
+        assert "S000" not in codes and "H003" in codes
+
+    def test_add_missing_anchor_is_H003(self, basic_doc):
+        broken = re.sub(r',"anchor":\{[^}]*?\}', "", basic_doc.dumps(), count=1)
+        codes = {f.code for f in aim.lint_text(broken)}
+        assert "H003" in codes and "S000" not in codes
+
+    def test_event_missing_seq_is_not_S000(self, basic_doc):
+        broken = re.sub(r'"seq":\d+,', "", basic_doc.dumps(), count=1)
+        codes = {f.code for f in aim.lint_text(broken)}
+        assert "S000" not in codes
+
+
+class TestUrlSchemeValidation:
+    """AIM-06: URL checks match by scheme, not raw prefix."""
+
+    @pytest.mark.parametrize("href", ["httpjavascript:alert(1)",
+                                      "httpsx://example.com", "mailtox:test"])
+    def test_fake_schemes_rejected(self, href):
+        doc = aim.new_document(title="T")
+        doc.add_chunk(f'<p data-aim="p1"><a href="{href}">l</a></p>',
+                      author=ME, at=ts(0))
+        codes = {f.code for f in aim.lint_text(doc.dumps())}
+        assert codes & {"V009", "X003"}
+
+    @pytest.mark.parametrize("href", ["https://example.com",
+                                      "http://example.com", "mailto:a@b.co",
+                                      "#sec"])
+    def test_real_schemes_pass(self, href):
+        doc = aim.new_document(title="T")
+        doc.add_chunk(f'<p data-aim="p1"><a href="{href}">l</a></p>',
+                      author=ME, at=ts(0))
+        assert not [f for f in aim.lint_text(doc.dumps()) if f.level == "error"]
+
+
+class TestConstructorThemeValues:
+    """AIM-07: new_document validates theme values, not just slot names."""
+
+    def test_bad_theme_value_raises(self):
+        with pytest.raises(InvalidOperation):
+            aim.new_document(title="x", theme={"--aim-brand-1": "not-a-color"})
+
+    def test_valid_theme_value_lints_clean(self):
+        doc = aim.new_document(title="x", theme={"--aim-brand-1": "#123456"})
+        assert not [f for f in aim.lint_text(doc.dumps()) if f.level == "error"]
+
+
+class TestProposeMoveNoop:
+    """AIM-08: a no-op move proposal is rejected like the direct move is."""
+
+    def test_propose_move_noop_raises(self, basic_doc):
+        with pytest.raises(InvalidOperation):
+            basic_doc.propose_move("intro", author=BOT, container="body",
+                                   after="h1", at=ts(10))
+
+    def test_propose_move_real_move_lints_clean(self, basic_doc):
+        p = basic_doc.propose_move("h1", author=BOT, container="body",
+                                   after="intro", at=ts(10))
+        assert p.action == "move"
+        assert not [f for f in aim.lint_text(basic_doc.dumps())
+                    if f.level == "error"]
 
 
 def _mini(construct: str) -> str:

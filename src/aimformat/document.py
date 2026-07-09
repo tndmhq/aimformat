@@ -1091,11 +1091,17 @@ class AimDocument:
 
     def _card_el(self, pid: str) -> Element:
         sec = self._state.section("aim-proposals")
-        card = None if sec is None else next(
-            (c for c in sec.elements() if c.get("id") == pid), None)
-        if card is None:
+        cards = ([] if sec is None
+                 else [c for c in sec.elements() if c.get("id") == pid])
+        if not cards:
             raise TargetNotFound(f"no pending proposal {pid!r}")
-        return card
+        # duplicate ids make resolution ambiguous — refuse rather than
+        # silently picking (and shadowing) the first match (AIM-04)
+        if len(cards) > 1:
+            raise InvalidOperation(
+                f"duplicate proposal id {pid!r}: document integrity error, "
+                "cannot resolve ambiguously")
+        return cards[0]
 
     def _new_proposal_id(self) -> str:
         taken = self._taken_ids() | {p.id for p in self.proposals}
@@ -1180,14 +1186,23 @@ class AimDocument:
                     at: Optional[str] = None) -> Proposal:
         _, payload = self._normalize_payload(markup)
         if isinstance(after, str) and ids.is_valid_proposal_id(after):
-            pending = {p.id for p in self.proposals if p.action == "add"}
+            pending = {p.id: p for p in self.proposals if p.action == "add"}
             if after not in pending:
                 raise TargetNotFound(f"anchor proposal {after!r} is not a pending add")
+            # a chained add resolves into the container of the add it anchors
+            # on; anchoring across containers can never be accepted (AIM-03)
+            anchored = pending[after].anchor_container or "body"
+            if anchored != container:
+                raise InvalidOperation(
+                    f"add into {container!r} cannot anchor on pending proposal "
+                    f"{after!r} in {anchored!r}")
             anchor = Anchor(container, after)
         else:
             anchor = self._resolve_end_anchor(container, after)
-            if anchor.after is not None and not self._state.exists(anchor.after):
-                raise TargetNotFound(f"anchor {anchor.after!r} not found")
+            # container-scoped validation, exactly like the direct add: the
+            # anchor must be a legal insertion point in `container`, not merely
+            # exist somewhere in the document (AIM-03)
+            self._state.resolve_insert_point(anchor)
         return self._new_card(action="add", author=author, target=None,
                               payload=payload, anchor=anchor,
                               explanation=explanation, depends_on=depends_on,
@@ -1213,7 +1228,15 @@ class AimDocument:
                      at: Optional[str] = None) -> Proposal:
         if not self._state.exists(target):
             raise TargetNotFound(f"no chunk {target!r}")
+        src = self._anchor_of(target)
         anchor = self._resolve_end_anchor(container, after, exclude=target)
+        # mirror the direct move: reject no-ops (AIM-08) and validate the
+        # destination container-scoped so the proposal can actually be
+        # accepted (AIM-03)
+        if (src.container, src.after) == (anchor.container, anchor.after):
+            raise InvalidOperation(f"move of {target!r} is a no-op (already "
+                                   "at that position)")
+        self._state.resolve_insert_point(anchor)
         return self._new_card(action="move", author=author, target=target,
                               payload=None, anchor=anchor,
                               explanation=explanation, depends_on=None, at=at)
@@ -1369,6 +1392,10 @@ class AimDocument:
         """Replay the history backwards over a copy; report chain problems."""
         problems: list[str] = []
         events = self.history
+        if any(not isinstance(e.data.get("seq"), int) for e in events):
+            problems.append("history has an event with a missing or "
+                            "non-integer seq")
+            return problems
         seqs = [e.seq for e in events]
         if seqs != sorted(seqs) or len(set(seqs)) != len(seqs):
             problems.append("history seq is not strictly ascending")
@@ -1394,6 +1421,10 @@ class AimDocument:
                 self._invert_on(state, ev, problems)
             except (TargetNotFound, InvalidOperation, HistoryError) as exc:
                 problems.append(f"seq {ev.seq}: replay failed — {exc}")
+            except Exception as exc:  # a malformed payload/anchor is a chain
+                # problem to report, never a verifier crash → S000 (AIM-05)
+                problems.append(f"seq {ev.seq}: replay failed — "
+                                f"{type(exc).__name__}: {exc}")
         return problems
 
     def _invert_on(self, state: DocState, ev: Event,
@@ -1422,7 +1453,11 @@ class AimDocument:
                 raise HistoryError("delete event carries no anchor — not invertible")
             state.insert(ev.get("before") or "", Anchor.from_obj(anchor))
         elif action == "move":
-            state.move(target, Anchor.from_obj(ev.get("from")))
+            frm = ev.get("from")
+            if frm is None:
+                raise HistoryError(
+                    "move event carries no 'from' — not invertible")
+            state.move(target, Anchor.from_obj(frm))
 
     def state_at(self, seq: int) -> "AimDocument":
         """Reconstruct the document as of *seq* (pending lane + caches dropped)."""
@@ -1756,9 +1791,9 @@ def new_document(*, title: str, lang: str = "en",
     css.raw = "\n" + generate_aim_css()
     head.children.append(css)
     if theme:
-        for name in theme:
-            if name not in REGISTRY.theme_slots:
-                raise InvalidOperation(f"unknown theme slot {name!r}")
+        # names AND values, like every other write path — the constructor
+        # must not emit a document its own linter rejects (V012) (AIM-07)
+        AimDocument._check_theme_slots(theme)
         body_css = "; ".join(f"{k}:{v}" for k, v in sorted(theme.items()))
         theme_el = Element("style", [("data-aim-theme", None)])
         theme_el.raw = f":root{{{body_css}}}"
