@@ -416,7 +416,7 @@ def _cmd_import(args: argparse.Namespace) -> int:
 # per-format pending defaults and what each exporter understands
 _EXPORT_PENDING = {
     ".docx": ("tracked", ("tracked", "accept-all", "reject-all")),
-    ".md": ("drop", ("drop", "criticmarkup")),
+    ".md": ("drop", ("drop", "criticmarkup", "accept-all", "reject-all")),
     ".html": ("keep", ("keep", "accept-all", "reject-all")),
     ".pdf": ("keep", ("keep", "accept-all", "reject-all")),
 }

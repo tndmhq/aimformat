@@ -272,11 +272,13 @@ size is expressed the same way (`<aim-slide style="width:960px;
 height:540px">`).
 
 Canvas numbers are **point-equivalent** by convention (informative): one
-canvas px prints as one typographic point (the print layer scales
-accordingly, §3.4), so `960×540` is the native 16:9 slide — PPTX's own
-13.33×7.5 in — and a paper-sized page is its point size (A5 portrait
-`420×595`, A4 portrait `595×842`). Any canvas size remains valid; renderers
-and exporters read each slide's own declared size.
+canvas px prints as one typographic point, so `960×540` is the native 16:9
+slide — PPTX's own 13.33×7.5 in — and a paper-sized page is its point size
+(A5 portrait `420×595`, A4 portrait `595×842`). The PDF exporter applies
+this scale when it pages slides; the embedded print layer (§3.4) still
+renders at CSS-native size (1 px = 0.75 pt) — folding the scale into the
+generated stylesheet is deferred to a future spec revision. Any canvas size
+remains valid; renderers and exporters read each slide's own declared size.
 
 ### 3.4 The embedded stylesheet (`aim.css`)
 

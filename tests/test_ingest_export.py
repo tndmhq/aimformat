@@ -195,6 +195,20 @@ def _docx_paragraphs(path):
     return [(p.style.name, p.text) for p in docx.Document(str(path)).paragraphs]
 
 
+def _paragraph_sequence(path):
+    """Body paragraphs in order: 'BREAK' for page-break paragraphs, else the
+    paragraph's full text (including runs inside w:ins revisions)."""
+    seq = []
+    for p in docx.Document(str(path)).paragraphs:
+        if p._p.findall(".//" + qn("w:br") + "[@" + qn("w:type") + "='page']"):
+            seq.append("BREAK")
+            continue
+        text = "".join(t.text or "" for t in p._p.iter(qn("w:t")))
+        if text:
+            seq.append(text)
+    return seq
+
+
 def _revision_authors(path, tag):
     d = docx.Document(str(path))
     return [el.get(qn("w:author")) for el in d.element.body.iter(qn(f"w:{tag}"))]
@@ -422,6 +436,49 @@ class TestExportDocxSlides:
         assert "Added into the page." in joined  # lands inside s1, not at the end
         assert _revision_authors(out, "ins")
         assert texts  # document is non-empty for the plain reader too
+
+    def test_body_add_after_slide_lands_on_next_page(self, tmp_path):
+        doc = _deck(with_flow=False)
+        doc.propose_add("<p>Between the pages.</p>", after="s1", author=BOT, at=ts(3))
+        out = aim.to_docx(doc, tmp_path / "deck.docx", pending="tracked")
+        kinds = _paragraph_sequence(out)
+        i_first = kinds.index("First body.")
+        i_ins = kinds.index("Between the pages.")
+        i_second = kinds.index("Second body.")
+        assert i_first < i_ins < i_second
+        # the page break comes BEFORE the tracked insertion (the add belongs
+        # to the page after the slide, like accepted content) and slide two
+        # still opens its own page
+        assert "BREAK" in kinds[i_first + 1 : i_ins]
+        assert "BREAK" in kinds[i_ins + 1 : i_second]
+
+    def test_pending_whole_slide_add_linearizes_per_block(self, tmp_path):
+        doc = _deck(with_flow=False)
+        doc.propose_add(
+            '<aim-slide style="width:420px; height:595px">'
+            '<h2 style="left:10px; top:10px; width:300px">New page</h2>'
+            '<p style="left:10px; top:60px; width:300px">New body.</p>'
+            "</aim-slide>",
+            after="s2",
+            author=BOT,
+            at=ts(3),
+        )
+        out = aim.to_docx(doc, tmp_path / "deck.docx", pending="tracked")
+        d = docx.Document(str(out))
+        styled = [
+            (p.style.name, "".join(t.text or "" for t in p._p.iter(qn("w:t"))))
+            for p in d.paragraphs
+        ]
+        # two separate inserted blocks — heading styled — not one collapsed blob
+        assert ("Heading 2", "New page") in styled
+        texts = [t for _, t in styled]
+        assert "New body." in texts
+        assert not any("New page" in t and "New body." in t for t in texts)
+        assert _revision_authors(out, "ins")
+        # the inserted page opens after slide two's page: s1→s2 and s2→add
+        kinds = _paragraph_sequence(out)
+        assert kinds.count("BREAK") == 2
+        assert kinds.index("New page") > kinds.index("Second body.")
 
     def test_accept_all_deck_exports_clean(self, tmp_path):
         doc = _deck()

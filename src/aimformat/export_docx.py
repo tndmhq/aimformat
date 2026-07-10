@@ -223,10 +223,16 @@ def _style_for(tag: str) -> str | None:
 
 
 def _block_children(el: Element) -> list[Element]:
-    """The block-level pieces of one chunk (a section's children; the
-    element itself otherwise)."""
+    """The block-level pieces of one chunk (a section's children; a slide's
+    children recursively, so a pending whole-slide add linearizes per block
+    like an accepted slide; the element itself otherwise)."""
     if el.tag == "section":
         return el.elements()
+    if el.tag == "aim-slide":
+        out: list[Element] = []
+        for child in el.elements():
+            out.extend(_block_children(child))
+        return out
     return [el]
 
 
@@ -313,12 +319,22 @@ class _Exporter:
             self._emit_anchored_adds(container, prop.id)  # chained adds anchor on this one
 
     def _emit_add_paragraphs(self, prop: Proposal, style: str | None = None) -> None:
-        for el in self._payload_elements(prop):
+        els = self._payload_elements(prop)
+        slide_payload = any(el.tag == "aim-slide" for el in els)
+        # a pending add anchored after a slide (or adding a slide) belongs to
+        # the next page, exactly like accepted content; the plain break
+        # survives a rejection, which is the accepted-state layout
+        if self._break_before_next or (slide_payload and self._has_content()):
+            self._break_before_next = False
+            self._page_break()
+        for el in els:
             for block in _block_children(el):
                 para = self.out.add_paragraph(
                     style=style or self._safe_style(_style_for(block.tag))
                 )
                 self.rev.ins(para, _block_runs(block), _actor_label(prop.author), prop.at)
+        if slide_payload:
+            self._break_before_next = True
 
     def _payload_elements(self, prop: Proposal) -> list[Element]:
         return [n for n in parse_fragment(prop.payload_html or "") if isinstance(n, Element)]
