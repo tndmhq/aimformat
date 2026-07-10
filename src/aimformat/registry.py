@@ -134,6 +134,27 @@ class Registry:
         return {k: re.compile(v)
                 for k, v in self.raw["style_props"]["patterns"].items()}
 
+    # -- page setup --------------------------------------------------------------
+    @cached_property
+    def page_sizes_mm(self) -> dict[str, list[float]]:
+        return self.raw["page"]["sizes_mm"]
+
+    @cached_property
+    def page_orientations(self) -> frozenset[str]:
+        return frozenset(self.raw["page"]["orientations"])
+
+    @cached_property
+    def page_default(self) -> dict:
+        return self.raw["page"]["default"]
+
+    @cached_property
+    def margin_pattern(self) -> re.Pattern:
+        return re.compile(self.raw["page"]["margin_pattern"])
+
+    @property
+    def margin_max_mm(self) -> float:
+        return self.raw["page"]["margin_max_mm"]
+
     # -- theme -----------------------------------------------------------------
     @cached_property
     def theme_slots(self) -> dict[str, dict]:

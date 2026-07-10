@@ -24,7 +24,7 @@ from .css import generate_aim_css
 from .dom import Comment, Element, Fragment, Text, deep_copy, parse_fragment, parse_html
 from .errors import HistoryError, InvalidOperation, ParseError, TargetNotFound
 from .events import Actor, Event
-from .pagesetup import (PageSetup, page_setup_from_obj,
+from .pagesetup import (PageSetup, doc_settings_element, page_setup_from_obj,
                         page_setup_from_settings, parse_doc_settings)
 from .registry import REGISTRY
 
@@ -386,13 +386,7 @@ class DocState:
             if current is not None:
                 self.head.children.remove(current)
             return
-        nodes = parse_fragment(markup)
-        el = next((n for n in nodes if isinstance(n, Element)), None)
-        if el is None or el.tag != "script" or \
-                el.get("type") != REGISTRY.script_types["doc"]:
-            raise InvalidOperation(
-                "settings payload must be a "
-                f'<script type="{REGISTRY.script_types["doc"]}"> block')
+        el = doc_settings_element(markup)
         if current is not None:
             idx = self.head.children.index(current)
             self.head.children[idx] = el
@@ -1424,13 +1418,7 @@ class AimDocument:
 
     def _validated_doc_markup(self, markup: str) -> str:
         """Validate + canonicalize a whole-settings-block payload."""
-        nodes = [n for n in parse_fragment(markup) if isinstance(n, Element)]
-        el = nodes[0] if len(nodes) == 1 else None
-        if el is None or el.tag != "script" or \
-                el.get("type") != REGISTRY.script_types["doc"]:
-            raise InvalidOperation(
-                "settings payload must be a single "
-                f'<script type="{REGISTRY.script_types["doc"]}"> block')
+        el = doc_settings_element(markup)
         settings = parse_doc_settings(el.raw)
         if "page" in settings:
             page_setup_from_obj(settings["page"])

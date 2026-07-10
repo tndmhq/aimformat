@@ -212,7 +212,8 @@ class _Exporter:
         # adds keyed by (container, after) — every container, not just body
         self.adds_by_anchor: dict[tuple[str, Optional[str]], list[Proposal]] = {}
         for p in doc.proposals:
-            if p.action == "modify" and p.target and p.target != "aim:theme":
+            if p.action == "modify" and p.target and \
+                    p.target not in ("aim:theme", "aim:doc"):
                 self.pending_mod[p.target] = p
             elif p.action == "delete" and p.target:
                 self.pending_del[p.target] = p

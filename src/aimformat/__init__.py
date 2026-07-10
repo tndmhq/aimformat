@@ -38,7 +38,7 @@ from .events import Actor, Event, agent, external, human
 from .export_docx import to_docx
 from .ingest import from_docling
 from .lint import Finding, lint, lint_path, lint_text
-from .pagesetup import PageSetup, page_css
+from .pagesetup import PageSetup, default_page_setup, page_css
 from .reconcile import ReconcileReport
 from .registry import REGISTRY
 
@@ -54,7 +54,7 @@ __all__ = [
     "human", "agent", "external",
     "from_docling", "to_docx",
     "from_path", "from_text", "from_markdown", "from_docx", "from_pdf",
-    "to_markdown", "to_html", "to_pdf", "page_css",
+    "to_markdown", "to_html", "to_pdf", "page_css", "default_page_setup",
     "generate_aim_css", "css_stats",
     "canonical_json", "sha256_prefixed",
     "AimError", "ParseError", "TargetNotFound", "InvalidOperation",

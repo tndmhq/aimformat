@@ -176,6 +176,12 @@ def main() -> None:
                          "<title>Conformance fixture</title>\n"
                          '<script type="application/aim-doc+json">\n'
                          "{not json]\n</script>\n"),
+        "nok_D002_duplicate_doc_settings.aim":
+            pag_flat.replace(
+                '<style data-aim-css=',
+                '<script type="application/aim-doc+json">\n'
+                '{"page":{"size":"A5"}}\n</script>\n<style data-aim-css=',
+                1),
         "nok_D003_unknown_page_size.aim":
             pag_flat.replace('"size":"A4"', '"size":"A0"'),
         "nok_D004_margin_out_of_bounds.aim":

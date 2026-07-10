@@ -139,6 +139,15 @@ class TestSetPageSetup:
         assert doc.doc_settings["x_vendor"] == {"k": 1}
         assert doc.doc_settings["page"]["size"] == "A5"
 
+    def test_duplicate_settings_blocks_are_d002(self, empty_doc):
+        empty_doc.flatten()
+        block = ('<script type="application/aim-doc+json">\n'
+                 '{"page":{"size":"A5"}}\n</script>')
+        text = empty_doc.dumps().replace(
+            "</title>", f"</title>\n{block}\n{block}")
+        codes = {f.code for f in aim.lint_text(text) if f.level == "error"}
+        assert codes == {"D002"}
+
     def test_malformed_block_is_parse_error(self, empty_doc):
         empty_doc.flatten()
         text = empty_doc.dumps().replace(
@@ -219,6 +228,19 @@ class TestPageSetupProposals:
                 p.id, decided_by=ME, at=ts(6),
                 applied='<script type="application/aim-doc+json">\n'
                         '{"page":{"size":"A0"}}\n</script>')
+
+    def test_typed_script_in_ordinary_payload_still_v002(self, basic_doc):
+        # the style/script vocabulary skip applies ONLY to whole-block
+        # singleton payloads — inside a normal chunk payload a typed script
+        # must stay a vocabulary error, not a smuggling hole
+        basic_doc.propose_modify(
+            "intro", '<p data-aim="intro">ok</p>', author=BOT, at=ts(5))
+        text = basic_doc.dumps().replace(
+            '<template><p data-aim="intro">ok</p></template>',
+            '<template><p data-aim="intro">ok<script '
+            'type="application/aim-doc+json">{}</script></p></template>')
+        codes = {f.code for f in aim.lint_text(text) if f.level == "error"}
+        assert "V002" in codes
 
     def test_modify_via_propose_modify(self, basic_doc):
         basic_doc.set_page_setup({"size": "A5"}, author=ME, at=ts(4))
@@ -317,6 +339,19 @@ class TestDocxMappings:
                for br in r._r.findall(qn("w:br"))
                if br.get(qn("w:type")) == "page"]
         assert len(brs) == 1
+
+    def test_pending_settings_proposal_not_misfiled_as_chunk_edit(
+            self, basic_doc, tmp_path):
+        from docx import Document
+        from docx.oxml.ns import qn
+        basic_doc.propose_page_setup({"size": "A5"}, author=BOT, at=ts(5))
+        out = tmp_path / "pending.docx"
+        aim.to_docx(basic_doc, out)  # default pending="tracked"
+        got = Document(str(out))
+        # the aim:doc proposal is not chunk content: no tracked-change runs
+        ins = got.element.body.findall(".//" + qn("w:ins"))
+        dels = got.element.body.findall(".//" + qn("w:del"))
+        assert not ins and not dels
 
     def test_ingest_side_pass_reads_intent(self, tmp_path):
         from docx import Document

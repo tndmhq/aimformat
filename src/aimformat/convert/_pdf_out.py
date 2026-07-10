@@ -36,8 +36,10 @@ def _print_html(doc: AimDocument, pending: str,
     html = to_html(doc, pending=pending)
     block = f"<style>\n{css}\n</style>\n"
     # splice BEFORE the theme block when there is one: export-time CSS may
-    # override the stylesheet's defaults but never the document's own theme
-    theme_at = html.find("<style data-aim-theme>")
+    # override the stylesheet's defaults but never the document's own theme.
+    # Prefix match (no closing ">"): the canonical serializer may follow the
+    # marker attribute with legal vendor attributes (data-x-*).
+    theme_at = html.find("<style data-aim-theme")
     if theme_at != -1:
         return html[:theme_at] + block + html[theme_at:]
     return html.replace("</head>", block + "</head>", 1)

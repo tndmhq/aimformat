@@ -26,6 +26,7 @@ from typing import Optional, Union
 from ..document import AimDocument
 from ..errors import InvalidOperation
 from ..events import Actor
+from ..pagesetup import _fmt_mm
 from ..registry import REGISTRY
 
 __all__ = ["apply_docx_pagination"]
@@ -41,7 +42,7 @@ def _norm(text: str) -> str:
 
 def _match_named_size(w_mm: float, h_mm: float) -> Optional[tuple[str, str]]:
     """(size, orientation) for a registered size within tolerance, or None."""
-    for name, (w, h) in REGISTRY.raw["page"]["sizes_mm"].items():
+    for name, (w, h) in REGISTRY.page_sizes_mm.items():
         if abs(w_mm - w) <= _SIZE_TOLERANCE_MM and \
                 abs(h_mm - h) <= _SIZE_TOLERANCE_MM:
             return name, "portrait"
@@ -62,9 +63,11 @@ def _read_page_setup(docx_doc) -> Optional[dict]:
     size, orientation = match
 
     def margin(emu) -> str:
+        # clamp into the registry bounds up front: a source file's exotic
+        # sectPr must degrade the margin, not fail the whole ingest
         mm = max(0.0, round((emu or 0) / _EMU_PER_MM, 1))
-        mm = min(mm, float(REGISTRY.raw["page"]["margin_max_mm"]))
-        return f"{mm:g}mm"
+        mm = min(mm, float(REGISTRY.margin_max_mm))
+        return _fmt_mm(mm)
 
     return {"size": size, "orientation": orientation,
             "margins": {"top": margin(section.top_margin),

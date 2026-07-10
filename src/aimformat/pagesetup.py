@@ -21,7 +21,6 @@ intent only: this setup block plus explicit ``<aim-page-break>`` chunks.
 from __future__ import annotations
 
 import json
-import re
 from dataclasses import dataclass, field
 from typing import Optional
 
@@ -42,10 +41,6 @@ def _invalid(msg: str, lint_code: str) -> InvalidOperation:
     return exc
 
 
-def _tables() -> dict:
-    return REGISTRY.raw["page"]
-
-
 @dataclass(frozen=True)
 class PageSetup:
     """A resolved page setup (always valid by construction)."""
@@ -57,12 +52,12 @@ class PageSetup:
     # -- derived geometry ------------------------------------------------------
     @property
     def page_width_mm(self) -> float:
-        w, h = _tables()["sizes_mm"][self.size]
+        w, h = REGISTRY.page_sizes_mm[self.size]
         return float(h if self.orientation == "landscape" else w)
 
     @property
     def page_height_mm(self) -> float:
-        w, h = _tables()["sizes_mm"][self.size]
+        w, h = REGISTRY.page_sizes_mm[self.size]
         return float(w if self.orientation == "landscape" else h)
 
     @property
@@ -95,7 +90,7 @@ def _fmt_mm(value: float) -> str:
 
 
 def default_page_setup() -> PageSetup:
-    return page_setup_from_obj(_tables()["default"])
+    return page_setup_from_obj(REGISTRY.page_default)
 
 
 def page_setup_from_obj(obj: object) -> PageSetup:
@@ -108,40 +103,57 @@ def page_setup_from_obj(obj: object) -> PageSetup:
     """
     if not isinstance(obj, dict):
         raise _invalid("page setup must be a JSON object", "D001")
-    t = _tables()
-    base = t["default"]
+    base = REGISTRY.page_default
     size = obj.get("size", base["size"])
     orientation = obj.get("orientation", base["orientation"])
-    if not isinstance(size, str) or size not in t["sizes_mm"]:
+    if not isinstance(size, str) or size not in REGISTRY.page_sizes_mm:
         raise _invalid(
             f"unknown page size {size!r} (registered: "
-            f"{', '.join(sorted(t['sizes_mm']))})", "D003")
-    if not isinstance(orientation, str) or orientation not in t["orientations"]:
+            f"{', '.join(sorted(REGISTRY.page_sizes_mm))})", "D003")
+    if not isinstance(orientation, str) or \
+            orientation not in REGISTRY.page_orientations:
         raise _invalid(
-            f"unknown orientation {orientation!r} "
-            f"(registered: {', '.join(t['orientations'])})", "D003")
+            f"unknown orientation {orientation!r} (registered: "
+            f"{', '.join(sorted(REGISTRY.page_orientations))})", "D003")
     raw_margins = obj.get("margins", base["margins"])
     if not isinstance(raw_margins, dict):
         raise _invalid("page margins must be an object", "D004")
-    pattern = re.compile(t["margin_pattern"])
     margins: dict[str, float] = {}
     for side in _SIDES:
         value = raw_margins.get(side, base["margins"][side])
-        if not isinstance(value, str) or not pattern.match(value):
+        if not isinstance(value, str) or not REGISTRY.margin_pattern.match(value):
             raise _invalid(
                 f"page margin {side} {value!r} does not match the margin "
-                f"grammar {t['margin_pattern']}", "D004")
+                f"grammar {REGISTRY.margin_pattern.pattern}", "D004")
         mm = float(value[:-2])
-        if mm > t["margin_max_mm"]:
+        if mm > REGISTRY.margin_max_mm:
             raise _invalid(
                 f"page margin {side} {value!r} exceeds the maximum "
-                f"{t['margin_max_mm']}mm", "D004")
+                f"{REGISTRY.margin_max_mm}mm", "D004")
         margins[side] = mm
     setup = PageSetup(size=size, orientation=orientation, margins_mm=margins)
     if setup.content_width_mm <= 0 or setup.content_height_mm <= 0:
         raise _invalid(
             f"margins leave no content area on {size} {orientation}", "D004")
     return setup
+
+
+def doc_settings_element(markup: str):
+    """Parse + shape-check a whole settings-block payload; returns the
+    single ``<script type="application/aim-doc+json">`` Element.
+
+    The one gate every aim:doc payload goes through — the setter, the
+    proposal validator, and the linter all call this, so the "single typed
+    script block" rule cannot drift between writer and verifier."""
+    from .dom import Element, parse_fragment
+    nodes = [n for n in parse_fragment(markup) if isinstance(n, Element)]
+    el = nodes[0] if len(nodes) == 1 else None
+    if el is None or el.tag != "script" or \
+            el.get("type") != REGISTRY.script_types["doc"]:
+        raise _invalid(
+            "settings payload must be a single "
+            f'<script type="{REGISTRY.script_types["doc"]}"> block', "D001")
+    return el
 
 
 def parse_doc_settings(raw: Optional[str]) -> dict:

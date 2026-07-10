@@ -345,11 +345,15 @@ class _Linter:
                 tmpl = next((c for c in card.elements()
                              if c.tag == "template"), None)
                 if tmpl is not None:
+                    # whole-block payloads (aim:theme style / aim:doc script)
+                    # are grammar-checked in proposals(); inside ORDINARY
+                    # chunk payloads a style/script stays a V002 vocabulary
+                    # error — the skip must not open a smuggling hole
+                    singleton = card.get("data-for") in ("aim:theme",
+                                                         "aim:doc")
                     for el in tmpl.elements():
                         for e in el.iter():
-                            if e.tag in ("style", "script"):
-                                # theme/settings payloads are grammar-checked
-                                # in proposals(); X004/X005 still sweep them
+                            if singleton and e.tag in ("style", "script"):
                                 continue
                             self.check_element(e, context="payload",
                                                where=card.get("id") or "")
@@ -611,15 +615,11 @@ class _Linter:
                                    p.payload_html.strip())
                     self.check_theme_block(inner, where)
                 elif p.target == "aim:doc":
-                    from .dom import parse_fragment
-                    roots = [n for n in parse_fragment(p.payload_html)
-                             if isinstance(n, Element)]
-                    el = roots[0] if len(roots) == 1 else None
-                    if el is None or el.tag != "script" or \
-                            el.get("type") != REGISTRY.script_types["doc"]:
-                        self.add("D001", ERROR,
-                                 "aim:doc payload must be a single aim-doc "
-                                 "script block", where)
+                    from .pagesetup import doc_settings_element
+                    try:
+                        el = doc_settings_element(p.payload_html)
+                    except InvalidOperation as exc:
+                        self.add("D001", ERROR, str(exc), where)
                     else:
                         self._check_doc_settings_raw(el.raw, where)
                 else:
