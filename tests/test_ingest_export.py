@@ -452,6 +452,24 @@ class TestExportDocxSlides:
         assert "BREAK" in kinds[i_first + 1 : i_ins]
         assert "BREAK" in kinds[i_ins + 1 : i_second]
 
+    def test_explicit_page_break_before_slide_stays_single(self, tmp_path):
+        doc = aim.new_document(title="Breaks")
+        doc.add_chunk("<p>Before.</p>", author=ME, at=ts(0))
+        doc.add_chunk("<aim-page-break></aim-page-break>", author=ME, at=ts(1))
+        doc.add_chunk(
+            '<aim-slide style="width:420px; height:595px">'
+            '<p style="left:10px; top:10px; width:300px">Page.</p>'
+            "</aim-slide>",
+            author=ME,
+            at=ts(2),
+        )
+        out = aim.to_docx(doc, tmp_path / "breaks.docx")
+        d = docx.Document(str(out))
+        breaks = d.element.body.findall(".//" + qn("w:br") + "[@" + qn("w:type") + "='page']")
+        # the explicit break already pages: the slide must not add a second
+        # one (two consecutive breaks render a blank page in Word)
+        assert len(breaks) == 1
+
     def test_pending_whole_slide_add_linearizes_per_block(self, tmp_path):
         doc = _deck(with_flow=False)
         doc.propose_add(

@@ -24,6 +24,8 @@ Fixed-layout pages: slides become correct pages end to end.
   In tracked mode, a pending add anchored after a slide starts on the
   following page (like accepted content), and a pending whole-slide add
   linearizes per block instead of collapsing into one inserted paragraph.
+  An explicit `aim-page-break` immediately before a slide no longer
+  doubles into a blank Word page.
 - **SDK/linter**: a payload whose root is a bare `aim-slide` (no identity
   markers) now always takes the container path — `add_chunk`/proposals
   previously demoted it to an opaque *chunk* with unaddressable children,
@@ -34,6 +36,11 @@ Fixed-layout pages: slides become correct pages end to end.
   Spec §3.3 now credits the canvas-pt print scale to the PDF exporter
   explicitly (the frozen v0.2 embedded print layer stays CSS-native;
   folding the scale in is deferred to a future stylesheet revision).
+  Replacements now keep the target's kind: an `aim-slide` payload can
+  never replace a chunk (and a container never becomes a flat block) —
+  `modify_chunk`, `propose_modify`, and the accept path all reject what
+  would fail S030/S031 on the next lint, including proposals authored
+  by external tools.
 
 ## 0.2.0 — 2026-07-10
 

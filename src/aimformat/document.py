@@ -784,6 +784,22 @@ class AimDocument:
     def _taken_ids(self) -> set[str]:
         return self._state.all_ids() | self._recorded_ids()
 
+    def _guard_replacement_kind(self, target: str, first: Element, kind: str | None = None) -> None:
+        """A replacement keeps the target's kind (§4.3): an ``aim-slide``
+        root can only ever be a container, and a container target can only
+        take a container-capable root — otherwise the write demotes one into
+        the other and the document fails S030/S031 on the very next lint."""
+        kind = kind or self._state.kind_of(target)
+        if kind == "chunk" and first.tag == "aim-slide":
+            raise InvalidOperation(
+                f"an aim-slide payload cannot replace chunk {target!r} "
+                "(slides are containers; delete the chunk and add the slide)"
+            )
+        if kind == "container" and first.tag not in REGISTRY.containers:
+            raise InvalidOperation(
+                f"payload root <{first.tag}> cannot replace container {target!r}"
+            )
+
     def _normalize_payload(
         self,
         markup: str,
@@ -819,6 +835,8 @@ class AimDocument:
             # For accept-with-tweaks on adds the target isn't live yet — the
             # caller passes the proposed root's marker via expect_marker.
             live_kind = self._state.kind_of(expect_id)
+            if live_kind in ("chunk", "container"):
+                self._guard_replacement_kind(expect_id, first, live_kind)
             if live_kind == "container":
                 marker = "data-aim-container"
             elif live_kind == "chunk":
@@ -1829,6 +1847,11 @@ class AimDocument:
                     payload = applied if applied is not None else prop.payload_html
                     if applied is not None and applied != prop.payload_html:
                         data["applied"] = applied
+                    # externally-authored proposals bypass creation-time
+                    # normalization: re-guard the kind before the write
+                    roots = [n for n in parse_fragment(payload or "") if isinstance(n, Element)]
+                    if roots:
+                        self._guard_replacement_kind(prop.target or "", roots[0])
                     self._state.replace(prop.target or "", payload or "")
             elif prop.action == "delete" and decision == "accepted":
                 # a hand-authored card can still carry a reserved target;

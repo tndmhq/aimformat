@@ -326,7 +326,8 @@ class _Exporter:
         # survives a rejection, which is the accepted-state layout
         if self._break_before_next or (slide_payload and self._has_content()):
             self._break_before_next = False
-            self._page_break()
+            if not self._ends_with_page_break():
+                self._page_break()
         for el in els:
             for block in _block_children(el):
                 para = self.out.add_paragraph(
@@ -450,7 +451,7 @@ class _Exporter:
         """
         sid = el.container_id or ""
         self._break_before_next = False
-        if self._has_content():
+        if self._has_content() and not self._ends_with_page_break():
             self._page_break()
         if sid:
             self._emit_anchored_adds(sid, None)
@@ -466,6 +467,20 @@ class _Exporter:
     def _has_content(self) -> bool:
         body = self.out.element.body
         return any(child.tag.endswith("}p") or child.tag.endswith("}tbl") for child in body)
+
+    def _ends_with_page_break(self) -> bool:
+        """True when the last emitted paragraph is nothing but a page break —
+        an explicit ``aim-page-break`` right before a slide already paged, and
+        a second break would print a blank page."""
+        from docx.oxml.ns import qn
+
+        paras = [c for c in self.out.element.body if c.tag.endswith("}p")]
+        if not paras:
+            return False
+        last = paras[-1]
+        breaks = [b for b in last.findall(".//" + qn("w:br")) if b.get(qn("w:type")) == "page"]
+        text = "".join(t.text or "" for t in last.findall(".//" + qn("w:t")))
+        return bool(breaks) and not text
 
     def _page_break(self) -> None:
         from docx.enum.text import WD_BREAK
