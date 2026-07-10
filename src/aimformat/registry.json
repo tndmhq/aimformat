@@ -1,5 +1,5 @@
 {
-  "spec_version": "0.1",
+  "spec_version": "0.2",
   "ids": {
     "chunk_pattern": "^[a-z0-9][a-z0-9_-]{0,63}$",
     "proposal_pattern": "^p-[a-z0-9][a-z0-9_-]{0,63}$",
@@ -11,16 +11,17 @@
     "body_order": ["content", "aim-proposals", "aim-assets", "history", "embeddings"],
     "script_types": {
       "meta": "application/aim-meta+json",
+      "doc": "application/aim-doc+json",
       "history": "application/aim-history+jsonl",
       "embeddings": "application/aim-embeddings+jsonl"
     }
   },
   "elements": {
-    "block_carriers": ["h1", "h2", "h3", "h4", "h5", "h6", "p", "section", "blockquote", "figure", "pre", "div", "hr", "ul", "ol", "table"],
+    "block_carriers": ["h1", "h2", "h3", "h4", "h5", "h6", "p", "section", "blockquote", "figure", "pre", "div", "hr", "aim-page-break", "ul", "ol", "table"],
     "item_carriers": {"li": ["ul", "ol"], "tr": ["table"]},
     "containers": ["ul", "ol", "table", "aim-slide"],
     "table_shells": ["thead", "tbody", "tfoot"],
-    "chunk_content": ["h1", "h2", "h3", "h4", "h5", "h6", "p", "section", "blockquote", "figure", "figcaption", "pre", "div", "hr", "ul", "ol", "li", "table", "thead", "tbody", "tfoot", "tr", "td", "th", "img", "svg", "use", "code", "a", "strong", "em", "b", "i", "u", "s", "sub", "sup", "mark", "br", "span"],
+    "chunk_content": ["h1", "h2", "h3", "h4", "h5", "h6", "p", "section", "blockquote", "figure", "figcaption", "pre", "div", "hr", "aim-page-break", "ul", "ol", "li", "table", "thead", "tbody", "tfoot", "tr", "td", "th", "img", "svg", "use", "code", "a", "strong", "em", "b", "i", "u", "s", "sub", "sup", "mark", "br", "span"],
     "asset_registry_content": ["svg", "symbol", "image", "rect", "circle", "ellipse", "path", "g"],
     "void": ["meta", "img", "br", "hr", "link", "input"],
     "forbidden": ["iframe", "object", "embed", "form", "input", "button", "select", "textarea", "video", "audio", "canvas", "base", "frame", "frameset", "applet", "math"]
@@ -65,6 +66,24 @@
       "height": "^\\d+(\\.\\d+)?px$",
       "transform": "^(rotate\\(-?\\d+(\\.\\d+)?deg\\)|translate\\(-?\\d+(\\.\\d+)?px, ?-?\\d+(\\.\\d+)?px\\)|scale\\(\\d+(\\.\\d+)?\\))( (rotate\\(-?\\d+(\\.\\d+)?deg\\)|translate\\(-?\\d+(\\.\\d+)?px, ?-?\\d+(\\.\\d+)?px\\)|scale\\(\\d+(\\.\\d+)?\\)))*$",
       "z-index": "^-?\\d+$"
+    }
+  },
+  "page": {
+    "sizes_mm": {
+      "A3": [297, 420],
+      "A4": [210, 297],
+      "A5": [148, 210],
+      "Letter": [215.9, 279.4],
+      "Legal": [215.9, 355.6],
+      "Tabloid": [279.4, 431.8]
+    },
+    "orientations": ["portrait", "landscape"],
+    "margin_pattern": "^\\d+(\\.\\d+)?mm$",
+    "margin_max_mm": 100,
+    "default": {
+      "size": "A4",
+      "orientation": "portrait",
+      "margins": {"top": "15mm", "right": "15mm", "bottom": "15mm", "left": "15mm"}
     }
   },
   "theme_slots": {
@@ -238,6 +257,12 @@
     "M002": ["warning", "embedding is stale or orphaned"],
     "M003": ["error", "cache block is not valid JSON of the required shape"],
     "M004": ["error", "aim-meta block present but missing its summary"],
+    "D001": ["error", "aim-doc settings block is not valid JSON of the required shape"],
+    "D002": ["error", "more than one aim-doc script in the head"],
+    "D003": ["error", "unknown page size or orientation"],
+    "D004": ["error", "invalid page margin (grammar, bounds, or no content area left)"],
+    "D005": ["error", "aim-page-break must be empty (explicit open+close tags)"],
+    "D006": ["error", "aim-page-break outside the top-level body flow"],
     "C001": ["error", "file is not in canonical form"]
   }
 }

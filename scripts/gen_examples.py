@@ -61,6 +61,16 @@ def proposal_doc() -> aim.AimDocument:
                              explanation="Audit is table stakes; cut it.",
                              at=t(12))
     doc.reject(rej.id, decided_by=ME, at=t(13))
+    # explicit pagination: A4 with generous margins, and the deliverables
+    # start a fresh page (aim-page-break is an ordinary chunk)
+    doc.set_page_setup({"size": "A4", "orientation": "portrait",
+                        "margins": {"top": "20mm", "right": "18mm",
+                                    "bottom": "20mm", "left": "18mm"}},
+                       author=ME, at=t(8),
+                       explanation="Print layout for the client PDF.")
+    doc.add_chunk("<aim-page-break></aim-page-break>", author=ME,
+                  after="scope", at=t(9),
+                  explanation="Deliverables start on their own page.")
     doc.checkpoint("sent-to-client", at=t(14))
     # still pending when the file is opened:
     doc.propose_add('<tr data-aim="r3"><td>Rollout &amp; training</td>'

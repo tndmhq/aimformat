@@ -58,9 +58,13 @@ other grouping nodes  descended (``sheet``, ``form_area``, chapters, …) —
 furniture layer       skipped (page headers/footers are not content)
 ====================  =====================================================
 
-Page provenance (``prov.page_no``) is dropped: .aim v0.1 has no pagination
-model. Tables and lists nested inside a list item become that item's inline
-content.
+Page provenance (``prov.page_no``) is dropped — deliberately, still, in the
+pagination-aware format: where content *landed* when some renderer flowed it
+is a layout artifact, and fossilizing a PDF's soft breaks as hard
+``<aim-page-break>`` chunks would be wrong. Explicit author intent (DOCX
+``sectPr`` page setup, hard page breaks) is a different matter and is carried
+over by the python-docx side pass in :mod:`.convert._docx_pages`. Tables and
+lists nested inside a list item become that item's inline content.
 """
 from __future__ import annotations
 

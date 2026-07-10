@@ -1,7 +1,8 @@
 # `.aim` — an open document format for human + AI co-authoring
 
-**Status: v0.1 draft — spec and reference tooling published, breaking changes
-possible until 1.0.** [Specification](spec.md) ·
+**Status: v0.2 draft — spec and reference tooling published, breaking changes
+possible until 1.0. v0.2 adds pagination: page setup (`aim:doc`) and hard
+page breaks.** [Specification](spec.md) ·
 [Getting started](docs/guide/getting-started.md) ·
 [Examples](examples/)
 

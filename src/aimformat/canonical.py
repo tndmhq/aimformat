@@ -179,9 +179,15 @@ def sha256_prefixed(data: Union[str, bytes]) -> str:
 
 
 def doc_hash(html_open_line: str, theme_line: Optional[str],
-             construct_lines: Iterable[str]) -> str:
-    """The reduced-projection hash anchoring checkpoints (spec §11.4)."""
+             construct_lines: Iterable[str], *,
+             doc_settings_line: Optional[str] = None) -> str:
+    """The reduced-projection hash anchoring checkpoints (spec §11.4).
+
+    The settings block participates only when present, so documents without
+    one hash exactly as they did before it existed."""
     lines = [html_open_line]
+    if doc_settings_line:
+        lines.append(doc_settings_line)
     if theme_line:
         lines.append(theme_line)
     lines.extend(construct_lines)

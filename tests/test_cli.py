@@ -24,7 +24,8 @@ class TestLintCommand:
         assert "PASS" in out
 
     def test_broken_file_exits_one_and_names_rule(self, saved, capsys):
-        text = saved.read_text().replace('data-aim-version="0.1"', "")
+        text = saved.read_text().replace(
+            f'data-aim-version="{aim.SPEC_VERSION}"', "")
         bad = saved.with_name("bad.aim")
         bad.write_text(text)
         assert main(["lint", str(bad)]) == 1

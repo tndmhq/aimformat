@@ -86,6 +86,16 @@ def main() -> None:
     flat.flatten()
     files["ok_flattened.aim"] = flat.dumps()
 
+    paginated = base_doc()
+    paginated.set_page_setup(
+        {"size": "A4", "orientation": "portrait",
+         "margins": {"top": "20mm", "right": "18mm",
+                     "bottom": "20mm", "left": "18mm"}},
+        author=ME, at=t(3))
+    paginated.add_chunk("<aim-page-break></aim-page-break>", author=ME,
+                        after="p1", at=t(4))
+    files["ok_pagination.aim"] = paginated.dumps()
+
     # -- nok: one rule per file ------------------------------------------
     # Derived from a FLATTENED base wherever possible, so a surgical body
     # defect cannot co-fire history-chain errors (H006) — each nok file
@@ -94,9 +104,19 @@ def main() -> None:
     flat_doc.flatten()
     flat = flat_doc.dumps()
     life = files["ok_lifecycle.aim"]
+
+    pag_doc = base_doc()
+    pag_doc.set_page_setup(
+        {"size": "A4", "orientation": "portrait",
+         "margins": {"top": "20mm", "right": "18mm",
+                     "bottom": "20mm", "left": "18mm"}},
+        author=ME, at=t(3))
+    pag_doc.flatten()
+    pag_flat = pag_doc.dumps()
+
     nok = {
         "nok_S001_missing_version.aim":
-            flat.replace(' data-aim-version="0.1"', ""),
+            flat.replace(f' data-aim-version="{aim.SPEC_VERSION}"', ""),
         "nok_S003_missing_charset.aim":
             flat.replace('<meta charset="utf-8">\n', ""),
         "nok_S004_missing_title.aim":
@@ -151,6 +171,24 @@ def main() -> None:
                          "<title>Conformance fixture</title>\n"
                          '<script type="application/aim-meta+json">\n'
                          "{not json]\n</script>\n"),
+        "nok_D001_malformed_doc_settings.aim":
+            flat.replace("<title>Conformance fixture</title>\n",
+                         "<title>Conformance fixture</title>\n"
+                         '<script type="application/aim-doc+json">\n'
+                         "{not json]\n</script>\n"),
+        "nok_D003_unknown_page_size.aim":
+            pag_flat.replace('"size":"A4"', '"size":"A0"'),
+        "nok_D004_margin_out_of_bounds.aim":
+            pag_flat.replace('"top":"20mm"', '"top":"250mm"'),
+        "nok_D005_page_break_not_empty.aim":
+            flat.replace('<p data-aim="p1">One paragraph &amp; some text.</p>',
+                         '<p data-aim="p1">One paragraph &amp; some text.</p>\n'
+                         '<aim-page-break data-aim="pbx">stray'
+                         "</aim-page-break>"),
+        "nok_D006_page_break_nested.aim":
+            flat.replace('<li data-aim="i1">First</li>',
+                         '<li data-aim="i1">First</li>'
+                         '<aim-page-break data-aim="pbn"></aim-page-break>'),
         "nok_H006_history_chain_broken.aim":
             life.replace("Better text.</p>", "Sneakily different.</p>", 1),
         "nok_C001_not_canonical.aim":

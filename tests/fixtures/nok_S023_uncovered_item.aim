@@ -1,9 +1,9 @@
 <!doctype html>
-<html data-aim-version="0.1" lang="en">
+<html data-aim-version="0.2" lang="en">
 <head>
 <meta charset="utf-8">
 <title>Conformance fixture</title>
-<style data-aim-css="0.1">
+<style data-aim-css="0.2">
 :root{--aim-brand-1:#1d4ed8;--aim-brand-2:#0f766e;--aim-brand-3:#b45309;--aim-brand-4:#6d28d9;--aim-font-heading:system-ui, -apple-system, 'Segoe UI', sans-serif;--aim-font-body:system-ui, -apple-system, 'Segoe UI', sans-serif;--aim-font-mono:ui-monospace, 'SF Mono', Menlo, Consolas, monospace}
 html{-webkit-text-size-adjust:100%}
 body{margin:2rem auto;padding:0 1.5rem;max-width:52rem;font-family:var(--aim-font-body);font-size:1rem;line-height:1.6;color:#1f2937;background:#fff}
@@ -23,6 +23,7 @@ figure{margin:1.5em 0}figcaption{font-size:.875rem;color:#6b7280;margin-top:.5re
 img,svg{max-width:100%;height:auto}
 hr{border:0;border-top:1px solid #e5e7eb;margin:2em 0}
 a{color:var(--aim-brand-1)}
+aim-page-break{display:block;border:0;border-top:1px dashed #d1d5db;margin:2em 0}
 .bg-amber-50{background-color:#fffbeb}
 .bg-amber-600{background-color:#d97706}
 .bg-brand-1{background-color:var(--aim-brand-1)}
@@ -271,6 +272,9 @@ aim-slide>[data-aim],aim-slide>[data-aim-container]{position:absolute;margin:0}
 @media (max-width:1000px){aim-slide{zoom:var(--aim-slide-scale,.28)}}
 @media (max-width:640px){aim-slide{zoom:var(--aim-slide-scale,.17)}}
 @media print{aim-slide{zoom:1;margin-bottom:0;page-break-after:always;border:0;box-shadow:none}}
+@media print{body{margin:0;padding:0;max-width:none}}
+@media print{aim-page-break{border:0;margin:0;break-after:page}}
+@media print{[data-aim]{break-inside:avoid}}
 aim-proposals{display:block;margin-top:3rem;padding-top:1rem;border-top:2px solid #e5e7eb}
 aim-proposals::before{content:'Pending changes';display:block;font-family:var(--aim-font-heading);font-weight:700;font-size:1.25rem;margin-bottom:.75rem}
 aim-proposal{display:block;border:1px solid #e5e7eb;border-left:3px solid var(--aim-brand-1);border-radius:.375rem;padding:.625rem .875rem;margin:.5rem 0;background:#f9fafb;font-size:.875rem}

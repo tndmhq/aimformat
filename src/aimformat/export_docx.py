@@ -225,6 +225,7 @@ class _Exporter:
         title = self.aim.title
         if title:
             self.out.core_properties.title = title
+        self._apply_page_setup()
         self._emit_body_adds(None)
         for construct in self.aim._state.constructs():
             self.emit_construct(construct)
@@ -237,6 +238,24 @@ class _Exporter:
             for prop in props:
                 self._emit_add_paragraphs(prop)
         self.adds_by_anchor.clear()
+
+    def _apply_page_setup(self) -> None:
+        """The document's page setup → Word section properties, from the
+        same resolution the PDF's @page rule uses (aimformat.pagesetup)."""
+        from docx.enum.section import WD_ORIENT
+        from docx.shared import Mm
+        setup = self.aim.page_setup
+        section = self.out.sections[0]
+        section.orientation = (WD_ORIENT.LANDSCAPE
+                               if setup.orientation == "landscape"
+                               else WD_ORIENT.PORTRAIT)
+        section.page_width = Mm(setup.page_width_mm)
+        section.page_height = Mm(setup.page_height_mm)
+        m = setup.margins_mm
+        section.top_margin = Mm(m["top"])
+        section.right_margin = Mm(m["right"])
+        section.bottom_margin = Mm(m["bottom"])
+        section.left_margin = Mm(m["left"])
 
     def _pop_adds(self, container: str, after: Optional[str]) -> list[Proposal]:
         return self.adds_by_anchor.pop((container, after), [])
@@ -338,6 +357,11 @@ class _Exporter:
             return
         if el.tag == "hr":
             self.out.add_paragraph("—" * 12)
+            return
+        if el.tag == "aim-page-break":
+            from docx.enum.text import WD_BREAK
+            para = self.out.add_paragraph()
+            para.add_run().add_break(WD_BREAK.PAGE)
             return
         if el.tag in ("ul", "ol"):  # atomic list chunk / nested list content
             self.emit_list(el)

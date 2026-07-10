@@ -31,6 +31,7 @@ from .dom import Comment, Element, Text
 from .errors import (AimError, HistoryError, InvalidOperation, ParseError,
                      TargetNotFound)
 from .events import _ISO_RE, Event
+from .pagesetup import page_setup_from_obj, parse_doc_settings
 from .registry import REGISTRY
 
 __all__ = ["Finding", "lint", "lint_text", "lint_path"]
@@ -67,6 +68,8 @@ class _Linter:
         self.body_sections()
         self.chunks_and_runs()
         self.vocabulary()
+        self.pagination()
+        self.doc_settings()
         self.security()
         self.proposals()
         self.history()
@@ -102,6 +105,11 @@ class _Linter:
         if len(metas) > 1:
             self.add("S027", ERROR,
                      "more than one aim-meta script in <head>")
+        settings = [e for e in head.elements() if e.tag == "script"
+                    and e.get("type") == REGISTRY.script_types["doc"]]
+        if len(settings) > 1:
+            self.add("D002", ERROR,
+                     "more than one aim-doc script in <head>")
         for node in self.state.body.children:
             if isinstance(node, Comment):
                 self.add("S007", ERROR, "comments are not allowed in <body> "
@@ -339,8 +347,10 @@ class _Linter:
                 if tmpl is not None:
                     for el in tmpl.elements():
                         for e in el.iter():
-                            if e.tag == "style":
-                                continue  # theme payloads checked in proposals()
+                            if e.tag in ("style", "script"):
+                                # theme/settings payloads are grammar-checked
+                                # in proposals(); X004/X005 still sweep them
+                                continue
                             self.check_element(e, context="payload",
                                                where=card.get("id") or "")
 
@@ -427,6 +437,51 @@ class _Linter:
             self.add("V009", ERROR,
                      f"{tag}@{attr} must use one of {schemes}: "
                      f"{value[:60]!r}", loc)
+
+    # -- D: pagination + document settings ------------------------------------------------
+    def pagination(self) -> None:
+        """`aim-page-break` placement: a top-level body chunk, empty, with
+        explicit open+close tags (a self-closed or unclosed custom element
+        would swallow its siblings in a browser's HTML parse)."""
+        for top in self.state.constructs():
+            for el in top.iter():
+                if el.tag != "aim-page-break":
+                    continue
+                where = el.chunk_id or ""
+                if el is not top:
+                    self.add("D006", ERROR,
+                             "aim-page-break must be a top-level body chunk, "
+                             "not nested content", where)
+                if el.self_closing:
+                    self.add("D005", ERROR,
+                             "aim-page-break must use explicit open+close "
+                             "tags (self-closing breaks HTML parsing)", where)
+                if el.elements() or any(
+                        isinstance(c, Text) and c.data.strip()
+                        for c in el.children):
+                    self.add("D005", ERROR,
+                             "aim-page-break must be empty", where)
+
+    def doc_settings(self) -> None:
+        el = self.state.script("doc")
+        if el is None:
+            return
+        self._check_doc_settings_raw(el.raw, "aim:doc")
+
+    def _check_doc_settings_raw(self, raw: Optional[str], where: str) -> None:
+        """Shared by the live block and aim:doc proposal payloads: the JSON
+        shape (D001) and the page grammars (D003/D004), with the code taken
+        from the tagged validation error (see pagesetup._invalid)."""
+        try:
+            settings = parse_doc_settings(raw)
+            page = settings.get("page")
+            if page is not None:
+                page_setup_from_obj(page)
+        except InvalidOperation as exc:
+            code = getattr(exc, "lint_code", "D001")
+            if code not in ("D001", "D003", "D004"):
+                code = "D001"  # only the documented codes may be emitted
+            self.add(code, ERROR, str(exc), where)
 
     # -- X: security (script blocks) -----------------------------------------------------
     def security(self) -> None:
@@ -540,7 +595,7 @@ class _Linter:
             if not spec["payload"] and p.payload_html:
                 self.add("P007", ERROR,
                          f"{p.action} proposal must be payloadless", where)
-            if p.target and p.target != "aim:theme" and \
+            if p.target and p.target not in ("aim:theme", "aim:doc") and \
                     not self.state.exists(p.target):
                 self.add("P008", ERROR,
                          f"proposal targets unknown chunk {p.target!r}", where)
@@ -555,6 +610,18 @@ class _Linter:
                     inner = re.sub(r"^<style[^>]*>|</style>$", "",
                                    p.payload_html.strip())
                     self.check_theme_block(inner, where)
+                elif p.target == "aim:doc":
+                    from .dom import parse_fragment
+                    roots = [n for n in parse_fragment(p.payload_html)
+                             if isinstance(n, Element)]
+                    el = roots[0] if len(roots) == 1 else None
+                    if el is None or el.tag != "script" or \
+                            el.get("type") != REGISTRY.script_types["doc"]:
+                        self.add("D001", ERROR,
+                                 "aim:doc payload must be a single aim-doc "
+                                 "script block", where)
+                    else:
+                        self._check_doc_settings_raw(el.raw, where)
                 else:
                     from .dom import parse_fragment
                     roots = [n for n in parse_fragment(p.payload_html)

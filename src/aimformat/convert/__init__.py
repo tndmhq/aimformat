@@ -23,6 +23,7 @@ from ..document import AimDocument, new_document
 from ..events import Actor, external
 from ..export_docx import to_docx
 from ..ingest import from_docling
+from ._docx_pages import apply_docx_pagination
 from ._html_out import to_html
 from ._markdown_in import from_markdown
 from ._markdown_out import to_markdown
@@ -70,10 +71,17 @@ def from_docx(path: Union[str, Path], *, title: Optional[str] = None,
               theme: Optional[dict[str, str]] = None) -> AimDocument:
     """DOCX → .aim via docling (extra ``ingest``). An explicit ``title``
     wins; otherwise the document's own title node does (docling exports the
-    file stem as ``name``, which is the final fallback)."""
-    return from_docling(
+    file stem as ``name``, which is the final fallback).
+
+    Explicit pagination intent (sectPr page setup, hard page breaks) is
+    carried over in a python-docx side pass — see
+    :mod:`aimformat.convert._docx_pages`."""
+    who = author or external("docx-import")
+    doc = from_docling(
         _docling_document(path), title=title, lang=lang,
-        author=author or external("docx-import"), theme=theme)
+        author=who, theme=theme)
+    apply_docx_pagination(doc, path, author=who)
+    return doc
 
 
 def from_pdf(path: Union[str, Path], *, title: Optional[str] = None,

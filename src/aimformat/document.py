@@ -24,6 +24,8 @@ from .css import generate_aim_css
 from .dom import Comment, Element, Fragment, Text, deep_copy, parse_fragment, parse_html
 from .errors import HistoryError, InvalidOperation, ParseError, TargetNotFound
 from .events import Actor, Event
+from .pagesetup import (PageSetup, page_setup_from_obj,
+                        page_setup_from_settings, parse_doc_settings)
 from .registry import REGISTRY
 
 __all__ = ["AimDocument", "Chunk", "Proposal", "Anchor", "LAST",
@@ -136,7 +138,7 @@ class DocState:
 
     def script(self, kind: str) -> Optional[Element]:
         want = REGISTRY.script_types[kind]
-        where = self.head if kind == "meta" else self.body
+        where = self.head if kind in ("meta", "doc") else self.body
         return next((e for e in where.elements()
                      if e.tag == "script" and e.get("type") == want), None)
 
@@ -188,6 +190,8 @@ class DocState:
     def exists(self, target: str) -> bool:
         if target == "aim:theme":
             return self.theme_el() is not None
+        if target == "aim:doc":
+            return self.script("doc") is not None
         if self.top_index(target) is not None:
             return True
         if self.container_node(target) is not None and target != "body":
@@ -209,6 +213,9 @@ class DocState:
         if target == "aim:theme":
             t = self.theme_el()
             return serialize(t) if t is not None else None
+        if target == "aim:doc":
+            d = self.script("doc")
+            return serialize(d) if d is not None else None
         i = self.top_index(target)
         if i is not None:
             return serialize(self.constructs()[i])
@@ -223,10 +230,13 @@ class DocState:
 
     def doc_hash(self) -> str:
         theme = self.theme_el()
+        settings = self.script("doc")
         return canonical.doc_hash(
             self.html_open_line(),
             serialize(theme) if theme is not None else None,
             (serialize(c) for c in self.constructs()),
+            doc_settings_line=(serialize(settings)
+                               if settings is not None else None),
         )
 
     # -- mutation ---------------------------------------------------------------
@@ -301,6 +311,9 @@ class DocState:
         return serialize_run(members)
 
     def replace(self, target: str, markup: str) -> None:
+        if target == "aim:doc":
+            self.set_doc_settings_markup(markup)
+            return
         if target == "aim:theme":
             self.set_theme_markup(markup)
             return
@@ -362,10 +375,47 @@ class DocState:
             else:
                 self.head.children.append(el)
 
+    # -- document settings (aim:doc) -------------------------------------------
+    def set_doc_settings_markup(self, markup: Optional[str]) -> None:
+        """Replace (or with ``None`` remove) the head settings block.
+
+        Canonical head position: after the aim-meta cache, before the
+        embedded stylesheet and the theme block (§2.1)."""
+        current = self.script("doc")
+        if markup is None:
+            if current is not None:
+                self.head.children.remove(current)
+            return
+        nodes = parse_fragment(markup)
+        el = next((n for n in nodes if isinstance(n, Element)), None)
+        if el is None or el.tag != "script" or \
+                el.get("type") != REGISTRY.script_types["doc"]:
+            raise InvalidOperation(
+                "settings payload must be a "
+                f'<script type="{REGISTRY.script_types["doc"]}"> block')
+        if current is not None:
+            idx = self.head.children.index(current)
+            self.head.children[idx] = el
+            return
+        meta = self.script("meta")
+        css = self.css_el()
+        theme = self.theme_el()
+        if meta is not None:
+            idx = self.head.children.index(meta) + 1
+        elif css is not None:
+            idx = self.head.children.index(css)
+        elif theme is not None:
+            idx = self.head.children.index(theme)
+        else:
+            idx = len(self.head.children)
+        self.head.children.insert(idx, el)
+
     def kind_of(self, target: str) -> Optional[str]:
         """``"chunk"`` / ``"container"`` / None for an id in this document."""
         if target == "aim:theme":
             return "theme"
+        if target == "aim:doc":
+            return "doc"
         if self.find_chunk(target)[1]:
             return "chunk"
         cont = self.container_node(target)
@@ -411,7 +461,14 @@ class AimDocument:
 
     # -- io ----------------------------------------------------------------------
     def dumps(self) -> str:
-        """Canonical serialization (refreshes the machine-managed stylesheet)."""
+        """Canonical serialization (refreshes the machine-managed stylesheet).
+
+        The declared ``data-aim-version`` is deliberately NOT touched: the
+        ``<html …>`` open line is hashed state (§11.3), so an implicit
+        upgrade would invalidate every checkpoint recorded under the old
+        line. Documents carry their birth version; only :func:`new_document`
+        stamps the current one. (The stylesheet is safe to refresh — it is
+        machine-managed and excluded from hashing.)"""
         css = self._state.css_el()
         if css is not None:
             css.raw = "\n" + generate_aim_css()
@@ -478,6 +535,25 @@ class AimDocument:
         if not isinstance(obj, dict):
             raise ParseError("aim-meta cache is not a JSON object")
         return obj
+
+    @property
+    def doc_settings(self) -> dict:
+        """The parsed aim:doc settings object (``{}`` when absent).
+
+        Raises :class:`ParseError` when the block exists but is not a JSON
+        object — a malformed settings block is corrupt data, not a missing
+        one (D001)."""
+        el = self._state.script("doc")
+        try:
+            return parse_doc_settings(el.raw if el is not None else None)
+        except InvalidOperation as exc:
+            raise ParseError(str(exc)) from exc
+
+    @property
+    def page_setup(self) -> PageSetup:
+        """The document's resolved page setup (registry defaults when the
+        settings block is absent or carries no ``page`` field)."""
+        return page_setup_from_settings(self.doc_settings)
 
     # -- chunk views -------------------------------------------------------------
     @property
@@ -886,6 +962,52 @@ class AimDocument:
             data["explanation"] = explanation
         self._append_event(data)
 
+    def _doc_settings_markup(self, page: Union[PageSetup, dict]) -> str:
+        """The whole settings block with ``page`` replaced — unknown fields
+        an aim:doc block already carries are preserved (forward compat)."""
+        setup = page if isinstance(page, PageSetup) else page_setup_from_obj(page)
+        settings = dict(self.doc_settings)
+        settings["page"] = setup.to_obj()
+        return (f'<script type="{REGISTRY.script_types["doc"]}">\n'
+                f"{canonical_json(settings)}\n</script>")
+
+    def set_page_setup(self, page: Union[PageSetup, dict], *, author: Actor,
+                       explanation: Optional[str] = None,
+                       at: Optional[str] = None) -> PageSetup:
+        """Set the page setup (aim:doc modify; whole-block payload).
+
+        ``page`` is a :class:`PageSetup` or its object form (``size``,
+        ``orientation``, ``margins``); values are validated against the
+        registry grammars before anything mutates."""
+        markup = self._doc_settings_markup(page)
+        before = self._state.serial("aim:doc")
+        if markup == before:
+            raise InvalidOperation("page setup unchanged")
+        self._state.set_doc_settings_markup(markup)
+        data = {"seq": self.seq + 1, "kind": "direct_edit", "t": at or _now_iso(),
+                "target": "aim:doc", "action": "modify", "after": markup,
+                "author": author.to_obj(), "batch": self._batch_id()}
+        if before is not None:
+            data["before"] = before
+        if explanation:
+            data["explanation"] = explanation
+        self._append_event(data)
+        return self.page_setup
+
+    def propose_page_setup(self, page: Union[PageSetup, dict], *, author: Actor,
+                           explanation: Optional[str] = None,
+                           depends_on: Optional[str] = None,
+                           at: Optional[str] = None) -> Proposal:
+        """Propose a page setup (pending aim:doc modify, like a theme swap)."""
+        markup = self._doc_settings_markup(page)
+        pid = self._new_proposal_id()
+        with self.batch():
+            self._supersede_if_pending("aim:doc", pid, author, at)
+            return self._new_card(action="modify", author=author,
+                                  target="aim:doc", payload=markup,
+                                  anchor=None, explanation=explanation,
+                                  depends_on=depends_on, at=at, pid=pid)
+
     def _anchor_of(self, target: str) -> Anchor:
         """The position *target* currently occupies (works for chunks and
         nested containers alike)."""
@@ -1021,13 +1143,15 @@ class AimDocument:
 
     def _apply_data(self, data: dict) -> None:
         action, target = data["action"], data["target"]
-        if target == "aim:theme":
+        if target in ("aim:theme", "aim:doc"):
+            setter = (self._state.set_theme_markup if target == "aim:theme"
+                      else self._state.set_doc_settings_markup)
             if data.get("x_remove"):
-                self._state.set_theme_markup(None)
+                setter(None)
                 data.pop("x_remove")
                 data.pop("after", None)
             else:
-                self._state.set_theme_markup(data["after"])
+                setter(data["after"])
             return
         if action == "modify":
             self._state.replace(target, data["after"])
@@ -1154,9 +1278,12 @@ class AimDocument:
                        at: Optional[str] = None) -> Proposal:
         if not self._state.exists(target):
             raise TargetNotFound(f"no chunk {target!r}")
-        _, payload = self._normalize_payload(markup, expect_id=target) \
-            if target != "aim:theme" \
-            else (target, self._validated_theme_markup(markup))
+        if target == "aim:theme":
+            payload = self._validated_theme_markup(markup)
+        elif target == "aim:doc":
+            payload = self._validated_doc_markup(markup)
+        else:
+            _, payload = self._normalize_payload(markup, expect_id=target)
         pid = self._new_proposal_id()
         with self.batch():  # the supersede + the new card are one intention
             self._supersede_if_pending(target, pid, author, at)
@@ -1255,6 +1382,8 @@ class AimDocument:
                 expect = prop.target if prop.action == "modify" else None
                 if prop.target == "aim:theme":
                     applied_payload = self._validated_theme_markup(applied)
+                elif prop.target == "aim:doc":
+                    applied_payload = self._validated_doc_markup(applied)
                 else:
                     _, applied_payload = self._normalize_payload(
                         applied, expect_id=expect,
@@ -1291,6 +1420,20 @@ class AimDocument:
             name, _, value = (s.strip() for s in piece.partition(":"))
             slots[name] = value
         self._check_theme_slots(slots)
+        return serialize(el)
+
+    def _validated_doc_markup(self, markup: str) -> str:
+        """Validate + canonicalize a whole-settings-block payload."""
+        nodes = [n for n in parse_fragment(markup) if isinstance(n, Element)]
+        el = nodes[0] if len(nodes) == 1 else None
+        if el is None or el.tag != "script" or \
+                el.get("type") != REGISTRY.script_types["doc"]:
+            raise InvalidOperation(
+                "settings payload must be a single "
+                f'<script type="{REGISTRY.script_types["doc"]}"> block')
+        settings = parse_doc_settings(el.raw)
+        if "page" in settings:
+            page_setup_from_obj(settings["page"])
         return serialize(el)
 
     def reject(self, pid: str, *, decided_by: Actor,
@@ -1441,6 +1584,8 @@ class AimDocument:
                 state.replace(target, ev.get("before"))
             elif target == "aim:theme":
                 state.set_theme_markup(None)
+            elif target == "aim:doc":
+                state.set_doc_settings_markup(None)
         elif action == "add":
             current = state.serial(target)
             if current != applied:

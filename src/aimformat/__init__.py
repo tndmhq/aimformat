@@ -38,21 +38,23 @@ from .events import Actor, Event, agent, external, human
 from .export_docx import to_docx
 from .ingest import from_docling
 from .lint import Finding, lint, lint_path, lint_text
+from .pagesetup import PageSetup, page_css
 from .reconcile import ReconcileReport
 from .registry import REGISTRY
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 SPEC_VERSION = REGISTRY.spec_version
 
 __all__ = [
     "AimDocument", "Anchor", "Chunk", "Proposal", "Event", "Actor",
-    "Finding", "LAST", "ReconcileReport", "SPEC_VERSION", "__version__",
+    "Finding", "LAST", "PageSetup", "ReconcileReport", "SPEC_VERSION",
+    "__version__",
     "load", "loads", "new_document",
     "lint", "lint_text", "lint_path",
     "human", "agent", "external",
     "from_docling", "to_docx",
     "from_path", "from_text", "from_markdown", "from_docx", "from_pdf",
-    "to_markdown", "to_html", "to_pdf",
+    "to_markdown", "to_html", "to_pdf", "page_css",
     "generate_aim_css", "css_stats",
     "canonical_json", "sha256_prefixed",
     "AimError", "ParseError", "TargetNotFound", "InvalidOperation",

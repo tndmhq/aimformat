@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "aimformat"
-version = "0.1.0"
+version = "0.2.0"
 description = "Reference SDK and verifier for the .aim document format — AI proposals and human accept/reject as file primitives"
 readme = "README.md"
 license = "MIT"
