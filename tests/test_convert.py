@@ -1,4 +1,5 @@
 """Converter tests: text/markdown import, md/html export, CLI, dispatch."""
+
 import pytest
 
 import aimformat as aim
@@ -68,8 +69,13 @@ class TestFromMarkdown:
         assert doc.title == "Report Title"
         assert not _errors(doc.dumps())
         tags = [c.tag for c in doc.chunks]
-        assert "h1" in tags and "h2" in tags and "pre" in tags \
-            and "blockquote" in tags and "hr" in tags
+        assert (
+            "h1" in tags
+            and "h2" in tags
+            and "pre" in tags
+            and "blockquote" in tags
+            and "hr" in tags
+        )
         # two lists + one table became containers with item chunks
         assert len(doc.containers) == 3
         assert "li" in tags and "tr" in tags
@@ -82,7 +88,7 @@ class TestFromMarkdown:
         assert 'href="javascript:' not in text
         assert 'src="ftp:' not in text
         assert "<div>raw html block</div>" not in text  # escaped, not injected
-        assert "raw html block" in text                 # …but kept as text
+        assert "raw html block" in text  # …but kept as text
 
     def test_disallowed_link_scheme_degrades_to_text(self):
         doc = aim.from_markdown("See [share](ftp://host/file) now.")
@@ -108,21 +114,29 @@ class TestToMarkdown:
         assert not _errors(doc2.dumps())
         md2 = aim.to_markdown(doc2)
         assert md1 == md2  # converged after one round trip
-        for token in ("# Report Title", "| H1 | H2 |", "```", "- first item",
-                      "1. ordered A", "> Quoted", "**bold**", "~~gone~~"):
+        for token in (
+            "# Report Title",
+            "| H1 | H2 |",
+            "```",
+            "- first item",
+            "1. ordered A",
+            "> Quoted",
+            "**bold**",
+            "~~gone~~",
+        ):
             assert token in md1
 
     def test_marks_without_md_equivalent_degrade(self):
         doc = aim.new_document(title="t")
-        doc.add_chunk("<p>a <u>u</u> and <mark>m</mark> here</p>",
-                      author=aim.human("x"))
+        doc.add_chunk("<p>a <u>u</u> and <mark>m</mark> here</p>", author=aim.human("x"))
         assert "a u and m here" in aim.to_markdown(doc)
 
     def test_figure(self):
         doc = aim.new_document(title="t")
-        doc.add_chunk('<figure><img alt="A" src="https://x/y.png">'
-                      "<figcaption>Cap</figcaption></figure>",
-                      author=aim.human("x"))
+        doc.add_chunk(
+            '<figure><img alt="A" src="https://x/y.png"><figcaption>Cap</figcaption></figure>',
+            author=aim.human("x"),
+        )
         md = aim.to_markdown(doc)
         assert "![A](https://x/y.png)" in md and "*Cap*" in md
 
@@ -135,9 +149,16 @@ class TestToMarkdown:
 class TestRoundTripHardening:
     """Regressions from the 2026-07-08 adversarial review."""
 
-    PROSE = ["# not a heading", "- not a list", "> not a quote",
-             "1. not ordered", "~~not struck~~", "&copy; entity text",
-             "<https://example.com> literal", "--- dashes"]
+    PROSE = [
+        "# not a heading",
+        "- not a list",
+        "> not a quote",
+        "1. not ordered",
+        "~~not struck~~",
+        "&copy; entity text",
+        "<https://example.com> literal",
+        "--- dashes",
+    ]
 
     def _doc(self, chunks):
         doc = aim.new_document(title="t")
@@ -147,35 +168,47 @@ class TestRoundTripHardening:
         return doc
 
     def test_prose_that_looks_like_markdown_survives(self):
-        doc = self._doc([
-            "<p>" + c.replace("&", "&amp;").replace("<", "&lt;")
-            .replace(">", "&gt;") + "</p>" for c in self.PROSE])
+        doc = self._doc(
+            [
+                "<p>" + c.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;") + "</p>"
+                for c in self.PROSE
+            ]
+        )
         md1 = aim.to_markdown(doc)
         d2 = aim.from_markdown(md1)
         assert [ch.text for ch in d2.chunks] == self.PROSE
         assert aim.to_markdown(d2) == md1  # converged
 
     def test_table_cells_with_br_pipes_code(self):
-        doc = self._doc([
-            "<table><thead><tr><th>H1</th><th>H2</th></tr></thead><tbody>"
-            "<tr><td>a<br>b</td><td><code>x|y</code></td></tr>"
-            "</tbody></table>"])
+        doc = self._doc(
+            [
+                "<table><thead><tr><th>H1</th><th>H2</th></tr></thead><tbody>"
+                "<tr><td>a<br>b</td><td><code>x|y</code></td></tr>"
+                "</tbody></table>"
+            ]
+        )
         d2 = aim.from_markdown(aim.to_markdown(doc))
         rows = [c for c in d2.chunks if c.tag == "tr"]
         assert len(rows) == 2  # header + body — the table survived
         assert "x|y" in rows[1].text
 
     def test_multi_row_thead_demotes(self):
-        doc = self._doc([
-            "<table><thead><tr><th>A</th></tr><tr><th>B</th></tr></thead>"
-            "<tbody><tr><td>c</td></tr></tbody></table>"])
+        doc = self._doc(
+            [
+                "<table><thead><tr><th>A</th></tr><tr><th>B</th></tr></thead>"
+                "<tbody><tr><td>c</td></tr></tbody></table>"
+            ]
+        )
         d2 = aim.from_markdown(aim.to_markdown(doc))
         assert len([c for c in d2.chunks if c.tag == "tr"]) == 3
 
     def test_backticks_in_code(self):
-        doc = self._doc([
-            "<p>inline <code>a`b</code> code</p>",
-            "<pre><code>line\n```\nfence inside</code></pre>"])
+        doc = self._doc(
+            [
+                "<p>inline <code>a`b</code> code</p>",
+                "<pre><code>line\n```\nfence inside</code></pre>",
+            ]
+        )
         d2 = aim.from_markdown(aim.to_markdown(doc))
         pre = [c for c in d2.chunks if c.tag == "pre"]
         assert len(pre) == 1 and "fence inside" in pre[0].text
@@ -207,7 +240,7 @@ class TestRoundTripHardening:
 
     def test_bom_stripped(self, tmp_path):
         p = tmp_path / "bom.md"
-        p.write_bytes("﻿# BOM Title\n\nBody.".encode("utf-8"))
+        p.write_bytes("﻿# BOM Title\n\nBody.".encode())
         doc = aim.from_path(p)
         assert doc.title == "BOM Title"
 
@@ -216,16 +249,19 @@ class TestRoundTripHardening:
         bot = aim.agent("m")
         doomed = doc.chunks[1]
         doc.propose_delete(doomed.id, author=bot, explanation="x")
-        doc.propose_add("<p>After beta.</p>", author=bot, container="body",
-                        after=doomed.id, explanation="y")
+        doc.propose_add(
+            "<p>After beta.</p>", author=bot, container="body", after=doomed.id, explanation="y"
+        )
         html = aim.to_html(doc, pending="accept-all")
         assert "After beta." in html and "Beta." not in html
 
     def test_critic_container_and_row_proposals_visible(self):
         doc = aim.new_document(title="t")
         u = aim.human("u")
-        doc.add_chunk('<ul data-aim-container=""><li data-aim="">one</li>'
-                      '<li data-aim="">two</li></ul>', author=u)
+        doc.add_chunk(
+            '<ul data-aim-container=""><li data-aim="">one</li><li data-aim="">two</li></ul>',
+            author=u,
+        )
         bot = aim.agent("m")
         li_id = [c for c in doc.chunks if c.tag == "li"][0].id
         doc.propose_delete(li_id, author=bot, explanation="drop item")
@@ -236,8 +272,9 @@ class TestRoundTripHardening:
         doc = aim.from_text("a ~> b and x ~~ y.")
         bot = aim.agent("m")
         c = doc.chunks[0]
-        doc.propose_modify(c.id, f'<p data-aim="{c.id}">clean.</p>',
-                           author=bot, explanation="note with <<} inside")
+        doc.propose_modify(
+            c.id, f'<p data-aim="{c.id}">clean.</p>', author=bot, explanation="note with <<} inside"
+        )
         md = aim.to_markdown(doc, pending="criticmarkup")
         # spans still terminate exactly once each
         assert md.count("~~}") == 1 or md.count("~~}") == 0
@@ -252,8 +289,7 @@ class TestRoundTripHardening:
         out.write_text("sentinel", "utf-8")
         assert cli_main(["export", str(doc_path), "-o", str(out)]) == 2
         assert out.read_text("utf-8") == "sentinel"
-        assert cli_main(["export", str(doc_path), "-o", str(out),
-                         "--force"]) == 0
+        assert cli_main(["export", str(doc_path), "-o", str(out), "--force"]) == 0
 
 
 class TestCriticMarkup:
@@ -261,11 +297,13 @@ class TestCriticMarkup:
         doc = aim.from_text("Alpha.\n\nBeta.")
         bot = aim.agent("test-model")
         a, b = doc.chunks
-        doc.propose_modify(a.id, f'<p data-aim="{a.id}">Alpha two.</p>',
-                           author=bot, explanation="tighter")
+        doc.propose_modify(
+            a.id, f'<p data-aim="{a.id}">Alpha two.</p>', author=bot, explanation="tighter"
+        )
         doc.propose_delete(b.id, author=bot, explanation="redundant")
-        doc.propose_add("<p>New tail.</p>", author=bot, container="body",
-                        explanation="closing note")
+        doc.propose_add(
+            "<p>New tail.</p>", author=bot, container="body", explanation="closing note"
+        )
         return doc
 
     def test_all_actions_render(self):
@@ -285,8 +323,9 @@ class TestToHtml:
         doc = aim.from_text("Alpha.")
         bot = aim.agent("test-model")
         c = doc.chunks[0]
-        doc.propose_modify(c.id, f'<p data-aim="{c.id}">Alpha two.</p>',
-                           author=bot, explanation="e")
+        doc.propose_modify(
+            c.id, f'<p data-aim="{c.id}">Alpha two.</p>', author=bot, explanation="e"
+        )
         return doc
 
     def test_keep(self):
@@ -355,15 +394,16 @@ class TestCli:
         out = tmp_path / "doc.aim"
         cli_main(["import", str(src), "-o", str(out)])
         assert cli_main(["export", str(out), "-o", str(tmp_path / "x.pptx")]) == 2
-        assert cli_main(["export", str(out), "-o", str(tmp_path / "x.md"),
-                         "--pending", "tracked"]) == 2
+        assert (
+            cli_main(["export", str(out), "-o", str(tmp_path / "x.md"), "--pending", "tracked"])
+            == 2
+        )
         assert cli_main(["import", str(src), "-o", str(out)]) == 2  # exists
 
     def test_import_unsupported(self, tmp_path):
         bad = tmp_path / "x.rtf"
         bad.write_text("x", "utf-8")
-        assert cli_main(["import", str(bad), "-o",
-                         str(tmp_path / "y.aim")]) == 2
+        assert cli_main(["import", str(bad), "-o", str(tmp_path / "y.aim")]) == 2
 
 
 class TestDoclingWrappers:
@@ -374,15 +414,21 @@ class TestDoclingWrappers:
     def test_hierarchical_body_descends_into_headings(self):
         # docling's DOCX output parents section content UNDER the heading
         # node; the walker must descend (found live 2026-07-07)
-        d = {"name": "x",
-             "body": {"children": [{"$ref": "#/texts/0"}]},
-             "texts": [
-                 {"self_ref": "#/texts/0", "label": "title", "text": "T",
-                  "children": [{"$ref": "#/texts/1"}]},
-                 {"self_ref": "#/texts/1", "label": "text",
-                  "text": "Body para", "children": []},
-             ],
-             "tables": [], "pictures": []}
+        d = {
+            "name": "x",
+            "body": {"children": [{"$ref": "#/texts/0"}]},
+            "texts": [
+                {
+                    "self_ref": "#/texts/0",
+                    "label": "title",
+                    "text": "T",
+                    "children": [{"$ref": "#/texts/1"}],
+                },
+                {"self_ref": "#/texts/1", "label": "text", "text": "Body para", "children": []},
+            ],
+            "tables": [],
+            "pictures": [],
+        }
         doc = aim.from_docling(d)
         assert [c.tag for c in doc.chunks] == ["h1", "p"]
         assert doc.title == "T"

@@ -21,9 +21,10 @@ Mapping notes:
   (same rule as docling ingestion); nested lists/tables stay inline content
   of their list item; everything inside a blockquote is one atomic chunk.
 """
+
 from __future__ import annotations
 
-from typing import Any, Optional
+from typing import Any
 
 from ..canonical import escape_attr, escape_text
 from ..document import AimDocument, new_document
@@ -41,8 +42,8 @@ def _md():
         from markdown_it import MarkdownIt
     except ImportError as exc:  # pragma: no cover - exercised without extra
         raise ImportError(
-            "markdown support requires the 'markdown' extra: "
-            "pip install 'aimformat[markdown]'") from exc
+            "markdown support requires the 'markdown' extra: pip install 'aimformat[markdown]'"
+        ) from exc
     return MarkdownIt("commonmark").enable("table").enable("strikethrough")
 
 
@@ -54,7 +55,7 @@ def _src_ok(src: str) -> bool:
     return src.startswith(_IMG_SCHEMES)
 
 
-def _inline(children: Optional[list[Any]]) -> str:
+def _inline(children: list[Any] | None) -> str:
     """Render an inline token list to .aim inline markup."""
     out: list[str] = []
     suppressed_links = 0  # links whose scheme we refuse: keep text only
@@ -91,8 +92,7 @@ def _inline(children: Optional[list[Any]]) -> str:
             src = tok.attrGet("src") or ""
             alt = tok.content or ""
             if _src_ok(src):
-                out.append(f'<img alt="{escape_attr(alt)}" '
-                           f'src="{escape_attr(src)}">')
+                out.append(f'<img alt="{escape_attr(alt)}" src="{escape_attr(src)}">')
             elif alt:
                 out.append(escape_text(f"[{alt}]"))
         elif t == "softbreak":
@@ -114,10 +114,10 @@ class _Walker:
     def __init__(self, tokens: list[Any]):
         self.toks = tokens
         self.i = 0
-        self.first_heading: Optional[str] = None
+        self.first_heading: str | None = None
 
     # ------------------------------------------------------------------
-    def blocks(self, stop: Optional[str] = None) -> list[str]:
+    def blocks(self, stop: str | None = None) -> list[str]:
         out: list[str] = []
         while self.i < len(self.toks):
             tok = self.toks[self.i]
@@ -165,8 +165,11 @@ class _Walker:
     # ------------------------------------------------------------------
     def _list(self, open_tok: Any) -> str:
         tag = "ol" if open_tok.type == "ordered_list_open" else "ul"
-        close = f"{tag if tag != 'ol' else 'ordered_list'}_close" \
-            if tag == "ol" else "bullet_list_close"
+        close = (
+            f"{tag if tag != 'ol' else 'ordered_list'}_close"
+            if tag == "ol"
+            else "bullet_list_close"
+        )
         items: list[str] = []
         while self.i < len(self.toks):
             tok = self.toks[self.i]
@@ -221,7 +224,7 @@ class _Walker:
     def _table(self) -> str:
         head_rows: list[str] = []
         body_rows: list[str] = []
-        current: Optional[list[str]] = None
+        current: list[str] | None = None
         cell_tag = "td"
         in_head = False
         while self.i < len(self.toks):
@@ -246,8 +249,7 @@ class _Walker:
                 inline = self.toks[self.i]
                 self.i += 2  # inline + *_close
                 if current is not None:
-                    current.append(f"<{cell_tag}>{_inline(inline.children)}"
-                                   f"</{cell_tag}>")
+                    current.append(f"<{cell_tag}>{_inline(inline.children)}</{cell_tag}>")
         html = "<table>"
         if head_rows:
             html += "<thead>" + "".join(head_rows) + "</thead>"
@@ -256,9 +258,14 @@ class _Walker:
         return html + "</table>"
 
 
-def from_markdown(text: str, *, title: Optional[str] = None,
-                  lang: str = "en", author: Optional[Actor] = None,
-                  theme: Optional[dict[str, str]] = None) -> AimDocument:
+def from_markdown(
+    text: str,
+    *,
+    title: str | None = None,
+    lang: str = "en",
+    author: Actor | None = None,
+    theme: dict[str, str] | None = None,
+) -> AimDocument:
     """Build an :class:`AimDocument` from Markdown source.
 
     ``title`` defaults to the first heading's text (or "Imported document").
@@ -270,10 +277,9 @@ def from_markdown(text: str, *, title: Optional[str] = None,
     blocks = walker.blocks()
     who = author or external("markdown-import")
     doc = new_document(
-        title=title or walker.first_heading or "Imported document",
-        lang=lang, theme=theme)
+        title=title or walker.first_heading or "Imported document", lang=lang, theme=theme
+    )
     with doc.batch():
         for markup in blocks:
-            doc.add_chunk(_containerize(markup), author=who,
-                          explanation="Imported from markdown")
+            doc.add_chunk(_containerize(markup), author=who, explanation="Imported from markdown")
     return doc
