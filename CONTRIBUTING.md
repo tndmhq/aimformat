@@ -64,11 +64,11 @@ in the registry, a `nok_` fixture, and a targeted test. Run
 
 The package is live on PyPI: <https://pypi.org/project/aimformat/>. Releases
 are wired for [PyPI Trusted
-Publishing](https://docs.pypi.org/trusted-publishers/) — no API tokens.
-One-time setup: in the `aimformat` project's **Settings → Publishing** on
-PyPI, add a trusted publisher with owner `tndmhq`, repository `aimformat`,
-workflow `publish.yml`, environment `pypi`; on GitHub, create the `pypi`
-environment (Settings → Environments). Then, per release:
+Publishing](https://docs.pypi.org/trusted-publishers/) — no API tokens
+anywhere. The one-time setup is **already configured** (since 2026-07-10):
+the PyPI project trusts owner `tndmhq`, repository `aimformat`, workflow
+`publish.yml`, environment `pypi` (re-add under the project's
+**Settings → Publishing** if it's ever lost). Per release:
 
 1. Bump `__version__` in `src/aimformat/__init__.py` (the single source —
    pyproject reads it) and move the `## Unreleased` block in
