@@ -1,13 +1,14 @@
 [build-system]
-requires = ["hatchling"]
+requires = ["hatchling>=1.26"]
 build-backend = "hatchling.build"
 
 [project]
 name = "aimformat"
-version = "0.1.0"
+dynamic = ["version"]
 description = "Reference SDK and verifier for the .aim document format — AI proposals and human accept/reject as file primitives"
 readme = "README.md"
 license = "MIT"
+license-files = ["LICENSE"]
 requires-python = ">=3.10"
 authors = [{ name = "Luca Campanella" }]
 keywords = ["aim", "document-format", "llm", "track-changes", "html"]
@@ -32,16 +33,27 @@ markdown = ["markdown-it-py==4.2.0"]           # from_markdown
 ingest = ["docling==2.110.0"]                  # from_docx / from_pdf
 pdf = ["playwright==1.61.0"]                   # to_pdf (+ playwright install chromium)
 convert = ["markdown-it-py==4.2.0", "docling==2.110.0", "python-docx==1.2.0"]
+# MCP server; upstream advises staying below 2.0
+mcp = ["mcp==1.28.1"]
 dev = ["pytest==9.1.1", "python-docx==1.2.0", "docling-core==2.86.0",
-       "markdown-it-py==4.2.0", "ruff==0.15.21", "mypy==2.2.0",
-       "hypothesis==6.156.4"]
+       "markdown-it-py==4.2.0", "mcp==1.28.1", "ruff==0.15.21",
+       "mypy==2.2.0", "hypothesis==6.156.4"]
 
 [project.scripts]
 aim = "aimformat.cli:main"
+# Collision-proof alias: PyPI's `aim` (AimStack) also installs an `aim` CLI,
+# and it makes `uvx aimformat` resolve to this tool.
+aimformat = "aimformat.cli:main"
 
 [project.urls]
 Homepage = "https://github.com/tndmhq/aimformat"
 Specification = "https://github.com/tndmhq/aimformat/blob/main/spec.md"
+Repository = "https://github.com/tndmhq/aimformat"
+Issues = "https://github.com/tndmhq/aimformat/issues"
+Changelog = "https://github.com/tndmhq/aimformat/blob/main/CHANGELOG.md"
+
+[tool.hatch.version]
+path = "src/aimformat/__init__.py"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/aimformat"]

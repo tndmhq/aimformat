@@ -23,9 +23,10 @@ from typing import TYPE_CHECKING
 from . import canonical, ids
 from .canonical import canonical_json, serialize, serialize_run
 from .css import generate_aim_css
-from .dom import Element, Fragment, Text, parse_fragment, parse_html
+from .dom import Comment, Element, Fragment, Text, parse_fragment, parse_html
 from .errors import HistoryError, InvalidOperation, ParseError, TargetNotFound
 from .events import Actor, Event
+from .note import find_note, is_canonical, render_note
 from .registry import REGISTRY
 
 if TYPE_CHECKING:  # pragma: no cover - import cycle guard, typing only
@@ -110,6 +111,33 @@ class Proposal:
     depends_on: str | None
     batch: str | None
     anchor_shell: str | None = None  # thead/tbody/tfoot for table rows
+
+
+def resolution_order(proposals: Sequence[Proposal]) -> list[Proposal]:
+    """A dependency-safe order for resolving a whole pending lane.
+
+    Card order in the file carries no dependency meaning (a manual reorder
+    is legal), so resolve in rounds: an add anchored on another pending add
+    waits for its anchor; within each round deletes go last, so an add
+    anchored on a chunk that a sibling card deletes lands while the anchor
+    still exists. Shared by ``aim accept/reject --all`` and the exporters'
+    resolve-a-copy paths.
+    """
+    pending = list(proposals)
+    order: list[Proposal] = []
+    while pending:
+        pending_ids = {p.id for p in pending}
+        ready = [p for p in pending if not (p.action == "add" and p.anchor_after in pending_ids)]
+        if not ready:
+            raise InvalidOperation(
+                "pending adds anchor on each other in a cycle — the file is "
+                "corrupt (aim lint reports P015)"
+            )
+        ready.sort(key=lambda p: p.action == "delete")
+        order.extend(ready)
+        done = {p.id for p in ready}
+        pending = [p for p in pending if p.id not in done]
+    return order
 
 
 # ===========================================================================
@@ -492,6 +520,49 @@ class AimDocument:
         if not isinstance(obj, dict):
             raise ParseError("aim-meta cache is not a JSON object")
         return obj
+
+    @property
+    def note(self) -> str | None:
+        """The agent note's raw comment text, or None (spec §2.5)."""
+        c = find_note(self._state.head)
+        return c.data if c else None
+
+    def has_canonical_note(self) -> bool:
+        """Whether the note is byte-exactly canonical for this spec version."""
+        data = self.note
+        return data is not None and is_canonical(data, self.spec_version)
+
+    def set_note(self) -> None:
+        """Insert or refresh the canonical agent note (spec §2.5).
+
+        Not an edit: no event is appended and ``doc_hash`` is unaffected —
+        the note has the same standing as the derived caches (§7). A stale
+        or foreign aim-note is replaced in place; otherwise the note lands
+        immediately after ``<meta charset>``.
+        """
+        head = self._state.head
+        data = render_note(self.spec_version)
+        existing = find_note(head)
+        if existing is not None:
+            existing.data = data
+            return
+        anchor = 0
+        for i, node in enumerate(head.children):
+            if isinstance(node, Element) and node.tag == "meta" and node.get("charset") is not None:
+                anchor = i + 1
+                break
+        head.children.insert(anchor, Comment(data))
+
+    def remove_note(self) -> None:
+        """Strip the agent note, if present. Not an edit (see set_note).
+
+        Removes every matching comment: a document may carry duplicate
+        notes (the S030 warning case) and "remove the note" must not leave
+        one behind.
+        """
+        head = self._state.head
+        while (c := find_note(head)) is not None:
+            head.children.remove(c)
 
     # -- chunk views -------------------------------------------------------------
     @property
@@ -2022,6 +2093,7 @@ def new_document(
     html = Element("html", [("data-aim-version", REGISTRY.spec_version), ("lang", lang)])
     head = Element("head")
     head.children.append(Element("meta", [("charset", "utf-8")]))
+    head.children.append(Comment(render_note()))
     title_el = Element("title")
     title_el.children.append(Text(title))
     head.children.append(title_el)

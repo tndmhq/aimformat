@@ -34,7 +34,7 @@ import re
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from .document import AimDocument, Proposal
+from .document import AimDocument, Proposal, resolution_order
 from .dom import Element, Text, parse_fragment
 from .errors import InvalidOperation
 from .events import external
@@ -514,30 +514,13 @@ class _Exporter:
 def _resolve_copy(doc: AimDocument, decision: str) -> AimDocument:
     clone = AimDocument.loads(doc.dumps())
     decider = external("docx-export")
-    guard = 0
-    while clone.proposals:
-        guard += 1
-        if guard > 1000:  # pragma: no cover - defensive
-            raise InvalidOperation("pending lane did not converge")
-        pending_ids = {p.id for p in clone.proposals}
-        # resolve proposals whose anchors are settled first (chains)
-        ready = [
-            p for p in clone.proposals if not (p.action == "add" and p.anchor_after in pending_ids)
-        ]
-        if not ready:
-            raise InvalidOperation(
-                "pending adds anchor on each other in a cycle — the file is "
-                "corrupt (aim lint reports P015)"
-            )
-        # deletes go last within a round: an add anchored on a chunk that a
-        # sibling delete card targets must land while the anchor still
-        # exists (accept order must not depend on card order)
-        ready.sort(key=lambda p: p.action == "delete")
-        for p in ready:
-            if decision == "accept-all":
-                clone.accept(p.id, decided_by=decider)
-            else:
-                clone.reject(p.id, decided_by=decider)
+    # dependency-safe order (chained adds after their anchor, deletes last
+    # per round) — shared with `aim accept/reject --all`
+    for p in resolution_order(clone.proposals):
+        if decision == "accept-all":
+            clone.accept(p.id, decided_by=decider)
+        else:
+            clone.reject(p.id, decided_by=decider)
     return clone
 
 

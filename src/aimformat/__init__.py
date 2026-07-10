@@ -41,10 +41,11 @@ from .convert import (
 from .css import css_stats, generate_aim_css
 from .document import LAST, AimDocument, Anchor, Chunk, Proposal, load, loads, new_document
 from .errors import AimError, HistoryError, InvalidOperation, ParseError, TargetNotFound
-from .events import Actor, Event, agent, external, human
+from .events import Actor, Event, agent, external, human, parse_actor
 from .export_docx import to_docx
 from .ingest import from_docling
 from .lint import Finding, lint, lint_path, lint_text
+from .note import render_note
 from .reconcile import ReconcileReport
 from .registry import REGISTRY
 
@@ -72,6 +73,8 @@ __all__ = [
     "human",
     "agent",
     "external",
+    "parse_actor",
+    "render_note",
     "from_docling",
     "to_docx",
     "from_path",

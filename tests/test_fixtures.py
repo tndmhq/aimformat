@@ -10,6 +10,7 @@ from pathlib import Path
 import pytest
 
 from aimformat.lint import lint_path
+from aimformat.registry import REGISTRY
 
 FIXTURES = Path(__file__).parent / "fixtures"
 OK = sorted(FIXTURES.glob("ok_*.aim"))
@@ -28,6 +29,9 @@ def test_ok_fixture_lints_clean(path):
 
 @pytest.mark.parametrize("path", NOK, ids=lambda p: p.name)
 def test_nok_fixture_trips_its_rule(path):
+    """The rule must fire at its registered level — an error rule that
+    started emitting only warnings would otherwise still pass."""
     want = path.name.split("_")[1]
-    codes = {f.code for f in lint_path(path) if f.level == "error"}
-    assert want in codes, f"expected {want}, got {codes or 'no errors'}"
+    level = REGISTRY.raw["lint_rules"][want][0]  # "error" | "warning"
+    codes = {f.code for f in lint_path(path) if f.level == level}
+    assert want in codes, f"expected {level}-level {want}, got {codes or 'no findings'}"

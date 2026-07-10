@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from .canonical import canonical_json
-from .errors import HistoryError
+from .errors import AimError, HistoryError
 from .registry import REGISTRY
 
 _ISO_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?Z$")
@@ -58,6 +58,21 @@ def agent(model: str, id: str | None = None) -> Actor:
 def external(id: str | None = None) -> Actor:
     """Convenience constructor: an external tool (e.g. ``aim reconcile``)."""
     return Actor("external", id=id)
+
+
+def parse_actor(spec: str) -> Actor:
+    """Parse an actor string: ``human:ID`` | ``agent:MODEL`` | ``external:ID``.
+
+    Bare ``external`` (no id) is allowed; humans need an id and agents a
+    model id, so those forms without a value are usage errors.
+    """
+    kind, sep, value = spec.partition(":")
+    kind, value = kind.strip(), value.strip()
+    if kind == "external":
+        return external(value or None)
+    if kind in ("human", "agent") and sep and value:
+        return human(value) if kind == "human" else agent(value)
+    raise AimError(f"invalid actor {spec!r} (use human:ID, agent:MODEL, or external:ID)")
 
 
 class Event:
