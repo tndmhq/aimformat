@@ -1,7 +1,7 @@
 ---
 date: 2026-07-10 12:45
 type: plan
-status: active
+status: done
 related: [2026-07-07_1659_decision_v01-open-points-resolved.md, 2026-07-07_2243_plan_converters.md]
 ---
 
