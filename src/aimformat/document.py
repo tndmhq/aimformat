@@ -24,6 +24,7 @@ from .css import generate_aim_css
 from .dom import Comment, Element, Fragment, Text, deep_copy, parse_fragment, parse_html
 from .errors import HistoryError, InvalidOperation, ParseError, TargetNotFound
 from .events import Actor, Event
+from .note import find_note, is_canonical, render_note
 from .registry import REGISTRY
 
 __all__ = ["AimDocument", "Chunk", "Proposal", "Anchor", "LAST",
@@ -478,6 +479,46 @@ class AimDocument:
         if not isinstance(obj, dict):
             raise ParseError("aim-meta cache is not a JSON object")
         return obj
+
+    @property
+    def note(self) -> Optional[str]:
+        """The agent note's raw comment text, or None (spec §2.5)."""
+        c = find_note(self._state.head)
+        return c.data if c else None
+
+    def has_canonical_note(self) -> bool:
+        """Whether the note is byte-exactly canonical for this spec version."""
+        data = self.note
+        return data is not None and is_canonical(data, self.spec_version)
+
+    def set_note(self) -> None:
+        """Insert or refresh the canonical agent note (spec §2.5).
+
+        Not an edit: no event is appended and ``doc_hash`` is unaffected —
+        the note has the same standing as the derived caches (§7). A stale
+        or foreign aim-note is replaced in place; otherwise the note lands
+        immediately after ``<meta charset>``.
+        """
+        head = self._state.head
+        data = render_note(self.spec_version)
+        existing = find_note(head)
+        if existing is not None:
+            existing.data = data
+            return
+        anchor = 0
+        for i, node in enumerate(head.children):
+            if isinstance(node, Element) and node.tag == "meta" \
+                    and node.get("charset") is not None:
+                anchor = i + 1
+                break
+        head.children.insert(anchor, Comment(data))
+
+    def remove_note(self) -> None:
+        """Strip the agent note, if present. Not an edit (see set_note)."""
+        head = self._state.head
+        c = find_note(head)
+        if c is not None:
+            head.children.remove(c)
 
     # -- chunk views -------------------------------------------------------------
     @property
@@ -1784,6 +1825,7 @@ def new_document(*, title: str, lang: str = "en",
                             ("lang", lang)])
     head = Element("head")
     head.children.append(Element("meta", [("charset", "utf-8")]))
+    head.children.append(Comment(render_note()))
     title_el = Element("title")
     title_el.children.append(Text(title))
     head.children.append(title_el)

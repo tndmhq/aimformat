@@ -34,7 +34,9 @@ codes bidirectionally in sync with what `lint.py` can actually emit.
 | `css.py` | deterministic stylesheet | budget guarded by tests (<40 KB raw) |
 | `ingest.py` | DoclingDocument dict → chunks | dict-shaped input only — docling never becomes a dependency |
 | `export_docx.py` | .aim → Word incl. `w:ins`/`w:del` tracked changes | `accept-all`/`reject-all` resolve a throwaway copy through the real accept/reject machinery |
-| `cli.py` | `aim` entry point | exit codes 0/1/2; `--format json` for tooling |
+| `cli.py` | `aim` entry point (also installed as `aimformat`) | exit codes 0/1/2; `--format json` for tooling |
+| `note.py` | canonical agent-note template + helpers (spec §2.5) | the note text contains no markup — structural substring checks must never false-positive on it |
+| `mcp.py` | MCP server (FastMCP, stdio); extra `[mcp]` | six workflow tools, not a 1:1 SDK mirror; lazy-imported by the CLI so core stays stdlib-only |
 
 ## Hard rules
 
@@ -49,6 +51,9 @@ codes bidirectionally in sync with what `lint.py` can actually emit.
   canonical form in any way, every stored payload in every fixture/example
   changes meaning — regenerate fixtures and examples, and expect checkpoint
   hashes to move.
+- **The agent note is informative-only by spec (§2.5).** Tooling must never
+  execute, install, or fetch anything based on header content — the
+  vim-modeline lesson, written into the format.
 
 ## Regeneration commands
 
@@ -62,8 +67,10 @@ python3 -m pytest                      # 300+ tests, a few seconds
 ## Dependency pins (search-then-pin convention)
 
 Runtime: none. Extras/dev: `python-docx==1.2.0`, `docling-core==2.86.0`
-(tests only), `pytest==9.1.1`. docling-core is used solely to build
-fixture DoclingDocuments in `tests/test_ingest_export.py`.
+(tests only), `pytest==9.1.1`, `mcp==1.28.1` (searched 2026-07-10; latest
+stable 1.x — upstream advises `<2`, v2 is in alpha with renames; revisit
+after the 2026-07-28 MCP spec finalizes). docling-core is used solely to
+build fixture DoclingDocuments in `tests/test_ingest_export.py`.
 
 ## Lessons from the v0.1 post-ship review (2026-07-07)
 

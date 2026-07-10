@@ -73,6 +73,14 @@ without a phantom intermediate version. A second proposal on the same chunk
 automatically supersedes the first; `add` proposals can anchor on other
 pending adds and rebind deterministically when their anchor is decided.
 
+The same flow from the shell:
+
+```sh
+aim propose modify kickoff.aim c42a --html '<p data-aim="c42a">…</p>' \
+    --author agent:model-id --explanation "Anchor the date."
+aim accept kickoff.aim p-… --author human:ada     # or: aim reject … --all
+```
+
 ## 4. Trust but verify
 
 ```python
@@ -95,6 +103,7 @@ doc.save("kickoff.aim")
 ```sh
 aim lint kickoff.aim        # the full verifier; exit code 1 on errors
 aim show kickoff.aim        # chunks, pending lane, history
+aim note kickoff.aim --check   # the agent note is present and current
 python3 -m http.server      # browsers render .aim when served as text/html
 ```
 
@@ -116,6 +125,15 @@ aim.to_docx(doc, "contract-reviewed.docx", pending="tracked")
 The ingestion lands as ordinary history (an `external` actor), so an
 imported document verifies like any other. The exporter never mutates your
 document: `accept-all`/`reject-all` resolve a throwaway copy.
+
+## 7. Agents
+
+Every document you just created opens with the **agent note** (spec §2.5) —
+a head comment that tells any LLM opening the file what it is and how to
+edit it safely. The full agent story lives in
+[`docs/for-agents.md`](../for-agents.md): the CLI verbs above, the MCP
+server (`pip install 'aimformat[mcp]'`, then `aim mcp`), and the Agent
+Skill (`npx skills add tndmhq/aimformat`).
 
 ## Where to go next
 

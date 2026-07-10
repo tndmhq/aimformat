@@ -28,5 +28,5 @@ def test_ok_fixture_lints_clean(path):
 @pytest.mark.parametrize("path", NOK, ids=lambda p: p.name)
 def test_nok_fixture_trips_its_rule(path):
     want = path.name.split("_")[1]
-    codes = {f.code for f in lint_path(path) if f.level == "error"}
-    assert want in codes, f"expected {want}, got {codes or 'no errors'}"
+    codes = {f.code for f in lint_path(path)}  # any level: S030 is a warning
+    assert want in codes, f"expected {want}, got {codes or 'no findings'}"

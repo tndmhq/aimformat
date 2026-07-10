@@ -102,6 +102,11 @@ class _Linter:
         if len(metas) > 1:
             self.add("S027", ERROR,
                      "more than one aim-meta script in <head>")
+        notes = [n for n in head.children if isinstance(n, Comment)
+                 and n.data.lstrip().startswith("aim-note:")]
+        if len(notes) > 1:
+            self.add("S030", WARNING,
+                     "more than one aim-note comment in <head>")
         for node in self.state.body.children:
             if isinstance(node, Comment):
                 self.add("S007", ERROR, "comments are not allowed in <body> "

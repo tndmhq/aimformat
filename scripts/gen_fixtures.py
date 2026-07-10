@@ -103,6 +103,10 @@ def main() -> None:
             flat.replace("<title>Conformance fixture</title>\n", ""),
         "nok_S007_body_comment.aim":
             flat.replace("<body>\n", "<body>\n<!-- stray -->\n"),
+        "nok_S030_duplicate_note.aim":
+            flat.replace('<meta charset="utf-8">\n',
+                         '<meta charset="utf-8">\n'
+                         "<!--\naim-note: a second note\n-->\n"),
         "nok_S011_uncovered_body_child.aim":
             flat.replace('<p data-aim="p1">', "<p>"),
         "nok_S012_chunk_and_container.aim":
@@ -164,6 +168,8 @@ def main() -> None:
     print(f"wrote {len(files)} fixtures to {OUT}")
 
     # sanity: every ok_* is clean; every nok_* trips EXACTLY its code
+    # (warning-level codes must fire without introducing any error)
+    levels = aim.REGISTRY.raw["lint_rules"]
     bad = 0
     for name in sorted(files):
         findings = aim.lint_text((OUT / name).read_text())
@@ -172,9 +178,12 @@ def main() -> None:
             print(f"  UNEXPECTED errors in {name}: {errors}")
             bad += 1
         if name.startswith("nok_"):
-            want = {name.split("_")[1]}
-            if errors != want:
-                print(f"  {name}: expected exactly {want}, got {errors}")
+            want = name.split("_")[1]
+            want_errors = {want} if levels[want][0] == "error" else set()
+            fired = {f.code for f in findings}
+            if want not in fired or errors != want_errors:
+                print(f"  {name}: expected {want} (errors {want_errors}), "
+                      f"got fired={fired} errors={errors}")
                 bad += 1
     print("fixture sanity:", "OK" if not bad else f"{bad} problems")
     sys.exit(1 if bad else 0)

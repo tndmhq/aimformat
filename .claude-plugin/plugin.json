@@ -1,0 +1,9 @@
+{
+  "name": "aimformat",
+  "description": "Work with AIM documents (.aim): read, edit, propose and resolve suggestions, import/export, validate — via the aimformat SDK and aim CLI.",
+  "author": {
+    "name": "Tndm",
+    "email": "contact@usetndm.com"
+  },
+  "homepage": "https://aimformat.com"
+}

@@ -34,10 +34,11 @@ from .document import (LAST, AimDocument, Anchor, Chunk, Proposal, load,
                        loads, new_document)
 from .errors import (AimError, HistoryError, InvalidOperation, ParseError,
                      TargetNotFound)
-from .events import Actor, Event, agent, external, human
+from .events import Actor, Event, agent, external, human, parse_actor
 from .export_docx import to_docx
 from .ingest import from_docling
 from .lint import Finding, lint, lint_path, lint_text
+from .note import render_note
 from .reconcile import ReconcileReport
 from .registry import REGISTRY
 
@@ -49,7 +50,7 @@ __all__ = [
     "Finding", "LAST", "ReconcileReport", "SPEC_VERSION", "__version__",
     "load", "loads", "new_document",
     "lint", "lint_text", "lint_path",
-    "human", "agent", "external",
+    "human", "agent", "external", "parse_actor", "render_note",
     "from_docling", "to_docx",
     "from_path", "from_text", "from_markdown", "from_docx", "from_pdf",
     "to_markdown", "to_html", "to_pdf",

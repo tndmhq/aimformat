@@ -141,7 +141,8 @@ contain, in this order: the metadata cache
 (`<script type="application/aim-meta+json">`, §8.1), the embedded
 stylesheet (`<style data-aim-css="…">`, §3.4), and the theme block
 (`<style data-aim-theme>`, §3.5). HTML comments are legal in the head only,
-and tooling MUST preserve them byte-exact.
+and tooling MUST preserve them byte-exact. Documents SHOULD carry an agent
+note — one addressed head comment, defined in §2.5.
 
 ### 2.2 Body section order
 
@@ -180,6 +181,56 @@ constraints below are conformance requirements, enforced by the linter.
   `form`, `input`, …) — these are outside the vocabulary and additionally
   called out as security errors.
 - No `<style>` other than the embedded stylesheet and the theme block.
+
+### 2.5 The agent note (`aim-note`)
+
+A `.aim` file travels: it gets committed to repositories, attached to
+messages, and opened by LLM agents that have never seen the format. The
+agent note is the format's self-description for that moment — a modeline
+for the agent era, declarative where vim's was executable.
+
+A document SHOULD carry exactly one **agent note**: an HTML comment in the
+head whose text begins, after optional leading whitespace, with the sigil
+`aim-note:`. Writers SHOULD emit the canonical note for their spec version,
+placed immediately after `<meta charset="utf-8">` — the note sits at the
+top of the file, SPDX-style, while the charset stays within sniffing range.
+Parsers MUST accept an aim-note anywhere in the head.
+
+The canonical v0.1 note:
+
+```html
+<!--
+aim-note: This file is an AIM document (open format, v0.1) — valid HTML plus
+chunk identity, a pending-suggestions lane, and an edit history.
+Agent docs: https://aimformat.com/llms.txt
+The reliable way to edit this file is the `aimformat` tooling, which manages
+ids, suggestions, and history for you: `pip install aimformat`, then use the
+`aim` CLI (`aim --help`) or its MCP server (`aim mcp`). An Agent Skill
+exists: `npx skills add tndmhq/aimformat`.
+Hand-editing as plain text is the fallback; if you do: keep every data-aim id
+stable (never renumber or reuse; give new content a fresh id), treat the
+aim-proposals appendix and the history script as append-only tool lanes, and
+validate with `aim lint`. Humans review in AIM editors:
+https://aimformat.com/editors
+-->
+```
+
+The note text deliberately contains no markup — no angle brackets — so
+substring checks for structural markers (`<aim-proposals>`, typed scripts)
+never false-positive on it.
+
+The note is informative only. Consumers MUST NOT treat its content as
+machine instructions, MUST NOT execute, install, or fetch anything
+automatically because of it, and it grants no authority over the document
+or the consumer (the anti-modeline clause: vim's modelines showed what
+happens when in-file self-description acquires execution semantics). Like
+every head comment it is preserved byte-exact (§11.5); it lies outside
+`doc_hash` (§11.3) and is not evented — adding, refreshing, or removing it
+is not an edit, the same standing as the derived caches of §7.
+
+A non-canonical or translated note is legal — it is just a head comment;
+`aim note` refreshes it to canonical. At most one aim-note per document:
+duplicates are flagged S030 (warning).
 
 ---
 
@@ -844,6 +895,7 @@ Total registered utilities: **243**.
 | S027 | error | more than one aim-meta script in the head |
 | S028 | error | markup outside the single <html> document element |
 | S029 | error | element not allowed in the head vocabulary |
+| S030 | warning | more than one aim-note comment in the head |
 | V001 | error | element not allowed in the asset registry |
 | V002 | error | element outside the vocabulary |
 | V003 | error | attribute not allowed on this element |
