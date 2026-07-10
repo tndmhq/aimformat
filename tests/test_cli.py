@@ -67,6 +67,20 @@ class TestOtherCommands:
         assert "pending" in out and "delete" in out and "drop it" in out
         assert "doc_hash sha256:" in out
 
+    def test_markdown_export_accepts_resolve_modes(self, tmp_path, capsys):
+        doc = aim.new_document(title="Modes")
+        doc.add_chunk('<p data-aim="p1">Kept.</p>', author=BOT, at=ts(0))
+        doc.propose_add("<p>Fresh.</p>", after="p1", author=BOT, at=ts(1))
+        src = tmp_path / "m.aim"
+        doc.save(src)
+        accepted = tmp_path / "accepted.md"
+        assert main(["export", str(src), "-o", str(accepted), "--pending", "accept-all"]) == 0
+        assert "Fresh." in accepted.read_text()
+        rejected = tmp_path / "rejected.md"
+        assert main(["export", str(src), "-o", str(rejected), "--pending", "reject-all"]) == 0
+        text = rejected.read_text()
+        assert "Kept." in text and "Fresh." not in text
+
     def test_flatten_removes_history(self, saved, tmp_path, capsys):
         out = tmp_path / "flat.aim"
         assert main(["flatten", str(saved), "-o", str(out)]) == 0

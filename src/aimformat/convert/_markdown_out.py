@@ -369,10 +369,20 @@ def to_markdown(doc: AimDocument, *, pending: str = "drop") -> str:
     """Export *doc* as Markdown.
 
     ``pending="drop"`` (default) renders the accepted document only;
-    ``pending="criticmarkup"`` renders pending proposals as CriticMarkup.
+    ``pending="criticmarkup"`` renders pending proposals as CriticMarkup;
+    ``pending="accept-all"`` / ``pending="reject-all"`` resolve the pending
+    lane on a throwaway copy first (the DOCX/PDF exporters' semantics) and
+    render the resolved document.
     """
+    if pending in ("accept-all", "reject-all"):
+        from ..export_docx import _resolve_copy
+
+        doc, pending = _resolve_copy(doc, pending), "drop"
     if pending not in ("drop", "criticmarkup"):
-        raise InvalidOperation(f"pending must be 'drop' or 'criticmarkup', got {pending!r}")
+        raise InvalidOperation(
+            f"pending must be 'drop', 'criticmarkup', 'accept-all', or "
+            f"'reject-all', got {pending!r}"
+        )
     critic = pending == "criticmarkup"
 
     adds_by_anchor: dict[tuple[str | None, str | None], list[Proposal]] = {}

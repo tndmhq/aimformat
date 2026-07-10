@@ -307,7 +307,7 @@ aim-assets{display:none}
 <p data-aim="p1">One paragraph &amp; some text.</p>
 <ul data-aim-container="l1"><li data-aim="i1">First</li><li data-aim="i2">Run…</li><li data-aim="i2">…run</li></ul>
 <aim-proposals>
-<aim-proposal id="p-dh417r4l" data-action="delete" data-at="2026-07-07T12:00:03Z" data-author="agent" data-author-model="claude-opus-4-8" data-batch="b4" data-explanation="Trim." data-for="ghost"></aim-proposal>
+<aim-proposal id="p-ubqnk2db" data-action="delete" data-at="2026-07-07T12:00:03Z" data-author="agent" data-author-model="claude-opus-4-8" data-batch="b4" data-explanation="Trim." data-for="ghost"></aim-proposal>
 </aim-proposals>
 <script type="application/aim-history+jsonl">
 

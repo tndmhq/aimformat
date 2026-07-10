@@ -47,6 +47,12 @@ so substring checks for structural markers never false-positive on it.
 - **Container**: `data-aim-container="id"` on `ul`/`ol`/`table`/`aim-slide`;
   its items/rows are chunks. Table row chunks sit inside
   `thead`/`tbody`/`tfoot` shells.
+- **Slides / fixed-layout pages**: `<aim-slide style="width:960px;
+  height:540px">` holds absolutely positioned chunks (`left`/`top`/`width`
+  inline styles; stacking via explicit `z-index`; DOM order = reading
+  order). Canvas px are point-equivalent at print — 960×540 is a 16:9
+  slide, 420×595 a true A5 page — and each slide exports as its own
+  correctly sized PDF page.
 - **Ids**: `^[a-z0-9][a-z0-9_-]{0,63}$`, unique per document, opaque, never
   renumbered, never reused (deleted ids stay burned). `p-` prefix reserved
   for proposals; `body`, `aim:theme`, `aim:doc` reserved. The SDK mints
