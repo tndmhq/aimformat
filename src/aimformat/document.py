@@ -1736,6 +1736,12 @@ class AimDocument:
                 elif target == "aim:doc":
                     payload = self._validated_doc_markup(markup)
                 else:
+                    # fail fast on a dangling proposal (target deleted out
+                    # from under it) — mirroring propose_modify; otherwise
+                    # the amend silently rewrites a card that can only
+                    # explode later, at accept time (review finding)
+                    if not self._state.exists(target):
+                        raise TargetNotFound(f"no chunk {target!r}")
                     _, payload = self._normalize_payload(markup, expect_id=target)
             elif prop.action == "add":
                 _, payload = self._payload_like(prop.payload_html or "", markup)

@@ -235,6 +235,17 @@ class TestAmend:
         again = reloaded.proposal(p.id)
         assert ">v2</p>" in (again.payload_html or "") and again.explanation == "better"
 
+    def test_amend_dangling_modify_fails_fast(self, basic_doc):
+        """Target deleted out from under a pending modify: amend refuses
+        with a clear error instead of rewriting a card that can only
+        explode later at accept (review finding)."""
+        p = basic_doc.propose_modify("intro", '<p data-aim="intro">v1</p>', author=BOT, at=ts(8))
+        basic_doc.delete_chunk("intro", author=ME, at=ts(9))
+        with pytest.raises(TargetNotFound):
+            basic_doc.amend_proposal(p.id, '<p data-aim="intro">v2</p>')
+        # explanation-only amends still work (no payload validation needed)
+        assert basic_doc.amend_proposal(p.id, explanation="still here").explanation == "still here"
+
     def test_amend_errors(self, basic_doc, rich_doc):
         p = basic_doc.propose_modify("intro", '<p data-aim="intro">v1</p>', author=BOT, at=ts(8))
         with pytest.raises(TargetNotFound):
