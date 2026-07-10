@@ -470,6 +470,13 @@ class _Linter:
         el = self.state.script("doc")
         if el is None:
             return
+        if el.self_closing:
+            # same rule as aim-page-break's D005: in a browser parse a
+            # self-closed <script/> stays open and swallows the head
+            self.add("D001", ERROR,
+                     "aim-doc settings block must use explicit open+close "
+                     "script tags (self-closing breaks HTML parsing)",
+                     "aim:doc")
         self._check_doc_settings_raw(el.raw, "aim:doc")
 
     def _check_doc_settings_raw(self, raw: Optional[str], where: str) -> None:

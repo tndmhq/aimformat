@@ -85,7 +85,10 @@ class PageSetup:
 
 
 def _fmt_mm(value: float) -> str:
-    s = f"{value:g}"
+    # fixed-point, never "%g": exponent spellings ("1e-06mm") are valid
+    # floats but violate the margin grammar, so a tiny-but-legal input
+    # would serialize into a block the linter itself rejects
+    s = f"{value:.6f}".rstrip("0").rstrip(".") or "0"
     return f"{s}mm"
 
 
@@ -153,6 +156,11 @@ def doc_settings_element(markup: str):
         raise _invalid(
             "settings payload must be a single "
             f'<script type="{REGISTRY.script_types["doc"]}"> block', "D001")
+    if el.self_closing:
+        raise _invalid(
+            "settings payload must use explicit open+close script tags — "
+            "in HTML a self-closed <script/> is still an open tag and "
+            "swallows the following markup", "D001")
     return el
 
 

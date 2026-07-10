@@ -78,6 +78,24 @@ class TestGrammar:
         assert page_setup_from_obj(page_setup_from_obj(obj).to_obj()).to_obj() \
             == page_setup_from_obj(obj).to_obj()
 
+    def test_fmt_mm_never_uses_exponent_notation(self):
+        # %g would spell 0.000001 as "1e-06" — a valid float that violates
+        # the margin grammar, so the writer would emit a block its own
+        # linter rejects (Codex PR-4 review)
+        from aimformat.pagesetup import _fmt_mm
+        assert _fmt_mm(0.000001) == "0.000001mm"
+        assert _fmt_mm(0.0) == "0mm"
+        assert _fmt_mm(15.0) == "15mm"
+        assert _fmt_mm(215.9) == "215.9mm"
+        from aimformat.registry import REGISTRY
+        for v in (0.000001, 1e-7, 0.1, 12.5, 100.0):
+            assert REGISTRY.margin_pattern.match(_fmt_mm(v))
+
+    def test_tiny_margin_round_trips_through_the_grammar(self):
+        s = page_setup_from_obj({"margins": {"top": "0.000001mm"}})
+        assert s.to_obj()["margins"]["top"] == "0.000001mm"
+        assert page_setup_from_obj(s.to_obj()).margins_mm["top"] == 0.000001
+
 
 # --------------------------------------------------------------------------
 class TestSetPageSetup:
@@ -166,6 +184,18 @@ class TestSetPageSetup:
             basic_doc.set_page_setup({"size": "A0"}, author=ME, at=ts(5))
         assert basic_doc.dumps() == before
 
+    def test_tiny_margin_survives_a_full_write_read_cycle(self, basic_doc):
+        # regression: "%g" serialized this as 1e-06mm — set_page_setup then
+        # produced a document whose own re-read raised D004
+        basic_doc.set_page_setup({"margins": {"top": "0.000001mm"}},
+                                 author=ME, at=ts(5))
+        assert basic_doc.page_setup.margins_mm["top"] == 0.000001
+        assert basic_doc.doc_settings["page"]["margins"]["top"] \
+            == "0.000001mm"
+        assert not [f for f in aim.lint_text(basic_doc.dumps())
+                    if f.level == "error"]
+        assert basic_doc.verify() == []
+
 
 # --------------------------------------------------------------------------
 class TestPageBreakChunk:
@@ -242,6 +272,24 @@ class TestPageSetupProposals:
         codes = {f.code for f in aim.lint_text(text) if f.level == "error"}
         assert "V002" in codes
 
+    def test_self_closing_settings_payload_is_rejected(self, basic_doc):
+        # in HTML a self-closed <script/> is still an open tag: the payload
+        # would parse as defaults here but swallow markup in a browser
+        basic_doc.set_page_setup({"size": "A5"}, author=ME, at=ts(4))
+        with pytest.raises(InvalidOperation) as exc:
+            basic_doc.propose_modify(
+                "aim:doc", '<script type="application/aim-doc+json"/>',
+                author=BOT, at=ts(5))
+        assert exc.value.lint_code == "D001"
+
+    def test_self_closed_live_settings_block_is_d001(self, empty_doc):
+        empty_doc.flatten()
+        text = empty_doc.dumps().replace(
+            "</title>",
+            '</title>\n<script type="application/aim-doc+json"/>')
+        codes = {f.code for f in aim.lint_text(text) if f.level == "error"}
+        assert "D001" in codes
+
     def test_modify_via_propose_modify(self, basic_doc):
         basic_doc.set_page_setup({"size": "A5"}, author=ME, at=ts(4))
         p = basic_doc.propose_modify(
@@ -254,6 +302,53 @@ class TestPageSetupProposals:
         basic_doc.accept(p.id, decided_by=ME, at=ts(6))
         assert basic_doc.page_setup.orientation == "landscape"
         assert basic_doc.verify() == []
+
+
+# --------------------------------------------------------------------------
+class TestReservedTargetGuards:
+    """propose_delete("aim:doc") used to create a lint-clean pending delete
+    that only exploded (TargetNotFound) at accept time — reserved heads have
+    no body anchor. Delete/move must be rejected up front, for aim:theme
+    alike (Codex PR-4 review)."""
+
+    def test_propose_delete_doc_rejected_at_propose_time(self, basic_doc):
+        basic_doc.set_page_setup({"size": "A5"}, author=ME, at=ts(5))
+        with pytest.raises(InvalidOperation, match="reserved"):
+            basic_doc.propose_delete("aim:doc", author=BOT, at=ts(6))
+        assert basic_doc.proposals == []  # no half-created card
+
+    def test_propose_move_doc_rejected_at_propose_time(self, basic_doc):
+        basic_doc.set_page_setup({"size": "A5"}, author=ME, at=ts(5))
+        with pytest.raises(InvalidOperation, match="reserved"):
+            basic_doc.propose_move("aim:doc", author=BOT, container="body",
+                                   at=ts(6))
+
+    def test_direct_delete_and_move_rejected(self, basic_doc):
+        basic_doc.set_page_setup({"size": "A5"}, author=ME, at=ts(5))
+        with pytest.raises(InvalidOperation, match="reserved"):
+            basic_doc.delete_chunk("aim:doc", author=ME, at=ts(6))
+        with pytest.raises(InvalidOperation, match="reserved"):
+            basic_doc.move_chunk("aim:doc", author=ME, at=ts(6))
+
+    def test_theme_target_equally_guarded(self, basic_doc):
+        with pytest.raises(InvalidOperation, match="reserved"):
+            basic_doc.propose_delete("aim:theme", author=BOT, at=ts(5))
+        with pytest.raises(InvalidOperation, match="reserved"):
+            basic_doc.delete_chunk("aim:theme", author=ME, at=ts(5))
+
+    def test_hand_authored_delete_card_fails_accept_with_intent(
+            self, basic_doc):
+        # a foreign tool can still write such a card: accept must fail
+        # loudly as InvalidOperation, while reject stays available
+        basic_doc.set_page_setup({"size": "A5"}, author=ME, at=ts(5))
+        p = basic_doc.propose_delete("intro", author=BOT, at=ts(6))
+        doc = aim.loads(basic_doc.dumps().replace('data-for="intro"',
+                                                  'data-for="aim:doc"'))
+        with pytest.raises(InvalidOperation, match="reserved"):
+            doc.accept(p.id, decided_by=ME, at=ts(7))
+        doc.reject(p.id, decided_by=ME, at=ts(8))
+        assert doc.proposals == []
+        assert doc.verify() == []
 
 
 # --------------------------------------------------------------------------
@@ -299,6 +394,21 @@ class TestPrintCssAndPdfHtml:
         assert "@font-face{font-family:X}" in html
         assert html.index("@page{") < html.index("</head>")
 
+    def test_print_html_resolves_pending_before_page_css(self, basic_doc):
+        # regression: with pending="accept-all" the @page rule was computed
+        # from the PRE-resolution document, printing the accepted A5 page
+        # inside the old A4 geometry
+        from aimformat.convert._pdf_out import _print_html
+        basic_doc.propose_page_setup({"size": "A5"}, author=BOT, at=ts(5))
+        html = _print_html(basic_doc, "accept-all", None)
+        assert "@page{size:148mm 210mm" in html
+        assert "@page{size:210mm 297mm" not in html
+        assert len(basic_doc.proposals) == 1  # the copy was throwaway
+        html = _print_html(basic_doc, "reject-all", None)
+        assert "@page{size:210mm 297mm" in html
+        with pytest.raises(InvalidOperation):
+            _print_html(basic_doc, "bogus", None)
+
     def test_to_pdf_smoke_page_count(self, basic_doc, tmp_path):
         pytest.importorskip("playwright")
         basic_doc.add_chunk("<aim-page-break></aim-page-break>",
@@ -337,6 +447,38 @@ class TestDocxMappings:
         from docx.oxml.ns import qn
         brs = [br for p in got.paragraphs for r in p.runs
                for br in r._r.findall(qn("w:br"))
+               if br.get(qn("w:type")) == "page"]
+        assert len(brs) == 1
+
+    def test_tracked_export_emits_pending_break_add_as_page_break(
+            self, basic_doc, tmp_path):
+        # regression: a pending aim-page-break add has no text runs, so the
+        # tracked lane emitted an empty w:ins paragraph — the review DOCX
+        # lost the proposed pagination change
+        from docx import Document
+        from docx.oxml.ns import qn
+        basic_doc.propose_add("<aim-page-break></aim-page-break>",
+                              author=BOT, after="h1", at=ts(5))
+        out = tmp_path / "tracked-break-add.docx"
+        aim.to_docx(basic_doc, out)  # default pending="tracked"
+        got = Document(str(out))
+        brs = [br for ins in got.element.body.findall(".//" + qn("w:ins"))
+               for br in ins.findall(".//" + qn("w:br"))
+               if br.get(qn("w:type")) == "page"]
+        assert len(brs) == 1
+
+    def test_tracked_export_emits_pending_break_delete_as_deleted_break(
+            self, basic_doc, tmp_path):
+        from docx import Document
+        from docx.oxml.ns import qn
+        pb = basic_doc.add_chunk("<aim-page-break></aim-page-break>",
+                                 author=ME, after="h1", at=ts(5))
+        basic_doc.propose_delete(pb.id, author=BOT, at=ts(6))
+        out = tmp_path / "tracked-break-del.docx"
+        aim.to_docx(basic_doc, out)
+        got = Document(str(out))
+        brs = [br for dele in got.element.body.findall(".//" + qn("w:del"))
+               for br in dele.findall(".//" + qn("w:br"))
                if br.get(qn("w:type")) == "page"]
         assert len(brs) == 1
 
@@ -379,7 +521,7 @@ class TestDocxMappings:
             "margins": {"top": "20mm", "right": "18mm",
                         "bottom": "20mm", "left": "18mm"}}
         assert _read_break_anchors(Document(str(path))) == [
-            "Beta paragraph.", "Gamma paragraph."]
+            ("Beta paragraph.", 1), ("Gamma paragraph.", 1)]
 
         doc = aim.new_document(title="Ingested")
         for i, txt in enumerate(["Alpha paragraph.", "Beta paragraph.",
@@ -409,3 +551,44 @@ class TestDocxMappings:
         doc.add_chunk("<p>Entirely different.</p>", author=ME, at=ts(0))
         apply_docx_pagination(doc, path, author=ME)
         assert "aim-page-break" not in [c.tag for c in doc.chunks]
+
+    def test_duplicate_text_anchors_on_the_right_occurrence(self, tmp_path):
+        # regression: first-match anchoring put the break after the FIRST
+        # of two identical paragraphs when the source broke after the second
+        from docx import Document
+        from docx.enum.text import WD_BREAK
+        from aimformat.convert._docx_pages import (_read_break_anchors,
+                                                   apply_docx_pagination)
+        src = Document()
+        src.add_paragraph("Repeat me.")
+        src.add_paragraph("Repeat me.").add_run().add_break(WD_BREAK.PAGE)
+        src.add_paragraph("After.")
+        path = tmp_path / "dup.docx"
+        src.save(str(path))
+        assert _read_break_anchors(Document(str(path))) == [("Repeat me.", 2)]
+
+        doc = aim.new_document(title="Dup")
+        doc.add_chunk("<p>Repeat me.</p>", author=ME, at=ts(0))
+        second = doc.add_chunk("<p>Repeat me.</p>", author=ME, at=ts(1))
+        doc.add_chunk("<p>After.</p>", author=ME, at=ts(2))
+        apply_docx_pagination(doc, path, author=ME)
+        body = doc.body_ids
+        breaks = [c.id for c in doc.chunks if c.tag == "aim-page-break"]
+        assert len(breaks) == 1
+        assert body.index(breaks[0]) == body.index(second.id) + 1
+
+    def test_same_run_text_before_break_is_the_anchor(self, tmp_path):
+        # regression: WordprocessingML allows <w:t>Beta</w:t><w:br/> in ONE
+        # run; the prefix bookkeeping missed it and fell back to the
+        # previous paragraph, importing the break one construct too early
+        from docx import Document
+        from docx.enum.text import WD_BREAK
+        from aimformat.convert._docx_pages import _read_break_anchors
+        src = Document()
+        src.add_paragraph("Alpha.")
+        run = src.add_paragraph().add_run("Beta.")
+        run.add_break(WD_BREAK.PAGE)  # text and break share one run
+        src.add_paragraph("Gamma.")
+        path = tmp_path / "samerun.docx"
+        src.save(str(path))
+        assert _read_break_anchors(Document(str(path))) == [("Beta.", 1)]

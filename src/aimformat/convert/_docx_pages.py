@@ -10,7 +10,8 @@ in the DOCX XML and is worth carrying over:
   tolerance (v0.2 registers named sizes only — odd custom sizes are skipped);
 - explicit page breaks (``<w:br w:type="page"/>`` runs and
   ``w:pageBreakBefore`` paragraph properties) → ``<aim-page-break>`` chunks,
-  anchored by matching the last body text before the break against the
+  anchored by matching the last body text before the break — by text *and*
+  occurrence, so repeated sentences resolve to the right copy — against the
   ingested chunks' text (best-effort: an unmatched hint is skipped, never
   guessed).
 
@@ -76,57 +77,85 @@ def _read_page_setup(docx_doc) -> Optional[dict]:
                         "left": margin(section.left_margin)}}
 
 
-def _read_break_anchors(docx_doc) -> list[str]:
-    """Normalized text of the last body content before each explicit break,
-    in document order ('' when a break precedes any text)."""
+def _read_break_anchors(docx_doc) -> list[tuple[str, int]]:
+    """(normalized text, occurrence) of the last body content before each
+    explicit break, in document order.
+
+    ``occurrence`` counts how many body paragraphs reading exactly that text
+    have appeared so far (1-based): the same sentence may legitimately occur
+    twice, and a bare-text hint would anchor the break on the *first* copy.
+    Run XML is walked node by node — WordprocessingML allows the break in
+    the same run as the text before it (``<w:t>Beta</w:t><w:br/>``), which
+    ``run.text``-then-``findall`` bookkeeping would miss."""
     from docx.oxml.ns import qn
-    br_tag, type_attr = qn("w:br"), qn("w:type")
-    anchors: list[str] = []
-    last_text = ""
+    br_tag, t_tag, type_attr = qn("w:br"), qn("w:t"), qn("w:type")
+    anchors: list[tuple[str, int]] = []
+    seen: dict[str, int] = {}
+    last: tuple[str, int] = ("", 0)
     for para in docx_doc.paragraphs:
-        if para.paragraph_format.page_break_before and last_text:
-            anchors.append(last_text)
+        if para.paragraph_format.page_break_before and last[0]:
+            anchors.append(last)
         prefix = ""
         for run in para.runs:
-            has_break = any(br.get(type_attr) == "page"
-                            for br in run._r.findall(br_tag))
-            if has_break:
-                before = _norm(prefix) or last_text
-                if before:
-                    anchors.append(before)
-            prefix += run.text or ""
-        if _norm(para.text):
-            last_text = _norm(para.text)
+            for node in run._r:
+                if node.tag == br_tag and node.get(type_attr) == "page":
+                    text = _norm(prefix)
+                    if text:
+                        # the break splits THIS paragraph: when it completes
+                        # it will be the next occurrence of that text
+                        anchors.append((text, seen.get(text, 0) + 1))
+                    elif last[0]:
+                        anchors.append(last)
+                elif node.tag == t_tag:
+                    prefix += node.text or ""
+        text = _norm(para.text)
+        if text:
+            seen[text] = seen.get(text, 0) + 1
+            last = (text, seen[text])
     return anchors
 
 
-def _insert_breaks(doc: AimDocument, anchors: list[str], *,
+def _insert_breaks(doc: AimDocument, anchors: list[tuple[str, int]], *,
                    author: Actor) -> int:
     """Insert an aim-page-break after each anchored top-level construct.
 
     A hint matches a construct when its text equals the construct's own
     normalized text or any of its item chunks' (a break after a list's last
-    item anchors on the list container)."""
-    candidates: list[tuple[str, set[str]]] = []
+    item anchors on the list container). Matching is by *occurrence*,
+    counted from the top of the document on both sides, so duplicate texts
+    resolve to the right copy; a hint whose occurrence cannot be reached
+    (or that would move backwards) is skipped, never guessed."""
+    candidates: list[tuple[str, dict[str, int]]] = []
     for el in doc._state.constructs():
         cid = el.chunk_id or el.container_id
         if not cid:
             continue
-        texts = {_norm(el.text())}
-        texts.update(_norm(item.text()) for item in el.iter()
-                     if item is not el and item.chunk_id)
-        candidates.append((cid, {t for t in texts if t}))
+        texts: dict[str, int] = {}
+        for item in el.iter():
+            if item is not el and item.chunk_id:
+                t = _norm(item.text())
+                if t:
+                    texts[t] = texts.get(t, 0) + 1
+        own = _norm(el.text())
+        if own and own not in texts:  # items already cover a one-item list
+            texts[own] = 1
+        candidates.append((cid, texts))
     inserted, start = 0, 0
-    for anchor in anchors:
-        for i in range(start, len(candidates)):
-            cid, texts = candidates[i]
-            if anchor in texts:
-                doc.add_chunk("<aim-page-break></aim-page-break>",
-                              author=author, after=cid,
-                              explanation="Explicit page break in the source "
-                                          "document")
-                inserted, start = inserted + 1, i + 1
+    for anchor, occurrence in anchors:
+        count, hit = 0, None
+        for i, (cid, texts) in enumerate(candidates):
+            count += texts.get(anchor, 0)
+            if count >= occurrence:
+                hit = (i, cid)
                 break
+        if hit is None or hit[0] < start:
+            continue
+        i, cid = hit
+        doc.add_chunk("<aim-page-break></aim-page-break>",
+                      author=author, after=cid,
+                      explanation="Explicit page break in the source "
+                                  "document")
+        inserted, start = inserted + 1, i + 1
     return inserted
 
 

@@ -42,6 +42,16 @@ LAST = _Last()
 
 AnchorAfter = Union[str, None, _Last]
 _BODY_SECTIONS = ("aim-proposals", "aim-assets", "script")
+#: Reserved singleton targets (spec §3.5/§3.6): they can be modified but
+#: never deleted or moved — they have no body anchor to restore them at.
+_RESERVED_TARGETS = ("aim:theme", "aim:doc")
+
+
+def _no_delete_move(target: str, action: str) -> None:
+    if target in _RESERVED_TARGETS:
+        raise InvalidOperation(
+            f"{target} is a reserved singleton and cannot be the target of "
+            f"a {action} — modify it instead")
 
 
 def _now_iso() -> str:
@@ -890,6 +900,7 @@ class AimDocument:
     def delete_chunk(self, cid: str, *, author: Actor,
                      explanation: Optional[str] = None,
                      at: Optional[str] = None) -> None:
+        _no_delete_move(cid, "delete")
         before = self._state.serial(cid)
         if before is None:
             raise TargetNotFound(f"no chunk {cid!r}")
@@ -906,6 +917,7 @@ class AimDocument:
     def move_chunk(self, cid: str, *, author: Actor, container: str = "body",
                    after: AnchorAfter = LAST, explanation: Optional[str] = None,
                    at: Optional[str] = None) -> None:
+        _no_delete_move(cid, "move")
         if not self._state.exists(cid):
             raise TargetNotFound(f"no chunk {cid!r}")
         src = self._anchor_of(cid)
@@ -1333,6 +1345,9 @@ class AimDocument:
     def propose_delete(self, target: str, *, author: Actor,
                        explanation: Optional[str] = None,
                        at: Optional[str] = None) -> Proposal:
+        # reject reserved targets at propose time: the card would lint clean
+        # but explode at accept (reserved heads have no body anchor)
+        _no_delete_move(target, "delete proposal")
         if not self._state.exists(target):
             raise TargetNotFound(f"no chunk {target!r}")
         pid = self._new_proposal_id()
@@ -1347,6 +1362,7 @@ class AimDocument:
                      after: AnchorAfter = LAST,
                      explanation: Optional[str] = None,
                      at: Optional[str] = None) -> Proposal:
+        _no_delete_move(target, "move proposal")
         if not self._state.exists(target):
             raise TargetNotFound(f"no chunk {target!r}")
         src = self._anchor_of(target)
@@ -1479,9 +1495,13 @@ class AimDocument:
                         data["applied"] = applied
                     self._state.replace(prop.target or "", payload or "")
             elif prop.action == "delete" and decision == "accepted":
+                # a hand-authored card can still carry a reserved target;
+                # fail with intent (reject/supersede stay available)
+                _no_delete_move(prop.target or "", "delete proposal")
                 data["anchor"] = self._anchor_of(prop.target or "").to_obj()
                 self._state.remove(prop.target or "")
             elif prop.action == "move" and decision == "accepted":
+                _no_delete_move(prop.target or "", "move proposal")
                 src = self._anchor_of(prop.target or "")
                 dst = Anchor(prop.anchor_container or "body", prop.anchor_after,
                              shell=prop.anchor_shell)

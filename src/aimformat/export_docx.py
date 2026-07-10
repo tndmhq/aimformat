@@ -101,9 +101,22 @@ def _runs_of(el: Element, fmt: Optional[dict] = None) -> list[dict]:
     return runs
 
 
+def _block_runs(el: Element) -> list[dict]:
+    """Run specs for one block: a page-break chunk is a single page-break
+    run (it has no text runs — without this, the tracked lane would emit a
+    pending break as an empty revision paragraph)."""
+    if el.tag == "aim-page-break":
+        return [{"page_break": True}]
+    return _runs_of(el)
+
+
 def _apply_runs(paragraph, runs: list[dict]) -> None:
     for spec in runs:
         run = paragraph.add_run()
+        if spec.get("page_break"):
+            from docx.enum.text import WD_BREAK
+            run.add_break(WD_BREAK.PAGE)
+            continue
         if spec.get("break"):
             run.add_break()
             continue
@@ -164,7 +177,11 @@ class _Revisions:
         # build a real run for formatting, then detach and retag its text
         from docx.oxml.ns import qn
         run = paragraph.add_run(spec.get("text", ""))
-        _format_run(run, spec)
+        if spec.get("page_break"):
+            from docx.enum.text import WD_BREAK
+            run.add_break(WD_BREAK.PAGE)
+        else:
+            _format_run(run, spec)
         r = run._r
         r.getparent().remove(r)
         if deleted:
@@ -272,8 +289,8 @@ class _Exporter:
             for block in _block_children(el):
                 para = self.out.add_paragraph(
                     style=style or self._safe_style(_style_for(block.tag)))
-                self.rev.ins(para, _runs_of(block), _actor_label(prop.author),
-                             prop.at)
+                self.rev.ins(para, _block_runs(block),
+                             _actor_label(prop.author), prop.at)
 
     def _payload_elements(self, prop: Proposal) -> list[Element]:
         return [n for n in parse_fragment(prop.payload_html or "")
@@ -323,13 +340,13 @@ class _Exporter:
         for block in _block_children(el):
             para = self.out.add_paragraph(
                 style=style or self._safe_style(_style_for(block.tag)))
-            self.rev.dele(para, _runs_of(block), label, date)
+            self.rev.dele(para, _block_runs(block), label, date)
         if prop.action == "modify":
             for new_el in self._payload_elements(prop):
                 for block in _block_children(new_el):
                     para = self.out.add_paragraph(
                         style=style or self._safe_style(_style_for(block.tag)))
-                    self.rev.ins(para, _runs_of(block), label, date)
+                    self.rev.ins(para, _block_runs(block), label, date)
 
     def emit_tracked_list_container(self, el: Element, prop: Proposal) -> None:
         label, date = _actor_label(prop.author), prop.at

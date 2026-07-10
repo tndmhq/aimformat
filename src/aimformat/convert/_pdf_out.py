@@ -30,6 +30,13 @@ __all__ = ["to_pdf"]
 
 def _print_html(doc: AimDocument, pending: str,
                 extra_css: Optional[str]) -> str:
+    if pending in ("accept-all", "reject-all"):
+        # resolve the pending lane FIRST (on a throwaway copy), so the
+        # @page rule and the printed HTML read the same document state — a
+        # pending aim:doc proposal must not leave the print CSS on the old
+        # geometry while the page itself resolves to the new one
+        from ..export_docx import _resolve_copy
+        doc, pending = _resolve_copy(doc, pending), "keep"
     css = page_css(doc.page_setup)
     if extra_css:
         css += "\n" + extra_css
