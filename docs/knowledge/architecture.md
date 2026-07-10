@@ -32,7 +32,7 @@ codes bidirectionally in sync with what `lint.py` can actually emit.
 | `lint.py` | the verifier; stable codes S/V/X/P/H/M/C | collects all findings in one run; `C001` byte-compares the source against the canonical serialization |
 | `reconcile.py` | repair out-of-band edits; adoption path for hand-written files | edit script from expected state E (forward replay of the FULL log) to actual body A, appended as `origin:"reconcile"` events — so `verify()` passes by construction; refuses pruned/damaged logs; never rewrites body content (only ids) |
 | `css.py` | deterministic stylesheet | budget guarded by tests (<40 KB raw) |
-| `ingest.py` | DoclingDocument dict → chunks | dict-shaped input only — docling never becomes a dependency |
+| `ingest.py` | DoclingDocument dict → chunks | dict-shaped input only — docling never becomes a dependency; run `formatting`/`hyperlink` and `inline` groups map to strong/em/u/s/sub/sup/a (safe schemes only) |
 | `export_docx.py` | .aim → Word incl. `w:ins`/`w:del` tracked changes | `accept-all`/`reject-all` resolve a throwaway copy through the real accept/reject machinery |
 | `cli.py` | `aim` entry point | exit codes 0/1/2; `--format json` for tooling |
 
@@ -63,7 +63,8 @@ python3 -m pytest                      # 300+ tests, a few seconds
 
 Runtime: none. Extras/dev: `python-docx==1.2.0`, `docling-core==2.86.0`
 (tests only), `pytest==9.1.1`. docling-core is used solely to build
-fixture DoclingDocuments in `tests/test_ingest_export.py`.
+fixture DoclingDocuments in `tests/test_ingest_export.py` and
+`tests/test_ingest_inline.py`.
 
 ## Lessons from the v0.1 post-ship review (2026-07-07)
 
