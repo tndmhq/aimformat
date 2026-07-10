@@ -21,6 +21,12 @@ Fixed-layout pages: slides become correct pages end to end.
   being silently dropped — a deck previously exported as an empty
   document. Figures honor an authored inline-style width (CSS px at
   96 dpi, clamped to the content box) instead of a hardcoded 4.5 in.
+- **SDK/linter**: a payload whose root is a bare `aim-slide` (no identity
+  markers) now always takes the container path — `add_chunk`/proposals
+  previously demoted it to an opaque *chunk* with unaddressable children,
+  and the linter accepted the result. New rule **S031** (error):
+  `aim-slide` marked as a chunk. `to_markdown` gains
+  `pending="accept-all"/"reject-all"` (resolve-on-a-copy, like DOCX/PDF).
 
 ## 0.2.0 — 2026-07-10
 

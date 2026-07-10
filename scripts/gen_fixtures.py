@@ -140,6 +140,11 @@ def main() -> None:
         "nok_S012_chunk_and_container.aim": flat.replace(
             "</body>", '<ul data-aim="lx" data-aim-container="l9"></ul>\n</body>'
         ),
+        "nok_S031_slide_as_chunk.aim": flat.replace(
+            "</body>",
+            '<aim-slide data-aim="sx" style="width:960px; height:540px">'
+            '<h2 style="left:60px; top:50px; width:600px">T</h2></aim-slide>\n</body>',
+        ),
         "nok_S016_id_reused_across_parents.aim": flat.replace(
             '<li data-aim="i1">First</li>', '<li data-aim="p1">First</li>'
         ),

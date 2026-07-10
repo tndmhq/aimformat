@@ -959,6 +959,7 @@ Total registered utilities: **243**.
 | S028 | error | markup outside the single <html> document element |
 | S029 | error | element not allowed in the head vocabulary |
 | S030 | warning | more than one aim-note comment in the head |
+| S031 | error | aim-slide marked as a chunk (slides are containers) |
 | V001 | error | element not allowed in the asset registry |
 | V002 | error | element outside the vocabulary |
 | V003 | error | attribute not allowed on this element |

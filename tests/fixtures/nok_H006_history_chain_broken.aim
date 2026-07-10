@@ -307,7 +307,7 @@ aim-assets{display:none}
 <p data-aim="p1">Sneakily different.</p>
 <ul data-aim-container="l1"><li data-aim="i1">First</li><li data-aim="i2">Run…</li><li data-aim="i2">…run</li></ul>
 <aim-proposals>
-<aim-proposal id="p-v5rogj0s" data-action="add" data-anchor-after="p1" data-anchor-container="body" data-at="2026-07-07T12:00:07Z" data-author="human" data-author-id="ada" data-batch="b4" data-explanation="More context."><template><p data-aim="1jvs148f">Pending addition.</p></template></aim-proposal>
+<aim-proposal id="p-bu0ug3tk" data-action="add" data-anchor-after="p1" data-anchor-container="body" data-at="2026-07-07T12:00:07Z" data-author="human" data-author-id="ada" data-batch="b4" data-explanation="More context."><template><p data-aim="dvang063">Pending addition.</p></template></aim-proposal>
 </aim-proposals>
 <script type="application/aim-history+jsonl">
 
@@ -318,8 +318,8 @@ aim-assets{display:none}
 {"action":"add","after":"<h1 data-aim=\"h1\" class=\"font-bold text-3xl\">Fixture<\/h1>","anchor":{"after":null,"container":"body"},"author":{"model":"claude-opus-4-8","type":"agent"},"batch":"b1","kind":"direct_edit","seq":1,"t":"2026-07-07T12:00:00Z","target":"h1"}
 {"action":"add","after":"<p data-aim=\"p1\">One paragraph &amp; some text.<\/p>","anchor":{"after":"h1","container":"body"},"author":{"model":"claude-opus-4-8","type":"agent"},"batch":"b2","kind":"direct_edit","seq":2,"t":"2026-07-07T12:00:01Z","target":"p1"}
 {"action":"add","after":"<ul data-aim-container=\"l1\"><li data-aim=\"i1\">First<\/li><li data-aim=\"i2\">Run…<\/li><li data-aim=\"i2\">…run<\/li><\/ul>","anchor":{"after":"p1","container":"body"},"author":{"model":"claude-opus-4-8","type":"agent"},"batch":"b3","kind":"direct_edit","seq":3,"t":"2026-07-07T12:00:02Z","target":"l1"}
-{"action":"modify","batch":"b5","before":"<p data-aim=\"p1\">One paragraph &amp; some text.<\/p>","decided_by":{"id":"ada","type":"human"},"decision":"accepted","explanation":"Tighter.","kind":"resolution","proposal":"p-5t60a1fs","proposed":"<p data-aim=\"p1\">Better text.<\/p>","proposed_at":"2026-07-07T12:00:03Z","proposed_by":{"model":"claude-opus-4-8","type":"agent"},"seq":4,"t":"2026-07-07T12:00:04Z","target":"p1"}
-{"action":"delete","batch":"b6","before":"<li data-aim=\"i1\">First<\/li>","decided_by":{"id":"ada","type":"human"},"decision":"rejected","explanation":"Redundant.","kind":"resolution","proposal":"p-tfnnvtal","proposed_at":"2026-07-07T12:00:05Z","proposed_by":{"model":"claude-opus-4-8","type":"agent"},"seq":5,"t":"2026-07-07T12:00:06Z","target":"i1"}
+{"action":"modify","batch":"b5","before":"<p data-aim=\"p1\">One paragraph &amp; some text.<\/p>","decided_by":{"id":"ada","type":"human"},"decision":"accepted","explanation":"Tighter.","kind":"resolution","proposal":"p-rmq8un3p","proposed":"<p data-aim=\"p1\">Better text.<\/p>","proposed_at":"2026-07-07T12:00:03Z","proposed_by":{"model":"claude-opus-4-8","type":"agent"},"seq":4,"t":"2026-07-07T12:00:04Z","target":"p1"}
+{"action":"delete","batch":"b6","before":"<li data-aim=\"i1\">First<\/li>","decided_by":{"id":"ada","type":"human"},"decision":"rejected","explanation":"Redundant.","kind":"resolution","proposal":"p-nuvcavp3","proposed_at":"2026-07-07T12:00:05Z","proposed_by":{"model":"claude-opus-4-8","type":"agent"},"seq":5,"t":"2026-07-07T12:00:06Z","target":"i1"}
 {"doc_hash":"sha256:64facdf8aa13540aaae44dd34ed370bb7ece9e6b9454d96d673ef4add071bd70","kind":"checkpoint","label":"reviewed","seq":6,"t":"2026-07-07T12:00:08Z"}
 </script>
 </body>

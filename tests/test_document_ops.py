@@ -214,3 +214,42 @@ class TestBatchesAndViews:
     def test_seq_monotonic(self, rich_doc):
         seqs = [e.seq for e in rich_doc.history]
         assert seqs == list(range(1, len(seqs) + 1))
+
+
+class TestBareSlidePayload:
+    """A payload whose root is aim-slide ALWAYS takes the container path —
+    a bare slide (no markers at all, e.g. an editor's new-page template)
+    must never be demoted to an opaque chunk with unaddressable children."""
+
+    def test_add_bare_slide_becomes_container(self):
+        import aimformat as aim
+
+        doc = aim.new_document(title="t")
+        created = doc.add_chunk(
+            '<aim-slide style="width:420px; height:595px">'
+            '<h2 style="left:42px; top:42px; width:336px">Title</h2>'
+            "</aim-slide>",
+            author=aim.human("u"),
+        )
+        assert created.id in doc.containers
+        text = doc.dumps()
+        assert f'data-aim-container="{created.id}"' in text
+        # the child got covered with its own chunk id
+        assert '<h2 data-aim="' in text
+        assert not [f for f in aim.lint(doc) if f.level == "error"]
+
+    def test_propose_bare_slide_add_accepts_clean(self):
+        import aimformat as aim
+
+        doc = aim.new_document(title="t")
+        me, bot = aim.human("u"), aim.agent("m")
+        doc.add_chunk("<p>anchor</p>", author=me)
+        p = doc.propose_add(
+            '<aim-slide style="width:960px; height:540px">'
+            '<p style="left:60px; top:50px; width:600px">Body</p></aim-slide>',
+            container="body",
+            author=bot,
+        )
+        doc.accept(p.id, decided_by=me)
+        assert any(True for _ in doc.containers)
+        assert not [f for f in aim.lint(doc) if f.level == "error"]
