@@ -1,4 +1,5 @@
 """The aim CLI: lint / hash / new / show / flatten / normalize / css."""
+
 import json
 from pathlib import Path
 
@@ -6,8 +7,7 @@ import pytest
 
 import aimformat as aim
 from aimformat.cli import main
-
-from conftest import BOT, ME, ts
+from conftest import BOT, ts
 
 
 @pytest.fixture
@@ -86,14 +86,12 @@ class TestNormalizeCommand:
 
     @pytest.fixture
     def non_canonical(self, tmp_path):
-        src = (Path(__file__).parent / "fixtures"
-               / "nok_C001_not_canonical.aim")
+        src = Path(__file__).parent / "fixtures" / "nok_C001_not_canonical.aim"
         dst = tmp_path / "doc.aim"
         dst.write_text(src.read_text("utf-8"), "utf-8")
         return dst
 
-    def test_rewrites_to_canonical_and_lints_clean(self, non_canonical,
-                                                   capsys):
+    def test_rewrites_to_canonical_and_lints_clean(self, non_canonical, capsys):
         assert main(["lint", str(non_canonical)]) == 1  # C001 before
         assert main(["normalize", str(non_canonical)]) == 0
         assert "wrote" in capsys.readouterr().out
@@ -114,8 +112,7 @@ class TestNormalizeCommand:
     def test_lossless_on_content(self, non_canonical):
         chunks_before = {c.id: c.text for c in aim.load(non_canonical).chunks}
         assert main(["normalize", str(non_canonical)]) == 0
-        assert {c.id: c.text
-                for c in aim.load(non_canonical).chunks} == chunks_before
+        assert {c.id: c.text for c in aim.load(non_canonical).chunks} == chunks_before
 
     def test_check_reports_without_writing(self, non_canonical, capsys):
         original = non_canonical.read_text("utf-8")
@@ -127,16 +124,14 @@ class TestNormalizeCommand:
         assert main(["normalize", "--check", str(saved)]) == 0
         assert "canonical" in capsys.readouterr().out
 
-    def test_output_flag_keeps_original(self, non_canonical, tmp_path,
-                                        capsys):
+    def test_output_flag_keeps_original(self, non_canonical, tmp_path, capsys):
         original = non_canonical.read_text("utf-8")
         out = tmp_path / "normalized.aim"
         assert main(["normalize", str(non_canonical), "-o", str(out)]) == 0
         assert non_canonical.read_text("utf-8") == original
         assert main(["lint", str(out)]) == 0
 
-    def test_crlf_agreement_between_check_and_c001(self, saved, tmp_path,
-                                                   capsys):
+    def test_crlf_agreement_between_check_and_c001(self, saved, tmp_path, capsys):
         """`normalize --check` and lint's C001 measure the same bytes
         (spec §11 byte equality) and may never disagree (Codex review #2).
         A blanket CRLF conversion also mangles machine-managed block
@@ -144,6 +139,7 @@ class TestNormalizeCommand:
         rules (X006/H005) and are deliberately NOT normalize's to rewrite;
         the agreement contract is about C001 specifically."""
         from aimformat.lint import lint_path
+
         crlf = tmp_path / "crlf.aim"
         crlf.write_bytes(saved.read_bytes().replace(b"\n", b"\r\n"))
         assert main(["normalize", "--check", str(crlf)]) == 1

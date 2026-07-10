@@ -36,7 +36,8 @@ convert = ["markdown-it-py==4.2.0", "docling==2.110.0", "python-docx==1.2.0"]
 # MCP server; upstream advises staying below 2.0
 mcp = ["mcp==1.28.1"]
 dev = ["pytest==9.1.1", "python-docx==1.2.0", "docling-core==2.86.0",
-       "markdown-it-py==4.2.0", "mcp==1.28.1"]
+       "markdown-it-py==4.2.0", "mcp==1.28.1", "ruff==0.15.21",
+       "mypy==2.2.0", "hypothesis==6.156.4"]
 
 [project.scripts]
 aim = "aimformat.cli:main"
@@ -60,3 +61,55 @@ packages = ["src/aimformat"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q"
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B"]
+
+[tool.mypy]
+# Lenient start; strictness ratchets per-module (WS1 decision, plan 2026-07-09).
+python_version = "3.10"
+files = ["src"]
+ignore_missing_imports = true
+check_untyped_defs = true
+warn_unused_ignores = true
+warn_redundant_casts = true
+no_implicit_optional = true
+
+[[tool.mypy.overrides]]
+# Optional-dependency imports (converters/ingest/export) — typed as Any so the
+# zero-dependency core checks cleanly whether or not the extras are installed.
+module = [
+  "docling.*",
+  "docling_core.*",
+  "docx.*",
+  "markdown_it.*",
+  "numpy.*",
+  "playwright.*",
+]
+follow_imports = "skip"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+# Lenient start (WS1 decision, plan 2026-07-09): these modules pre-date typing
+# and still have Optional-narrowing debt. Ratchet: remove a module from this
+# list (and fix what surfaces) rather than ever adding one.
+module = [
+  "aimformat.document",
+  "aimformat.export_docx",
+  "aimformat.ingest",
+  "aimformat.lint",
+  "aimformat.reconcile",
+]
+disable_error_code = [
+  "arg-type",
+  "assignment",
+  "list-item",
+  "operator",
+  "type-var",
+  "union-attr",
+]

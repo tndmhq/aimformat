@@ -1,4 +1,5 @@
 """The agent note (spec §2.5): emission, round-trip, helpers, CLI, S030."""
+
 import json
 
 import pytest
@@ -6,7 +7,6 @@ import pytest
 import aimformat as aim
 from aimformat.cli import main
 from aimformat.note import SIGIL, find_note, render_note
-
 from conftest import BOT
 
 
@@ -80,8 +80,11 @@ class TestS030:
         assert not [f for f in aim.lint(doc) if f.code == "S030"]
 
     def test_duplicate_notes_warn(self):
-        text = aim.new_document(title="T").dumps().replace(
-            "<title>", "<!--\naim-note: duplicate\n-->\n<title>", 1)
+        text = (
+            aim.new_document(title="T")
+            .dumps()
+            .replace("<title>", "<!--\naim-note: duplicate\n-->\n<title>", 1)
+        )
         findings = [f for f in aim.lint_text(text) if f.code == "S030"]
         assert len(findings) == 1 and findings[0].level == "warning"
 
@@ -132,7 +135,8 @@ class TestNoteCommand:
         # duplicate notes (the S030 warning case): --remove must strip them
         # all, not report "removed" while a second note survives
         text = saved.read_text("utf-8").replace(
-            "<title>", "<!--\naim-note: duplicate\n-->\n<title>", 1)
+            "<title>", "<!--\naim-note: duplicate\n-->\n<title>", 1
+        )
         saved.write_text(text, "utf-8")
         assert main(["note", "--remove", str(saved)]) == 0
         assert "removed" in capsys.readouterr().out
@@ -157,10 +161,20 @@ class TestProposalVerbs:
         return path
 
     def test_propose_modify_then_accept(self, saved, capsys):
-        rc = main(["propose", "modify", str(saved), "p1",
-                   "--html", '<p data-aim="p1">Better.</p>',
-                   "--author", "agent:test-model",
-                   "--explanation", "Tighter."])
+        rc = main(
+            [
+                "propose",
+                "modify",
+                str(saved),
+                "p1",
+                "--html",
+                '<p data-aim="p1">Better.</p>',
+                "--author",
+                "agent:test-model",
+                "--explanation",
+                "Tighter.",
+            ]
+        )
         assert rc == 0
         pid = capsys.readouterr().out.splitlines()[0]
         assert pid.startswith("p-")
@@ -168,21 +182,22 @@ class TestProposalVerbs:
         assert [p.id for p in doc.proposals] == [pid]
         assert doc.proposals[0].author.model == "test-model"
 
-        assert main(["accept", str(saved), pid,
-                     "--author", "human:ada"]) == 0
+        assert main(["accept", str(saved), pid, "--author", "human:ada"]) == 0
         doc = aim.load(saved)
         assert not doc.proposals
         assert "Better." in doc.chunk("p1").html
 
     def test_propose_add_json_and_reject_all(self, saved, capsys):
-        rc = main(["propose", "add", str(saved),
-                   "--html", "<p>New paragraph.</p>", "--format", "json"])
+        rc = main(
+            ["propose", "add", str(saved), "--html", "<p>New paragraph.</p>", "--format", "json"]
+        )
         assert rc == 0
         payload = json.loads(capsys.readouterr().out)
         assert payload["action"] == "add"
 
-        assert main(["reject", str(saved), "--all",
-                     "--author", "human:ada", "--format", "json"]) == 0
+        assert (
+            main(["reject", str(saved), "--all", "--author", "human:ada", "--format", "json"]) == 0
+        )
         decisions = json.loads(capsys.readouterr().out)
         assert [d["decision"] for d in decisions] == ["reject"]
         assert not aim.load(saved).proposals
@@ -191,18 +206,15 @@ class TestProposalVerbs:
         # a pending add anchored on a chunk a sibling card deletes: raw card
         # order would kill the anchor first (mirrors the exporters' rule)
         main(["propose", "delete", str(saved), "p1"])
-        main(["propose", "add", str(saved),
-              "--html", "<p>after p1</p>", "--after", "p1"])
+        main(["propose", "add", str(saved), "--html", "<p>after p1</p>", "--after", "p1"])
         capsys.readouterr()
-        assert main(["accept", str(saved), "--all",
-                     "--author", "human:ada"]) == 0
+        assert main(["accept", str(saved), "--all", "--author", "human:ada"]) == 0
         doc = aim.load(saved)
         assert not doc.proposals
         assert "p1" not in [c.id for c in doc.chunks]
         assert any("after p1" in c.html for c in doc.chunks)
 
-    def test_accept_all_resolves_add_chains_in_dependency_order(
-            self, saved, capsys):
+    def test_accept_all_resolves_add_chains_in_dependency_order(self, saved, capsys):
         # add B anchors on pending add A; a manual card reorder (legal —
         # lint does not require dependency order) puts B first, so raw
         # card order would hit "anchor proposal ... is still pending"
@@ -211,16 +223,13 @@ class TestProposalVerbs:
         b = doc.propose_add("<p>second new</p>", author=BOT, after=a.id)
         doc.save(saved)
         lines = saved.read_text("utf-8").splitlines(keepends=True)
-        ia = next(i for i, ln in enumerate(lines)
-                  if ln.startswith(f'<aim-proposal id="{a.id}"'))
-        ib = next(i for i, ln in enumerate(lines)
-                  if ln.startswith(f'<aim-proposal id="{b.id}"'))
+        ia = next(i for i, ln in enumerate(lines) if ln.startswith(f'<aim-proposal id="{a.id}"'))
+        ib = next(i for i, ln in enumerate(lines) if ln.startswith(f'<aim-proposal id="{b.id}"'))
         lines[ia], lines[ib] = lines[ib], lines[ia]
         saved.write_text("".join(lines), "utf-8")
         assert [p.id for p in aim.load(saved).proposals] == [b.id, a.id]
 
-        assert main(["accept", str(saved), "--all",
-                     "--author", "human:ada"]) == 0
+        assert main(["accept", str(saved), "--all", "--author", "human:ada"]) == 0
         capsys.readouterr()
         doc = aim.load(saved)
         assert not doc.proposals
@@ -230,8 +239,7 @@ class TestProposalVerbs:
     def test_propose_theme_bare_slot_names(self, saved, capsys):
         # slot names start "--aim-", which argparse would eat as an option;
         # the bare form is qualified automatically
-        assert main(["propose", "theme", str(saved),
-                     "--set", "brand-1=#333333"]) == 0
+        assert main(["propose", "theme", str(saved), "--set", "brand-1=#333333"]) == 0
         capsys.readouterr()
         doc = aim.load(saved)
         assert "--aim-brand-1:#333333" in doc.proposals[-1].payload_html
@@ -244,8 +252,7 @@ class TestProposalVerbs:
         assert "no pending" in capsys.readouterr().out
 
     def test_bad_author_is_domain_error(self, saved):
-        assert main(["propose", "delete", str(saved), "p1",
-                     "--author", "wizard:gandalf"]) == 1
+        assert main(["propose", "delete", str(saved), "p1", "--author", "wizard:gandalf"]) == 1
 
     def test_show_json_shape(self, saved, capsys):
         main(["propose", "delete", str(saved), "p1"])
@@ -260,5 +267,6 @@ class TestProposalVerbs:
     def test_mcp_subcommand_registered(self, capsys):
         # parse-only: the subcommand exists; execution is tested in test_mcp
         from aimformat.cli import build_parser
+
         args = build_parser().parse_args(["mcp"])
         assert args.command == "mcp"

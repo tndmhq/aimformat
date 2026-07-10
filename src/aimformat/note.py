@@ -5,9 +5,8 @@ tooling that open a ``.aim`` file outside AIM-aware software. Declarative
 only: per §2.5 nothing may execute, install, or fetch anything because of
 note content — the note informs, the reader decides.
 """
-from __future__ import annotations
 
-from typing import Optional
+from __future__ import annotations
 
 from .dom import Comment, Element
 from .registry import REGISTRY
@@ -31,17 +30,16 @@ validate with `aim lint`. Humans review in AIM editors:
 https://aimformat.com/editors"""
 
 
-def render_note(version: Optional[str] = None) -> str:
+def render_note(version: str | None = None) -> str:
     """The canonical comment data for *version* (default: current spec).
 
     Newline-framed so the serialized form is ``<!--\\naim-note: …\\n-->``,
     byte-stable through parse/serialize round-trips.
     """
-    return "\n" + _TEMPLATE.format(version=version or REGISTRY.spec_version) \
-        + "\n"
+    return "\n" + _TEMPLATE.format(version=version or REGISTRY.spec_version) + "\n"
 
 
-def find_note(head: Element) -> Optional[Comment]:
+def find_note(head: Element) -> Comment | None:
     """The first agent-note comment among *head*'s children, if any."""
     for node in head.children:
         if isinstance(node, Comment) and node.data.lstrip().startswith(SIGIL):
@@ -49,6 +47,6 @@ def find_note(head: Element) -> Optional[Comment]:
     return None
 
 
-def is_canonical(data: str, version: Optional[str] = None) -> bool:
+def is_canonical(data: str, version: str | None = None) -> bool:
     """Whether *data* is byte-exactly the canonical note for *version*."""
     return data == render_note(version)

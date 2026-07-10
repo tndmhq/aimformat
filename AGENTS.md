@@ -93,6 +93,8 @@ technical content only (see Governance below).
 
 ## Governance (public repo)
 
+- **Reviewing a PR (human or bot)?** Follow [`REVIEW.md`](REVIEW.md) — ≤5
+  severity-tagged findings, no nits, aimformat-specific checklist.
 - **`docs/knowledge/` is maintainer-authoritative.** Changes to it go through
   PR review like code; external PRs may propose knowledge edits but the
   maintainer decides what is recorded as fact.

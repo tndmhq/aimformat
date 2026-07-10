@@ -56,10 +56,14 @@ def main() -> int:
     ap.add_argument("type", choices=TYPES)
     ap.add_argument("slug", help="kebab-case slug, e.g. spec-v01")
     ap.add_argument("--title", help="entry title (default: derived from type + slug)")
-    ap.add_argument("--what", default="TODO — one-line summary.",
-                    help="one-line summary for the index 'What' column")
-    ap.add_argument("--dry-run", action="store_true",
-                    help="print what would be written without touching files")
+    ap.add_argument(
+        "--what",
+        default="TODO — one-line summary.",
+        help="one-line summary for the index 'What' column",
+    )
+    ap.add_argument(
+        "--dry-run", action="store_true", help="print what would be written without touching files"
+    )
     args = ap.parse_args()
 
     if not SLUG_RE.match(args.slug):
@@ -75,15 +79,14 @@ def main() -> int:
 
     title = args.title or f"{args.type.capitalize()}: {args.slug.replace('-', ' ')}"
     entry = ENTRY_TEMPLATE.format(date=date, time=time_col, type=args.type, title=title)
-    row = (f"| {date} {time_col} | {args.type} | [{args.slug}]({name}) "
-           f"| active | {args.what} |\n")
+    row = f"| {date} {time_col} | {args.type} | [{args.slug}]({name}) | active | {args.what} |\n"
 
     index_text = INDEX.read_text(encoding="utf-8")
     sep = re.search(r"^\|---.*\|\n", index_text, flags=re.M)
     if not sep:
         print(f"could not find the table separator row in {INDEX}", file=sys.stderr)
         return 1
-    new_index = index_text[: sep.end()] + row + index_text[sep.end():]
+    new_index = index_text[: sep.end()] + row + index_text[sep.end() :]
 
     if args.dry_run:
         print(f"would create {path.relative_to(REPO_ROOT)}:\n{entry}")

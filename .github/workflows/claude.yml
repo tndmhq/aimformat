@@ -1,0 +1,46 @@
+name: Claude (@claude mention)
+
+# On-demand Claude Code on @claude mentions in PR/issue comments — reviews
+# ("@claude review", guided by REVIEW.md) and fixes ("@claude fix ...").
+# Public repo: only comments authored by the repo OWNER or a MEMBER trigger
+# a run; strangers and bots never do (author_association gate below, plus
+# the action's own write-access check). Fork PRs get no secrets by default.
+
+on:
+  issue_comment:
+    types: [created]
+  pull_request_review_comment:
+    types: [created]
+
+permissions:
+  contents: write # push fix commits to the PR branch
+  pull-requests: write # post the review / progress comment
+  issues: write # respond on issues
+  id-token: write # OIDC exchange for the Claude GitHub App token
+  actions: read # let Claude read CI results on the PR
+
+concurrency:
+  group: claude-${{ github.event.issue.number || github.event.pull_request.number }}
+  cancel-in-progress: false
+
+jobs:
+  claude:
+    if: >-
+      contains(github.event.comment.body, '@claude') &&
+      contains(fromJSON('["OWNER", "MEMBER"]'), github.event.comment.author_association)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      # Required: tag mode's branch setup runs git fetch/checkout against the
+      # existing workspace checkout — the action never clones the repo itself.
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 1
+      - uses: anthropics/claude-code-action@37b464ce72700f7b2c5ff8d2db7fa7b15df792f5 # v1.0.169
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          # (use_sticky_comment deliberately omitted: it only takes effect on
+          # pull_request-event workflows, never on issue_comment triggers —
+          # tag mode posts and updates its own tracking comment regardless.)
+          claude_args: |
+            --max-turns 50

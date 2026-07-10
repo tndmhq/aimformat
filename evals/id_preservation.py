@@ -32,6 +32,7 @@ aimformat.note so it can never drift) is inserted/stripped *textually*,
 so the harness controls both variants regardless of what new_document()
 emits.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -43,7 +44,6 @@ import subprocess
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional
 
 import aimformat as aim
 
@@ -61,8 +61,7 @@ META_CHARSET_LINE = '<meta charset="utf-8">'
 _NOTE_COMMENT_RE = re.compile(r"<!--\s*aim-note:.*?-->\n?", re.S)
 _ID_ATTR_RE = re.compile(r'\bdata-aim(?:-container)?="([^"]+)"')
 _CARD_ID_RE = re.compile(r'<aim-proposal\b[^>]*?\bid="([^"]+)"')
-_HISTORY_RE = re.compile(
-    r'<script\s+type="application/aim-history\+jsonl"\s*>(.*?)</script>', re.S)
+_HISTORY_RE = re.compile(r'<script\s+type="application/aim-history\+jsonl"\s*>(.*?)</script>', re.S)
 _FENCE_RE = re.compile(r"^```[^\n]*\n(.*?)\n?```\s*$", re.S)
 
 
@@ -77,10 +76,11 @@ def insert_note(text: str, version: str) -> str:
     try:
         at = lines.index(META_CHARSET_LINE)
     except ValueError:
-        raise SystemExit(f"fixture has no {META_CHARSET_LINE!r} line — "
-                         "cannot place the aim-note comment")
+        raise SystemExit(
+            f"fixture has no {META_CHARSET_LINE!r} line — cannot place the aim-note comment"
+        ) from None
     note = "<!--\n" + AIM_NOTE_TEMPLATE.format(version=version) + "\n-->"
-    return "\n".join(lines[: at + 1] + [note] + lines[at + 1:])
+    return "\n".join(lines[: at + 1] + [note] + lines[at + 1 :])
 
 
 # --------------------------------------------------------------------------
@@ -97,9 +97,12 @@ def build_fixture() -> tuple[str, str]:
     bot = aim.agent("eval-fixture")
     doc = aim.new_document(title="Search Service Migration Plan")
     with doc.batch():
-        doc.add_chunk('<h1 data-aim="ttl">Search Service Migration Plan</h1>',
-                      author=bot, at=_t(0),
-                      explanation="Initial draft of the migration plan.")
+        doc.add_chunk(
+            '<h1 data-aim="ttl">Search Service Migration Plan</h1>',
+            author=bot,
+            at=_t(0),
+            explanation="Initial draft of the migration plan.",
+        )
         doc.add_chunk(
             '<p data-aim="intro">This document has been written in order to '
             "describe, at a fairly high level, the plan that we are "
@@ -107,36 +110,47 @@ def build_fixture() -> tuple[str, str]:
             "from the legacy Solr 6 cluster onto the new OpenSearch "
             "deployment, and it also covers the goals, the timeline, and "
             "the risks that are associated with this effort.</p>",
-            author=bot, at=_t(1))
-        doc.add_chunk('<h2 data-aim="bg-h">Background</h2>',
-                      author=bot, at=_t(2))
+            author=bot,
+            at=_t(1),
+        )
+        doc.add_chunk('<h2 data-aim="bg-h">Background</h2>', author=bot, at=_t(2))
         doc.add_chunk(
             '<p data-aim="bg-p1">The legacy cluster indexes 41M documents '
             "across nine shards and serves roughly 220 queries per second "
             "at peak. It runs on hardware that leaves warranty at the end "
-            "of Q4.</p>", author=bot, at=_t(3))
+            "of Q4.</p>",
+            author=bot,
+            at=_t(3),
+        )
         doc.add_chunk(
             '<p data-aim="bg-p2">Plugin compatability was the main blocker '
             "in the previous migration attempt: three custom analyzers "
             "depended on APIs removed in Solr 7.</p>",
-            author=bot, at=_t(4))
-        doc.add_chunk('<h2 data-aim="goals-h">Goals</h2>',
-                      author=bot, at=_t(5))
+            author=bot,
+            at=_t(4),
+        )
+        doc.add_chunk('<h2 data-aim="goals-h">Goals</h2>', author=bot, at=_t(5))
         doc.add_chunk(
-            '<p data-aim="goals-p">The migration is done when all of the '
-            "following hold:</p>", author=bot, at=_t(6))
+            '<p data-aim="goals-p">The migration is done when all of the following hold:</p>',
+            author=bot,
+            at=_t(6),
+        )
         doc.add_chunk(
             '<ul data-aim-container="goals">'
             '<li data-aim="g1">Query latency p99 under 120ms at peak load</li>'
             '<li data-aim="g2">All three custom analyzers ported and '
             "covered by golden-query tests</li>"
             '<li data-aim="g3">Index rebuild from source of truth in under '
-            "4 hours</li></ul>", author=bot, at=_t(7))
-        doc.add_chunk('<h2 data-aim="tl-h">Timeline</h2>',
-                      author=bot, at=_t(8))
+            "4 hours</li></ul>",
+            author=bot,
+            at=_t(7),
+        )
+        doc.add_chunk('<h2 data-aim="tl-h">Timeline</h2>', author=bot, at=_t(8))
         doc.add_chunk(
-            '<p data-aim="tl-p">Four phases, each gated on the previous '
-            "one:</p>", author=bot, at=_t(9))
+            '<p data-aim="tl-p">Four phases, each gated on the previous one:</p>',
+            author=bot,
+            at=_t(9),
+        )
         doc.add_chunk(
             '<table data-aim-container="tl"><thead>'
             '<tr data-aim="r0"><th>Phase</th><th>Weeks</th><th>Owner</th>'
@@ -147,30 +161,41 @@ def build_fixture() -> tuple[str, str]:
             "<td>Platform team</td></tr>"
             '<tr data-aim="r3"><td>Shadow traffic and cutover</td><td>2</td>'
             "<td>Search team</td></tr></tbody></table>",
-            author=bot, at=_t(10))
-        doc.add_chunk('<h2 data-aim="risks-h">Risks</h2>',
-                      author=bot, at=_t(11))
+            author=bot,
+            at=_t(10),
+        )
+        doc.add_chunk('<h2 data-aim="risks-h">Risks</h2>', author=bot, at=_t(11))
         doc.add_chunk(
             '<p data-aim="risks-p">Scoring parity is the main risk: BM25 '
             "parameter defaults differ between the two engines, so ranking "
             "changes must be caught by the golden-query suite rather than "
-            "by users.</p>", author=bot, at=_t(12))
-        doc.add_chunk('<h2 data-aim="next-h">Next steps</h2>',
-                      author=bot, at=_t(13))
+            "by users.</p>",
+            author=bot,
+            at=_t(12),
+        )
+        doc.add_chunk('<h2 data-aim="next-h">Next steps</h2>', author=bot, at=_t(13))
         doc.add_chunk(
             '<p data-aim="next-p">Staffing is confirmed for the analyzer '
             "port; the dual-write design review is scheduled for the first "
-            "week of the project.</p>", author=bot, at=_t(14))
+            "week of the project.</p>",
+            author=bot,
+            at=_t(14),
+        )
     prop = doc.propose_add(
         '<tr data-aim="r4"><td>Decommission legacy cluster</td><td>1</td>'
         "<td>Platform team</td></tr>",
-        author=bot, container="tl", after="r3", at=_t(20),
-        explanation="The plan should end with the legacy hardware gone.")
+        author=bot,
+        container="tl",
+        after="r3",
+        at=_t(20),
+        explanation="The plan should end with the legacy hardware gone.",
+    )
     doc.set_summary(
         "Plan to migrate search from a legacy Solr 6 cluster to OpenSearch: "
         "four gated phases over nine weeks, gated on analyzer ports and "
         "golden-query parity. One pending timeline row awaits review.",
-        model="eval-fixture")
+        model="eval-fixture",
+    )
     version = doc.spec_version or aim.SPEC_VERSION
     text = doc.dumps()
     # Pin the (randomly minted) proposal id so the fixture is deterministic.
@@ -180,8 +205,10 @@ def build_fixture() -> tuple[str, str]:
     for name, variant_text in (("with-note", with_), ("without-note", without)):
         errors = [f for f in aim.lint_text(variant_text) if f.level == "error"]
         if errors:
-            raise SystemExit(f"fixture variant {name!r} does not lint clean: "
-                             + "; ".join(str(e) for e in errors))
+            raise SystemExit(
+                f"fixture variant {name!r} does not lint clean: "
+                + "; ".join(str(e) for e in errors)
+            )
     return with_, without
 
 
@@ -189,20 +216,27 @@ def build_fixture() -> tuple[str, str]:
 # Edit tasks. Instructions name sections/content, never ids or mechanics —
 # the point is what a model does when told only what a user would say.
 TASKS = [
-    {"name": "typo-fix",
-     "instruction": "Fix the typo 'compatability' in the Background section "
-                    "(it should read 'compatibility')"},
-    {"name": "intro-rewrite",
-     "instruction": "Rewrite the introduction paragraph (the one right "
-                    "after the main title) to be punchier: at most two "
-                    "short sentences, same meaning"},
-    {"name": "bullet-add",
-     "instruction": "Add one new bullet to the Goals list: 'Zero-downtime "
-                    "cutover for all tenants'"},
+    {
+        "name": "typo-fix",
+        "instruction": "Fix the typo 'compatability' in the Background section "
+        "(it should read 'compatibility')",
+    },
+    {
+        "name": "intro-rewrite",
+        "instruction": "Rewrite the introduction paragraph (the one right "
+        "after the main title) to be punchier: at most two "
+        "short sentences, same meaning",
+    },
+    {
+        "name": "bullet-add",
+        "instruction": "Add one new bullet to the Goals list: 'Zero-downtime "
+        "cutover for all tenants'",
+    },
 ]
 
-PROMPT_TEMPLATE = ("Here is a file. {task}. Return ONLY the complete edited "
-                   "file, no commentary.\n\n{file}")
+PROMPT_TEMPLATE = (
+    "Here is a file. {task}. Return ONLY the complete edited file, no commentary.\n\n{file}"
+)
 
 
 # --------------------------------------------------------------------------
@@ -225,15 +259,13 @@ def strip_fences(reply: str) -> str:
     return text.rstrip("\n") + "\n"
 
 
-def run_model(prompt: str, *, model: Optional[str], timeout: float) -> str:
+def run_model(prompt: str, *, model: str | None, timeout: float) -> str:
     cmd = ["claude", "-p", prompt, "--output-format", "text"]
     if model:
         cmd += ["--model", model]
-    proc = subprocess.run(cmd, capture_output=True, text=True,
-                          timeout=timeout)
+    proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
     if proc.returncode != 0:
-        raise RuntimeError(f"claude exited {proc.returncode}: "
-                           f"{proc.stderr.strip()[:400]}")
+        raise RuntimeError(f"claude exited {proc.returncode}: {proc.stderr.strip()[:400]}")
     return proc.stdout
 
 
@@ -265,7 +297,7 @@ class Score:
     lanes_intact: bool
     lint_errors: int
     lint_codes: list[str] = field(default_factory=list)
-    note_retained: Optional[bool] = None  # None = not applicable (WITHOUT)
+    note_retained: bool | None = None  # None = not applicable (WITHOUT)
     detail: str = ""
 
 
@@ -279,8 +311,9 @@ def _head_slice(text: str) -> str:
 
 
 def _has_note(text: str) -> bool:
-    return any("aim-note:" in m.group(0)
-               for m in re.finditer(r"<!--.*?-->", _head_slice(text), re.S))
+    return any(
+        "aim-note:" in m.group(0) for m in re.finditer(r"<!--.*?-->", _head_slice(text), re.S)
+    )
 
 
 def score_output(original: str, edited: str, *, expect_note: bool) -> Score:
@@ -302,8 +335,7 @@ def score_output(original: str, edited: str, *, expect_note: bool) -> Score:
     missing = sorted(orig_ids - edited_ids)
     ids_preserved = not missing
     if missing:
-        notes.append("missing ids: " + ", ".join(missing[:6])
-                     + ("…" if len(missing) > 6 else ""))
+        notes.append("missing ids: " + ", ".join(missing[:6]) + ("…" if len(missing) > 6 else ""))
 
     # lanes: history block content byte-unchanged + every card still there
     orig_hist = _HISTORY_RE.findall(original)
@@ -323,10 +355,15 @@ def score_output(original: str, edited: str, *, expect_note: bool) -> Score:
 
     note_retained = _has_note(edited) if expect_note else None
 
-    return Score(parses=parses, ids_preserved=ids_preserved,
-                 lanes_intact=lanes_intact, lint_errors=len(errors),
-                 lint_codes=codes, note_retained=note_retained,
-                 detail="; ".join(notes))
+    return Score(
+        parses=parses,
+        ids_preserved=ids_preserved,
+        lanes_intact=lanes_intact,
+        lint_errors=len(errors),
+        lint_codes=codes,
+        note_retained=note_retained,
+        detail="; ".join(notes),
+    )
 
 
 # --------------------------------------------------------------------------
@@ -335,14 +372,14 @@ def _frac(values: list[bool]) -> str:
     return f"{sum(values)}/{len(values)}"
 
 
-def render_report(rows: list[dict], *, args: argparse.Namespace,
-                  fixture_stats: str) -> str:
+def render_report(rows: list[dict], *, args: argparse.Namespace, fixture_stats: str) -> str:
     """rows: one dict per (task, variant) with 'scores': list[Score]."""
     stamp = _dt.datetime.now(_dt.timezone.utc).strftime("%Y-%m-%d %H:%MZ")
     lines = [
         "# Id-preservation eval — naked LLM edits of a .aim file",
         "",
-        f"- run: {stamp}  ·  mode: {'dry-run (canned output, no API calls)' if args.dry_run else 'live'}",
+        f"- run: {stamp}  ·  mode: "
+        f"{'dry-run (canned output, no API calls)' if args.dry_run else 'live'}",
         f"- model: {args.model or 'claude CLI default'}  ·  trials per cell: {args.trials}",
         f"- aimformat {aim.__version__} (spec {aim.SPEC_VERSION})  ·  fixture: {fixture_stats}",
         "",
@@ -369,13 +406,14 @@ def render_report(rows: list[dict], *, args: argparse.Namespace,
             f"| {_frac([x.lanes_intact for x in s])} "
             f"| {note_cell} "
             f"| {statistics.mean(x.lint_errors for x in s):.1f} "
-            f"| {', '.join(codes) or '—'} |")
-    details = [(row, i, sc) for row in rows
-               for i, sc in enumerate(row["scores"], 1) if sc.detail]
+            f"| {', '.join(codes) or '—'} |"
+        )
+    details = [(row, i, sc) for row in rows for i, sc in enumerate(row["scores"], 1) if sc.detail]
     if details:
         lines += ["", "## Trial details", ""]
-        lines += [f"- {row['task']} / {row['variant']} / trial {i}: "
-                  f"{sc.detail}" for row, i, sc in details]
+        lines += [
+            f"- {row['task']} / {row['variant']} / trial {i}: {sc.detail}" for row, i, sc in details
+        ]
     return "\n".join(lines) + "\n"
 
 
@@ -383,61 +421,68 @@ def render_report(rows: list[dict], *, args: argparse.Namespace,
 def main() -> int:
     ap = argparse.ArgumentParser(
         description="Measure invariant preservation of naked-LLM .aim edits, "
-                    "with vs without the aim-note head comment.")
-    ap.add_argument("--trials", type=int, default=1,
-                    help="model calls per task per variant (default 1)")
-    ap.add_argument("--model", default=None,
-                    help="passed through to `claude --model`")
-    ap.add_argument("--timeout", type=float, default=300.0,
-                    help="seconds per model call (default 300)")
-    ap.add_argument("--dry-run", action="store_true",
-                    help="use a canned fake model output; no API calls")
+        "with vs without the aim-note head comment."
+    )
+    ap.add_argument(
+        "--trials", type=int, default=1, help="model calls per task per variant (default 1)"
+    )
+    ap.add_argument("--model", default=None, help="passed through to `claude --model`")
+    ap.add_argument(
+        "--timeout", type=float, default=300.0, help="seconds per model call (default 300)"
+    )
+    ap.add_argument(
+        "--dry-run", action="store_true", help="use a canned fake model output; no API calls"
+    )
     args = ap.parse_args()
 
     if not args.dry_run and shutil.which("claude") is None:
-        print("error: the `claude` CLI is not on PATH.\n"
-              "Install it (https://claude.com/claude-code, e.g. "
-              "`npm install -g @anthropic-ai/claude-code`) and log in, "
-              "or use --dry-run to exercise the pipeline without it.",
-              file=sys.stderr)
+        print(
+            "error: the `claude` CLI is not on PATH.\n"
+            "Install it (https://claude.com/claude-code, e.g. "
+            "`npm install -g @anthropic-ai/claude-code`) and log in, "
+            "or use --dry-run to exercise the pipeline without it.",
+            file=sys.stderr,
+        )
         return 1
 
     with_note, without_note = build_fixture()
-    fixture_stats = (f"{len(_body_id_set(aim.loads(with_note)))} body ids, "
-                     f"{len(with_note) / 1024:.0f} KB")
-    variants = [("with-note", with_note, True),
-                ("without-note", without_note, False)]
+    fixture_stats = (
+        f"{len(_body_id_set(aim.loads(with_note)))} body ids, {len(with_note) / 1024:.0f} KB"
+    )
+    variants = [("with-note", with_note, True), ("without-note", without_note, False)]
 
     rows: list[dict] = []
     total = len(TASKS) * len(variants) * args.trials
     done = 0
     for task in TASKS:
         for vname, vtext, has_note in variants:
-            prompt = PROMPT_TEMPLATE.format(task=task["instruction"],
-                                            file=vtext)
+            prompt = PROMPT_TEMPLATE.format(task=task["instruction"], file=vtext)
             scores: list[Score] = []
             for trial in range(args.trials):
                 done += 1
-                print(f"[{done}/{total}] {task['name']} · {vname} · "
-                      f"trial {trial + 1}", file=sys.stderr)
+                print(
+                    f"[{done}/{total}] {task['name']} · {vname} · trial {trial + 1}",
+                    file=sys.stderr,
+                )
                 if args.dry_run:
                     reply = fake_model_output(vtext, task["name"])
                 else:
                     try:
-                        reply = run_model(prompt, model=args.model,
-                                          timeout=args.timeout)
-                    except (RuntimeError,
-                            subprocess.TimeoutExpired) as exc:
-                        scores.append(Score(
-                            parses=False, ids_preserved=False,
-                            lanes_intact=False, lint_errors=0,
-                            detail=f"model call failed: {exc}"))
+                        reply = run_model(prompt, model=args.model, timeout=args.timeout)
+                    except (RuntimeError, subprocess.TimeoutExpired) as exc:
+                        scores.append(
+                            Score(
+                                parses=False,
+                                ids_preserved=False,
+                                lanes_intact=False,
+                                lint_errors=0,
+                                detail=f"model call failed: {exc}",
+                            )
+                        )
                         continue
-                sc = score_output(vtext, strip_fences(reply),
-                                  expect_note=has_note)
+                sc = score_output(vtext, strip_fences(reply), expect_note=has_note)
                 scores.append(sc)
-            rows.append({"task": task["name"], "variant": vname,
-                         "scores": scores})
+            rows.append({"task": task["name"], "variant": vname, "scores": scores})
 
     report = render_report(rows, args=args, fixture_stats=fixture_stats)
     print(report)

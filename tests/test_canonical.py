@@ -1,12 +1,16 @@
 """Canonical form: escaping, attribute order, hashing, round-trips (spec §11)."""
-import pytest
 
 import aimformat as aim
-from aimformat.canonical import (canonical_attrs, canonical_json, doc_hash,
-                                 escape_attr, escape_text, serialize,
-                                 sha256_prefixed, sort_class_tokens)
+from aimformat.canonical import (
+    canonical_json,
+    doc_hash,
+    escape_attr,
+    escape_text,
+    serialize,
+    sha256_prefixed,
+    sort_class_tokens,
+)
 from aimformat.dom import parse_fragment
-
 from conftest import BOT, ts
 
 
@@ -19,7 +23,7 @@ class TestEscaping:
         assert escape_text('a & b < c > "d"') == 'a &amp; b &lt; c &gt; "d"'
 
     def test_attr_escapes_amp_quote_only(self):
-        assert escape_attr('</script> & "x"') == '</script> &amp; &quot;x&quot;'
+        assert escape_attr('</script> & "x"') == "</script> &amp; &quot;x&quot;"
 
     def test_entities_roundtrip_through_parse(self):
         e = el("<p>1 &amp; 2 &lt;tag&gt;</p>")
@@ -33,8 +37,9 @@ class TestEscaping:
 class TestAttributeOrder:
     def test_data_aim_first_then_class_style_then_alpha(self):
         e = el('<p title="t" style="left:1px" data-aim="x" class="b a" lang="en">.</p>')
-        assert serialize(e) == ('<p data-aim="x" class="a b" style="left:1px" '
-                                'lang="en" title="t">.</p>')
+        assert serialize(e) == (
+            '<p data-aim="x" class="a b" style="left:1px" lang="en" title="t">.</p>'
+        )
 
     def test_src_href_forced_last(self):
         e = el('<img src="https://x/y.png" alt="pic">')
@@ -65,7 +70,7 @@ class TestJson:
 
     def test_script_terminator_escaped(self):
         out = canonical_json({"x": "</script>"})
-        assert "</script" not in out and '<\\/script>' in out
+        assert "</script" not in out and "<\\/script>" in out
 
     def test_unicode_not_ascii_escaped(self):
         assert canonical_json({"x": "€ 中"}) == '{"x":"€ 中"}'
@@ -73,8 +78,7 @@ class TestJson:
 
 class TestDocHash:
     def test_recipe_shape(self):
-        h = doc_hash("<html>", "<style data-aim-theme>:root{}</style>",
-                     ["<p data-aim=\"a\">x</p>"])
+        h = doc_hash("<html>", "<style data-aim-theme>:root{}</style>", ['<p data-aim="a">x</p>'])
         assert h.startswith("sha256:") and len(h) == 7 + 64
 
     def test_hash_ignores_caches_and_proposals(self):
@@ -101,13 +105,18 @@ class TestDocHash:
 
     def test_geometry_counts_in_hash(self):
         doc = aim.new_document(title="T")
-        doc.add_chunk('<aim-slide data-aim-container="s" '
-                      'style="width:1920px; height:1080px">'
-                      '<p data-aim="a" style="left:10px; top:10px">x</p>'
-                      "</aim-slide>", author=BOT, at=ts(0))
+        doc.add_chunk(
+            '<aim-slide data-aim-container="s" '
+            'style="width:1920px; height:1080px">'
+            '<p data-aim="a" style="left:10px; top:10px">x</p>'
+            "</aim-slide>",
+            author=BOT,
+            at=ts(0),
+        )
         h0 = doc.doc_hash
-        doc.modify_chunk("a", '<p data-aim="a" style="left:20px; top:10px">x</p>',
-                         author=BOT, at=ts(1))
+        doc.modify_chunk(
+            "a", '<p data-aim="a" style="left:20px; top:10px">x</p>', author=BOT, at=ts(1)
+        )
         assert doc.doc_hash != h0
 
 
@@ -119,12 +128,14 @@ class TestRoundTrip:
 
     def test_multiline_pre_survives(self):
         doc = aim.new_document(title="T")
-        doc.add_chunk('<pre data-aim="code"><code>line one\nline two</code></pre>',
-                      author=BOT, at=ts(0))
+        doc.add_chunk(
+            '<pre data-aim="code"><code>line one\nline two</code></pre>', author=BOT, at=ts(0)
+        )
         text = doc.dumps()
         doc2 = aim.loads(text)
-        assert doc2.chunk("code").html == \
-            '<pre data-aim="code"><code>line one\nline two</code></pre>'
+        assert (
+            doc2.chunk("code").html == '<pre data-aim="code"><code>line one\nline two</code></pre>'
+        )
         assert doc2.dumps() == text
 
     def test_constructs_never_share_a_line(self):

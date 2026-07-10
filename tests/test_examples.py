@@ -1,4 +1,5 @@
 """The committed examples are canonical, verified, and lint-clean."""
+
 from pathlib import Path
 
 import pytest

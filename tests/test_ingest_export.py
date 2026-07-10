@@ -4,11 +4,11 @@ docling-core builds faithful fixture documents (the same dict shape the full
 docling converter emits); python-docx reads back what the exporter wrote.
 Both are dev/test dependencies only — the package itself stays stdlib-only.
 """
+
 import pytest
 
 import aimformat as aim
 from aimformat.errors import InvalidOperation
-
 from conftest import BOT, ME, ts
 
 docling_core = pytest.importorskip("docling_core")
@@ -22,8 +22,7 @@ from docx.oxml.ns import qn  # noqa: E402
 def build_docling_fixture() -> DoclingDocument:
     d = DoclingDocument(name="pilot-report")
     d.add_title(text="Pilot report")
-    d.add_text(label="text", text="We ran the pilot for six weeks & learned "
-                                  "a lot.")
+    d.add_text(label="text", text="We ran the pilot for six weeks & learned a lot.")
     d.add_heading(text="What worked", level=1)
     lst = d.add_group(label=GroupLabel.LIST)
     d.add_list_item(text="Review speed doubled", parent=lst)
@@ -32,19 +31,42 @@ def build_docling_fixture() -> DoclingDocument:
     d.add_list_item(text="Roll out to briefs", parent=olst, enumerated=True)
     d.add_list_item(text="Then contracts", parent=olst, enumerated=True)
     d.add_heading(text="Numbers", level=2)
-    td = TableData(num_rows=2, num_cols=2, table_cells=[
-        TableCell(text="Metric", start_row_offset_idx=0, end_row_offset_idx=1,
-                  start_col_offset_idx=0, end_col_offset_idx=1,
-                  column_header=True),
-        TableCell(text="Value", start_row_offset_idx=0, end_row_offset_idx=1,
-                  start_col_offset_idx=1, end_col_offset_idx=2,
-                  column_header=True),
-        TableCell(text="Accepted edits", start_row_offset_idx=1,
-                  end_row_offset_idx=2, start_col_offset_idx=0,
-                  end_col_offset_idx=1),
-        TableCell(text="38%", start_row_offset_idx=1, end_row_offset_idx=2,
-                  start_col_offset_idx=1, end_col_offset_idx=2),
-    ])
+    td = TableData(
+        num_rows=2,
+        num_cols=2,
+        table_cells=[
+            TableCell(
+                text="Metric",
+                start_row_offset_idx=0,
+                end_row_offset_idx=1,
+                start_col_offset_idx=0,
+                end_col_offset_idx=1,
+                column_header=True,
+            ),
+            TableCell(
+                text="Value",
+                start_row_offset_idx=0,
+                end_row_offset_idx=1,
+                start_col_offset_idx=1,
+                end_col_offset_idx=2,
+                column_header=True,
+            ),
+            TableCell(
+                text="Accepted edits",
+                start_row_offset_idx=1,
+                end_row_offset_idx=2,
+                start_col_offset_idx=0,
+                end_col_offset_idx=1,
+            ),
+            TableCell(
+                text="38%",
+                start_row_offset_idx=1,
+                end_row_offset_idx=2,
+                start_col_offset_idx=1,
+                end_col_offset_idx=2,
+            ),
+        ],
+    )
     d.add_table(data=td)
     d.add_text(label="code", text="aim lint report.aim")
     return d
@@ -60,8 +82,9 @@ class TestIngest:
         src = build_docling_fixture()
         a = aim.from_docling(src)
         b = aim.from_docling(src.export_to_dict())
-        assert [c.html.replace(c.id, "X") for c in a.chunks] == \
-               [c.html.replace(c.id, "X") for c in b.chunks]
+        assert [c.html.replace(c.id, "X") for c in a.chunks] == [
+            c.html.replace(c.id, "X") for c in b.chunks
+        ]
 
     def test_rejects_wrong_type(self):
         with pytest.raises(TypeError):
@@ -109,14 +132,12 @@ class TestIngest:
 
     def test_ingested_doc_lints_clean_and_verifies(self, ingested):
         assert ingested.verify() == []
-        assert not [f for f in aim.lint_text(ingested.dumps())
-                    if f.level == "error"]
+        assert not [f for f in aim.lint_text(ingested.dumps()) if f.level == "error"]
 
     def test_picture_with_caption(self):
         d = DoclingDocument(name="pics")
         pic = d.add_picture()
-        d.add_text(label="caption", text="Figure 1: the setup",
-                   parent=pic)
+        d.add_text(label="caption", text="Figure 1: the setup", parent=pic)
         obj = d.export_to_dict()
         # wire the caption ref the way docling emits it
         obj["pictures"][0]["captions"] = [{"$ref": obj["texts"][0]["self_ref"]}]
@@ -126,15 +147,35 @@ class TestIngest:
 
     def test_colspan_survives(self):
         d = DoclingDocument(name="spans")
-        td = TableData(num_rows=2, num_cols=2, table_cells=[
-            TableCell(text="Wide", start_row_offset_idx=0,
-                      end_row_offset_idx=1, start_col_offset_idx=0,
-                      end_col_offset_idx=2, col_span=2, column_header=True),
-            TableCell(text="a", start_row_offset_idx=1, end_row_offset_idx=2,
-                      start_col_offset_idx=0, end_col_offset_idx=1),
-            TableCell(text="b", start_row_offset_idx=1, end_row_offset_idx=2,
-                      start_col_offset_idx=1, end_col_offset_idx=2),
-        ])
+        td = TableData(
+            num_rows=2,
+            num_cols=2,
+            table_cells=[
+                TableCell(
+                    text="Wide",
+                    start_row_offset_idx=0,
+                    end_row_offset_idx=1,
+                    start_col_offset_idx=0,
+                    end_col_offset_idx=2,
+                    col_span=2,
+                    column_header=True,
+                ),
+                TableCell(
+                    text="a",
+                    start_row_offset_idx=1,
+                    end_row_offset_idx=2,
+                    start_col_offset_idx=0,
+                    end_col_offset_idx=1,
+                ),
+                TableCell(
+                    text="b",
+                    start_row_offset_idx=1,
+                    end_row_offset_idx=2,
+                    start_col_offset_idx=1,
+                    end_col_offset_idx=2,
+                ),
+            ],
+        )
         d.add_table(data=td)
         doc = aim.from_docling(d)
         assert 'colspan="2"' in doc.dumps()
@@ -142,8 +183,8 @@ class TestIngest:
     def test_furniture_skipped(self):
         d = DoclingDocument(name="f")
         from docling_core.types.doc.document import ContentLayer
-        d.add_text(label="text", text="page header",
-                   content_layer=ContentLayer.FURNITURE)
+
+        d.add_text(label="text", text="page header", content_layer=ContentLayer.FURNITURE)
         d.add_text(label="text", text="real content")
         doc = aim.from_docling(d)
         texts = [c.text for c in doc.chunks]
@@ -156,8 +197,7 @@ def _docx_paragraphs(path):
 
 def _revision_authors(path, tag):
     d = docx.Document(str(path))
-    return [el.get(qn("w:author"))
-            for el in d.element.body.iter(qn(f"w:{tag}"))]
+    return [el.get(qn("w:author")) for el in d.element.body.iter(qn(f"w:{tag}"))]
 
 
 class TestExportDocx:
@@ -180,9 +220,11 @@ class TestExportDocx:
 
     def test_inline_marks(self, tmp_path):
         doc = aim.new_document(title="T")
-        doc.add_chunk('<p data-aim="p1">plain <strong>bold</strong> '
-                      "<em>ital</em> <code>mono</code></p>", author=BOT,
-                      at=ts(0))
+        doc.add_chunk(
+            '<p data-aim="p1">plain <strong>bold</strong> <em>ital</em> <code>mono</code></p>',
+            author=BOT,
+            at=ts(0),
+        )
         out = aim.to_docx(doc, tmp_path / "m.docx")
         para = docx.Document(str(out)).paragraphs[0]
         runs = {r.text: r for r in para.runs}
@@ -191,10 +233,14 @@ class TestExportDocx:
 
     def test_pending_tracked_emits_ins_and_del(self, tmp_path):
         doc = aim.new_document(title="T")
-        doc.add_chunk('<p data-aim="p1">The old wording.</p>', author=ME,
-                      at=ts(0))
-        doc.propose_modify("p1", '<p data-aim="p1">The new wording.</p>',
-                           author=BOT, explanation="better", at=ts(1))
+        doc.add_chunk('<p data-aim="p1">The old wording.</p>', author=ME, at=ts(0))
+        doc.propose_modify(
+            "p1",
+            '<p data-aim="p1">The new wording.</p>',
+            author=BOT,
+            explanation="better",
+            at=ts(1),
+        )
         out = aim.to_docx(doc, tmp_path / "tracked.docx", pending="tracked")
         ins, dele = _revision_authors(out, "ins"), _revision_authors(out, "del")
         assert ins and dele
@@ -205,8 +251,7 @@ class TestExportDocx:
     def test_pending_add_tracked_as_inserted_paragraph(self, tmp_path):
         doc = aim.new_document(title="T")
         doc.add_chunk('<p data-aim="p1">Anchor.</p>', author=ME, at=ts(0))
-        doc.propose_add("<p>Brand new paragraph.</p>", author=BOT,
-                        after="p1", at=ts(1))
+        doc.propose_add("<p>Brand new paragraph.</p>", author=BOT, after="p1", at=ts(1))
         out = aim.to_docx(doc, tmp_path / "add.docx")
         d = docx.Document(str(out))
         # runs inside w:ins are invisible to Paragraph.text — check the XML
@@ -224,8 +269,7 @@ class TestExportDocx:
     def test_accept_all_resolves_on_copy(self, tmp_path):
         doc = aim.new_document(title="T")
         doc.add_chunk('<p data-aim="p1">Old.</p>', author=ME, at=ts(0))
-        doc.propose_modify("p1", '<p data-aim="p1">New.</p>', author=BOT,
-                           at=ts(1))
+        doc.propose_modify("p1", '<p data-aim="p1">New.</p>', author=BOT, at=ts(1))
         out = aim.to_docx(doc, tmp_path / "acc.docx", pending="accept-all")
         texts = [p.text for p in docx.Document(str(out)).paragraphs]
         assert "New." in texts and "Old." not in texts
@@ -234,8 +278,7 @@ class TestExportDocx:
     def test_reject_all(self, tmp_path):
         doc = aim.new_document(title="T")
         doc.add_chunk('<p data-aim="p1">Old.</p>', author=ME, at=ts(0))
-        doc.propose_modify("p1", '<p data-aim="p1">New.</p>', author=BOT,
-                           at=ts(1))
+        doc.propose_modify("p1", '<p data-aim="p1">New.</p>', author=BOT, at=ts(1))
         out = aim.to_docx(doc, tmp_path / "rej.docx", pending="reject-all")
         texts = [p.text for p in docx.Document(str(out)).paragraphs]
         assert "Old." in texts and "New." not in texts
@@ -243,18 +286,16 @@ class TestExportDocx:
     def test_accept_all_resolves_chained_adds_in_order(self, tmp_path):
         doc = aim.new_document(title="T")
         doc.add_chunk('<p data-aim="p1">Anchor.</p>', author=ME, at=ts(0))
-        p1 = doc.propose_add('<p data-aim="n1">One.</p>', author=BOT,
-                             after="p1", at=ts(1))
-        doc.propose_add('<p data-aim="n2">Two.</p>', author=BOT,
-                        after=p1.id, at=ts(2))
+        p1 = doc.propose_add('<p data-aim="n1">One.</p>', author=BOT, after="p1", at=ts(1))
+        doc.propose_add('<p data-aim="n2">Two.</p>', author=BOT, after=p1.id, at=ts(2))
         out = aim.to_docx(doc, tmp_path / "chain.docx", pending="accept-all")
         texts = [p.text for p in docx.Document(str(out)).paragraphs]
         assert texts.index("One.") < texts.index("Two.")
 
     def test_row_modify_tracked_in_cells(self, rich_doc, tmp_path):
         rich_doc.propose_modify(
-            "row1", '<tr data-aim="row1"><td>alpha</td><td>99</td></tr>',
-            author=BOT, at=ts(20))
+            "row1", '<tr data-aim="row1"><td>alpha</td><td>99</td></tr>', author=BOT, at=ts(20)
+        )
         out = aim.to_docx(rich_doc, tmp_path / "row.docx")
         assert _revision_authors(out, "ins") and _revision_authors(out, "del")
 
@@ -266,21 +307,26 @@ class TestExportDocx:
         p = ingested.propose_modify(
             next(c.id for c in ingested.chunks if c.tag == "p"),
             "<p>We ran the pilot for six weeks and learned plenty.</p>",
-            author=BOT, explanation="Tighter.", at=ts(30))
+            author=BOT,
+            explanation="Tighter.",
+            at=ts(30),
+        )
         ingested.accept(p.id, decided_by=ME, at=ts(31))
         assert ingested.verify() == []
-        out = aim.to_docx(ingested, tmp_path / "loop.docx",
-                          pending="accept-all")
+        out = aim.to_docx(ingested, tmp_path / "loop.docx", pending="accept-all")
         text = "\n".join(p.text for p in docx.Document(str(out)).paragraphs)
         assert "learned plenty" in text
         assert "Pilot report" in text
 
     def test_figure_caption_and_hr(self, tmp_path):
         doc = aim.new_document(title="T")
-        doc.add_chunk('<figure data-aim="f"><img alt="chart" '
-                      'src="https://example.org/x.png">'
-                      "<figcaption>The chart.</figcaption></figure>",
-                      author=BOT, at=ts(0))
+        doc.add_chunk(
+            '<figure data-aim="f"><img alt="chart" '
+            'src="https://example.org/x.png">'
+            "<figcaption>The chart.</figcaption></figure>",
+            author=BOT,
+            at=ts(0),
+        )
         doc.add_chunk('<hr data-aim="rule">', author=BOT, at=ts(1))
         out = aim.to_docx(doc, tmp_path / "fig.docx")
         text = "\n".join(p.text for p in docx.Document(str(out)).paragraphs)

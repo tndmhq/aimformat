@@ -4,6 +4,7 @@ Third-party implementations can run their verifier over the same directory:
 ok_* files must produce no errors; nok_<CODE>_* files must produce <CODE>.
 Regenerate with scripts/gen_fixtures.py.
 """
+
 from pathlib import Path
 
 import pytest
@@ -33,5 +34,4 @@ def test_nok_fixture_trips_its_rule(path):
     want = path.name.split("_")[1]
     level = REGISTRY.raw["lint_rules"][want][0]  # "error" | "warning"
     codes = {f.code for f in lint_path(path) if f.level == level}
-    assert want in codes, \
-        f"expected {level}-level {want}, got {codes or 'no findings'}"
+    assert want in codes, f"expected {level}-level {want}, got {codes or 'no findings'}"

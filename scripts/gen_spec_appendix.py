@@ -10,6 +10,7 @@ stylesheet. Run from the repo root after any registry change:
 
 tests/test_spec.py fails if the committed appendix is stale.
 """
+
 from __future__ import annotations
 
 import pathlib
@@ -41,20 +42,25 @@ def build() -> str:
 
     a("### A.1 Elements")
     a("")
-    a(f"- **Block chunk carriers** (top level and inside slides): "
-      f"{code(raw['elements']['block_carriers'])}")
-    a(f"- **Item chunk carriers**: " + "; ".join(
-        f"`{k}` inside {code(v)}" for k, v in raw["elements"]["item_carriers"].items()))
-    a(f"- **Containers** (`data-aim-container`): "
-      f"{code(raw['elements']['containers'])} plus `aim-slide`")
-    a(f"- **Table shells** (scaffolding between container and row chunks): "
-      f"{code(raw['elements']['table_shells'])}")
-    a(f"- **Allowed inside chunk subtrees**: "
-      f"{code(raw['elements']['chunk_content'])}")
-    a(f"- **Asset registry content**: "
-      f"{code(raw['elements']['asset_registry_content'])}")
-    a(f"- **Explicitly forbidden** (security, X001): "
-      f"{code(raw['elements']['forbidden'])}")
+    a(
+        f"- **Block chunk carriers** (top level and inside slides): "
+        f"{code(raw['elements']['block_carriers'])}"
+    )
+    a(
+        "- **Item chunk carriers**: "
+        + "; ".join(f"`{k}` inside {code(v)}" for k, v in raw["elements"]["item_carriers"].items())
+    )
+    a(
+        f"- **Containers** (`data-aim-container`): "
+        f"{code(raw['elements']['containers'])} plus `aim-slide`"
+    )
+    a(
+        f"- **Table shells** (scaffolding between container and row chunks): "
+        f"{code(raw['elements']['table_shells'])}"
+    )
+    a(f"- **Allowed inside chunk subtrees**: {code(raw['elements']['chunk_content'])}")
+    a(f"- **Asset registry content**: {code(raw['elements']['asset_registry_content'])}")
+    a(f"- **Explicitly forbidden** (security, X001): {code(raw['elements']['forbidden'])}")
     a("")
 
     a("### A.2 Class vocabulary")
@@ -64,12 +70,12 @@ def build() -> str:
     a(f"- **Weights** `font-*`: {code(c['font_weights'])}")
     a(f"- **Leading** `leading-*`: {code(c['leadings'])}")
     a(f"- **Alignment** `text-*`: {code(c['alignments'])}")
-    pal = "; ".join(f"`{fam}` ({', '.join(shades)})"
-                    for fam, shades in c["palette"].items())
-    a(f"- **Palette** for `text-` / `bg-` / `border-`: {pal}; plus "
-      f"`white` and theme-backed `brand-1…{c['brand_slot_count']}`")
-    a(f"- **Spacing** `{'`, `'.join(c['spacing_props'])}` × scale "
-      f"{code(c['spacing_scale'])}")
+    pal = "; ".join(f"`{fam}` ({', '.join(shades)})" for fam, shades in c["palette"].items())
+    a(
+        f"- **Palette** for `text-` / `bg-` / `border-`: {pal}; plus "
+        f"`white` and theme-backed `brand-1…{c['brand_slot_count']}`"
+    )
+    a(f"- **Spacing** `{'`, `'.join(c['spacing_props'])}` × scale {code(c['spacing_scale'])}")
     a(f"- **Singles**: {code(sorted(c['singles']))}")
     a("")
     a(f"Total registered utilities: **{len(r.allowed_classes)}**.")
@@ -93,17 +99,17 @@ def build() -> str:
 
     a("### A.5 Proposal attributes and event fields")
     a("")
-    a(f"- `aim-proposal` attributes: "
-      f"{code(raw['attributes']['per_element']['aim-proposal'])}")
+    a(f"- `aim-proposal` attributes: {code(raw['attributes']['per_element']['aim-proposal'])}")
     for action, spec in raw["proposal_actions"].items():
         payload = "payload" if spec["payload"] else "payloadless"
         req = code(spec["requires"]) if spec["requires"] else "—"
         a(f"- `{action}`: {payload}; requires {req}")
     a("")
     for kind, fields in raw["events"]["fields"].items():
-        a(f"- `{kind}` events — required: {code(fields['required'])}"
-          + (f"; optional: {code(fields['optional'])}"
-             if fields["optional"] else ""))
+        a(
+            f"- `{kind}` events — required: {code(fields['required'])}"
+            + (f"; optional: {code(fields['optional'])}" if fields["optional"] else "")
+        )
     a("")
 
     a("### A.6 Verifier rule codes")
