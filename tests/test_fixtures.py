@@ -4,6 +4,7 @@ Third-party implementations can run their verifier over the same directory:
 ok_* files must produce no errors; nok_<CODE>_* files must produce <CODE>.
 Regenerate with scripts/gen_fixtures.py.
 """
+
 from pathlib import Path
 
 import pytest

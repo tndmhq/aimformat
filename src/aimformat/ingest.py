@@ -56,10 +56,11 @@ Page provenance (``prov.page_no``) is dropped: .aim v0.1 has no pagination
 model. Tables and lists nested inside a list item become that item's inline
 content.
 """
+
 from __future__ import annotations
 
 import re
-from typing import Any, Optional, Union
+from typing import Any
 
 from .canonical import escape_attr, escape_text
 from .document import AimDocument, new_document
@@ -78,7 +79,8 @@ def _as_dict(source: Any) -> dict:
         return export()
     raise TypeError(
         "from_docling() expects a DoclingDocument or its export_to_dict() "
-        f"dict, got {type(source).__name__}")
+        f"dict, got {type(source).__name__}"
+    )
 
 
 class _Resolver:
@@ -87,7 +89,7 @@ class _Resolver:
     def __init__(self, doc: dict):
         self.doc = doc
 
-    def deref(self, ref: Union[dict, str]) -> dict:
+    def deref(self, ref: dict | str) -> dict:
         path = ref["$ref"] if isinstance(ref, dict) else ref
         node: Any = self.doc
         for part in path.lstrip("#/").split("/"):
@@ -146,18 +148,19 @@ def _list_items_markup(res: _Resolver, group: dict) -> str:
             tag = _list_tag(res, child)
             nested = f"<{tag}>{_list_items_markup(res, child)}</{tag}>"
             if parts:
-                parts[-1] = parts[-1][:-len("</li>")] + nested + "</li>"
+                parts[-1] = parts[-1][: -len("</li>")] + nested + "</li>"
             else:
                 parts.append(f"<li>{nested}</li>")
     return "".join(parts)
 
 
-def _table_markup(table: dict) -> Optional[str]:
+def _table_markup(table: dict) -> str | None:
     data = table.get("data") or {}
     grid = data.get("grid") or []
     if not grid:
         return None
-    head_rows, body_rows = [], []
+    head_rows: list[str] = []
+    body_rows: list[str] = []
     for ri, row in enumerate(grid):
         # a cell belongs to the row where it STARTS; the grid repeats
         # spanning cells in every row/column they cover
@@ -176,15 +179,13 @@ def _table_markup(table: dict) -> Optional[str]:
         header = all(c.get("column_header") for c in own)
         cells = []
         for cell in own:
-            tag = "th" if cell.get("column_header") or cell.get("row_header") \
-                else "td"
+            tag = "th" if cell.get("column_header") or cell.get("row_header") else "td"
             attrs = ""
             if cell.get("col_span", 1) > 1:
                 attrs += f' colspan="{cell["col_span"]}"'
             if cell.get("row_span", 1) > 1:
                 attrs += f' rowspan="{cell["row_span"]}"'
-            cells.append(f"<{tag}{attrs}>{escape_text(cell.get('text', ''))}"
-                         f"</{tag}>")
+            cells.append(f"<{tag}{attrs}>{escape_text(cell.get('text', ''))}</{tag}>")
         row_html = "<tr>" + "".join(cells) + "</tr>"
         (head_rows if header else body_rows).append(row_html)
     if not head_rows and not body_rows:
@@ -221,17 +222,21 @@ def _picture_markup(res: _Resolver, pic: dict) -> str:
     else:  # no (usable) embedded bytes: keep an honest textual placeholder
         body = f"<p><em>[picture: {escape_text(alt)}]</em></p>"
     for child in res.children(pic):  # picture-attached text (not captions)
-        if child.get("label") in ("text", "paragraph") and child.get("text") \
-                and _is_body(child):
+        if child.get("label") in ("text", "paragraph") and child.get("text") and _is_body(child):
             body += f"<p>{_text_of(child)}</p>"
     if caption:
         body += f"<figcaption>{escape_text(caption)}</figcaption>"
     return f"<figure>{body}</figure>"
 
 
-def from_docling(source: Any, *, title: Optional[str] = None,
-                 lang: str = "en", author: Optional[Actor] = None,
-                 theme: Optional[dict[str, str]] = None) -> AimDocument:
+def from_docling(
+    source: Any,
+    *,
+    title: str | None = None,
+    lang: str = "en",
+    author: Actor | None = None,
+    theme: dict[str, str] | None = None,
+) -> AimDocument:
     """Build an :class:`AimDocument` from a DoclingDocument (or its dict).
 
     ``author`` attributes the ingestion events; it defaults to the
@@ -276,9 +281,16 @@ def from_docling(source: Any, *, title: Optional[str] = None,
                     level = min(int(child.get("level", 1)) + 1, _HEADING_CAP)
                     blocks.append(f"<h{level}>{_text_of(child)}</h{level}>")
                 walk(child)
-            elif label in ("text", "paragraph", "formula", "checkbox_selected",
-                           "checkbox_unselected", "footnote", "reference",
-                           "document_index"):
+            elif label in (
+                "text",
+                "paragraph",
+                "formula",
+                "checkbox_selected",
+                "checkbox_unselected",
+                "footnote",
+                "reference",
+                "document_index",
+            ):
                 if child.get("text"):
                     blocks.append(f"<p>{_text_of(child)}</p>")
             elif label == "caption":
@@ -311,14 +323,17 @@ def from_docling(source: Any, *, title: Optional[str] = None,
 
     walk(body)
 
-    doc = new_document(title=doc_title or data.get("name") or "Imported document",
-                       lang=lang, theme=theme)
+    doc = new_document(
+        title=doc_title or data.get("name") or "Imported document", lang=lang, theme=theme
+    )
     source_name = data.get("name") or "document"
     with doc.batch():
         for markup in blocks:
-            doc.add_chunk(_containerize(markup), author=who,
-                          explanation=f"Imported from {source_name!r} via "
-                                      "docling ingestion")
+            doc.add_chunk(
+                _containerize(markup),
+                author=who,
+                explanation=f"Imported from {source_name!r} via docling ingestion",
+            )
     return doc
 
 
@@ -326,14 +341,19 @@ def _containerize(markup: str) -> str:
     """Lists/tables arrive as plain markup; mark them as .aim containers with
     item chunks (ids get assigned by the document operations)."""
     if markup.startswith(("<ul>", "<ol>", "<table>")):
-        from .dom import parse_fragment
         from .canonical import serialize
+        from .dom import parse_fragment
+
         root = parse_fragment(markup)[0]
         root.set("data-aim-container", "")  # placeholder; op assigns real id
         for el in root.iter():
             if el.tag in ("li", "tr") and el is not root:
-                parent_ok = el.tag == "li" and root.tag in ("ul", "ol") or \
-                    el.tag == "tr" and root.tag == "table"
+                parent_ok = (
+                    el.tag == "li"
+                    and root.tag in ("ul", "ol")
+                    or el.tag == "tr"
+                    and root.tag == "table"
+                )
                 if parent_ok and _direct_item(root, el):
                     el.set("data-aim", "")
         return serialize(root)
@@ -345,8 +365,8 @@ def _direct_item(root, el) -> bool:
     list root, tr under the table root or one of its thead/tbody/tfoot
     shells. Anything reached through li/td/th is nested chunk content."""
     from .dom import Element
-    hop = {id(c): p for p in root.iter() for c in p.children
-           if isinstance(c, Element)}
+
+    hop = {id(c): p for p in root.iter() for c in p.children if isinstance(c, Element)}
     chain = []
     parent = hop.get(id(el))
     while parent is not None and parent is not root:

@@ -1,10 +1,10 @@
 """History: invertibility, verification, tampering, time travel, undo/redo,
 checkpoints, flatten/prune."""
+
 import pytest
 
 import aimformat as aim
 from aimformat.errors import HistoryError, InvalidOperation
-
 from conftest import BOT, ME, ts
 
 
@@ -31,13 +31,29 @@ class TestEventShape:
 
     def test_event_validate_flags_unknown_kind_and_fields(self):
         assert aim.Event({"kind": "merge", "seq": 1}).validate()
-        ev = aim.Event({"seq": 1, "kind": "checkpoint", "t": ts(0),
-                        "label": "x", "doc_hash": "sha256:0", "bogus": 1})
+        ev = aim.Event(
+            {
+                "seq": 1,
+                "kind": "checkpoint",
+                "t": ts(0),
+                "label": "x",
+                "doc_hash": "sha256:0",
+                "bogus": 1,
+            }
+        )
         assert any("unknown field" in p for p in ev.validate())
 
     def test_x_fields_are_allowed(self):
-        ev = aim.Event({"seq": 1, "kind": "checkpoint", "t": ts(0),
-                        "label": "x", "doc_hash": "sha256:0", "x_vendor": 1})
+        ev = aim.Event(
+            {
+                "seq": 1,
+                "kind": "checkpoint",
+                "t": ts(0),
+                "label": "x",
+                "doc_hash": "sha256:0",
+                "x_vendor": 1,
+            }
+        )
         assert not ev.validate()
 
 
@@ -51,8 +67,9 @@ class TestVerify:
 
     def test_external_body_edit_is_detected(self, lifecycle_doc):
         text = lifecycle_doc.dumps()
-        tampered = text.replace("We audited the Q2 numbers end to end.",
-                                "We audited most of the Q2 numbers.")
+        tampered = text.replace(
+            "We audited the Q2 numbers end to end.", "We audited most of the Q2 numbers."
+        )
         assert tampered != text
         problems = aim.loads(tampered).verify()
         assert any("mismatch" in p for p in problems)
@@ -72,8 +89,7 @@ class TestVerify:
     def test_delete_without_anchor_not_invertible(self, basic_doc):
         basic_doc.delete_chunk("intro", author=ME, at=ts(5))
         el = basic_doc._state.script("history")
-        el.raw = el.raw.replace(
-            '"anchor":{"after":"h1","container":"body"},', "")
+        el.raw = el.raw.replace('"anchor":{"after":"h1","container":"body"},', "")
         assert any("anchor" in p for p in basic_doc.verify())
 
     def test_verify_walks_pruned_history(self, rich_doc):
@@ -84,22 +100,19 @@ class TestVerify:
 class TestUndoRedo:
     def test_undo_restores_previous_state(self, basic_doc):
         h0 = basic_doc.doc_hash
-        basic_doc.modify_chunk("intro", '<p data-aim="intro">Changed.</p>',
-                               author=ME, at=ts(5))
+        basic_doc.modify_chunk("intro", '<p data-aim="intro">Changed.</p>', author=ME, at=ts(5))
         basic_doc.undo(author=ME, at=ts(6))
         assert basic_doc.doc_hash == h0
         assert basic_doc.history[-1].origin == "undo"
 
     def test_undo_is_append_not_rewrite(self, basic_doc):
         n = len(basic_doc.history)
-        basic_doc.modify_chunk("intro", '<p data-aim="intro">Changed.</p>',
-                               author=ME, at=ts(5))
+        basic_doc.modify_chunk("intro", '<p data-aim="intro">Changed.</p>', author=ME, at=ts(5))
         basic_doc.undo(author=ME, at=ts(6))
         assert len(basic_doc.history) == n + 2
 
     def test_redo_reapplies(self, basic_doc):
-        basic_doc.modify_chunk("intro", '<p data-aim="intro">Changed.</p>',
-                               author=ME, at=ts(5))
+        basic_doc.modify_chunk("intro", '<p data-aim="intro">Changed.</p>', author=ME, at=ts(5))
         h1 = basic_doc.doc_hash
         basic_doc.undo(author=ME, at=ts(6))
         basic_doc.redo(author=ME, at=ts(7))
@@ -108,11 +121,10 @@ class TestUndoRedo:
 
     def test_undo_undo_walks_back_two_edits(self, basic_doc):
         h0 = basic_doc.doc_hash
-        basic_doc.modify_chunk("intro", '<p data-aim="intro">One.</p>',
-                               author=ME, at=ts(5))
+        basic_doc.modify_chunk("intro", '<p data-aim="intro">One.</p>', author=ME, at=ts(5))
         basic_doc.add_chunk('<p data-aim="extra">Two.</p>', author=ME, at=ts(6))
-        basic_doc.undo(author=ME, at=ts(7))   # removes "extra"
-        basic_doc.undo(author=ME, at=ts(8))   # restores intro
+        basic_doc.undo(author=ME, at=ts(7))  # removes "extra"
+        basic_doc.undo(author=ME, at=ts(8))  # restores intro
         assert basic_doc.doc_hash == h0
 
     def test_undo_of_add_removes_chunk(self, basic_doc):
@@ -129,8 +141,7 @@ class TestUndoRedo:
 
     def test_undo_of_move_restores_position(self, basic_doc):
         order0 = basic_doc.body_ids
-        basic_doc.move_chunk("intro", container="body", after=None,
-                             author=ME, at=ts(5))
+        basic_doc.move_chunk("intro", container="body", after=None, author=ME, at=ts(5))
         basic_doc.undo(author=ME, at=ts(6))
         assert basic_doc.body_ids == order0
 
@@ -139,18 +150,15 @@ class TestUndoRedo:
             empty_doc.undo(author=ME, at=ts(1))
 
     def test_nothing_to_redo_after_fresh_edit(self, basic_doc):
-        basic_doc.modify_chunk("intro", '<p data-aim="intro">A.</p>',
-                               author=ME, at=ts(5))
+        basic_doc.modify_chunk("intro", '<p data-aim="intro">A.</p>', author=ME, at=ts(5))
         basic_doc.undo(author=ME, at=ts(6))
-        basic_doc.modify_chunk("intro", '<p data-aim="intro">B.</p>',
-                               author=ME, at=ts(7))
+        basic_doc.modify_chunk("intro", '<p data-aim="intro">B.</p>', author=ME, at=ts(7))
         with pytest.raises(InvalidOperation):
             basic_doc.redo(author=ME, at=ts(8))
 
     def test_undo_accepted_resolution(self, basic_doc):
         h0 = basic_doc.doc_hash
-        p = basic_doc.propose_modify("intro", '<p data-aim="intro">New.</p>',
-                                     author=BOT, at=ts(5))
+        p = basic_doc.propose_modify("intro", '<p data-aim="intro">New.</p>', author=BOT, at=ts(5))
         basic_doc.accept(p.id, decided_by=ME, at=ts(6))
         basic_doc.undo(author=ME, at=ts(7))
         assert basic_doc.doc_hash == h0
@@ -170,8 +178,7 @@ class TestCheckpointsAndTravel:
 
     def test_state_at_before_accept_shows_old_text(self, basic_doc):
         seq0 = basic_doc.seq
-        p = basic_doc.propose_modify("intro", '<p data-aim="intro">New.</p>',
-                                     author=BOT, at=ts(5))
+        p = basic_doc.propose_modify("intro", '<p data-aim="intro">New.</p>', author=BOT, at=ts(5))
         basic_doc.accept(p.id, decided_by=ME, at=ts(6))
         past = basic_doc.state_at(seq0)
         assert past.chunk("intro").text == "Intro paragraph."

@@ -12,6 +12,7 @@
 
 Exit codes: 0 ok · 1 lint errors / verification failure · 2 usage.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -41,9 +42,14 @@ def _cmd_lint(args: argparse.Namespace) -> int:
         warnings = [f for f in findings if f.level == "warning"]
         total_errors += len(errors)
         if args.format == "json":
-            payload.append({"file": str(path),
-                            "errors": len(errors), "warnings": len(warnings),
-                            "findings": [f.__dict__ for f in findings]})
+            payload.append(
+                {
+                    "file": str(path),
+                    "errors": len(errors),
+                    "warnings": len(warnings),
+                    "findings": [f.__dict__ for f in findings],
+                }
+            )
             continue
         if not args.quiet or errors:
             print(f"== {path}")
@@ -77,15 +83,16 @@ def _cmd_new(args: argparse.Namespace) -> int:
 
 def _cmd_show(args: argparse.Namespace) -> int:
     doc = AimDocument.load(args.file)
-    print(f"{doc.title!r} — spec {doc.spec_version}, seq {doc.seq}, "
-          f"{len(doc.chunks)} chunks, {len(doc.proposals)} pending")
+    print(
+        f"{doc.title!r} — spec {doc.spec_version}, seq {doc.seq}, "
+        f"{len(doc.chunks)} chunks, {len(doc.proposals)} pending"
+    )
     print(f"doc_hash {doc.doc_hash}")
     if doc.proposals:
         print("pending:")
         for p in doc.proposals:
             tgt = p.target or f"into {p.anchor_container}"
-            print(f"  {p.id:>10}  {p.action:<7} {tgt:<12} "
-                  f"{p.author.type:<6} {p.explanation or ''}")
+            print(f"  {p.id:>10}  {p.action:<7} {tgt:<12} {p.author.type:<6} {p.explanation or ''}")
     if doc.history:
         print("history:")
         for ev in doc.history:
@@ -106,9 +113,9 @@ def _cmd_flatten(args: argparse.Namespace) -> int:
 
 def _cmd_reconcile(args: argparse.Namespace) -> int:
     from .events import external
+
     doc = AimDocument.load(args.file)
-    report = doc.reconcile(author=external("aim-reconcile"),
-                           dry_run=args.check)
+    report = doc.reconcile(author=external("aim-reconcile"), dry_run=args.check)
     for old, new in report.assigned_ids:
         print(f"  id assigned: {old or '(unmarked)'} -> {new}")
     for pid in report.rejected_proposals:
@@ -128,8 +135,10 @@ def _cmd_reconcile(args: argparse.Namespace) -> int:
 def _cmd_css(args: argparse.Namespace) -> int:
     if args.stats:
         s = css_stats()
-        print(f"rules {s['rules']}  raw {s['raw_bytes'] / 1024:.1f} KB  "
-              f"gzip {s['gzip_bytes'] / 1024:.1f} KB")
+        print(
+            f"rules {s['rules']}  raw {s['raw_bytes'] / 1024:.1f} KB  "
+            f"gzip {s['gzip_bytes'] / 1024:.1f} KB"
+        )
         return 0
     sys.stdout.write(generate_aim_css())
     return 0
@@ -137,6 +146,7 @@ def _cmd_css(args: argparse.Namespace) -> int:
 
 def _cmd_import(args: argparse.Namespace) -> int:
     from .convert import from_path
+
     out = Path(args.output)
     if out.exists() and not args.force:
         print(f"aim: {out} exists (use --force to overwrite)", file=sys.stderr)
@@ -169,28 +179,36 @@ def _cmd_export(args: argparse.Namespace) -> int:
         return 2
     suffix = out.suffix.lower()
     if suffix not in _EXPORT_PENDING:
-        print(f"aim: unsupported export format {suffix!r} "
-              f"(supported: {', '.join(sorted(_EXPORT_PENDING))})",
-              file=sys.stderr)
+        print(
+            f"aim: unsupported export format {suffix!r} "
+            f"(supported: {', '.join(sorted(_EXPORT_PENDING))})",
+            file=sys.stderr,
+        )
         return 2
     default, allowed = _EXPORT_PENDING[suffix]
     pending = args.pending or default
     if pending not in allowed:
-        print(f"aim: --pending {pending!r} not valid for {suffix} "
-              f"(allowed: {', '.join(allowed)})", file=sys.stderr)
+        print(
+            f"aim: --pending {pending!r} not valid for {suffix} (allowed: {', '.join(allowed)})",
+            file=sys.stderr,
+        )
         return 2
     doc = AimDocument.load(args.input)
     if suffix == ".docx":
         from .export_docx import to_docx
+
         to_docx(doc, out, pending=pending)
     elif suffix == ".md":
         from .convert import to_markdown
+
         out.write_text(to_markdown(doc, pending=pending), "utf-8")
     elif suffix == ".html":
         from .convert import to_html
+
         out.write_text(to_html(doc, pending=pending), "utf-8")
     else:
         from .convert import to_pdf
+
         to_pdf(doc, out, pending=pending)
     print(f"wrote {out}")
     return 0
@@ -200,17 +218,19 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="aim",
         description=f"Reference tooling for the .aim document format "
-                    f"(spec {REGISTRY.spec_version}).")
-    parser.add_argument("--version", action="version",
-                        version=f"aimformat {__version__} "
-                                f"(spec {REGISTRY.spec_version})")
+        f"(spec {REGISTRY.spec_version}).",
+    )
+    parser.add_argument(
+        "--version",
+        action="version",
+        version=f"aimformat {__version__} (spec {REGISTRY.spec_version})",
+    )
     sub = parser.add_subparsers(dest="command", required=True)
 
     p = sub.add_parser("lint", help="verify .aim documents")
     p.add_argument("files", nargs="+")
     p.add_argument("--format", choices=["text", "json"], default="text")
-    p.add_argument("--quiet", action="store_true",
-                   help="print errors only")
+    p.add_argument("--quiet", action="store_true", help="print errors only")
     p.set_defaults(func=_cmd_lint)
 
     p = sub.add_parser("hash", help="print a document's doc_hash")
@@ -221,57 +241,57 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("-o", "--output", required=True)
     p.add_argument("--title", default="Untitled")
     p.add_argument("--lang", default="en")
-    p.add_argument("--force", action="store_true",
-                   help="overwrite an existing file")
+    p.add_argument("--force", action="store_true", help="overwrite an existing file")
     p.set_defaults(func=_cmd_new)
 
     p = sub.add_parser("show", help="overview: chunks, pending lane, history")
     p.add_argument("file")
     p.set_defaults(func=_cmd_show)
 
-    p = sub.add_parser("flatten",
-                       help="drop history (and embeddings); modifies the "
-                            "file in place unless -o is given")
+    p = sub.add_parser(
+        "flatten",
+        help="drop history (and embeddings); modifies the file in place unless -o is given",
+    )
     p.add_argument("file")
     p.add_argument("-o", "--output")
     p.add_argument("--keep-embeddings", action="store_true")
     p.set_defaults(func=_cmd_flatten)
 
-    p = sub.add_parser("reconcile",
-                       help="detect out-of-band edits and append reconcile "
-                            "events; modifies the file in place unless -o "
-                            "is given")
+    p = sub.add_parser(
+        "reconcile",
+        help="detect out-of-band edits and append reconcile "
+        "events; modifies the file in place unless -o "
+        "is given",
+    )
     p.add_argument("file")
     p.add_argument("-o", "--output")
-    p.add_argument("--check", action="store_true",
-                   help="report drift without modifying anything; "
-                        "exit 1 when drift is found")
+    p.add_argument(
+        "--check",
+        action="store_true",
+        help="report drift without modifying anything; exit 1 when drift is found",
+    )
     p.set_defaults(func=_cmd_reconcile)
 
     p = sub.add_parser("css", help="print the generated aim.css")
     p.add_argument("--stats", action="store_true")
     p.set_defaults(func=_cmd_css)
 
-    p = sub.add_parser("import",
-                       help="convert md/txt/docx/pdf to .aim (by extension)")
+    p = sub.add_parser("import", help="convert md/txt/docx/pdf to .aim (by extension)")
     p.add_argument("input")
     p.add_argument("-o", "--output", required=True)
-    p.add_argument("--title", help="document title (default: derived from "
-                                   "content or filename)")
+    p.add_argument("--title", help="document title (default: derived from content or filename)")
     p.add_argument("--lang", default="en")
-    p.add_argument("--force", action="store_true",
-                   help="overwrite an existing file")
+    p.add_argument("--force", action="store_true", help="overwrite an existing file")
     p.set_defaults(func=_cmd_import)
 
-    p = sub.add_parser("export",
-                       help="convert .aim to docx/md/html/pdf (by extension)")
+    p = sub.add_parser("export", help="convert .aim to docx/md/html/pdf (by extension)")
     p.add_argument("input")
     p.add_argument("-o", "--output", required=True)
-    p.add_argument("--pending",
-                   help="pending-lane fate; per-format default: "
-                        "docx=tracked, md=drop, html/pdf=keep")
-    p.add_argument("--force", action="store_true",
-                   help="overwrite an existing file")
+    p.add_argument(
+        "--pending",
+        help="pending-lane fate; per-format default: docx=tracked, md=drop, html/pdf=keep",
+    )
+    p.add_argument("--force", action="store_true", help="overwrite an existing file")
     p.set_defaults(func=_cmd_export)
     return parser
 

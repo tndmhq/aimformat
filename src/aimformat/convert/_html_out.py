@@ -7,6 +7,7 @@ lane. The default keeps the proposals appendix: pending changes must stay
 visible to a plain reader (spec §5.5), and the appendix renders as the
 pure-CSS change memo.
 """
+
 from __future__ import annotations
 
 from ..document import AimDocument
@@ -26,10 +27,11 @@ def to_html(doc: AimDocument, *, pending: str = "keep") -> str:
         copy = AimDocument.loads(doc.dumps())
     elif pending in ("accept-all", "reject-all"):
         from ..export_docx import _resolve_copy
+
         copy = _resolve_copy(doc, pending)
     else:
         raise InvalidOperation(
-            "pending must be 'keep', 'accept-all', or 'reject-all', "
-            f"got {pending!r}")
+            f"pending must be 'keep', 'accept-all', or 'reject-all', got {pending!r}"
+        )
     copy.flatten(drop_embeddings=True)
     return copy.dumps()

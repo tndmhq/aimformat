@@ -1,12 +1,12 @@
 """The aim CLI: lint / hash / new / show / flatten / css."""
+
 import json
 
 import pytest
 
 import aimformat as aim
 from aimformat.cli import main
-
-from conftest import BOT, ME, ts
+from conftest import BOT, ts
 
 
 @pytest.fixture

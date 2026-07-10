@@ -25,13 +25,14 @@ rather than being dropped), and hyperlink relationships (links render as
 text with the URL in parentheses). These are deliberate scope cuts, not
 oversights.
 """
+
 from __future__ import annotations
 
 import base64
 import io
 import re
 from pathlib import Path
-from typing import TYPE_CHECKING, Optional, Union
+from typing import TYPE_CHECKING
 
 from .document import AimDocument, Proposal
 from .dom import Element, Text, parse_fragment
@@ -39,7 +40,7 @@ from .errors import InvalidOperation
 from .events import external
 
 if TYPE_CHECKING:  # pragma: no cover
-    from docx.text.paragraph import Paragraph
+    pass
 
 __all__ = ["to_docx"]
 
@@ -54,16 +55,17 @@ _HEADINGS = {"h1", "h2", "h3", "h4", "h5", "h6"}
 def _require_docx():
     try:
         import docx  # noqa: F401
+
         return docx
     except ImportError as exc:  # pragma: no cover - environment-dependent
         raise ImportError(
-            "DOCX export needs python-docx. Install the extra:\n"
-            "    pip install 'aimformat[docx]'") from exc
+            "DOCX export needs python-docx. Install the extra:\n    pip install 'aimformat[docx]'"
+        ) from exc
 
 
 # --------------------------------------------------------------------------
 # inline content -> (text, formatting) run specs
-def _runs_of(el: Element, fmt: Optional[dict] = None) -> list[dict]:
+def _runs_of(el: Element, fmt: dict | None = None) -> list[dict]:
     fmt = dict(fmt or {})
     tag = el.tag
     if tag in _BOLD_TAGS:
@@ -125,6 +127,7 @@ def _format_run(run, spec: dict) -> None:
         run.font.superscript = True
     if spec.get("highlight"):
         from docx.enum.text import WD_COLOR_INDEX
+
         run.font.highlight_color = WD_COLOR_INDEX.YELLOW
 
 
@@ -138,6 +141,7 @@ class _Revisions:
 
     def _attrs(self, el, author: str, date: str) -> None:
         from docx.oxml.ns import qn
+
         el.set(qn("w:id"), str(self._next))
         el.set(qn("w:author"), author)
         el.set(qn("w:date"), date or "2026-01-01T00:00:00Z")
@@ -145,6 +149,7 @@ class _Revisions:
 
     def ins(self, paragraph, runs: list[dict], author: str, date: str) -> None:
         from docx.oxml import OxmlElement
+
         wrap = OxmlElement("w:ins")
         self._attrs(wrap, author, date)
         for spec in runs:
@@ -153,6 +158,7 @@ class _Revisions:
 
     def dele(self, paragraph, runs: list[dict], author: str, date: str) -> None:
         from docx.oxml import OxmlElement
+
         wrap = OxmlElement("w:del")
         self._attrs(wrap, author, date)
         for spec in runs:
@@ -163,6 +169,7 @@ class _Revisions:
     def _make_run(paragraph, spec: dict, *, deleted: bool):
         # build a real run for formatting, then detach and retag its text
         from docx.oxml.ns import qn
+
         run = paragraph.add_run(spec.get("text", ""))
         _format_run(run, spec)
         r = run._r
@@ -182,7 +189,7 @@ def _actor_label(author) -> str:
     return author.id or "external"
 
 
-def _style_for(tag: str) -> Optional[str]:
+def _style_for(tag: str) -> str | None:
     if tag in _HEADINGS:
         return f"Heading {tag[1]}"
     if tag == "blockquote":
@@ -210,7 +217,7 @@ class _Exporter:
         self.pending_mod: dict[str, Proposal] = {}
         self.pending_del: dict[str, Proposal] = {}
         # adds keyed by (container, after) — every container, not just body
-        self.adds_by_anchor: dict[tuple[str, Optional[str]], list[Proposal]] = {}
+        self.adds_by_anchor: dict[tuple[str, str | None], list[Proposal]] = {}
         for p in doc.proposals:
             if p.action == "modify" and p.target and p.target != "aim:theme":
                 self.pending_mod[p.target] = p
@@ -238,28 +245,26 @@ class _Exporter:
                 self._emit_add_paragraphs(prop)
         self.adds_by_anchor.clear()
 
-    def _pop_adds(self, container: str, after: Optional[str]) -> list[Proposal]:
+    def _pop_adds(self, container: str, after: str | None) -> list[Proposal]:
         return self.adds_by_anchor.pop((container, after), [])
 
-    def _emit_body_adds(self, anchor: Optional[str]) -> None:
+    def _emit_body_adds(self, anchor: str | None) -> None:
         for prop in self._pop_adds("body", anchor):
             self._emit_add_paragraphs(prop)
             self._emit_body_adds(prop.id)  # chained adds anchor on this one
 
-    def _emit_add_paragraphs(self, prop: Proposal,
-                             style: Optional[str] = None) -> None:
+    def _emit_add_paragraphs(self, prop: Proposal, style: str | None = None) -> None:
         for el in self._payload_elements(prop):
             for block in _block_children(el):
                 para = self.out.add_paragraph(
-                    style=style or self._safe_style(_style_for(block.tag)))
-                self.rev.ins(para, _runs_of(block), _actor_label(prop.author),
-                             prop.at)
+                    style=style or self._safe_style(_style_for(block.tag))
+                )
+                self.rev.ins(para, _runs_of(block), _actor_label(prop.author), prop.at)
 
     def _payload_elements(self, prop: Proposal) -> list[Element]:
-        return [n for n in parse_fragment(prop.payload_html or "")
-                if isinstance(n, Element)]
+        return [n for n in parse_fragment(prop.payload_html or "") if isinstance(n, Element)]
 
-    def _safe_style(self, name: Optional[str]) -> Optional[str]:
+    def _safe_style(self, name: str | None) -> str | None:
         if name is None:
             return None
         return name if self._has_style(name) else None
@@ -297,24 +302,22 @@ class _Exporter:
                 self.emit_block(block, cid)
 
     # -- tracked replacements (exactly once per chunk, never per child) -------
-    def emit_tracked_chunk(self, el: Element, prop: Proposal,
-                           style: Optional[str] = None) -> None:
+    def emit_tracked_chunk(self, el: Element, prop: Proposal, style: str | None = None) -> None:
         label, date = _actor_label(prop.author), prop.at
         for block in _block_children(el):
-            para = self.out.add_paragraph(
-                style=style or self._safe_style(_style_for(block.tag)))
+            para = self.out.add_paragraph(style=style or self._safe_style(_style_for(block.tag)))
             self.rev.dele(para, _runs_of(block), label, date)
         if prop.action == "modify":
             for new_el in self._payload_elements(prop):
                 for block in _block_children(new_el):
                     para = self.out.add_paragraph(
-                        style=style or self._safe_style(_style_for(block.tag)))
+                        style=style or self._safe_style(_style_for(block.tag))
+                    )
                     self.rev.ins(para, _runs_of(block), label, date)
 
     def emit_tracked_list_container(self, el: Element, prop: Proposal) -> None:
         label, date = _actor_label(prop.author), prop.at
-        style = self._safe_style("List Bullet" if el.tag == "ul"
-                                 else "List Number")
+        style = self._safe_style("List Bullet" if el.tag == "ul" else "List Number")
         for li in el.elements():
             para = self.out.add_paragraph(style=style)
             self.rev.dele(para, _runs_of(li), label, date)
@@ -325,8 +328,7 @@ class _Exporter:
                     self.rev.ins(para, _runs_of(li), label, date)
 
     # -- plain blocks -----------------------------------------------------------
-    def emit_block(self, el: Element, cid: str,
-                   style: Optional[str] = None) -> None:
+    def emit_block(self, el: Element, cid: str, style: str | None = None) -> None:
         if el.tag == "figure":
             self.emit_figure(el)
             return
@@ -342,8 +344,7 @@ class _Exporter:
         if el.tag in ("ul", "ol"):  # atomic list chunk / nested list content
             self.emit_list(el)
             return
-        para = self.out.add_paragraph(
-            style=style or self._safe_style(_style_for(el.tag)))
+        para = self.out.add_paragraph(style=style or self._safe_style(_style_for(el.tag)))
         _apply_runs(para, _runs_of(el))
 
     def emit_pre(self, el: Element) -> None:
@@ -364,6 +365,7 @@ class _Exporter:
             if m:
                 try:
                     from docx.shared import Inches
+
                     blob = base64.b64decode(m.group(1))
                     self.out.add_picture(io.BytesIO(blob), width=Inches(4.5))
                     emitted = True
@@ -380,8 +382,7 @@ class _Exporter:
                 self.emit_block(child, el.chunk_id or "")
         for cap in el.elements():
             if cap.tag == "figcaption":
-                self.out.add_paragraph(cap.text(),
-                                       style=self._safe_style("Caption"))
+                self.out.add_paragraph(cap.text(), style=self._safe_style("Caption"))
 
     # -- lists ---------------------------------------------------------------------
     def emit_list(self, el: Element, level: int = 0) -> None:
@@ -394,13 +395,12 @@ class _Exporter:
             self._emit_list_adds(container_id, None, style)
         for li in el.elements():
             cid = li.chunk_id or ""
-            prop = (self.pending_del.get(cid) or self.pending_mod.get(cid)) \
-                if cid else None
+            prop = (self.pending_del.get(cid) or self.pending_mod.get(cid)) if cid else None
             nested = [c for c in li.elements() if c.tag in ("ul", "ol")]
             content = Element("li")
-            content.children = [c for c in li.children
-                                if not (isinstance(c, Element)
-                                        and c.tag in ("ul", "ol"))]
+            content.children = [
+                c for c in li.children if not (isinstance(c, Element) and c.tag in ("ul", "ol"))
+            ]
             if prop is not None:
                 self.emit_tracked_chunk(content, prop, style=style)
             else:
@@ -410,21 +410,22 @@ class _Exporter:
             if container_id and cid:
                 self._emit_list_adds(container_id, cid, style)
 
-    def _emit_list_adds(self, container: str, after: Optional[str],
-                        style: Optional[str]) -> None:
+    def _emit_list_adds(self, container: str, after: str | None, style: str | None) -> None:
         for prop in self._pop_adds(container, after):
             self._emit_add_paragraphs(prop, style=style)
             self._emit_list_adds(container, prop.id, style)
 
     # -- tables ----------------------------------------------------------------------
-    def emit_table(self, el: Element, *, force: Optional[str] = None,
-                   prop: Optional[Proposal] = None) -> None:
+    def emit_table(
+        self, el: Element, *, force: str | None = None, prop: Proposal | None = None
+    ) -> None:
         rows = el.find_all(lambda e: e.tag == "tr")
         if not rows:
             return
-        ncols = max(sum(int(c.get("colspan") or 1)
-                        for c in r.elements() if c.tag in ("td", "th"))
-                    for r in rows)
+        ncols = max(
+            sum(int(c.get("colspan") or 1) for c in r.elements() if c.tag in ("td", "th"))
+            for r in rows
+        )
         table = self.out.add_table(rows=len(rows), cols=ncols)
         table.style = "Table Grid" if self._has_style("Table Grid") else None
         occupied: set[tuple[int, int]] = set()
@@ -438,8 +439,7 @@ class _Exporter:
             new_cells = None
             if prop_mod is not None:
                 payload = self._payload_elements(prop_mod)
-                new_cells = [c for p in payload for c in p.elements()
-                             if c.tag in ("td", "th")]
+                new_cells = [c for p in payload for c in p.elements() if c.tag in ("td", "th")]
             cells = [c for c in row.elements() if c.tag in ("td", "th")]
             ci = 0
             for orig_idx, cell_el in enumerate(cells):
@@ -449,8 +449,7 @@ class _Exporter:
                 rowspan = int(cell_el.get("rowspan") or 1)
                 cell = table.cell(ri, ci)
                 if colspan > 1 or rowspan > 1:
-                    cell = cell.merge(table.cell(ri + rowspan - 1,
-                                                 ci + colspan - 1))
+                    cell = cell.merge(table.cell(ri + rowspan - 1, ci + colspan - 1))
                     for dr in range(rowspan):
                         for dc in range(colspan):
                             occupied.add((ri + dr, ci + dc))
@@ -459,45 +458,51 @@ class _Exporter:
                 if cell_el.tag == "th":
                     runs = [{**r, "bold": True} for r in runs]
                 if force == "ins" and prop is not None:
-                    self.rev.ins(para, runs, _actor_label(prop.author),
-                                 prop.at)
+                    self.rev.ins(para, runs, _actor_label(prop.author), prop.at)
                 elif prop_del is not None:
-                    self.rev.dele(para, runs, _actor_label(prop_del.author),
-                                  prop_del.at)
+                    self.rev.dele(para, runs, _actor_label(prop_del.author), prop_del.at)
                 elif prop_mod is not None:
-                    self.rev.dele(para, runs, _actor_label(prop_mod.author),
-                                  prop_mod.at)
+                    self.rev.dele(para, runs, _actor_label(prop_mod.author), prop_mod.at)
                     if new_cells and orig_idx < len(new_cells):
-                        take = new_cells[orig_idx:] \
-                            if orig_idx == len(cells) - 1 else \
-                            [new_cells[orig_idx]]
+                        take = (
+                            new_cells[orig_idx:]
+                            if orig_idx == len(cells) - 1
+                            else [new_cells[orig_idx]]
+                        )
                         for nc in take:  # surplus new cells join the last one
-                            self.rev.ins(para, _runs_of(nc),
-                                         _actor_label(prop_mod.author),
-                                         prop_mod.at)
+                            self.rev.ins(
+                                para, _runs_of(nc), _actor_label(prop_mod.author), prop_mod.at
+                            )
                 else:
                     _apply_runs(para, runs)
                 ci += colspan
             if container_id and not force:
-                self._emit_row_adds(table, ri, container_id, rid or None,
-                                    ncols)
+                self._emit_row_adds(table, ri, container_id, rid or None, ncols)
         if container_id and not force:
-            self._emit_row_adds(table, -1, container_id, None, ncols,
-                                first=True)
+            self._emit_row_adds(table, -1, container_id, None, ncols, first=True)
 
-    def _emit_row_adds(self, table, after_index: int, container: str,
-                       after: Optional[str], ncols: int,
-                       first: bool = False) -> None:
+    def _emit_row_adds(
+        self,
+        table,
+        after_index: int,
+        container: str,
+        after: str | None,
+        ncols: int,
+        first: bool = False,
+    ) -> None:
         """Insert pending row-adds as fully-inserted (w:ins) table rows."""
         props = self._pop_adds(container, after)
         for prop in props:
             new_row = table.add_row()  # appended; repositioned below
-            payload_cells = [c for p in self._payload_elements(prop)
-                             for c in p.elements() if c.tag in ("td", "th")]
+            payload_cells = [
+                c
+                for p in self._payload_elements(prop)
+                for c in p.elements()
+                if c.tag in ("td", "th")
+            ]
             for idx in range(min(len(payload_cells), ncols)):
                 para = new_row.cells[idx].paragraphs[0]
-                self.rev.ins(para, _runs_of(payload_cells[idx]),
-                             _actor_label(prop.author), prop.at)
+                self.rev.ins(para, _runs_of(payload_cells[idx]), _actor_label(prop.author), prop.at)
             if first:
                 table.rows[0]._tr.addprevious(new_row._tr)
             elif after_index >= 0:
@@ -516,12 +521,14 @@ def _resolve_copy(doc: AimDocument, decision: str) -> AimDocument:
             raise InvalidOperation("pending lane did not converge")
         pending_ids = {p.id for p in clone.proposals}
         # resolve proposals whose anchors are settled first (chains)
-        ready = [p for p in clone.proposals
-                 if not (p.action == "add" and p.anchor_after in pending_ids)]
+        ready = [
+            p for p in clone.proposals if not (p.action == "add" and p.anchor_after in pending_ids)
+        ]
         if not ready:
             raise InvalidOperation(
                 "pending adds anchor on each other in a cycle — the file is "
-                "corrupt (aim lint reports P015)")
+                "corrupt (aim lint reports P015)"
+            )
         # deletes go last within a round: an add anchored on a chunk that a
         # sibling delete card targets must land while the anchor still
         # exists (accept order must not depend on card order)
@@ -534,8 +541,7 @@ def _resolve_copy(doc: AimDocument, decision: str) -> AimDocument:
     return clone
 
 
-def to_docx(doc: AimDocument, path: Union[str, Path], *,
-            pending: str = "tracked") -> Path:
+def to_docx(doc: AimDocument, path: str | Path, *, pending: str = "tracked") -> Path:
     """Write *doc* to *path* as a .docx file.
 
     ``pending`` — what to do with the pending lane: ``"tracked"`` emits Word
@@ -543,8 +549,7 @@ def to_docx(doc: AimDocument, path: Union[str, Path], *,
     copy first (the original document is never mutated).
     """
     if pending not in _PENDING_MODES:
-        raise InvalidOperation(
-            f"pending must be one of {_PENDING_MODES}, got {pending!r}")
+        raise InvalidOperation(f"pending must be one of {_PENDING_MODES}, got {pending!r}")
     docx_mod = _require_docx()
     source = doc if pending == "tracked" else _resolve_copy(doc, pending)
     exporter = _Exporter(source, docx_mod)
