@@ -131,19 +131,23 @@ def proposal_doc() -> aim.AimDocument:
 
 
 def deck_doc() -> aim.AimDocument:
-    """A slide deck: positioned chunks, z-index, a pending slide."""
+    """A slide deck: positioned chunks, z-index, a pending slide.
+
+    Canvas sizes follow the canvas-pt convention (spec §3.3): 960×540 is
+    the native 16:9 point size, so 1 canvas px prints as 1 pt.
+    """
     doc = aim.new_document(title="Pilot read-out", theme={"--aim-brand-1": "#7c3aed"})
     doc.add_chunk(
         '<aim-slide data-aim-container="s1" '
-        'style="width:1920px; height:1080px">'
+        'style="width:960px; height:540px">'
         '<div data-aim="band" class="bg-brand-1" '
-        'style="left:0px; top:880px; width:1920px; height:200px; '
+        'style="left:0px; top:440px; width:960px; height:100px; '
         'z-index:1"></div>'
         '<h2 data-aim="t1" class="font-bold text-6xl" '
-        'style="left:120px; top:340px; width:1400px; z-index:2">'
+        'style="left:60px; top:170px; width:700px; z-index:2">'
         "Documents that review themselves</h2>"
         '<p data-aim="st1" class="text-2xl text-gray-600" '
-        'style="left:120px; top:520px; width:1200px; z-index:2">'
+        'style="left:60px; top:260px; width:600px; z-index:2">'
         "Pilot read-out — July 2026</p></aim-slide>",
         author=BOT,
         at=t(0),
@@ -151,12 +155,12 @@ def deck_doc() -> aim.AimDocument:
     )
     doc.add_chunk(
         '<aim-slide data-aim-container="s2" '
-        'style="width:1920px; height:1080px">'
+        'style="width:960px; height:540px">'
         '<h2 data-aim="t2" class="font-bold text-5xl" '
-        'style="left:120px; top:100px; width:1000px">Next steps'
+        'style="left:60px; top:50px; width:500px">Next steps'
         "</h2>"
         '<p data-aim="b2" class="text-3xl" '
-        'style="left:120px; top:300px; width:1400px">Extend the '
+        'style="left:60px; top:150px; width:700px">Extend the '
         "pilot to the briefs team for Q4.</p></aim-slide>",
         author=BOT,
         at=t(1),
@@ -164,7 +168,7 @@ def deck_doc() -> aim.AimDocument:
     doc.propose_modify(
         "b2",
         '<p data-aim="b2" class="text-3xl" '
-        'style="left:120px; top:300px; width:1400px">Extend '
+        'style="left:60px; top:150px; width:700px">Extend '
         "the pilot to the briefs team for Q4; decision review "
         "on 15 August.</p>",
         author=BOT,
@@ -175,9 +179,62 @@ def deck_doc() -> aim.AimDocument:
     return doc
 
 
+# A deterministic 24×18 gradient PNG (the booklet's "photo").
+_PHOTO = (
+    "data:image/png;base64,"
+    "iVBORw0KGgoAAAANSUhEUgAAABgAAAASCAIAAADOjonJAAAANklEQVR42mOssXrLQA3A"
+    "wsbFQB2D2LkYqWQQN+OgcxEDtQKbcfgGNsNwjX62QZeOhnVeo45BACToAxsE+VB3AAAA"
+    "AElFTkSuQmCC"
+)
+
+
+def booklet_doc() -> aim.AimDocument:
+    """Fixed-layout paper pages: an A5 booklet (canvas-pt convention —
+    420×595 canvas px print as a true A5 page), with a positioned image
+    figure and a positioned list."""
+    doc = aim.new_document(title="Vintage recital — programme", theme={"--aim-brand-1": "#7c3aed"})
+    doc.add_chunk(
+        '<aim-slide data-aim-container="pg1" '
+        'style="width:420px; height:595px">'
+        f'<figure data-aim="photo" style="left:60px; top:70px; width:300px; z-index:1">'
+        f'<img alt="Stage lights" style="width:300px; height:225px" src="{_PHOTO}"></figure>'
+        '<h2 data-aim="cover" class="font-heading font-bold text-4xl text-center text-brand-1" '
+        'style="left:40px; top:340px; width:340px; z-index:2">'
+        "Vintage recital</h2>"
+        '<p data-aim="when" class="text-sm text-center text-gray-600" '
+        'style="left:40px; top:410px; width:340px">Saturday 12 September — 19:30</p>'
+        '<div data-aim="rule" class="bg-brand-1" '
+        'style="left:180px; top:460px; width:60px; height:4px"></div>'
+        "</aim-slide>",
+        author=BOT,
+        at=t(0),
+        explanation="Cover page.",
+    )
+    doc.add_chunk(
+        '<aim-slide data-aim-container="pg2" '
+        'style="width:420px; height:595px">'
+        '<h2 data-aim="ph" class="font-heading font-bold text-2xl text-brand-1" '
+        'style="left:40px; top:60px; width:340px">Programme</h2>'
+        '<ul data-aim-container="prog" class="list-none" '
+        'style="left:40px; top:120px; width:340px">'
+        '<li data-aim="i1" class="text-sm">Overture — the quiet room</li>'
+        '<li data-aim="i2" class="text-sm">Duet — margins and marginalia</li>'
+        '<li data-aim="i3" class="text-sm">Finale — everything accepted</li>'
+        "</ul></aim-slide>",
+        author=BOT,
+        at=t(1),
+    )
+    doc.checkpoint("to-print", at=t(4))
+    return doc
+
+
 def main() -> None:
     OUT.mkdir(exist_ok=True)
-    for name, doc in (("proposal.aim", proposal_doc()), ("deck.aim", deck_doc())):
+    for name, doc in (
+        ("proposal.aim", proposal_doc()),
+        ("deck.aim", deck_doc()),
+        ("booklet.aim", booklet_doc()),
+    ):
         assert doc.verify() == [], name
         text = doc.dumps()
         errors = [f for f in aim.lint_text(text) if f.level == "error"]

@@ -194,6 +194,27 @@ invariants or you will corrupt identity and history:
   edits are recorded into history as attributed events instead of dangling
   as unexplained divergence.
 
+## Slides and fixed-layout pages
+
+A slide is an `<aim-slide data-aim-container="id" style="width:960px;
+height:540px">` in the body flow; its children are ordinary chunks,
+absolutely positioned via inline `left`/`top`/`width` (plus optional
+`height`, `transform`, `z-index`). DOM order is reading order; overlap
+needs explicit `z-index`. Authoring rules that matter:
+
+- **Canvas px are points.** Use `960×540` for a 16:9 slide, a paper page
+  at its point size (A5 portrait `420×595`, A4 `595×842`). Each slide then
+  exports as its own correctly sized PDF page, and font sizes read as
+  their print sizes (a `text-4xl` heading ≈ a 36 pt title).
+- Every direct child must carry `data-aim` (or be a `data-aim-container`
+  list/table) — the linter flags uncovered children (S020). Slides never
+  nest (S026).
+- Adding, moving, or deleting a whole slide is an ordinary container op
+  targeting the slide id, anchored in `body`.
+- Prefer proposals for content changes inside slides, like anywhere else;
+  geometry-only tweaks are normal `modify` payloads re-emitting the chunk
+  with its new `style`.
+
 ## The agent note
 
 Every `.aim` file SHOULD open with the agent-note head comment (§2.5) — a

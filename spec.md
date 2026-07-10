@@ -119,7 +119,7 @@ see §4.4 for id rules):
 <section data-aim="b31f"><h2>Scope</h2><p>…</p></section>
 <aim-page-break data-aim="pgb1"></aim-page-break>
 <ul data-aim-container="l2"><li data-aim="c90">Discovery</li><li data-aim="c91">Implementation…</li><li data-aim="c91">…and rollout</li></ul>
-<aim-slide data-aim-container="s01" style="width:1920px; height:1080px"><h2 data-aim="77de" class="text-5xl" style="left:96px; top:64px; width:900px; z-index:2">Timeline</h2></aim-slide>
+<aim-slide data-aim-container="s01" style="width:960px; height:540px"><h2 data-aim="77de" class="text-5xl" style="left:48px; top:32px; width:450px; z-index:2">Timeline</h2></aim-slide>
 <aim-proposals>
 <aim-proposal id="p-19" data-action="modify" data-at="2026-07-07T09:41:02Z" data-author="agent" data-author-model="model-id" data-batch="b7" data-explanation="Tighten the intro." data-for="c42a"><template><p data-aim="c42a">Acme saves €2.1M over three years…</p></template></aim-proposal>
 </aim-proposals>
@@ -268,8 +268,15 @@ Continuous values go in `style=""`, restricted to the whitelist
 `left, top, width, height, transform, z-index` with per-property value
 grammars (Appendix A.3). Discrete design choices are classes; measurements
 are inline styles; document-wide constants are theme slots. Slide canvas
-size is expressed the same way (`<aim-slide style="width:1920px;
-height:1080px">`).
+size is expressed the same way (`<aim-slide style="width:960px;
+height:540px">`).
+
+Canvas numbers are **point-equivalent** by convention (informative): one
+canvas px prints as one typographic point (the print layer scales
+accordingly, §3.4), so `960×540` is the native 16:9 slide — PPTX's own
+13.33×7.5 in — and a paper-sized page is its point size (A5 portrait
+`420×595`, A4 portrait `595×842`). Any canvas size remains valid; renderers
+and exporters read each slide's own declared size.
 
 ### 3.4 The embedded stylesheet (`aim.css`)
 
@@ -806,9 +813,9 @@ chunks:
 </style>
 </head>
 <body>
-<aim-slide data-aim-container="s1" style="width:1920px; height:1080px"><h2 data-aim="t1" class="font-bold text-5xl" style="left:120px; top:100px; width:1200px; z-index:2">Quarterly review</h2><p data-aim="b1" class="text-2xl text-gray-600" style="left:120px; top:300px; width:1200px">Reading order is DOM order; stacking is explicit z-index.</p></aim-slide>
+<aim-slide data-aim-container="s1" style="width:960px; height:540px"><h2 data-aim="t1" class="font-bold text-5xl" style="left:60px; top:50px; width:600px; z-index:2">Quarterly review</h2><p data-aim="b1" class="text-2xl text-gray-600" style="left:60px; top:150px; width:600px">Reading order is DOM order; stacking is explicit z-index.</p></aim-slide>
 <script type="application/aim-history+jsonl">
-{"action":"add","after":"<aim-slide data-aim-container=\"s1\" style=\"width:1920px; height:1080px\"><h2 data-aim=\"t1\" class=\"font-bold text-5xl\" style=\"left:120px; top:100px; width:1200px; z-index:2\">Quarterly review<\/h2><p data-aim=\"b1\" class=\"text-2xl text-gray-600\" style=\"left:120px; top:300px; width:1200px\">Reading order is DOM order; stacking is explicit z-index.<\/p><\/aim-slide>","anchor":{"after":null,"container":"body"},"author":{"model":"model-id","type":"agent"},"batch":"b1","kind":"direct_edit","seq":1,"t":"2026-07-07T12:00:00Z","target":"s1"}
+{"action":"add","after":"<aim-slide data-aim-container=\"s1\" style=\"width:960px; height:540px\"><h2 data-aim=\"t1\" class=\"font-bold text-5xl\" style=\"left:60px; top:50px; width:600px; z-index:2\">Quarterly review<\/h2><p data-aim=\"b1\" class=\"text-2xl text-gray-600\" style=\"left:60px; top:150px; width:600px\">Reading order is DOM order; stacking is explicit z-index.<\/p><\/aim-slide>","anchor":{"after":null,"container":"body"},"author":{"model":"model-id","type":"agent"},"batch":"b1","kind":"direct_edit","seq":1,"t":"2026-07-07T12:00:00Z","target":"s1"}
 </script>
 </body>
 </html>
@@ -1012,6 +1019,11 @@ Total registered utilities: **243**.
   from an event's `before`/`applied` pair (or a card's payload vs the live
   chunk); the algorithm is a tool choice — the format deliberately stores
   whole-target payloads.
+- **Canvas sizes are points**: author slide canvases so one canvas px is
+  one typographic point at print — `960×540` for 16:9 decks (the native
+  PPTX point size), paper pages at their point dimensions (A5 portrait
+  `420×595`). Geometry then transfers to page-description and slide
+  formats without rescaling (§3.3).
 - **Deep links**: `data-aim` ids have no native `#fragment` targets;
   viewers and exporters MAY synthesize anchors using the convention
   `#aim:<chunk-id>`.

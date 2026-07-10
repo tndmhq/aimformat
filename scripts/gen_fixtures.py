@@ -76,12 +76,12 @@ def main() -> None:
     deck = aim.new_document(title="Deck fixture")
     deck.add_chunk(
         '<aim-slide data-aim-container="s1" '
-        'style="width:1920px; height:1080px">'
+        'style="width:960px; height:540px">'
         '<h2 data-aim="t1" class="font-bold text-5xl" '
-        'style="left:120px; top:100px; width:1200px; z-index:2">'
+        'style="left:60px; top:50px; width:600px; z-index:2">'
         "Slide one</h2>"
         '<p data-aim="b1" class="text-2xl" '
-        'style="left:120px; top:300px; width:1200px">Body</p>'
+        'style="left:60px; top:150px; width:600px">Body</p>'
         "</aim-slide>",
         author=BOT,
         at=t(0),
