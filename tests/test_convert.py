@@ -1,5 +1,7 @@
 """Converter tests: text/markdown import, md/html export, CLI, dispatch."""
 
+import re
+
 import pytest
 
 import aimformat as aim
@@ -446,3 +448,78 @@ class TestToPdf:
             pytest.skip(str(exc))  # chromium not installed
         assert out.stat().st_size > 1000
         assert out.read_bytes()[:5] == b"%PDF-"
+
+
+def _mixed_deck() -> aim.AimDocument:
+    """A flow chunk, an A5-canvas page, and a default-canvas slide."""
+    doc = aim.new_document(title="Mixed")
+    u = aim.human("u")
+    doc.add_chunk("<p>flow before</p>", author=u)
+    doc.add_chunk(
+        '<aim-slide data-aim-container="pg1" style="width:420px; height:595px">'
+        '<h2 data-aim="t1" style="left:10px; top:10px; width:300px">Booklet page</h2>'
+        "</aim-slide>",
+        author=u,
+    )
+    doc.add_chunk(
+        '<aim-slide data-aim-container="pg2">'
+        '<p data-aim="t2" style="left:10px; top:10px; width:300px">Default canvas</p>'
+        "</aim-slide>",
+        author=u,
+    )
+    return doc
+
+
+@pytest.mark.filterwarnings("ignore")
+class TestPdfSlidePages:
+    def test_print_css_names_a_page_per_slide(self):
+        from aimformat.convert._pdf_out import _print_html
+
+        html = _print_html(_mixed_deck(), "keep", None)
+        # canvas-pt: the A5 canvas becomes a real 420×595pt page …
+        assert "@page pg-pg1{size:420pt 595pt;margin:0}" in html
+        # … an unsized canvas gets the 16:9 convention default …
+        assert "@page pg-pg2{size:960pt 540pt;margin:0}" in html
+        # … slides are assigned their page and print-scaled px→pt (×4/3) …
+        assert 'aim-slide[data-aim-container="pg1"]{page:pg-pg1;zoom:1.33333}' in html
+        # … and the flow keeps the document page setup (A4 default).
+        assert "@page{size:210mm 297mm" in html
+
+    def test_no_slides_no_named_pages(self):
+        from aimformat.convert._pdf_out import _print_html
+
+        assert "@page pg-" not in _print_html(aim.from_text("plain"), "keep", None)
+
+    def test_resolution_updates_named_pages(self):
+        from aimformat.convert._pdf_out import _print_html
+
+        doc = _mixed_deck()
+        doc.propose_add(
+            '<aim-slide data-aim-container="pg3" style="width:595px; height:842px">'
+            '<p data-aim="t3" style="left:10px; top:10px; width:300px">Pending page</p>'
+            "</aim-slide>",
+            container="body",
+            after="pg2",
+            author=aim.agent("m"),
+        )
+        accepted = _print_html(doc, "accept-all", None)
+        assert "@page pg-pg3{size:595pt 842pt;margin:0}" in accepted
+        rejected = _print_html(doc, "reject-all", None)
+        assert "pg-pg3" not in rejected
+
+    def test_pdf_pages_have_canvas_sizes(self, tmp_path):
+        pytest.importorskip("playwright")
+        out = tmp_path / "deck.pdf"
+        try:
+            aim.to_pdf(_mixed_deck(), out)
+        except RuntimeError as exc:
+            pytest.skip(str(exc))  # chromium not installed
+        boxes = re.findall(rb"/MediaBox \[([\d. ]+)\]", out.read_bytes())
+        sizes = set()
+        for raw in boxes:
+            x0, y0, x1, y1 = (float(v) for v in raw.split())
+            sizes.add((round(x1 - x0), round(y1 - y0)))
+        # the A5 canvas page, the default 16:9 canvas page, the A4 flow page
+        assert (420, 595) in sizes
+        assert (960, 540) in sizes
+        assert (595, 842) in sizes
