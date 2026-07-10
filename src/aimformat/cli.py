@@ -9,6 +9,7 @@
     aim accept FILE PID...  accept pending proposals (or --all)
     aim reject FILE PID...  reject pending proposals (or --all)
     aim flatten FILE        drop history (+embeddings) -> clean file
+    aim normalize FILE      rewrite in canonical form (lossless, idempotent)
     aim reconcile FILE      detect out-of-band edits; append reconcile events
     aim css                 print the generated aim.css for this spec version
     aim import IN -o F.aim  convert md/txt/docx/pdf to .aim
@@ -285,6 +286,38 @@ def _cmd_flatten(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_normalize(args: argparse.Namespace) -> int:
+    """Tier-2 canonicalization: re-spell to the spec §11 normal form.
+
+    Lossless and idempotent — attribute order, class-token order, style
+    spelling and layout collapse to their canonical form; content (including
+    out-of-vocabulary content, which stays the linter's to flag) is never
+    coerced or dropped. `doc_hash` is computed over the canonical projection,
+    so normalizing never changes it.
+
+    Uses the same primitive as lint's C001 (`document_text` on the fragment
+    as loaded — no machine-CSS refresh) so the two verbs can never disagree
+    about what "canonical" means, and raw bytes end to end so newline
+    translation can't mask or introduce differences.
+    """
+    from .canonical import document_text
+    path = Path(args.file)
+    original = path.read_bytes()
+    doc = AimDocument.loads(original.decode("utf-8"))
+    canonical_bytes = document_text(doc._fragment).encode("utf-8")
+    changed = canonical_bytes != original
+    if args.check:
+        print(f"{path}: {'not canonical' if changed else 'canonical'}")
+        return 1 if changed else 0
+    out = Path(args.output or args.file)
+    if not changed and out == path:
+        print(f"{path}: already canonical")
+        return 0
+    out.write_bytes(canonical_bytes)
+    print(f"wrote {out}")
+    return 0
+
+
 def _cmd_reconcile(args: argparse.Namespace) -> int:
     from .events import external
     doc = AimDocument.load(args.file)
@@ -502,6 +535,18 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("-o", "--output")
     p.add_argument("--keep-embeddings", action="store_true")
     p.set_defaults(func=_cmd_flatten)
+
+    p = sub.add_parser("normalize",
+                       help="rewrite a document in canonical form (spec "
+                            "§11); lossless and idempotent — re-spells, "
+                            "never coerces; modifies the file in place "
+                            "unless -o is given")
+    p.add_argument("file")
+    p.add_argument("-o", "--output")
+    p.add_argument("--check", action="store_true",
+                   help="report without writing; exit 1 when the file is "
+                        "not canonical")
+    p.set_defaults(func=_cmd_normalize)
 
     p = sub.add_parser("reconcile",
                        help="detect out-of-band edits and append reconcile "
