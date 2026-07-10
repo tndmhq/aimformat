@@ -70,6 +70,7 @@ from typing import Any, Optional, Union
 from .canonical import escape_attr, escape_text
 from .document import AimDocument, new_document
 from .events import Actor, external
+from .registry import REGISTRY
 
 __all__ = ["from_docling"]
 
@@ -112,12 +113,6 @@ def _text_of(node: dict) -> str:
     return escape_text(node.get("text", "") or "")
 
 
-# hyperlinks are emitted only for schemes the registry allows on a.href;
-# anything else (file://, ftp://, …) keeps its text — a converter must not
-# produce documents the linter then rejects (V009)
-_SAFE_HREF_RE = re.compile(r"^(https?:|mailto:|#)", re.IGNORECASE)
-
-
 def _fmt_markup(node: dict) -> str:
     """A text item's inline markup: escaped text wrapped per the docling
     ``formatting`` flags and ``hyperlink`` — fixed nesting order
@@ -140,7 +135,10 @@ def _fmt_markup(node: dict) -> str:
     if fmt.get("bold"):
         out = f"<strong>{out}</strong>"
     link = node.get("hyperlink")
-    if link and _SAFE_HREF_RE.match(str(link)):
+    # emit only registry-allowed schemes; anything else (file://, ftp://, …)
+    # keeps its text — a converter must not produce documents the linter
+    # then rejects (V009). Same predicate the linter itself uses.
+    if link and REGISTRY.url_allowed("a.href", str(link)):
         out = f'<a href="{escape_attr(str(link))}">{out}</a>'
     return out
 
@@ -157,11 +155,16 @@ def _hugs(prev: dict, cur: dict) -> bool:
     """Whether two adjacent inline runs join without a space. docling strips
     run-boundary whitespace (``text`` and ``orig`` alike), so the join is a
     heuristic: closing punctuation hugs left, opening brackets hug right,
-    and sub/superscript runs hug their base (H2O, x2, footnote markers) —
-    strictly better than docling's own serializers, which space-join
-    unconditionally ("H 2 O", "bold , then")."""
-    if _script_of(prev) != "baseline" or _script_of(cur) != "baseline":
-        return True
+    and script runs hug their base — strictly better than docling's own
+    serializers, which space-join unconditionally ("H 2 O", "bold , then").
+
+    Direction matters after a script run: a SUBSCRIPT is usually mid-word
+    (H2O — glue both sides), while a SUPERSCRIPT usually ends its word
+    (x², footnote markers — glue left only, keep the following space)."""
+    if _script_of(cur) != "baseline":
+        return True  # scripts always attach to the base on their left
+    if _script_of(prev) == "sub":
+        return True  # …O in H2O
     prev_text = prev.get("text") or ""
     cur_text = cur.get("text") or ""
     return (cur_text.startswith(_NO_SPACE_BEFORE)
@@ -172,22 +175,24 @@ def _inline_group_markup(res: _Resolver, group: dict) -> str:
     """One ``inline`` group — the per-run shape docling emits for a
     paragraph with mixed formatting — joined back into a single block's
     inline content."""
-    out = ""
+    parts: list[str] = []
     prev: Optional[dict] = None
     for child in res.children(group):
-        if child.get("label") == "inline":  # defensive: nested inline group
-            markup = _inline_group_markup(res, child)
-        elif child.get("text"):
+        if child.get("text"):
             markup = _fmt_markup(child)
+        elif child.get("children"):
+            # nested grouping of any label: descend rather than silently
+            # dropping a subtree (mirrors the body walker's philosophy)
+            markup = _inline_group_markup(res, child)
         else:
             continue
         if not markup:
             continue
-        if out and prev is not None and not _hugs(prev, child):
-            out += " "
-        out += markup
+        if prev is not None and not _hugs(prev, child):
+            parts.append(" ")
+        parts.append(markup)
         prev = child
-    return out
+    return "".join(parts)
 
 
 def _list_tag(res: _Resolver, group: dict) -> str:

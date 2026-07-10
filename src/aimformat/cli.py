@@ -113,11 +113,18 @@ def _cmd_normalize(args: argparse.Namespace) -> int:
     out-of-vocabulary content, which stays the linter's to flag) is never
     coerced or dropped. `doc_hash` is computed over the canonical projection,
     so normalizing never changes it.
+
+    Uses the same primitive as lint's C001 (`document_text` on the fragment
+    as loaded — no machine-CSS refresh) so the two verbs can never disagree
+    about what "canonical" means, and raw bytes end to end so newline
+    translation can't mask or introduce differences.
     """
+    from .canonical import document_text
     path = Path(args.file)
-    original = path.read_text("utf-8")
-    canonical_text = AimDocument.loads(original).dumps()
-    changed = canonical_text != original
+    original = path.read_bytes()
+    doc = AimDocument.loads(original.decode("utf-8"))
+    canonical_bytes = document_text(doc._fragment).encode("utf-8")
+    changed = canonical_bytes != original
     if args.check:
         print(f"{path}: {'not canonical' if changed else 'canonical'}")
         return 1 if changed else 0
@@ -125,7 +132,7 @@ def _cmd_normalize(args: argparse.Namespace) -> int:
     if not changed and out == path:
         print(f"{path}: already canonical")
         return 0
-    out.write_text(canonical_text, "utf-8")
+    out.write_bytes(canonical_bytes)
     print(f"wrote {out}")
     return 0
 

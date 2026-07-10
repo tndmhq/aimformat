@@ -76,6 +76,29 @@ class TestInlineGroups:
         para = next(h for h in chunk_htmls(doc) if h.startswith("<p"))
         assert "H<sub>2</sub>O and x<sup>2</sup>" in para
 
+    def test_script_join_is_directional(self):
+        """Sub glues both sides (H2O); sup glues left only (x² grows)."""
+        d = DoclingDocument(name="dir")
+        d.add_title(text="Dir")
+        g1 = d.add_group(label=GroupLabel.INLINE)
+        d.add_text(label=DocItemLabel.TEXT, text="H", parent=g1,
+                   formatting=fmt())
+        d.add_text(label=DocItemLabel.TEXT, text="2", parent=g1,
+                   formatting=fmt(script="sub"))
+        d.add_text(label=DocItemLabel.TEXT, text="O flows", parent=g1,
+                   formatting=fmt())
+        g2 = d.add_group(label=GroupLabel.INLINE)
+        d.add_text(label=DocItemLabel.TEXT, text="area x", parent=g2,
+                   formatting=fmt())
+        d.add_text(label=DocItemLabel.TEXT, text="2", parent=g2,
+                   formatting=fmt(script="super"))
+        d.add_text(label=DocItemLabel.TEXT, text="grows", parent=g2,
+                   formatting=fmt())
+        doc = aim.from_docling(d)
+        paras = [h for h in chunk_htmls(doc) if h.startswith("<p")]
+        assert any("H<sub>2</sub>O flows" in h for h in paras)
+        assert any("area x<sup>2</sup> grows" in h for h in paras)
+
     def test_combined_marks_nest_in_fixed_order(self):
         d = DoclingDocument(name="all")
         d.add_title(text="All")

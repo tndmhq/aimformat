@@ -419,21 +419,14 @@ class _Linter:
             self.add("X003", ERROR, f"dangerous URL in {tag}@{attr}: "
                      f"{value[:40]!r}", loc)
             return
-        # match by scheme, not raw prefix: a bare scheme token (http, https,
-        # mailto) must be the value's actual scheme — the text before the
-        # first ':' — so `httpjavascript:` / `mailtox:` no longer sneak past a
-        # prefix test; '#' is fragment-only; tokens carrying a ':' (data:image/)
-        # stay exact prefixes (review AIM-06)
-        bare = {s.lower() for s in schemes if ":" not in s and s != "#"}
-        prefixes = [s.lower() for s in schemes if ":" in s]
-        if "#" in schemes and low.startswith("#"):
-            return
-        if any(low.startswith(p) for p in prefixes):
-            return
-        if ":" in low and low.split(":", 1)[0] in bare:
-            return
-        self.add("V009", ERROR,
-                 f"{tag}@{attr} must use one of {schemes}: {value[:60]!r}", loc)
+        # scheme matching lives in REGISTRY.url_allowed (single source of
+        # truth shared with converters): bare tokens match the actual
+        # scheme, '#' is fragment-only, ':'-carrying tokens are prefixes
+        # (review AIM-06)
+        if not REGISTRY.url_allowed(f"{tag}.{attr}", value):
+            self.add("V009", ERROR,
+                     f"{tag}@{attr} must use one of {schemes}: "
+                     f"{value[:60]!r}", loc)
 
     # -- X: security (script blocks) -----------------------------------------------------
     def security(self) -> None:

@@ -73,6 +73,24 @@ class Registry:
     def url_schemes(self, key: str) -> list[str]:
         return self.raw["attributes"]["url_schemes"].get(key, [])
 
+    def url_allowed(self, key: str, value: str) -> bool:
+        """Whether *value* matches a registered scheme for ``key`` (e.g.
+        ``"a.href"``). Single source of truth for URL policy: bare scheme
+        tokens (http, mailto) must be the value's actual scheme — the text
+        before the first ':' — '#' is fragment-only, and tokens carrying a
+        ':' (data:image/) are exact prefixes. No registered schemes means
+        no restriction. The linter (V009) and converters both call this."""
+        schemes = self.url_schemes(key)
+        if not schemes:
+            return True
+        low = value.lower()
+        if "#" in schemes and low.startswith("#"):
+            return True
+        if any(low.startswith(s.lower()) for s in schemes if ":" in s):
+            return True
+        bare = {s.lower() for s in schemes if ":" not in s and s != "#"}
+        return ":" in low and low.split(":", 1)[0] in bare
+
     # -- classes -------------------------------------------------------------
     @cached_property
     def class_declarations(self) -> dict[str, str]:
