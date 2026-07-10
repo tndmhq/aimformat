@@ -1,15 +1,17 @@
 """MCP server: tool surface, read projection, propose/resolve round-trip."""
 import json
 
-import anyio
 import pytest
 
-import aimformat as aim
-from aimformat.mcp import create_server
-
-from conftest import BOT
-
+# skip before touching anything optional: without the [mcp] extra these
+# imports would abort collection instead of skipping the suite
 mcp_memory = pytest.importorskip("mcp.shared.memory")
+anyio = pytest.importorskip("anyio")
+
+import aimformat as aim  # noqa: E402
+from aimformat.mcp import create_server  # noqa: E402
+
+from conftest import BOT  # noqa: E402
 
 
 TOOLS = {"aim_read", "aim_edit", "aim_propose", "aim_resolve",

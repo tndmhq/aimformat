@@ -128,6 +128,16 @@ class TestNoteCommand:
         assert "removed" in capsys.readouterr().out
         assert aim.load(saved).note is None
 
+    def test_remove_strips_duplicate_notes(self, saved, capsys):
+        # duplicate notes (the S030 warning case): --remove must strip them
+        # all, not report "removed" while a second note survives
+        text = saved.read_text("utf-8").replace(
+            "<title>", "<!--\naim-note: duplicate\n-->\n<title>", 1)
+        saved.write_text(text, "utf-8")
+        assert main(["note", "--remove", str(saved)]) == 0
+        assert "removed" in capsys.readouterr().out
+        assert SIGIL not in saved.read_text("utf-8")
+
     def test_check_and_remove_conflict(self, saved):
         assert main(["note", "--check", "--remove", str(saved)]) == 2
 
@@ -190,6 +200,32 @@ class TestProposalVerbs:
         assert not doc.proposals
         assert "p1" not in [c.id for c in doc.chunks]
         assert any("after p1" in c.html for c in doc.chunks)
+
+    def test_accept_all_resolves_add_chains_in_dependency_order(
+            self, saved, capsys):
+        # add B anchors on pending add A; a manual card reorder (legal —
+        # lint does not require dependency order) puts B first, so raw
+        # card order would hit "anchor proposal ... is still pending"
+        doc = aim.load(saved)
+        a = doc.propose_add("<p>first new</p>", author=BOT, after="p1")
+        b = doc.propose_add("<p>second new</p>", author=BOT, after=a.id)
+        doc.save(saved)
+        lines = saved.read_text("utf-8").splitlines(keepends=True)
+        ia = next(i for i, ln in enumerate(lines)
+                  if ln.startswith(f'<aim-proposal id="{a.id}"'))
+        ib = next(i for i, ln in enumerate(lines)
+                  if ln.startswith(f'<aim-proposal id="{b.id}"'))
+        lines[ia], lines[ib] = lines[ib], lines[ia]
+        saved.write_text("".join(lines), "utf-8")
+        assert [p.id for p in aim.load(saved).proposals] == [b.id, a.id]
+
+        assert main(["accept", str(saved), "--all",
+                     "--author", "human:ada"]) == 0
+        capsys.readouterr()
+        doc = aim.load(saved)
+        assert not doc.proposals
+        texts = [c.text for c in doc.chunks]
+        assert texts == ["Original.", "first new", "second new"]
 
     def test_propose_theme_bare_slot_names(self, saved, capsys):
         # slot names start "--aim-", which argparse would eat as an option;

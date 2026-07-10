@@ -110,6 +110,33 @@ class Proposal:
     anchor_shell: Optional[str] = None  # thead/tbody/tfoot for table rows
 
 
+def resolution_order(proposals: Sequence[Proposal]) -> list[Proposal]:
+    """A dependency-safe order for resolving a whole pending lane.
+
+    Card order in the file carries no dependency meaning (a manual reorder
+    is legal), so resolve in rounds: an add anchored on another pending add
+    waits for its anchor; within each round deletes go last, so an add
+    anchored on a chunk that a sibling card deletes lands while the anchor
+    still exists. Shared by ``aim accept/reject --all`` and the exporters'
+    resolve-a-copy paths.
+    """
+    pending = list(proposals)
+    order: list[Proposal] = []
+    while pending:
+        pending_ids = {p.id for p in pending}
+        ready = [p for p in pending
+                 if not (p.action == "add" and p.anchor_after in pending_ids)]
+        if not ready:
+            raise InvalidOperation(
+                "pending adds anchor on each other in a cycle — the file is "
+                "corrupt (aim lint reports P015)")
+        ready.sort(key=lambda p: p.action == "delete")
+        order.extend(ready)
+        done = {p.id for p in ready}
+        pending = [p for p in pending if p.id not in done]
+    return order
+
+
 # ===========================================================================
 class DocState:
     """Structural operations over one document tree.
@@ -514,10 +541,14 @@ class AimDocument:
         head.children.insert(anchor, Comment(data))
 
     def remove_note(self) -> None:
-        """Strip the agent note, if present. Not an edit (see set_note)."""
+        """Strip the agent note, if present. Not an edit (see set_note).
+
+        Removes every matching comment: a document may carry duplicate
+        notes (the S030 warning case) and "remove the note" must not leave
+        one behind.
+        """
         head = self._state.head
-        c = find_note(head)
-        if c is not None:
+        while (c := find_note(head)) is not None:
             head.children.remove(c)
 
     # -- chunk views -------------------------------------------------------------

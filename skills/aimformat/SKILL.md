@@ -24,7 +24,8 @@ the source of truth. Full agent guide: https://aimformat.com/llms.txt
 ```sh
 pip install aimformat              # zero runtime dependencies; CLI: aim (alias: aimformat)
 pip install 'aimformat[mcp]'       # + MCP server (aim mcp), if you prefer typed tools
-pip install 'aimformat[convert]'   # + docx/pdf import-export, when converting
+pip install 'aimformat[convert]'   # + md/docx import-export and pdf import
+pip install 'aimformat[pdf]'       # + pdf export (playwright + chromium)
 ```
 
 ## Reading a document

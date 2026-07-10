@@ -27,7 +27,7 @@ from pathlib import Path
 
 from . import __version__
 from .css import css_stats, generate_aim_css
-from .document import LAST, AimDocument, new_document
+from .document import LAST, AimDocument, new_document, resolution_order
 from .errors import AimError
 from .lint import lint_path
 from .registry import REGISTRY
@@ -190,11 +190,9 @@ def _cmd_resolve(args: argparse.Namespace, decision: str) -> int:
     doc = AimDocument.load(args.file)
     decided_by = parse_actor(args.author)
     if args.all:
-        # deletes go last, mirroring the exporters: an add anchored on a
-        # chunk that a sibling card deletes must resolve while the anchor
-        # still exists (export_docx._resolve rounds)
-        props = sorted(doc.proposals, key=lambda p: p.action == "delete")
-        pids = [p.id for p in props]
+        # dependency-safe order shared with the exporters: chained adds
+        # resolve after the add they anchor on, deletes go last per round
+        pids = [p.id for p in resolution_order(doc.proposals)]
     else:
         pids = args.pids
     if not pids:

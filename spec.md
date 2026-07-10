@@ -204,9 +204,9 @@ aim-note: This file is an AIM document (open format, v0.1) — valid HTML plus
 chunk identity, a pending-suggestions lane, and an edit history.
 Agent docs: https://aimformat.com/llms.txt
 The reliable way to edit this file is the `aimformat` tooling, which manages
-ids, suggestions, and history for you: `pip install aimformat`, then use the
-`aim` CLI (`aim --help`) or its MCP server (`aim mcp`). An Agent Skill
-exists: `npx skills add tndmhq/aimformat`.
+ids, suggestions, and history for you: `pip install aimformat` for the `aim`
+CLI (`aim --help`); `pip install 'aimformat[mcp]'` adds its MCP server
+(`aim mcp`). An Agent Skill exists: `npx skills add tndmhq/aimformat`.
 Hand-editing as plain text is the fallback; if you do: keep every data-aim id
 stable (never renumber or reuse; give new content a fresh id), treat the
 aim-proposals appendix and the history script as append-only tool lanes, and

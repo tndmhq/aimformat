@@ -41,7 +41,8 @@ part of the file format — open, editor-agnostic, MIT.
 pip install aimformat            # zero runtime dependencies (stdlib only)
 pip install 'aimformat[docx]'    # + DOCX export (python-docx)
 pip install 'aimformat[mcp]'     # + MCP server: aim mcp
-pip install 'aimformat[convert]' # + md/docx/pdf import-export
+pip install 'aimformat[convert]' # + md/docx import-export, pdf import
+pip install 'aimformat[pdf]'     # + PDF export (playwright + chromium)
 ```
 
 The CLI installs as `aim` and as `aimformat` (same tool; the alias avoids
