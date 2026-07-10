@@ -27,6 +27,8 @@ tool() {
   [ -x "$envbin" ] && printf '%s' "$envbin" || true
 }
 
+# NB: in a `case` pattern (unlike pathname globbing) `*` also matches `/`,
+# so these patterns match .py files at ANY depth under the repo root.
 case "$file" in
   "$repo_root"/*.py)
     cd "$repo_root" || exit 0
