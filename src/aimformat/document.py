@@ -1669,6 +1669,58 @@ class AimDocument:
             at=at,
         )
 
+    def amend_proposal(
+        self,
+        pid: str,
+        markup: str | None = None,
+        *,
+        explanation: str | None = None,
+        at: str | None = None,
+    ) -> Proposal:
+        """Replace a pending proposal's payload and/or explanation IN PLACE.
+
+        Spec §5.4 sanctions this: editing a pending payload is allowed and
+        unrecorded — no history event is appended (provenance is preserved
+        at resolution via ``proposed`` vs ``applied``). The proposal keeps
+        its id, action, target, anchor, author, batch, and dependencies;
+        re-anchoring or re-targeting is a reject + new propose, not an
+        amend. Payloads are validated exactly like the original propose
+        call (modify: against the live target; add: keeping the proposed
+        root id and marker kind, so chained anchors stay stable).
+        delete/move proposals carry no payload — only their explanation
+        can be amended. ``explanation=""`` clears it.
+        """
+        card = self._card_el(pid)
+        prop = self.proposal(pid)
+        if markup is None and explanation is None:
+            raise InvalidOperation("amend_proposal needs a new payload and/or explanation")
+        if markup is not None:
+            if prop.action == "modify":
+                target = prop.target or ""
+                if target == "aim:theme":
+                    payload = self._validated_theme_markup(markup)
+                elif target == "aim:doc":
+                    payload = self._validated_doc_markup(markup)
+                else:
+                    _, payload = self._normalize_payload(markup, expect_id=target)
+            elif prop.action == "add":
+                _, payload = self._payload_like(prop.payload_html or "", markup)
+            else:
+                raise InvalidOperation(f"a {prop.action} proposal carries no payload to amend")
+            tmpl = next((c for c in card.elements() if c.tag == "template"), None)
+            if tmpl is None:  # defensive: modify/add cards always carry one
+                tmpl = Element("template")
+                card.children.append(tmpl)
+            tmpl.children = list(parse_fragment(payload))
+        if explanation is not None:
+            if explanation:
+                card.set("data-explanation", explanation)
+            else:
+                card.remove_attr("data-explanation")
+        if at is not None:
+            card.set("data-at", at)
+        return self.proposal(pid)
+
     # -- resolution ---------------------------------------------------------------------------
     def accept(
         self,
