@@ -5,6 +5,7 @@
     aim new -o FILE         scaffold a minimal valid document
     aim show FILE           human-readable history / pending-lane overview
     aim flatten FILE        drop history (+embeddings) -> clean file
+    aim normalize FILE      rewrite in canonical form (lossless, idempotent)
     aim reconcile FILE      detect out-of-band edits; append reconcile events
     aim css                 print the generated aim.css for this spec version
     aim import IN -o F.aim  convert md/txt/docx/pdf to .aim
@@ -100,6 +101,31 @@ def _cmd_flatten(args: argparse.Namespace) -> int:
     doc.flatten(drop_embeddings=not args.keep_embeddings)
     out = Path(args.output or args.file)
     doc.save(out)
+    print(f"wrote {out}")
+    return 0
+
+
+def _cmd_normalize(args: argparse.Namespace) -> int:
+    """Tier-2 canonicalization: re-spell to the spec §11 normal form.
+
+    Lossless and idempotent — attribute order, class-token order, style
+    spelling and layout collapse to their canonical form; content (including
+    out-of-vocabulary content, which stays the linter's to flag) is never
+    coerced or dropped. `doc_hash` is computed over the canonical projection,
+    so normalizing never changes it.
+    """
+    path = Path(args.file)
+    original = path.read_text("utf-8")
+    canonical_text = AimDocument.loads(original).dumps()
+    changed = canonical_text != original
+    if args.check:
+        print(f"{path}: {'not canonical' if changed else 'canonical'}")
+        return 1 if changed else 0
+    out = Path(args.output or args.file)
+    if not changed and out == path:
+        print(f"{path}: already canonical")
+        return 0
+    out.write_text(canonical_text, "utf-8")
     print(f"wrote {out}")
     return 0
 
@@ -236,6 +262,18 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("-o", "--output")
     p.add_argument("--keep-embeddings", action="store_true")
     p.set_defaults(func=_cmd_flatten)
+
+    p = sub.add_parser("normalize",
+                       help="rewrite a document in canonical form (spec "
+                            "§11); lossless and idempotent — re-spells, "
+                            "never coerces; modifies the file in place "
+                            "unless -o is given")
+    p.add_argument("file")
+    p.add_argument("-o", "--output")
+    p.add_argument("--check", action="store_true",
+                   help="report without writing; exit 1 when the file is "
+                        "not canonical")
+    p.set_defaults(func=_cmd_normalize)
 
     p = sub.add_parser("reconcile",
                        help="detect out-of-band edits and append reconcile "

@@ -1,5 +1,6 @@
-"""The aim CLI: lint / hash / new / show / flatten / css."""
+"""The aim CLI: lint / hash / new / show / flatten / normalize / css."""
 import json
+from pathlib import Path
 
 import pytest
 
@@ -78,3 +79,58 @@ class TestOtherCommands:
         assert "aim-proposal::" in css
         assert main(["css", "--stats"]) == 0
         assert "KB" in capsys.readouterr().out
+
+
+class TestNormalizeCommand:
+    """`aim normalize`: tier-2 canonicalization — lossless, idempotent."""
+
+    @pytest.fixture
+    def non_canonical(self, tmp_path):
+        src = (Path(__file__).parent / "fixtures"
+               / "nok_C001_not_canonical.aim")
+        dst = tmp_path / "doc.aim"
+        dst.write_text(src.read_text("utf-8"), "utf-8")
+        return dst
+
+    def test_rewrites_to_canonical_and_lints_clean(self, non_canonical,
+                                                   capsys):
+        assert main(["lint", str(non_canonical)]) == 1  # C001 before
+        assert main(["normalize", str(non_canonical)]) == 0
+        assert "wrote" in capsys.readouterr().out
+        assert main(["lint", str(non_canonical)]) == 0  # canonical after
+
+    def test_idempotent(self, non_canonical, capsys):
+        assert main(["normalize", str(non_canonical)]) == 0
+        first = non_canonical.read_text("utf-8")
+        assert main(["normalize", str(non_canonical)]) == 0
+        assert "already canonical" in capsys.readouterr().out
+        assert non_canonical.read_text("utf-8") == first
+
+    def test_doc_hash_unchanged(self, non_canonical):
+        before = aim.load(non_canonical).doc_hash
+        assert main(["normalize", str(non_canonical)]) == 0
+        assert aim.load(non_canonical).doc_hash == before
+
+    def test_lossless_on_content(self, non_canonical):
+        chunks_before = {c.id: c.text for c in aim.load(non_canonical).chunks}
+        assert main(["normalize", str(non_canonical)]) == 0
+        assert {c.id: c.text
+                for c in aim.load(non_canonical).chunks} == chunks_before
+
+    def test_check_reports_without_writing(self, non_canonical, capsys):
+        original = non_canonical.read_text("utf-8")
+        assert main(["normalize", "--check", str(non_canonical)]) == 1
+        assert "not canonical" in capsys.readouterr().out
+        assert non_canonical.read_text("utf-8") == original
+
+    def test_check_passes_on_canonical(self, saved, capsys):
+        assert main(["normalize", "--check", str(saved)]) == 0
+        assert "canonical" in capsys.readouterr().out
+
+    def test_output_flag_keeps_original(self, non_canonical, tmp_path,
+                                        capsys):
+        original = non_canonical.read_text("utf-8")
+        out = tmp_path / "normalized.aim"
+        assert main(["normalize", str(non_canonical), "-o", str(out)]) == 0
+        assert non_canonical.read_text("utf-8") == original
+        assert main(["lint", str(out)]) == 0
