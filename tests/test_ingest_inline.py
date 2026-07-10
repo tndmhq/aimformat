@@ -196,6 +196,55 @@ class TestListItems:
         assert any("<strong>plain but bold</strong>" in h for h in lis)
 
 
+class TestHostileInput:
+    def test_cyclic_inline_group_does_not_recurse_forever(self):
+        """A $ref cycle in the inline-group graph (hostile dict) must not
+        crash ingestion — same guarantee walk() gives (Codex review #2)."""
+        data = {
+            "name": "evil",
+            "body": {"self_ref": "#/body",
+                     "children": [{"$ref": "#/groups/0"}]},
+            "groups": [
+                {"self_ref": "#/groups/0", "label": "inline",
+                 "content_layer": "body",
+                 "children": [{"$ref": "#/texts/0"},
+                              {"$ref": "#/groups/1"}]},
+                {"self_ref": "#/groups/1", "label": "inline",
+                 "content_layer": "body",
+                 "children": [{"$ref": "#/groups/0"}]},  # the cycle
+            ],
+            "texts": [{"self_ref": "#/texts/0", "label": "text",
+                       "content_layer": "body", "text": "survivor"}],
+        }
+        doc = aim.from_docling(data)  # must not raise RecursionError
+        assert any("survivor" in c.html for c in doc.chunks)
+
+    def test_furniture_runs_are_skipped_inside_inline_groups(self):
+        """Header/footer runs (content_layer furniture) never leak into a
+        paragraph (Codex review #2)."""
+        data = {
+            "name": "furn",
+            "body": {"self_ref": "#/body",
+                     "children": [{"$ref": "#/groups/0"}]},
+            "groups": [
+                {"self_ref": "#/groups/0", "label": "inline",
+                 "content_layer": "body",
+                 "children": [{"$ref": "#/texts/0"},
+                              {"$ref": "#/texts/1"}]},
+            ],
+            "texts": [
+                {"self_ref": "#/texts/0", "label": "text",
+                 "content_layer": "body", "text": "body text"},
+                {"self_ref": "#/texts/1", "label": "text",
+                 "content_layer": "furniture", "text": "PAGE 3 OF 12"},
+            ],
+        }
+        doc = aim.from_docling(data)
+        joined = "".join(c.html for c in doc.chunks)
+        assert "body text" in joined
+        assert "PAGE 3 OF 12" not in joined
+
+
 class TestConformance:
     def test_ingested_formatting_lints_clean(self):
         doc = aim.from_docling(build_mixed_paragraph())

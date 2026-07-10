@@ -134,3 +134,24 @@ class TestNormalizeCommand:
         assert main(["normalize", str(non_canonical), "-o", str(out)]) == 0
         assert non_canonical.read_text("utf-8") == original
         assert main(["lint", str(out)]) == 0
+
+    def test_crlf_agreement_between_check_and_c001(self, saved, tmp_path,
+                                                   capsys):
+        """`normalize --check` and lint's C001 measure the same bytes
+        (spec §11 byte equality) and may never disagree (Codex review #2).
+        A blanket CRLF conversion also mangles machine-managed block
+        INTERIORS (css, history JSONL) — those are flagged by their own
+        rules (X006/H005) and are deliberately NOT normalize's to rewrite;
+        the agreement contract is about C001 specifically."""
+        from aimformat.lint import lint_path
+        crlf = tmp_path / "crlf.aim"
+        crlf.write_bytes(saved.read_bytes().replace(b"\n", b"\r\n"))
+        assert main(["normalize", "--check", str(crlf)]) == 1
+        assert any(f.code == "C001" for f in lint_path(crlf))
+        assert main(["normalize", str(crlf)]) == 0
+        # structure is canonical again: C001 gone AND --check agrees
+        assert not any(f.code == "C001" for f in lint_path(crlf))
+        assert main(["normalize", "--check", str(crlf)]) == 0
+        # interior damage stays flagged by its dedicated rules, untouched
+        # by the lossless re-speller
+        assert any(f.code in ("X006", "H005") for f in lint_path(crlf))

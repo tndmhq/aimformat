@@ -176,19 +176,31 @@ def _hugs(prev: dict, cur: dict) -> bool:
             or prev_text.endswith(_NO_SPACE_AFTER))
 
 
-def _inline_group_markup(res: _Resolver, group: dict) -> str:
+def _inline_group_markup(res: _Resolver, group: dict,
+                         _visited: Optional[set] = None) -> str:
     """One ``inline`` group — the per-run shape docling emits for a
     paragraph with mixed formatting — joined back into a single block's
-    inline content."""
+    inline content. Guards against ``$ref`` cycles in hostile dicts (the
+    same case ``walk()`` handles) and skips furniture runs, mirroring the
+    body walker's layer filter."""
+    if _visited is None:
+        _visited = set()
+    ref = group.get("self_ref", "")
+    if ref:
+        if ref in _visited:
+            return ""
+        _visited.add(ref)
     parts: list[str] = []
     prev: Optional[dict] = None
     for child in res.children(group):
+        if not _is_body(child):
+            continue  # page headers/footers never belong in a paragraph
         if child.get("text"):
             markup = _fmt_markup(child)
         elif child.get("children"):
             # nested grouping of any label: descend rather than silently
             # dropping a subtree (mirrors the body walker's philosophy)
-            markup = _inline_group_markup(res, child)
+            markup = _inline_group_markup(res, child, _visited)
         else:
             continue
         if not markup:

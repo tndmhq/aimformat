@@ -730,7 +730,10 @@ def lint_text(text: str) -> list[Finding]:
 
 def lint_path(path: Union[str, Path]) -> list[Finding]:
     try:
-        text = Path(path).read_text("utf-8")
+        # raw bytes, no universal-newline translation: canonical form is
+        # byte equality (spec §11), so C001 must see CRLF as-is — and stay
+        # in agreement with `aim normalize --check`, which compares bytes
+        text = Path(path).read_bytes().decode("utf-8")
     except (OSError, UnicodeDecodeError) as exc:
         return [Finding("S000", ERROR, f"cannot read {path}: {exc}")]
     return lint_text(text)
