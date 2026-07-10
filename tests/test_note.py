@@ -177,6 +177,29 @@ class TestProposalVerbs:
         assert [d["decision"] for d in decisions] == ["reject"]
         assert not aim.load(saved).proposals
 
+    def test_accept_all_resolves_deletes_last(self, saved, capsys):
+        # a pending add anchored on a chunk a sibling card deletes: raw card
+        # order would kill the anchor first (mirrors the exporters' rule)
+        main(["propose", "delete", str(saved), "p1"])
+        main(["propose", "add", str(saved),
+              "--html", "<p>after p1</p>", "--after", "p1"])
+        capsys.readouterr()
+        assert main(["accept", str(saved), "--all",
+                     "--author", "human:ada"]) == 0
+        doc = aim.load(saved)
+        assert not doc.proposals
+        assert "p1" not in [c.id for c in doc.chunks]
+        assert any("after p1" in c.html for c in doc.chunks)
+
+    def test_propose_theme_bare_slot_names(self, saved, capsys):
+        # slot names start "--aim-", which argparse would eat as an option;
+        # the bare form is qualified automatically
+        assert main(["propose", "theme", str(saved),
+                     "--set", "brand-1=#333333"]) == 0
+        capsys.readouterr()
+        doc = aim.load(saved)
+        assert "--aim-brand-1:#333333" in doc.proposals[-1].payload_html
+
     def test_accept_requires_pids_or_all(self, saved):
         assert main(["accept", str(saved)]) == 2
 

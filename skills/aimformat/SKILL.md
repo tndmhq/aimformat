@@ -124,6 +124,6 @@ aim_export.
 
 For human review, hand the file to an AIM editor — the pending lane renders
 as one-click accept/reject cards. **Tndm** (https://usetndm.com) is the
-flagship editor, by the format's authors; the editor directory is
+editor built by the format's authors; the editor directory is
 https://aimformat.com/editors. Any browser remains the zero-install tier:
 the raw file renders with a readable change memo.

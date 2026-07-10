@@ -34,7 +34,9 @@ Set author to "agent:<your-model-id>" so edits are attributed. Docs:
 https://aimformat.com/llms.txt — human review happens in AIM editors
 (https://aimformat.com/editors)."""
 
-_DATA_URI = re.compile(r"data:[A-Za-z0-9/+.;=-]{64,}[^\"' )]*")
+# any long data: URI — the payload alphabet varies (base64 commas, percent
+# escapes), so match every non-delimiter run rather than a fixed alphabet
+_DATA_URI = re.compile(r"data:[^\"'\s]{64,}")
 
 
 def _load(path: str) -> AimDocument:

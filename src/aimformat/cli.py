@@ -155,7 +155,12 @@ def _cmd_propose(args: argparse.Namespace) -> int:
                       file=sys.stderr)
                 return 2
             k, v = item.split("=", 1)
-            slots[k.strip()] = v.strip()
+            k, v = k.strip(), v.strip()
+            # slot names start "--aim-", which argparse would eat as an
+            # option; accept the bare form and qualify it here
+            if not k.startswith("--"):
+                k = "--" + k if k.startswith("aim-") else "--aim-" + k
+            slots[k] = v
         p = doc.propose_theme(slots, author=author,
                               explanation=args.explanation)
     out = Path(args.output or args.file)
@@ -183,7 +188,14 @@ def _cmd_resolve(args: argparse.Namespace, decision: str) -> int:
         return 2
     doc = AimDocument.load(args.file)
     decided_by = parse_actor(args.author)
-    pids = [p.id for p in doc.proposals] if args.all else args.pids
+    if args.all:
+        # deletes go last, mirroring the exporters: an add anchored on a
+        # chunk that a sibling card deletes must resolve while the anchor
+        # still exists (export_docx._resolve rounds)
+        props = sorted(doc.proposals, key=lambda p: p.action == "delete")
+        pids = [p.id for p in props]
+    else:
+        pids = args.pids
     if not pids:
         print("[]" if args.format == "json" else "no pending proposals")
         return 0
@@ -463,7 +475,9 @@ def build_parser() -> argparse.ArgumentParser:
     pa = actions.add_parser("theme", help="change theme slots")
     pa.add_argument("file")
     pa.add_argument("--set", action="append", required=True,
-                    metavar="SLOT=VALUE")
+                    metavar="SLOT=VALUE",
+                    help="e.g. brand-1=#333333 (the '--aim-' prefix is "
+                         "added for you; --set=--aim-brand-1=… also works)")
     _proposal_common(pa)
 
     for verb, fn in (("accept", _cmd_accept), ("reject", _cmd_reject)):

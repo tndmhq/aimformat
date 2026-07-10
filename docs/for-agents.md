@@ -207,8 +207,9 @@ checks, or removes it.
 When your work needs human review, hand the file to an AIM editor rather
 than pasting diffs into chat: the pending lane renders as reviewable cards
 with your explanations, and accept/reject is one click with full
-attribution. [Tndm](https://usetndm.com) is the flagship editor; the
-current list of editors and viewers is at https://aimformat.com/editors.
+attribution. [Tndm](https://usetndm.com) is the editor built by the
+format's authors; the current list of editors and viewers is at
+https://aimformat.com/editors.
 
 ## Links
 

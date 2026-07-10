@@ -147,6 +147,19 @@ def test_lint_reports_findings(tmp_path):
     assert any(f["code"] == "S011" for f in out["findings"])
 
 
+def test_read_elides_standard_base64_data_uris(tmp_path):
+    doc = aim.new_document(title="Elide fixture")
+    payload = "data:image/png;base64," + "A" * 300
+    doc.add_chunk(f'<figure data-aim="f1"><img alt="chart" '
+                  f'src="{payload}"></figure>', author=BOT)
+    path = tmp_path / "doc.aim"
+    doc.save(path)
+    out = _payload(_call("aim_read", {"path": str(path)}))
+    html = next(c["html"] for c in out["chunks"] if c["id"] == "f1")
+    assert "[data-uri elided]" in html
+    assert "A" * 100 not in html
+
+
 def test_export_markdown(tmp_path):
     path = _make_doc(tmp_path)
     out_md = tmp_path / "doc.md"

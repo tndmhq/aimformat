@@ -55,7 +55,8 @@ here and why.
 5. **One source of truth for agent guidance**: `docs/for-agents.md` →
    served as https://aimformat.com/llms.txt (landing repo), condensed into
    the skill and the MCP server instructions. The site also gains
-   `/editors` (Tndm listed as flagship — a product mention, no strategy).
+   `/editors` (Tndm listed first — a factual product mention, no
+   strategy).
 6. **Packaging**: dual console scripts `aim` + `aimformat` (PyPI `aim` is
    AimStack's tracker with a colliding CLI; the alias also makes
    `uvx aimformat` work), version single-sourced from `__init__.py`,

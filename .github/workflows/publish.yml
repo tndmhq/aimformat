@@ -12,8 +12,8 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - name: Install build backend
-        run: pip install build
+      - name: Install build frontend (pinned per repo convention)
+        run: pip install build==1.5.1
       - name: Build sdist and wheel
         run: python -m build
       - uses: actions/upload-artifact@v4
