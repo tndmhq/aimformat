@@ -3,8 +3,20 @@
 All notable changes to the spec and the reference toolkit. The package
 version tracks the spec version it implements (0.x minors may break).
 
-## Unreleased
+## 0.2.0 — 2026-07-10
 
+First release published to PyPI: `pip install aimformat`.
+
+- **Pagination** (spec §3.6): `<aim-page-break></aim-page-break>` — the
+  hard page break as an ordinary empty top-level chunk: addressable,
+  movable, proposable, undoable (explicit open+close tags required;
+  placement enforced top-level). And the `aim:doc` settings block (head
+  script, `application/aim-doc+json`) defining page setup: registered
+  named size, orientation, per-side mm margins (defaults = A4 portrait
+  15 mm — the previous hardcoded PDF geometry). Whole-block modify
+  semantics exactly like `aim:theme`: events, undo/redo, proposals,
+  accept-with-tweaks. `doc_hash` covers the settings line when present;
+  documents without it hash byte-identically to v0.1.
 - **The agent note** (spec §2.5): every new/imported document opens with a
   declarative head comment (`aim-note:`) telling LLM agents what the file
   is, where the docs live (aimformat.com/llms.txt), and the hand-editing
