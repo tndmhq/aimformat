@@ -453,20 +453,12 @@ class _Linter:
         if low.startswith("javascript:") or low.startswith("data:text"):
             self.add("X003", ERROR, f"dangerous URL in {tag}@{attr}: {value[:40]!r}", loc)
             return
-        # match by scheme, not raw prefix: a bare scheme token (http, https,
-        # mailto) must be the value's actual scheme — the text before the
-        # first ':' — so `httpjavascript:` / `mailtox:` no longer sneak past a
-        # prefix test; '#' is fragment-only; tokens carrying a ':' (data:image/)
-        # stay exact prefixes (review AIM-06)
-        bare = {s.lower() for s in schemes if ":" not in s and s != "#"}
-        prefixes = [s.lower() for s in schemes if ":" in s]
-        if "#" in schemes and low.startswith("#"):
-            return
-        if any(low.startswith(p) for p in prefixes):
-            return
-        if ":" in low and low.split(":", 1)[0] in bare:
-            return
-        self.add("V009", ERROR, f"{tag}@{attr} must use one of {schemes}: {value[:60]!r}", loc)
+        # scheme matching lives in REGISTRY.url_allowed (single source of
+        # truth shared with converters): bare tokens match the actual
+        # scheme, '#' is fragment-only, ':'-carrying tokens are prefixes
+        # (review AIM-06)
+        if not REGISTRY.url_allowed(f"{tag}.{attr}", value):
+            self.add("V009", ERROR, f"{tag}@{attr} must use one of {schemes}: {value[:60]!r}", loc)
 
     # -- X: security (script blocks) -----------------------------------------------------
     def security(self) -> None:
@@ -507,7 +499,7 @@ class _Linter:
                     "machine-managed; regenerate via dumps())",
                 )
 
-    # -- theme -----------------------------------------------------------------------------
+    # -- theme -------------------------------------------------------------------------------------
     def check_theme_block(self, raw: str, where: str) -> None:
         m = re.fullmatch(r"\s*:root\{([^{}]*)\}\s*", raw)
         if not m:
@@ -717,7 +709,7 @@ class _Linter:
         except HistoryError as exc:
             self.add("H002", ERROR, str(exc))
 
-    # -- caches ----------------------------------------------------------------------------------
+    # -- caches ------------------------------------------------------------------------------------
     def caches(self) -> None:
         try:
             meta = self.doc.meta
@@ -743,7 +735,7 @@ class _Linter:
         except ParseError as exc:
             self.add("M003", ERROR, f"embeddings cache: {exc}")
 
-    # -- C: canonical form -----------------------------------------------------------------------
+    # -- C: canonical form ---------------------------------------------------------------------
     def canonical_form(self) -> None:
         if self.text is None:
             return
@@ -793,7 +785,10 @@ def lint_text(text: str) -> list[Finding]:
 
 def lint_path(path: str | Path) -> list[Finding]:
     try:
-        text = Path(path).read_text("utf-8")
+        # raw bytes, no universal-newline translation: canonical form is
+        # byte equality (spec §11), so C001 must see CRLF as-is — and stay
+        # in agreement with `aim normalize --check`, which compares bytes
+        text = Path(path).read_bytes().decode("utf-8")
     except (OSError, UnicodeDecodeError) as exc:
         return [Finding("S000", ERROR, f"cannot read {path}: {exc}")]
     return lint_text(text)

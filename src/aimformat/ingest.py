@@ -32,7 +32,13 @@ Mapping (docling label → .aim):
 ====================  =====================================================
 ``title``             ``<h1>`` chunk (also the document title by default)
 ``section_header``    ``<h2>``–``<h6>`` chunk (docling level + 1, capped)
-``text``/``paragraph`` ``<p>`` chunk
+``text``/``paragraph`` ``<p>`` chunk; ``formatting`` flags become
+                      ``strong/em/u/s/sub/sup``, ``hyperlink`` becomes
+                      ``<a>`` when its scheme is registry-safe
+``inline`` group      one ``<p>`` chunk joining the per-run children
+                      (docling's shape for mixed-formatting paragraphs);
+                      runs join with a space except at punctuation and
+                      around sub/superscript
 ``code``              ``<pre><code>`` chunk
 ``formula``           ``<p>`` chunk (TeX source as text)
 ``list`` group        ``<ul>``/``<ol>`` container (orderedness read from the
@@ -65,6 +71,7 @@ from typing import Any
 from .canonical import escape_attr, escape_text
 from .document import AimDocument, new_document
 from .events import Actor, external
+from .registry import REGISTRY
 
 __all__ = ["from_docling"]
 
@@ -108,6 +115,103 @@ def _text_of(node: dict) -> str:
     return escape_text(node.get("text", "") or "")
 
 
+def _fmt_markup(node: dict) -> str:
+    """A text item's inline markup: escaped text wrapped per the docling
+    ``formatting`` flags and ``hyperlink`` — fixed nesting order
+    ``a > strong > em > u > s > sub|sup`` (outermost first)."""
+    out = _text_of(node)
+    if not out:
+        return out
+    fmt = node.get("formatting") or {}
+    script = fmt.get("script", "baseline")
+    if script == "sub":
+        out = f"<sub>{out}</sub>"
+    elif script == "super":
+        out = f"<sup>{out}</sup>"
+    if fmt.get("strikethrough"):
+        out = f"<s>{out}</s>"
+    if fmt.get("underline"):
+        out = f"<u>{out}</u>"
+    if fmt.get("italic"):
+        out = f"<em>{out}</em>"
+    if fmt.get("bold"):
+        out = f"<strong>{out}</strong>"
+    link = node.get("hyperlink")
+    # emit only registry-allowed schemes; anything else (file://, ftp://, …)
+    # keeps its text — a converter must not produce documents the linter
+    # then rejects (V009). Same predicate the linter itself uses.
+    if link and REGISTRY.url_allowed("a.href", str(link)):
+        out = f'<a href="{escape_attr(str(link))}">{out}</a>'
+    return out
+
+
+def _script_of(node: dict) -> str:
+    return (node.get("formatting") or {}).get("script", "baseline")
+
+
+_NO_SPACE_BEFORE = tuple(",.;:!?)]}»")
+_NO_SPACE_AFTER = tuple("([{«")
+
+
+def _hugs(prev: dict, cur: dict) -> bool:
+    """Whether two adjacent inline runs join without a space. docling strips
+    run-boundary whitespace (``text`` and ``orig`` alike), so the join is a
+    heuristic: closing punctuation hugs left, opening brackets hug right,
+    and script runs hug their base — strictly better than docling's own
+    serializers, which space-join unconditionally ("H 2 O", "bold , then").
+
+    Direction matters after a script run: a SUBSCRIPT is usually mid-word
+    (H2O — glue both sides), while a SUPERSCRIPT usually ends its word
+    (x², footnote markers — glue left only, keep the following space)."""
+    if _script_of(cur) != "baseline":
+        return True  # scripts always attach to the base on their left
+    if _script_of(prev) == "sub":
+        return True  # …O in H2O
+    prev_text = prev.get("text") or ""
+    cur_text = cur.get("text") or ""
+    # some backends keep run-boundary whitespace (DOCX strips it, HTML/
+    # programmatic documents may not): an existing boundary space must not
+    # be doubled by the separator (Codex review, aimformat#2)
+    if prev_text[-1:].isspace() or cur_text[:1].isspace():
+        return True
+    return cur_text.startswith(_NO_SPACE_BEFORE) or prev_text.endswith(_NO_SPACE_AFTER)
+
+
+def _inline_group_markup(res: _Resolver, group: dict, _visited: set | None = None) -> str:
+    """One ``inline`` group — the per-run shape docling emits for a
+    paragraph with mixed formatting — joined back into a single block's
+    inline content. Guards against ``$ref`` cycles in hostile dicts (the
+    same case ``walk()`` handles) and skips furniture runs, mirroring the
+    body walker's layer filter."""
+    if _visited is None:
+        _visited = set()
+    ref = group.get("self_ref", "")
+    if ref:
+        if ref in _visited:
+            return ""
+        _visited.add(ref)
+    parts: list[str] = []
+    prev: dict | None = None
+    for child in res.children(group):
+        if not _is_body(child):
+            continue  # page headers/footers never belong in a paragraph
+        if child.get("text"):
+            markup = _fmt_markup(child)
+        elif child.get("children"):
+            # nested grouping of any label: descend rather than silently
+            # dropping a subtree (mirrors the body walker's philosophy)
+            markup = _inline_group_markup(res, child, _visited)
+        else:
+            continue
+        if not markup:
+            continue
+        if prev is not None and not _hugs(prev, child):
+            parts.append(" ")
+        parts.append(markup)
+        prev = child
+    return "".join(parts)
+
+
 def _list_tag(res: _Resolver, group: dict) -> str:
     """docling-core exports ordered lists with group label ``list`` too; the
     orderedness lives on the items' ``enumerated`` flag."""
@@ -119,7 +223,7 @@ def _list_tag(res: _Resolver, group: dict) -> str:
 
 def _li_markup(res: _Resolver, item: dict) -> str:
     """One list item; nested lists and tables become its inline content."""
-    inner = _text_of(item)
+    inner = _fmt_markup(item)
     for child in res.children(item):
         label = child.get("label")
         if label in ("list", "ordered_list"):
@@ -130,8 +234,12 @@ def _li_markup(res: _Resolver, item: dict) -> str:
             nested_table = _table_markup(child)
             if nested_table:
                 inner += nested_table
+        elif label == "inline":
+            # DOCX items with mixed run formatting carry their content in an
+            # inline group (the item's own text is empty)
+            inner += _inline_group_markup(res, child)
         elif label in ("text", "paragraph") and child.get("text"):
-            inner += f"<p>{_text_of(child)}</p>"
+            inner += f"<p>{_fmt_markup(child)}</p>"
     return f"<li>{inner}</li>"
 
 
@@ -223,7 +331,7 @@ def _picture_markup(res: _Resolver, pic: dict) -> str:
         body = f"<p><em>[picture: {escape_text(alt)}]</em></p>"
     for child in res.children(pic):  # picture-attached text (not captions)
         if child.get("label") in ("text", "paragraph") and child.get("text") and _is_body(child):
-            body += f"<p>{_text_of(child)}</p>"
+            body += f"<p>{_fmt_markup(child)}</p>"
     if caption:
         body += f"<figcaption>{escape_text(caption)}</figcaption>"
     return f"<figure>{body}</figure>"
@@ -292,7 +400,13 @@ def from_docling(
                 "document_index",
             ):
                 if child.get("text"):
-                    blocks.append(f"<p>{_text_of(child)}</p>")
+                    blocks.append(f"<p>{_fmt_markup(child)}</p>")
+            elif label == "inline":
+                # a paragraph with mixed run formatting: one block, not one
+                # chunk per run (descending would shatter it)
+                markup = _inline_group_markup(res, child)
+                if markup:
+                    blocks.append(f"<p>{markup}</p>")
             elif label == "caption":
                 if ref not in seen_caption_refs and child.get("text"):
                     blocks.append(f"<p>{_text_of(child)}</p>")

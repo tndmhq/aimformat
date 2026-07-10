@@ -68,6 +68,7 @@ doc.save("proposal.aim")                 # canonical bytes; renders in a browser
 aim lint proposal.aim     # structure + vocabulary + security + history chain
 aim show proposal.aim     # chunks, pending lane, history at a glance
 aim hash proposal.aim     # current doc_hash
+aim normalize other.aim   # re-spell to canonical form (lossless, idempotent)
 ```
 
 What makes this different from "HTML with extra attributes":
