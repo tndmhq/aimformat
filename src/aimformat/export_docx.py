@@ -11,19 +11,23 @@ default — is how the **pending lane** is handled:
     so a counterparty opening the file in Word sees reviewable tracked
     changes. Granularity is the chunk (whole-block delete + insert), matching
     what the format stores; word-level diffs are a viewer concern. This
-    covers body chunks, list items and whole list containers, table rows and
-    whole table containers, and adds anchored anywhere outside slides.
+    covers body chunks, chunks inside slides, list items and whole list
+    containers, table rows and whole table containers, and anchored adds.
 ``pending="accept-all"`` / ``pending="reject-all"``
     The pending lane is resolved on a throwaway copy of the document —
     through the ordinary accept/reject machinery, decided by the ``external``
     actor ``docx-export`` — and the resolved body is exported clean.
 
-Not represented in v0.1: ``move`` proposals and ``aim:theme`` proposals
-(exported as unchanged content), slides (``aim-slide`` targets a future PPTX
-exporter; adds anchored inside slides surface at the end of the document
-rather than being dropped), and hyperlink relationships (links render as
-text with the URL in parentheses). These are deliberate scope cuts, not
-oversights.
+Slides linearize (Word has no fixed canvas): a page break, then the slide's
+chunks as flowing blocks in reading order — geometry and classes drop; text,
+structure, marks, and the per-chunk pending lane survive. The same
+degradation contract as the Markdown exporter, on pages instead of ``---``.
+A faithful canvas export is the PDF's job (and a future PPTX exporter's).
+
+Not represented in v0.1: ``move`` proposals, ``aim:theme``/``aim:doc``
+proposals, and proposals targeting a *whole slide* (all export as unchanged
+current content), plus hyperlink relationships (links render as text with
+the URL in parentheses). These are deliberate scope cuts, not oversights.
 """
 
 from __future__ import annotations
@@ -226,6 +230,21 @@ def _block_children(el: Element) -> list[Element]:
     return [el]
 
 
+_PX_VALUE_RE = re.compile(r"^(\d+(?:\.\d+)?)px$")
+
+
+def _style_px(el: Element, prop: str) -> float | None:
+    """A px-valued inline-style property of *el*, if declared."""
+    for piece in (el.get("style") or "").split(";"):
+        if ":" not in piece:
+            continue
+        name, val = (s.strip() for s in piece.split(":", 1))
+        if name == prop:
+            m = _PX_VALUE_RE.match(val)
+            return float(m.group(1)) if m else None
+    return None
+
+
 # --------------------------------------------------------------------------
 class _Exporter:
     def __init__(self, doc: AimDocument, docx_mod):
@@ -233,6 +252,7 @@ class _Exporter:
         self.docx = docx_mod
         self.out = docx_mod.Document()
         self.rev = _Revisions()
+        self._break_before_next = False  # set after a slide: next content opens a page
         self.pending_mod: dict[str, Proposal] = {}
         self.pending_del: dict[str, Proposal] = {}
         # adds keyed by (container, after) — every container, not just body
@@ -252,14 +272,14 @@ class _Exporter:
         if title:
             self.out.core_properties.title = title
         self._apply_page_setup()
-        self._emit_body_adds(None)
+        self._emit_anchored_adds("body", None)
         for construct in self.aim._state.constructs():
             self.emit_construct(construct)
             cid = construct.chunk_id or construct.container_id
-            self._emit_body_adds(cid)
-        # anything still unemitted (adds anchored inside slides, or into
-        # containers that themselves are pending-deleted) surfaces at the
-        # end rather than being silently dropped
+            self._emit_anchored_adds("body", cid)
+        # anything still unemitted (adds into containers that are themselves
+        # pending-deleted) surfaces at the end rather than being silently
+        # dropped
         for props in list(self.adds_by_anchor.values()):
             for prop in props:
                 self._emit_add_paragraphs(prop)
@@ -287,10 +307,10 @@ class _Exporter:
     def _pop_adds(self, container: str, after: str | None) -> list[Proposal]:
         return self.adds_by_anchor.pop((container, after), [])
 
-    def _emit_body_adds(self, anchor: str | None) -> None:
-        for prop in self._pop_adds("body", anchor):
+    def _emit_anchored_adds(self, container: str, anchor: str | None) -> None:
+        for prop in self._pop_adds(container, anchor):
             self._emit_add_paragraphs(prop)
-            self._emit_body_adds(prop.id)  # chained adds anchor on this one
+            self._emit_anchored_adds(container, prop.id)  # chained adds anchor on this one
 
     def _emit_add_paragraphs(self, prop: Proposal, style: str | None = None) -> None:
         for el in self._payload_elements(prop):
@@ -318,7 +338,11 @@ class _Exporter:
     # -- constructs ------------------------------------------------------------
     def emit_construct(self, el: Element) -> None:
         if el.tag == "aim-slide":
-            return  # slides target a future PPTX exporter
+            self.emit_slide(el)
+            return
+        if self._break_before_next:
+            self._break_before_next = False
+            self._page_break()
         cid = el.chunk_id or el.container_id or ""
         prop = self.pending_del.get(cid) or self.pending_mod.get(cid)
         if el.container_id and el.tag in ("ul", "ol"):
@@ -401,6 +425,38 @@ class _Exporter:
             run = para.add_run(line)
             run.font.name = _MONO
 
+    def emit_slide(self, el: Element) -> None:
+        """Linearize a fixed-canvas page: a page break, then the slide's
+        chunks as flowing blocks in reading order (see the module
+        docstring). Chunk-level proposals inside the slide ride the same
+        tracked/resolve machinery as body chunks; a proposal targeting the
+        slide container itself exports as unchanged current content.
+        """
+        sid = el.container_id or ""
+        self._break_before_next = False
+        if self._has_content():
+            self._page_break()
+        if sid:
+            self._emit_anchored_adds(sid, None)
+        for child in el.elements():
+            self.emit_construct(child)
+            if sid:
+                self._emit_anchored_adds(sid, child.chunk_id or child.container_id)
+        # content following the slide belongs to the next page — mirror of
+        # the print layer's page-break-after; nothing is emitted when the
+        # slide is last, so the document gains no trailing blank page
+        self._break_before_next = True
+
+    def _has_content(self) -> bool:
+        body = self.out.element.body
+        return any(child.tag.endswith("}p") or child.tag.endswith("}tbl") for child in body)
+
+    def _page_break(self) -> None:
+        from docx.enum.text import WD_BREAK
+
+        para = self.out.add_paragraph()
+        para.add_run().add_break(WD_BREAK.PAGE)
+
     def emit_figure(self, el: Element) -> None:
         img = el.find(lambda e: e.tag == "img")
         emitted = False
@@ -409,10 +465,8 @@ class _Exporter:
             m = re.match(r"^data:image/[a-z+.-]+;base64,(.*)$", src, re.S)
             if m:
                 try:
-                    from docx.shared import Inches
-
                     blob = base64.b64decode(m.group(1))
-                    self.out.add_picture(io.BytesIO(blob), width=Inches(4.5))
+                    self.out.add_picture(io.BytesIO(blob), width=self._figure_width(el, img))
                     emitted = True
                 except Exception:
                     emitted = False
@@ -428,6 +482,21 @@ class _Exporter:
         for cap in el.elements():
             if cap.tag == "figcaption":
                 self.out.add_paragraph(cap.text(), style=self._safe_style("Caption"))
+
+    def _figure_width(self, fig: Element, img: Element):
+        """The authored image width (inline style, CSS px at 96 dpi — the
+        img's own, else the figure's), capped to the page content box; the
+        historical 4.5 in when nothing is declared."""
+        from docx.shared import Inches
+
+        px = _style_px(img, "width")
+        if px is None:
+            px = _style_px(fig, "width")
+        inches = px / 96.0 if px is not None else 4.5
+        setup = self.aim.page_setup
+        margins = setup.margins_mm
+        avail = (setup.page_width_mm - margins["left"] - margins["right"]) / 25.4
+        return Inches(max(0.25, min(inches, avail)))
 
     # -- lists ---------------------------------------------------------------------
     def emit_list(self, el: Element, level: int = 0) -> None:

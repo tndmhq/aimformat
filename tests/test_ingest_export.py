@@ -331,3 +331,131 @@ class TestExportDocx:
         out = aim.to_docx(doc, tmp_path / "fig.docx")
         text = "\n".join(p.text for p in docx.Document(str(out)).paragraphs)
         assert "[image: chart]" in text and "The chart." in text
+
+
+_PNG_1PX = (
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGNgYGBg"
+    "AAAABQABh6FO1AAAAABJRU5ErkJggg=="
+)
+
+
+def _deck(with_flow=True):
+    doc = aim.new_document(title="Deck")
+    if with_flow:
+        doc.add_chunk('<p data-aim="intro">Before the pages.</p>', author=ME, at=ts(0))
+    doc.add_chunk(
+        '<aim-slide data-aim-container="s1" style="width:420px; height:595px">'
+        '<h2 data-aim="t1" style="left:10px; top:10px; width:300px">Page one</h2>'
+        '<p data-aim="b1" style="left:10px; top:60px; width:300px">First body.</p>'
+        "</aim-slide>",
+        author=ME,
+        at=ts(1),
+    )
+    doc.add_chunk(
+        '<aim-slide data-aim-container="s2" style="width:420px; height:595px">'
+        '<p data-aim="b2" style="left:10px; top:10px; width:300px">Second body.</p>'
+        "</aim-slide>",
+        author=ME,
+        at=ts(2),
+    )
+    return doc
+
+
+class TestExportDocxSlides:
+    def test_slides_linearize_instead_of_dropping(self, tmp_path):
+        out = aim.to_docx(_deck(), tmp_path / "deck.docx")
+        paras = _docx_paragraphs(out)
+        assert ("Heading 2", "Page one") in paras
+        texts = [t for _, t in paras]
+        assert "First body." in texts and "Second body." in texts
+        # reading order preserved across the linearization
+        assert texts.index("Page one") < texts.index("First body.") < texts.index("Second body.")
+
+    def test_page_breaks_frame_slides(self, tmp_path):
+        out = aim.to_docx(_deck(), tmp_path / "deck.docx")
+        d = docx.Document(str(out))
+        breaks = d.element.body.findall(".//" + qn("w:br") + "[@" + qn("w:type") + "='page']")
+        # one before each slide (after the intro / between slides), none trailing
+        assert len(breaks) == 2
+
+    def test_leading_slide_gets_no_blank_first_page(self, tmp_path):
+        out = aim.to_docx(_deck(with_flow=False), tmp_path / "deck.docx")
+        d = docx.Document(str(out))
+        breaks = d.element.body.findall(".//" + qn("w:br") + "[@" + qn("w:type") + "='page']")
+        assert len(breaks) == 1  # only between the two slides
+
+    def test_flow_after_slide_starts_on_fresh_page(self, tmp_path):
+        doc = _deck(with_flow=False)
+        doc.add_chunk('<p data-aim="after">Back to flow.</p>', author=ME, at=ts(3))
+        out = aim.to_docx(doc, tmp_path / "deck.docx")
+        d = docx.Document(str(out))
+        breaks = d.element.body.findall(".//" + qn("w:br") + "[@" + qn("w:type") + "='page']")
+        assert len(breaks) == 2  # s1→s2 and s2→flow
+
+    def test_in_slide_pending_modify_rides_tracked_changes(self, tmp_path):
+        doc = _deck()
+        doc.propose_modify(
+            "b1", '<p data-aim="b1" style="left:10px; top:60px; width:300px">Sharper body.</p>',
+            author=BOT, at=ts(3),
+        )
+        out = aim.to_docx(doc, tmp_path / "deck.docx", pending="tracked")
+        assert _revision_authors(out, "ins") and _revision_authors(out, "del")
+        xml = docx.Document(str(out)).element.body.xml
+        assert "Sharper body." in xml and "First body." in xml
+
+    def test_in_slide_pending_add_emits_in_place(self, tmp_path):
+        doc = _deck()
+        doc.propose_add(
+            '<p style="left:10px; top:110px; width:300px">Added into the page.</p>',
+            container="s1", after="b1", author=BOT, at=ts(3),
+        )
+        out = aim.to_docx(doc, tmp_path / "deck.docx", pending="tracked")
+        xml = docx.Document(str(out)).element.body.xml
+        assert "Added into the page." in xml
+        texts = [t for _, t in _docx_paragraphs(out)]
+        joined = "\n".join(xml.split("Second body.")[0:1])
+        assert "Added into the page." in joined  # lands inside s1, not at the end
+        assert _revision_authors(out, "ins")
+        assert texts  # document is non-empty for the plain reader too
+
+    def test_accept_all_deck_exports_clean(self, tmp_path):
+        doc = _deck()
+        doc.propose_modify(
+            "b2", '<p data-aim="b2" style="left:10px; top:10px; width:300px">Final body.</p>',
+            author=BOT, at=ts(3),
+        )
+        out = aim.to_docx(doc, tmp_path / "deck.docx", pending="accept-all")
+        texts = [t for _, t in _docx_paragraphs(out)]
+        assert "Final body." in texts and "Second body." not in texts
+
+
+class TestExportDocxFigureWidth:
+    def _fig_doc(self, style: str | None):
+        doc = aim.new_document(title="T")
+        s = f' style="{style}"' if style else ""
+        doc.add_chunk(
+            f'<figure data-aim="f"><img alt="dot"{s} '
+            f'src="data:image/png;base64,{_PNG_1PX}"></figure>',
+            author=ME,
+            at=ts(0),
+        )
+        return doc
+
+    def _picture_width_emu(self, path):
+        d = docx.Document(str(path))
+        assert d.inline_shapes, "no picture was embedded"
+        return d.inline_shapes[0].width
+
+    def test_authored_width_is_honored(self, tmp_path):
+        out = aim.to_docx(self._fig_doc("width:300px"), tmp_path / "f.docx")
+        emu = self._picture_width_emu(out)
+        assert abs(emu - int(914400 * 300 / 96)) <= 914400 // 96  # 3.125in ±1px
+
+    def test_default_width_when_unspecified(self, tmp_path):
+        out = aim.to_docx(self._fig_doc(None), tmp_path / "f.docx")
+        assert abs(self._picture_width_emu(out) - int(4.5 * 914400)) <= 9144
+
+    def test_oversized_width_clamps_to_content_box(self, tmp_path):
+        out = aim.to_docx(self._fig_doc("width:2000px"), tmp_path / "f.docx")
+        # A4 portrait, 15mm margins → 180mm content ≈ 7.09in
+        assert self._picture_width_emu(out) <= int(7.1 * 914400)
