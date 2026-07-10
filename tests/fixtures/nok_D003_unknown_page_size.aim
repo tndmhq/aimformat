@@ -17,6 +17,9 @@ validate with `aim lint`. Humans review in AIM editors:
 https://aimformat.com/editors
 -->
 <title>Conformance fixture</title>
+<script type="application/aim-doc+json">
+{"page":{"margins":{"bottom":"20mm","left":"18mm","right":"18mm","top":"20mm"},"orientation":"portrait","size":"A0"}}
+</script>
 <style data-aim-css="0.2">
 :root{--aim-brand-1:#1d4ed8;--aim-brand-2:#0f766e;--aim-brand-3:#b45309;--aim-brand-4:#6d28d9;--aim-font-heading:system-ui, -apple-system, 'Segoe UI', sans-serif;--aim-font-body:system-ui, -apple-system, 'Segoe UI', sans-serif;--aim-font-mono:ui-monospace, 'SF Mono', Menlo, Consolas, monospace}
 html{-webkit-text-size-adjust:100%}
@@ -303,7 +306,7 @@ aim-assets{display:none}
 <style data-aim-theme>:root{--aim-brand-1:#1a73e8}</style>
 </head>
 <body>
-<h1 data-aim="h1" class="text-glow">Fixture</h1>
+<h1 data-aim="h1" class="font-bold text-3xl">Fixture</h1>
 <p data-aim="p1">One paragraph &amp; some text.</p>
 <ul data-aim-container="l1"><li data-aim="i1">First</li><li data-aim="i2">Run…</li><li data-aim="i2">…run</li></ul>
 </body>

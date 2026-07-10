@@ -41,7 +41,7 @@ class TestCss:
 
     def test_new_document_embeds_css(self):
         text = aim.new_document(title="T").dumps()
-        assert '<style data-aim-css="0.1">' in text
+        assert f'<style data-aim-css="{aim.SPEC_VERSION}">' in text
         assert "aim-proposals::before" in text
 
 

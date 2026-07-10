@@ -1,6 +1,7 @@
-# The `.aim` document format — specification v0.1
+# The `.aim` document format — specification v0.2
 
-**Status: v0.1 (first published draft).** This is the normative specification
+**Status: v0.2 (draft; v0.1 plus pagination — page setup and hard page
+breaks, §3.6).** This is the normative specification
 for `.aim`, an AI-native document format in which AI proposals and human
 accept/reject decisions are first-class file primitives. The reference
 toolkit in this repository (`aimformat` on PyPI, the `aim` CLI) implements
@@ -11,11 +12,11 @@ Maintained by the aimformat project. Licensed MIT, like everything in this
 repository. Contributions: see [`CONTRIBUTING.md`](CONTRIBUTING.md).
 
 **Versioning.** A document declares the spec version it targets in
-`<html data-aim-version="0.1">`. The spec follows SemVer with the 0.x
+`<html data-aim-version="0.2">`. The spec follows SemVer with the 0.x
 caveat: **every 0.x minor may break**; parsers MUST ignore unknown JSON
 fields (with `x_*` reserved for vendor extensions) and MUST treat unknown
 event kinds or elements as errors within the same minor version. The
-embedded stylesheet is versioned with the spec (`data-aim-css="0.1"`).
+embedded stylesheet is versioned with the spec (`data-aim-css="0.2"`).
 
 The key words MUST, MUST NOT, SHOULD, SHOULD NOT, and MAY are to be
 interpreted as described in RFC 2119. Sections marked *informative* define
@@ -99,20 +100,24 @@ see §4.4 for id rules):
 
 ```html
 <!doctype html>
-<html data-aim-version="0.1" lang="en">
+<html data-aim-version="0.2" lang="en">
 <head>
 <meta charset="utf-8">
 <title>Q3 Proposal — Acme GmbH</title>
 <script type="application/aim-meta+json">
 {"summary":{"as_of_seq":58,"doc_hash":"sha256:9f2c…","model":"model-id","text":"Three-year services proposal…"},"toc":[…]}
 </script>
-<style data-aim-css="0.1">/* machine-managed stylesheet, §3.4 */</style>
+<script type="application/aim-doc+json">
+{"page":{"margins":{"bottom":"15mm","left":"15mm","right":"15mm","top":"15mm"},"orientation":"portrait","size":"A4"}}
+</script>
+<style data-aim-css="0.2">/* machine-managed stylesheet, §3.4 */</style>
 <style data-aim-theme>:root{--aim-brand-1:#1a73e8}</style>
 </head>
 <body>
 <h1 data-aim="8b1f" class="font-bold text-3xl text-brand-1">Proposal</h1>
 <p data-aim="c42a">We propose a three-year engagement…</p>
 <section data-aim="b31f"><h2>Scope</h2><p>…</p></section>
+<aim-page-break data-aim="pgb1"></aim-page-break>
 <ul data-aim-container="l2"><li data-aim="c90">Discovery</li><li data-aim="c91">Implementation…</li><li data-aim="c91">…and rollout</li></ul>
 <aim-slide data-aim-container="s01" style="width:1920px; height:1080px"><h2 data-aim="77de" class="text-5xl" style="left:96px; top:64px; width:900px; z-index:2">Timeline</h2></aim-slide>
 <aim-proposals>
@@ -138,7 +143,8 @@ see §4.4 for id rules):
 
 The head MUST contain `<meta charset="utf-8">` and a `<title>`. It MAY
 contain, in this order: the metadata cache
-(`<script type="application/aim-meta+json">`, §8.1), the embedded
+(`<script type="application/aim-meta+json">`, §8.1), the document settings
+block (`<script type="application/aim-doc+json">`, §3.6), the embedded
 stylesheet (`<style data-aim-css="…">`, §3.4), and the theme block
 (`<style data-aim-theme>`, §3.5). HTML comments are legal in the head only,
 and tooling MUST preserve them byte-exact. Documents SHOULD carry an agent
@@ -270,7 +276,7 @@ height:1080px">`).
 One static stylesheet per spec minor version — an element base layer,
 every registered utility, theme-slot defaults, and the `aim-*` chrome
 (slide canvas framing/scaling, proposal cards). It is embedded by default
-(`<style data-aim-css="0.1">`) so documents are self-contained, offline,
+(`<style data-aim-css="0.2">`) so documents are self-contained, offline,
 and archival; it is **machine-managed and derived**: tools regenerate it
 freely, and it is excluded from content hashing. Documents SHOULD embed it;
 a document without it still conforms but degrades at the raw tier.
@@ -289,6 +295,39 @@ assigning registered slots only (`--aim-brand-1…4`, `--aim-font-heading`,
 dangling references; cascade order (stylesheet first, theme after) is the
 entire override mechanism. The theme block is versioned document state,
 addressable in events as the reserved target `aim:theme` (§6.5).
+
+### 3.6 Page setup and pagination
+
+Pagination state is **intent, not layout**. Two primitives:
+
+- **Page setup** lives in the head settings block
+  (`<script type="application/aim-doc+json">`, addressable as the reserved
+  target `aim:doc`, §6.5): a `page` object with a registered named `size`
+  (Appendix A.6), an `orientation`, and per-side `margins` in millimetres.
+  An absent block or an absent field means the registry default (A4
+  portrait, 15mm all around). Unknown fields in the settings object are
+  ignored by parsers and preserved by tools, like all JSON in the format.
+- **Hard page breaks** are `<aim-page-break></aim-page-break>` — an
+  ordinary, empty, top-level chunk: it carries `data-aim`, anchors, moves,
+  deletes, and can be proposed and accepted like any other chunk. It MUST
+  be written with explicit open and close tags — HTML parsers do not know
+  custom void elements, so a self-closed spelling would swallow the rest
+  of the body in a browser parse (D005).
+
+**Soft (automatic) page breaks are never stored.** Where a line falls on a
+page is a function of fonts, margins, and the rendering engine; every
+renderer recomputes them (OOXML's `w:lastRenderedPageBreak` — a cached soft
+break that every consumer learned to ignore — is the cautionary precedent).
+The file carries intent only: this section's two primitives.
+
+Print rendering (the `aim.css` print layer): `aim-page-break` forces a
+break (`break-after: page`); each `aim-slide` prints as its own page
+(§3.4); and chunks — including item chunks, since `li`/`tr` carry
+`data-aim` — avoid breaking internally (`break-inside: avoid`), so break
+decisions happen **between** chunks and a block-granular preview (an
+editor's page view) agrees with the print engine by construction. An
+element taller than one page still fragments (`avoid` is a request, not a
+guarantee). On screen, the break renders as a subtle dashed marker.
 
 ---
 
@@ -486,8 +525,10 @@ whole subtree serialization.
 
 Chunk ids, container ids, plus **reserved singleton ids**: `aim:theme` (the
 whole theme block as before/after; introducing the block is a `modify` with
-no `before`) and `aim:doc` (reserved for document-level settings; defined
-fields arrive in a later version — targeting it in v0.1 is an error).
+no `before`) and `aim:doc` (the head settings
+block, §3.6, as whole-block before/after serializations — introducing the
+block is a `modify` with no `before`, exactly like `aim:theme`; v0.2
+defines its `page` field).
 
 ### 6.6 Invertibility
 
@@ -659,9 +700,9 @@ per line in JSONL blocks.
 ### 11.3 `doc_hash`
 
 `doc_hash` = `sha256:` + hex sha256 over the UTF-8 bytes of the **reduced
-projection**: the `<html …>` open tag line, the theme-block line (when
-present), and each body content construct line, LF-joined with a trailing
-LF. The proposals appendix, the asset registry, both trailers, and all
+projection**: the `<html …>` open tag line, the settings-block line (when
+present, §3.6), the theme-block line (when present), and each body content
+construct line, LF-joined with a trailing LF. The proposals appendix, the asset registry, both trailers, and all
 caches are excluded. Hashing the whole projection (rather than composing
 per-chunk hashes) captures attributes, geometry, and order with nothing to
 forget by enumeration.
@@ -691,7 +732,7 @@ A document conforms when the verifier reports no errors across:
 **vocabulary** (elements, classes, styles, attributes, theme grammar),
 **security** (§2.4), **pending lane** (§5.4), **history** (field schemas,
 seq contiguity, canonical JSON, full chain verification), and **canonical
-form** (§11, byte-exact). Rule codes are listed in Appendix A.6; the
+form** (§11, byte-exact). Rule codes are listed in Appendix A.7; the
 conformance suite (`tests/fixtures/ok_*.aim` / `nok_<CODE>_*.aim`) pins one
 rule per file and doubles as a test kit for independent implementations.
 
@@ -708,11 +749,11 @@ embed the generated one):
 
 ```aim
 <!doctype html>
-<html data-aim-version="0.1" lang="en">
+<html data-aim-version="0.2" lang="en">
 <head>
 <meta charset="utf-8">
 <title>Minimal</title>
-<style data-aim-css="0.1">
+<style data-aim-css="0.2">
 </style>
 </head>
 <body>
@@ -731,11 +772,11 @@ resolution and a checkpoint in the log:
 
 ```aim
 <!doctype html>
-<html data-aim-version="0.1" lang="en">
+<html data-aim-version="0.2" lang="en">
 <head>
 <meta charset="utf-8">
 <title>Pending lane</title>
-<style data-aim-css="0.1">
+<style data-aim-css="0.2">
 </style>
 </head>
 <body>
@@ -746,7 +787,7 @@ resolution and a checkpoint in the log:
 <script type="application/aim-history+jsonl">
 {"action":"add","after":"<p data-aim=\"c1\">The first wording.<\/p>","anchor":{"after":null,"container":"body"},"author":{"id":"ada","type":"human"},"batch":"b1","kind":"direct_edit","seq":1,"t":"2026-07-07T12:00:00Z","target":"c1"}
 {"action":"modify","applied":"<p data-aim=\"c1\">The accepted wording.<\/p>","batch":"b2","before":"<p data-aim=\"c1\">The first wording.<\/p>","decided_by":{"id":"ada","type":"human"},"decision":"accepted","kind":"resolution","proposal":"p-0","proposed":"<p data-aim=\"c1\">The acceptable wording.<\/p>","proposed_at":"2026-07-07T12:01:00Z","proposed_by":{"model":"model-id","type":"agent"},"seq":2,"t":"2026-07-07T12:02:00Z","target":"c1"}
-{"doc_hash":"sha256:cd0352f73c1979db04101ff8d6075a9f3a75103534adb30eecd4dddff179e1bd","kind":"checkpoint","label":"reviewed","seq":3,"t":"2026-07-07T12:03:00Z"}
+{"doc_hash":"sha256:bd679de3e34ae7cc8e2e6ac2c82e84c29429aab3675ae24d3d68f2a244d65be2","kind":"checkpoint","label":"reviewed","seq":3,"t":"2026-07-07T12:03:00Z"}
 </script>
 </body>
 </html>
@@ -757,11 +798,11 @@ chunks:
 
 ```aim
 <!doctype html>
-<html data-aim-version="0.1" lang="en">
+<html data-aim-version="0.2" lang="en">
 <head>
 <meta charset="utf-8">
 <title>One slide</title>
-<style data-aim-css="0.1">
+<style data-aim-css="0.2">
 </style>
 </head>
 <body>
@@ -807,11 +848,11 @@ stylesheet. Do not edit it by hand.*
 
 ### A.1 Elements
 
-- **Block chunk carriers** (top level and inside slides): `h1` `h2` `h3` `h4` `h5` `h6` `p` `section` `blockquote` `figure` `pre` `div` `hr` `ul` `ol` `table`
+- **Block chunk carriers** (top level and inside slides): `h1` `h2` `h3` `h4` `h5` `h6` `p` `section` `blockquote` `figure` `pre` `div` `hr` `aim-page-break` `ul` `ol` `table`
 - **Item chunk carriers**: `li` inside `ul` `ol`; `tr` inside `table`
 - **Containers** (`data-aim-container`): `ul` `ol` `table` `aim-slide` plus `aim-slide`
 - **Table shells** (scaffolding between container and row chunks): `thead` `tbody` `tfoot`
-- **Allowed inside chunk subtrees**: `h1` `h2` `h3` `h4` `h5` `h6` `p` `section` `blockquote` `figure` `figcaption` `pre` `div` `hr` `ul` `ol` `li` `table` `thead` `tbody` `tfoot` `tr` `td` `th` `img` `svg` `use` `code` `a` `strong` `em` `b` `i` `u` `s` `sub` `sup` `mark` `br` `span`
+- **Allowed inside chunk subtrees**: `h1` `h2` `h3` `h4` `h5` `h6` `p` `section` `blockquote` `figure` `figcaption` `pre` `div` `hr` `aim-page-break` `ul` `ol` `li` `table` `thead` `tbody` `tfoot` `tr` `td` `th` `img` `svg` `use` `code` `a` `strong` `em` `b` `i` `u` `s` `sub` `sup` `mark` `br` `span`
 - **Asset registry content**: `svg` `symbol` `image` `rect` `circle` `ellipse` `path` `g`
 - **Explicitly forbidden** (security, X001): `iframe` `object` `embed` `form` `input` `button` `select` `textarea` `video` `audio` `canvas` `base` `frame` `frameset` `applet` `math`
 
@@ -862,7 +903,22 @@ Total registered utilities: **243**.
 - `resolution` events — required: `seq` `kind` `t` `proposal` `target` `action` `decision` `proposed_by` `proposed_at` `decided_by` `batch`; optional: `before` `proposed` `applied` `anchor` `from` `to` `superseded_by` `explanation` `source`
 - `checkpoint` events — required: `seq` `kind` `t` `label` `doc_hash`
 
-### A.6 Verifier rule codes
+### A.6 Page setup
+
+| size | portrait (mm) |
+|---|---|
+| `A3` | 297 × 420 |
+| `A4` | 210 × 297 |
+| `A5` | 148 × 210 |
+| `Letter` | 215.9 × 279.4 |
+| `Legal` | 215.9 × 355.6 |
+| `Tabloid` | 279.4 × 431.8 |
+
+- **Orientations**: `portrait` `landscape`
+- **Margin grammar**: `^\d+(\.\d+)?mm$`, at most 100mm per side, and the margins MUST leave a positive content area
+- **Default**: `A4` portrait, margins top `15mm` right `15mm` bottom `15mm` left `15mm`
+
+### A.7 Verifier rule codes
 
 | code | level | rule |
 |---|---|---|
@@ -941,6 +997,12 @@ Total registered utilities: **243**.
 | M002 | warning | embedding is stale or orphaned |
 | M003 | error | cache block is not valid JSON of the required shape |
 | M004 | error | aim-meta block present but missing its summary |
+| D001 | error | aim-doc settings block is not valid JSON of the required shape |
+| D002 | error | more than one aim-doc script in the head |
+| D003 | error | unknown page size or orientation |
+| D004 | error | invalid page margin (grammar, bounds, or no content area left) |
+| D005 | error | aim-page-break must be empty (explicit open+close tags) |
+| D006 | error | aim-page-break outside the top-level body flow |
 | C001 | error | file is not in canonical form |
 <!-- END GENERATED REGISTRY REFERENCE -->
 
@@ -961,11 +1023,11 @@ Total registered utilities: **243**.
 
 ## Appendix C. Future extensions (informative)
 
-Planned but deliberately outside v0.1: cell-level table addressing and
-column operations; pagination for non-slide documents (page breaks,
-headers/footers, margins); slide masters/layouts and transitions; an
-`.aimx` ZIP container for asset-heavy documents; multi-writer merge
-semantics (v0.1 is single-writer; divergence is detectable via payload
-equality and checkpoint hashes); `aim:doc` settings; signing on top of the
-hash-anchored history; media-type registration; fonts as assets; an
+Planned but deliberately outside v0.2: cell-level table addressing and
+column operations; pagination furniture (headers/footers, page-number
+fields, per-section page setups carried on the break); slide
+masters/layouts and transitions; an `.aimx` ZIP container for asset-heavy
+documents; multi-writer merge semantics (v0.2 is single-writer; divergence
+is detectable via payload equality and checkpoint hashes); signing on top
+of the hash-anchored history; media-type registration; fonts as assets; an
 `aim open` reference implementation.

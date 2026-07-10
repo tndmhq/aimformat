@@ -112,7 +112,28 @@ def build() -> str:
         )
     a("")
 
-    a("### A.6 Verifier rule codes")
+    a("### A.6 Page setup")
+    a("")
+    page = raw["page"]
+    a("| size | portrait (mm) |")
+    a("|---|---|")
+    for name, (w, h) in page["sizes_mm"].items():
+        a(f"| `{name}` | {w} × {h} |")
+    a("")
+    a(f"- **Orientations**: {code(page['orientations'])}")
+    a(
+        f"- **Margin grammar**: `{page['margin_pattern']}`, at most "
+        f"{page['margin_max_mm']}mm per side, and the margins MUST leave a "
+        "positive content area"
+    )
+    d = page["default"]
+    a(
+        f"- **Default**: `{d['size']}` {d['orientation']}, margins "
+        + " ".join(f"{k} `{v}`" for k, v in d["margins"].items())
+    )
+    a("")
+
+    a("### A.7 Verifier rule codes")
     a("")
     a("| code | level | rule |")
     a("|---|---|---|")

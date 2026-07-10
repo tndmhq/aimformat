@@ -116,6 +116,9 @@ def _apply_event(state: DocState, ev: Event) -> None:
     if target == "aim:theme":
         state.set_theme_markup(payload)  # None removes the block
         return
+    if target == "aim:doc":
+        state.set_doc_settings_markup(payload)  # None removes the block
+        return
     if payload is None and action in ("modify", "add"):
         raise HistoryError(f"{action} event carries no payload")
     if action == "modify":
@@ -159,13 +162,17 @@ def _strip_body_state(S: AimDocument) -> None:
     for el in state.constructs():
         state.body.children.remove(el)
     state.set_theme_markup(None)
+    state.set_doc_settings_markup(None)
 
 
 def _align_theme_baseline(S: AimDocument, events: list[Event], work: AimDocument) -> None:
-    """A theme block no event ever touched (constructor-set) has no
-    recoverable baseline: expected := actual, so it is left untracked."""
+    """A theme or settings block no event ever touched (constructor-set /
+    imported) has no recoverable baseline: expected := actual, so it is
+    left untracked."""
     if not any(e.state_changing and e.target == "aim:theme" for e in events):
         S._state.set_theme_markup(work._state.serial("aim:theme"))
+    if not any(e.state_changing and e.target == "aim:doc" for e in events):
+        S._state.set_doc_settings_markup(work._state.serial("aim:doc"))
 
 
 # ===========================================================================
@@ -401,6 +408,18 @@ def _ev_theme(S: AimDocument, after: str | None, author: Actor, at: str | None) 
     S._append_event(data)
 
 
+def _ev_doc_settings(S: AimDocument, after: str | None, author: Actor, at: str | None) -> None:
+    before = S._state.serial("aim:doc")
+    S._state.set_doc_settings_markup(after)
+    data = _base(S, author, at)
+    data.update({"target": "aim:doc", "action": "modify"})
+    if before is not None:
+        data["before"] = before
+    if after is not None:  # absent after = removal (mirrors undo's shape)
+        data["after"] = after
+    S._append_event(data)
+
+
 # ===========================================================================
 # the drive: append the edit script E -> A
 
@@ -413,6 +432,11 @@ def _drive(S: AimDocument, work: AimDocument, author: Actor, at: str | None) -> 
     a_theme = work._state.serial("aim:theme")
     if e_theme != a_theme:
         _ev_theme(S, a_theme, author, at)
+
+    e_doc = S._state.serial("aim:doc")
+    a_doc = work._state.serial("aim:doc")
+    if e_doc != a_doc:
+        _ev_doc_settings(S, a_doc, author, at)
 
     gone = {uid for uid in E if uid not in A}
     both = [uid for uid in E if uid in A]
@@ -503,7 +527,11 @@ def _reject_dangling(
     pending_adds = {p.id for p in S.proposals if p.action == "add"}
     for p in list(S.proposals):
         dangling = False
-        if p.action in ("modify", "delete", "move") and p.target and p.target != "aim:theme":
+        if (
+            p.action in ("modify", "delete", "move")
+            and p.target
+            and p.target not in ("aim:theme", "aim:doc")
+        ):
             dangling = not S._state.exists(p.target)
         if not dangling and p.action in ("add", "move"):
             cont = p.anchor_container

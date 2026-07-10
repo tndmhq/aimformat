@@ -42,6 +42,9 @@ def _base_layer() -> list[str]:
         "img,svg{max-width:100%;height:auto}",
         "hr{border:0;border-top:1px solid #e5e7eb;margin:2em 0}",
         "a{color:var(--aim-brand-1)}",
+        # hard page break: on screen a subtle dashed marker; in print the
+        # actual break (chrome layer). Distinct from hr (a thematic break).
+        "aim-page-break{display:block;border:0;border-top:1px dashed #d1d5db;margin:2em 0}",
     ]
 
 
@@ -59,6 +62,15 @@ def _chrome_layer() -> list[str]:
         "@media (max-width:640px){aim-slide{zoom:var(--aim-slide-scale,.17)}}",
         "@media print{aim-slide{zoom:1;margin-bottom:0;page-break-after:always;"
         "border:0;box-shadow:none}}",
+        # print pagination (spec §3.6): the screen layout's centered column
+        # must not add to the @page margins; hard breaks break; chunks (and
+        # item chunks — li/tr carry data-aim too) break only BETWEEN each
+        # other, so any block-granular preview agrees with the print engine.
+        # An element taller than one page still fragments (avoid is a
+        # request, not a guarantee) — the same overflow rule previews use.
+        "@media print{body{margin:0;padding:0;max-width:none}}",
+        "@media print{aim-page-break{border:0;margin:0;break-after:page}}",
+        "@media print{[data-aim]{break-inside:avoid}}",
         # pending lane: the raw-tier change memo
         "aim-proposals{display:block;margin-top:3rem;padding-top:1rem;"
         "border-top:2px solid #e5e7eb}",

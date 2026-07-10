@@ -315,6 +315,70 @@ class TestTheme:
 
 
 # ===========================================================================
+class TestPageSetup:
+    """aim:doc mirrors aim:theme through reconcile: replayable removal
+    events, out-of-band drift detection, untracked baselines, and pending
+    proposals that must not be rejected as dangling."""
+
+    def _paged(self, basic_doc):
+        basic_doc.set_page_setup({"size": "A5"}, author=ME, at=ts(5))
+        return basic_doc
+
+    def test_settings_removal_event_replays(self, basic_doc):
+        # set → undo produces a modify with `before` and no `after` (the
+        # introduction inverted); reconcile must replay it, not crash
+        doc = self._paged(basic_doc)
+        doc.undo(author=ME, at=ts(6))
+        report = doc.reconcile(at=ts(60))
+        assert not report.changed
+        assert doc.verify() == []
+
+    def test_hand_edited_page_setup_yields_doc_modify(self, basic_doc):
+        doc = aim.loads(self._paged(basic_doc).dumps().replace('"size":"A5"', '"size":"Legal"', 1))
+        report = reconciled(doc)
+        [ev] = report.events
+        assert (ev.action, ev.target) == ("modify", "aim:doc")
+        assert '"size":"A5"' in ev.get("before")
+        assert '"size":"Legal"' in ev.get("after")
+        assert doc.page_setup.size == "Legal"
+
+    def test_hand_removed_settings_yields_removal_event(self, basic_doc):
+        doc_text = self._paged(basic_doc).dumps()
+        block_start = doc_text.index('<script type="application/aim-doc+json">')
+        block_end = doc_text.index("</script>", block_start) + len("</script>\n")
+        doc = aim.loads(doc_text[:block_start] + doc_text[block_end:])
+        report = reconciled(doc)
+        [ev] = report.events
+        assert (ev.action, ev.target) == ("modify", "aim:doc")
+        assert "before" in ev.data and "after" not in ev.data
+        assert doc.page_setup.size == "A4"  # back to defaults
+
+    def test_settings_never_touched_by_events_is_untracked(self, empty_doc):
+        # a block no event wrote (imported/hand-added on a flat doc) has no
+        # baseline: left as-is, no synthesized event
+        empty_doc.flatten()
+        text = empty_doc.dumps().replace(
+            "</title>",
+            '</title>\n<script type="application/aim-doc+json">\n{"page":{"size":"A5"}}\n</script>',
+        )
+        doc = aim.loads(text)
+        report = doc.reconcile(at=ts(60))
+        assert doc.page_setup.size == "A5"
+        assert not any(e.target == "aim:doc" for e in report.events)
+        assert doc.verify() == []
+
+    def test_pending_settings_proposal_survives_reconcile(self, basic_doc):
+        basic_doc.propose_page_setup({"size": "A5"}, author=BOT, at=ts(5))
+        # an out-of-band body edit forces a real reconcile pass
+        doc = aim.loads(
+            basic_doc.dumps().replace("Intro paragraph.", "Intro paragraph, hand-edited.", 1)
+        )
+        report = reconciled(doc)
+        assert report.rejected_proposals == []
+        assert len(doc.proposals) == 1
+
+
+# ===========================================================================
 class TestAdoption:
     HAND_WRITTEN = """<!doctype html>
 <html data-aim-version="0.1" lang="en">

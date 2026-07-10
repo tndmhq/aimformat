@@ -30,11 +30,13 @@ def warn_codes(text: str) -> set[str]:
 
 class TestStructureRules:
     def test_S001_missing_version(self, good_text):
-        broken = good_text.replace(' data-aim-version="0.1"', "")
+        broken = good_text.replace(f' data-aim-version="{aim.SPEC_VERSION}"', "")
         assert "S001" in codes(broken)
 
     def test_S002_future_version_warns(self, good_text):
-        broken = good_text.replace('data-aim-version="0.1"', 'data-aim-version="9.9"')
+        broken = good_text.replace(
+            f'data-aim-version="{aim.SPEC_VERSION}"', 'data-aim-version="9.9"'
+        )
         assert "S002" in warn_codes(broken)
 
     def test_S003_missing_charset(self, good_text):
@@ -47,7 +49,7 @@ class TestStructureRules:
 
     def test_S005_missing_aimcss_warns(self, basic_doc):
         text = basic_doc.dumps()
-        start = text.index('<style data-aim-css="0.1">')
+        start = text.index(f'<style data-aim-css="{aim.SPEC_VERSION}">')
         end = text.index("</style>", start) + len("</style>\n")
         assert "S005" in warn_codes(text[:start] + text[end:])
 

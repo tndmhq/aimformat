@@ -485,9 +485,11 @@ class TestEmbeddedCssIsVerified:
     so lint must pin it to the generated stylesheet."""
 
     def test_tampered_aim_css_is_X006(self, basic_doc):
+        v = re.escape(aim.SPEC_VERSION)
         bad = re.sub(
-            r'<style data-aim-css="0.1">[\s\S]*?</style>',
-            '<style data-aim-css="0.1">\n@import url(https://evil.example/x'
+            rf'<style data-aim-css="{v}">[\s\S]*?</style>',
+            f'<style data-aim-css="{aim.SPEC_VERSION}">'
+            "\n@import url(https://evil.example/x"
             ".css);\nbody{background:red}\n</style>",
             basic_doc.dumps(),
         )
