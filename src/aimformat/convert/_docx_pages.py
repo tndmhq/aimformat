@@ -18,11 +18,11 @@ in the DOCX XML and is worth carrying over:
 Everything here is a no-op without python-docx (the ``docx`` extra): the
 ingest itself never fails over pagination.
 """
+
 from __future__ import annotations
 
 import re
 from pathlib import Path
-from typing import Optional, Union
 
 from ..document import AimDocument
 from ..errors import InvalidOperation
@@ -41,24 +41,21 @@ def _norm(text: str) -> str:
     return _WS.sub(" ", text).strip()
 
 
-def _match_named_size(w_mm: float, h_mm: float) -> Optional[tuple[str, str]]:
+def _match_named_size(w_mm: float, h_mm: float) -> tuple[str, str] | None:
     """(size, orientation) for a registered size within tolerance, or None."""
     for name, (w, h) in REGISTRY.page_sizes_mm.items():
-        if abs(w_mm - w) <= _SIZE_TOLERANCE_MM and \
-                abs(h_mm - h) <= _SIZE_TOLERANCE_MM:
+        if abs(w_mm - w) <= _SIZE_TOLERANCE_MM and abs(h_mm - h) <= _SIZE_TOLERANCE_MM:
             return name, "portrait"
-        if abs(w_mm - h) <= _SIZE_TOLERANCE_MM and \
-                abs(h_mm - w) <= _SIZE_TOLERANCE_MM:
+        if abs(w_mm - h) <= _SIZE_TOLERANCE_MM and abs(h_mm - w) <= _SIZE_TOLERANCE_MM:
             return name, "landscape"
     return None
 
 
-def _read_page_setup(docx_doc) -> Optional[dict]:
+def _read_page_setup(docx_doc) -> dict | None:
     section = docx_doc.sections[0]
     if section.page_width is None or section.page_height is None:
         return None
-    match = _match_named_size(section.page_width / _EMU_PER_MM,
-                              section.page_height / _EMU_PER_MM)
+    match = _match_named_size(section.page_width / _EMU_PER_MM, section.page_height / _EMU_PER_MM)
     if match is None:
         return None
     size, orientation = match
@@ -70,11 +67,16 @@ def _read_page_setup(docx_doc) -> Optional[dict]:
         mm = min(mm, float(REGISTRY.margin_max_mm))
         return _fmt_mm(mm)
 
-    return {"size": size, "orientation": orientation,
-            "margins": {"top": margin(section.top_margin),
-                        "right": margin(section.right_margin),
-                        "bottom": margin(section.bottom_margin),
-                        "left": margin(section.left_margin)}}
+    return {
+        "size": size,
+        "orientation": orientation,
+        "margins": {
+            "top": margin(section.top_margin),
+            "right": margin(section.right_margin),
+            "bottom": margin(section.bottom_margin),
+            "left": margin(section.left_margin),
+        },
+    }
 
 
 def _read_break_anchors(docx_doc) -> list[tuple[str, int]]:
@@ -88,6 +90,7 @@ def _read_break_anchors(docx_doc) -> list[tuple[str, int]]:
     the same run as the text before it (``<w:t>Beta</w:t><w:br/>``), which
     ``run.text``-then-``findall`` bookkeeping would miss."""
     from docx.oxml.ns import qn
+
     br_tag, t_tag, type_attr = qn("w:br"), qn("w:t"), qn("w:type")
     anchors: list[tuple[str, int]] = []
     seen: dict[str, int] = {}
@@ -115,8 +118,7 @@ def _read_break_anchors(docx_doc) -> list[tuple[str, int]]:
     return anchors
 
 
-def _insert_breaks(doc: AimDocument, anchors: list[tuple[str, int]], *,
-                   author: Actor) -> int:
+def _insert_breaks(doc: AimDocument, anchors: list[tuple[str, int]], *, author: Actor) -> int:
     """Insert an aim-page-break after each anchored top-level construct.
 
     A hint matches a construct when its text equals the construct's own
@@ -151,16 +153,17 @@ def _insert_breaks(doc: AimDocument, anchors: list[tuple[str, int]], *,
         if hit is None or hit[0] < start:
             continue
         i, cid = hit
-        doc.add_chunk("<aim-page-break></aim-page-break>",
-                      author=author, after=cid,
-                      explanation="Explicit page break in the source "
-                                  "document")
+        doc.add_chunk(
+            "<aim-page-break></aim-page-break>",
+            author=author,
+            after=cid,
+            explanation="Explicit page break in the source document",
+        )
         inserted, start = inserted + 1, i + 1
     return inserted
 
 
-def apply_docx_pagination(doc: AimDocument, path: Union[str, Path], *,
-                          author: Actor) -> None:
+def apply_docx_pagination(doc: AimDocument, path: str | Path, *, author: Actor) -> None:
     """Carry a DOCX file's explicit pagination intent onto *doc* (in place).
 
     Best-effort by contract: without python-docx, or on any surprise in the
@@ -178,9 +181,9 @@ def apply_docx_pagination(doc: AimDocument, path: Union[str, Path], *,
         page = _read_page_setup(docx_doc)
         if page is not None:
             try:
-                doc.set_page_setup(page, author=author,
-                                   explanation="Page setup from the source "
-                                               "document")
+                doc.set_page_setup(
+                    page, author=author, explanation="Page setup from the source document"
+                )
             except InvalidOperation:
                 pass  # defaults already, or a degenerate sectPr — skip
         _insert_breaks(doc, _read_break_anchors(docx_doc), author=author)

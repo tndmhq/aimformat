@@ -2,6 +2,20 @@
 <html data-aim-version="0.2" lang="en">
 <head>
 <meta charset="utf-8">
+<!--
+aim-note: This file is an AIM document (open format, v0.2) — valid HTML plus
+chunk identity, a pending-suggestions lane, and an edit history.
+Agent docs: https://aimformat.com/llms.txt
+The reliable way to edit this file is the `aimformat` tooling, which manages
+ids, suggestions, and history for you: `pip install aimformat` for the `aim`
+CLI (`aim --help`); `pip install 'aimformat[mcp]'` adds its MCP server
+(`aim mcp`). An Agent Skill exists: `npx skills add tndmhq/aimformat`.
+Hand-editing as plain text is the fallback; if you do: keep every data-aim id
+stable (never renumber or reuse; give new content a fresh id), treat the
+aim-proposals appendix and the history script as append-only tool lanes, and
+validate with `aim lint`. Humans review in AIM editors:
+https://aimformat.com/editors
+-->
 <title>Conformance fixture</title>
 <style data-aim-css="0.2">
 :root{--aim-brand-1:#1d4ed8;--aim-brand-2:#0f766e;--aim-brand-3:#b45309;--aim-brand-4:#6d28d9;--aim-font-heading:system-ui, -apple-system, 'Segoe UI', sans-serif;--aim-font-body:system-ui, -apple-system, 'Segoe UI', sans-serif;--aim-font-mono:ui-monospace, 'SF Mono', Menlo, Consolas, monospace}
@@ -293,7 +307,7 @@ aim-assets{display:none}
 <p data-aim="p1">One paragraph &amp; some text.</p>
 <ul data-aim-container="l1"><li data-aim="i1">First</li><li data-aim="i2">Run…</li><li data-aim="i2">…run</li></ul>
 <aim-proposals>
-<aim-proposal id="p-an68egaa" data-action="delete" data-at="2026-07-07T12:00:03Z" data-author="agent" data-author-model="claude-opus-4-8" data-batch="b4" data-explanation="Trim." data-for="ghost"></aim-proposal>
+<aim-proposal id="p-dh417r4l" data-action="delete" data-at="2026-07-07T12:00:03Z" data-author="agent" data-author-model="claude-opus-4-8" data-batch="b4" data-explanation="Trim." data-for="ghost"></aim-proposal>
 </aim-proposals>
 <script type="application/aim-history+jsonl">
 

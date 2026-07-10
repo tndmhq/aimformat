@@ -60,6 +60,23 @@ in the registry, a `nok_` fixture, and a targeted test. Run
 `python3 -m pytest` before pushing — CI runs the same thing across Python
 3.10–3.13.
 
+## Releasing (maintainers)
+
+Publishing is wired for [PyPI Trusted
+Publishing](https://docs.pypi.org/trusted-publishers/) — no API tokens.
+One-time setup: on PyPI, add a *pending* trusted publisher for project
+`aimformat` with owner `tndmhq`, repository `aimformat`, workflow
+`publish.yml`, environment `pypi`; on GitHub, create the `pypi`
+environment (Settings → Environments). Then, per release:
+
+1. Bump `__version__` in `src/aimformat/__init__.py` (the single source —
+   pyproject reads it) and move the `## Unreleased` block in
+   `CHANGELOG.md` under the new version heading.
+2. `python3 -m pytest` green; `git tag v<version> && git push --tags`.
+3. Create a GitHub release for the tag — publishing it triggers
+   [`publish.yml`](.github/workflows/publish.yml), which builds sdist +
+   wheel and uploads to PyPI via OIDC.
+
 ## Notes specific to external PRs
 
 - You are **not required to append to `docs/log/`** — the episodic log is a

@@ -6,6 +6,7 @@ theme slots, event schemas, and canonical-form tables. The linter, the
 ``aim.css`` generator, and the generated spec appendix all read from here so
 they can never drift from each other.
 """
+
 from __future__ import annotations
 
 import json
@@ -61,11 +62,22 @@ class Registry:
     # -- attributes ----------------------------------------------------------
     def allowed_attrs(self, tag: str) -> frozenset[str]:
         per = self.raw["attributes"]["per_element"].get(tag, [])
-        if tag in ("html", "script", "style", "template", "symbol", "image",
-                   "rect", "circle", "ellipse", "path", "g", "use"):
+        if tag in (
+            "html",
+            "script",
+            "style",
+            "template",
+            "symbol",
+            "image",
+            "rect",
+            "circle",
+            "ellipse",
+            "path",
+            "g",
+            "use",
+        ):
             return frozenset(per)  # non-content elements: exact lists only
-        base = set(self.raw["attributes"]["global"]) | {
-            self.raw["attributes"]["chunk_marker"]}
+        base = set(self.raw["attributes"]["global"]) | {self.raw["attributes"]["chunk_marker"]}
         if tag in self.containers or tag == "aim-slide":
             base.add(self.raw["attributes"]["container_marker"])
         return frozenset(base | set(per))
@@ -131,8 +143,7 @@ class Registry:
 
     @cached_property
     def style_patterns(self) -> dict[str, re.Pattern]:
-        return {k: re.compile(v)
-                for k, v in self.raw["style_props"]["patterns"].items()}
+        return {k: re.compile(v) for k, v in self.raw["style_props"]["patterns"].items()}
 
     # -- page setup --------------------------------------------------------------
     @cached_property
@@ -162,8 +173,7 @@ class Registry:
 
     @cached_property
     def theme_patterns(self) -> dict[str, re.Pattern]:
-        return {k: re.compile(v)
-                for k, v in self.raw["theme_value_patterns"].items()}
+        return {k: re.compile(v) for k, v in self.raw["theme_value_patterns"].items()}
 
     # -- events / proposals ------------------------------------------------------
     @cached_property

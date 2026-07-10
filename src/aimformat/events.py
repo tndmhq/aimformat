@@ -5,15 +5,16 @@ Events are stored as canonical JSON lines inside the history script block.
 ignore unknown fields (``x_*`` is reserved for vendor extensions), so the
 dict — not a closed dataclass — is the truth.
 """
+
 from __future__ import annotations
 
 import json
 import re
 from dataclasses import dataclass
-from typing import Any, Optional
+from typing import Any
 
 from .canonical import canonical_json
-from .errors import HistoryError
+from .errors import AimError, HistoryError
 from .registry import REGISTRY
 
 _ISO_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?Z$")
@@ -24,8 +25,8 @@ class Actor:
     """Who did something: a human, an agent (model), or an external tool."""
 
     type: str  # "human" | "agent" | "external"
-    id: Optional[str] = None
-    model: Optional[str] = None
+    id: str | None = None
+    model: str | None = None
 
     def __post_init__(self) -> None:
         if self.type not in REGISTRY.raw["events"]["actor_types"]:
@@ -40,7 +41,7 @@ class Actor:
         return out
 
     @classmethod
-    def from_obj(cls, obj: dict) -> "Actor":
+    def from_obj(cls, obj: dict) -> Actor:
         return cls(type=obj["type"], id=obj.get("id"), model=obj.get("model"))
 
 
@@ -49,14 +50,29 @@ def human(id: str) -> Actor:
     return Actor("human", id=id)
 
 
-def agent(model: str, id: Optional[str] = None) -> Actor:
+def agent(model: str, id: str | None = None) -> Actor:
     """Convenience constructor: an AI-agent actor (exact model id)."""
     return Actor("agent", id=id, model=model)
 
 
-def external(id: Optional[str] = None) -> Actor:
+def external(id: str | None = None) -> Actor:
     """Convenience constructor: an external tool (e.g. ``aim reconcile``)."""
     return Actor("external", id=id)
+
+
+def parse_actor(spec: str) -> Actor:
+    """Parse an actor string: ``human:ID`` | ``agent:MODEL`` | ``external:ID``.
+
+    Bare ``external`` (no id) is allowed; humans need an id and agents a
+    model id, so those forms without a value are usage errors.
+    """
+    kind, sep, value = spec.partition(":")
+    kind, value = kind.strip(), value.strip()
+    if kind == "external":
+        return external(value or None)
+    if kind in ("human", "agent") and sep and value:
+        return human(value) if kind == "human" else agent(value)
+    raise AimError(f"invalid actor {spec!r} (use human:ID, agent:MODEL, or external:ID)")
 
 
 class Event:
@@ -81,27 +97,27 @@ class Event:
         return self.data["t"]
 
     @property
-    def target(self) -> Optional[str]:
+    def target(self) -> str | None:
         return self.data.get("target")
 
     @property
-    def action(self) -> Optional[str]:
+    def action(self) -> str | None:
         return self.data.get("action")
 
     @property
-    def decision(self) -> Optional[str]:
+    def decision(self) -> str | None:
         return self.data.get("decision")
 
     @property
-    def origin(self) -> Optional[str]:
+    def origin(self) -> str | None:
         return self.data.get("origin")
 
     @property
-    def batch(self) -> Optional[str]:
+    def batch(self) -> str | None:
         return self.data.get("batch")
 
     @property
-    def author(self) -> Optional[Actor]:
+    def author(self) -> Actor | None:
         obj = self.data.get("author")
         return Actor.from_obj(obj) if obj else None
 
@@ -118,7 +134,7 @@ class Event:
         return False
 
     @property
-    def applied_payload(self) -> Optional[str]:
+    def applied_payload(self) -> str | None:
         """The serialization this event put into the document (if any)."""
         if self.kind == "resolution":
             return self.data.get("applied", self.data.get("proposed"))
@@ -129,14 +145,13 @@ class Event:
         return canonical_json(self.data)
 
     @classmethod
-    def from_json(cls, line: str) -> "Event":
+    def from_json(cls, line: str) -> Event:
         try:
             obj = json.loads(line)
         except json.JSONDecodeError as exc:
             raise HistoryError(f"unparseable history line: {exc}") from exc
         if not isinstance(obj, dict):
-            raise HistoryError(
-                f"history line is not a JSON object: {line[:60]!r}")
+            raise HistoryError(f"history line is not a JSON object: {line[:60]!r}")
         return cls(obj)
 
     def validate(self) -> list[str]:
@@ -152,8 +167,9 @@ class Event:
         known = set(schema["required"]) | set(schema["optional"])
         for field in self.data:
             if field not in known and not field.startswith("x_"):
-                problems.append(f"{kind} event has unknown field {field!r} "
-                                "(vendor extensions must use x_*)")
+                problems.append(
+                    f"{kind} event has unknown field {field!r} (vendor extensions must use x_*)"
+                )
         if not isinstance(self.data.get("seq"), int):
             problems.append("seq must be an integer")
         t = self.data.get("t")
@@ -171,14 +187,15 @@ class Event:
         for role in ("author", "proposed_by", "decided_by"):
             obj = self.data.get(role)
             if obj is not None:
-                if not isinstance(obj, dict) or obj.get("type") not in \
-                        REGISTRY.raw["events"]["actor_types"]:
+                if (
+                    not isinstance(obj, dict)
+                    or obj.get("type") not in REGISTRY.raw["events"]["actor_types"]
+                ):
                     problems.append(f"{role} is not a valid actor object")
         problems += self._replay_field_problems(kind, act)
         return problems
 
-    def _replay_field_problems(self, kind: Optional[str],
-                               act: Optional[str]) -> list[str]:
+    def _replay_field_problems(self, kind: str | None, act: str | None) -> list[str]:
         """Action-specific fields that forward replay / inverse verification
         need. Without these an event can be well-typed yet non-replayable —
         a latent break the chain verifier would otherwise hit as a crash

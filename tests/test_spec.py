@@ -1,5 +1,6 @@
 """The spec is executable: every ```aim snippet lints clean, the generated
 appendix is fresh, and the rule-code table stays in sync with the verifier."""
+
 import re
 import subprocess
 import sys
@@ -18,8 +19,9 @@ def test_spec_exists_with_snippets():
     assert SPEC.exists() and len(SNIPPETS) >= 3
 
 
-@pytest.mark.parametrize("idx", range(len(SNIPPETS)),
-                         ids=[f"snippet{i}" for i in range(len(SNIPPETS))])
+@pytest.mark.parametrize(
+    "idx", range(len(SNIPPETS)), ids=[f"snippet{i}" for i in range(len(SNIPPETS))]
+)
 def test_spec_snippet_lints_clean(idx):
     errors = [f for f in aim.lint_text(SNIPPETS[idx]) if f.level == "error"]
     assert not errors, "\n".join(str(e) for e in errors)
@@ -33,9 +35,11 @@ def test_spec_snippets_verify_their_history(idx=1):
 def test_generated_appendix_is_fresh(tmp_path):
     """Running the generator must be a no-op on the committed spec."""
     before = SPEC.read_text("utf-8")
-    subprocess.run([sys.executable, str(ROOT / "scripts" /
-                                        "gen_spec_appendix.py")],
-                   check=True, capture_output=True)
+    subprocess.run(
+        [sys.executable, str(ROOT / "scripts" / "gen_spec_appendix.py")],
+        check=True,
+        capture_output=True,
+    )
     after = SPEC.read_text("utf-8")
     assert before == after, "spec appendix is stale — run gen_spec_appendix.py"
 
@@ -50,7 +54,7 @@ def test_lint_rule_codes_match_registry():
 
 
 def test_registry_levels_match_linter_behavior():
-    for code, (level, _) in aim.REGISTRY.raw["lint_rules"].items():
+    for _code, (level, _) in aim.REGISTRY.raw["lint_rules"].items():
         assert level in ("error", "warning")
 
 

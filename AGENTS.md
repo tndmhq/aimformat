@@ -16,8 +16,9 @@ the pointer in `CLAUDE.md`.)
 `aimformat` — the open `.aim` document format: an AI-native format where AI
 proposals and human accept/reject are first-class file primitives. This repo
 holds the **spec (v0.1 draft, [`spec.md`](spec.md))**, the Python SDK +
-verifier + CLI (`src/aimformat/`), the conformance suite, and the developer
-docs; the MCP server and reference viewer are planned. Open design questions
+verifier + CLI (`src/aimformat/`), the MCP server (`aim mcp`, extra
+`[mcp]`), the Agent Skill (`skills/aimformat/`), the conformance suite, and
+the developer docs; the reference viewer is planned. Open design questions
 (spec Appendix C) are decided by the maintainer, not inferred — propose,
 don't assume. Read
 [`docs/knowledge/architecture.md`](docs/knowledge/architecture.md) before
@@ -44,7 +45,13 @@ technical content only (see Governance below).
 - [`docs/`](docs/README.md) — two-tier agent memory
   ([`knowledge/`](docs/knowledge/) + [`log/`](docs/log/));
   [`scripts/new_log_entry.py`](scripts/new_log_entry.py) scaffolds entries.
-- MCP server and reference viewer — planned, not yet in-repo.
+- [`src/aimformat/mcp.py`](src/aimformat/mcp.py) — the MCP server (stdio,
+  six tools); [`skills/aimformat/`](skills/aimformat/) — the Agent Skill
+  (also exposed as a Claude Code plugin via
+  [`.claude-plugin/`](.claude-plugin/));
+  [`docs/for-agents.md`](docs/for-agents.md) — the LLM-facing guide;
+  [`evals/`](evals/) — id-preservation eval harness.
+- Reference viewer — planned, not yet in-repo.
 
 ## Conventions (canonical — source of truth for all tndmhq repos)
 
@@ -86,6 +93,8 @@ technical content only (see Governance below).
 
 ## Governance (public repo)
 
+- **Reviewing a PR (human or bot)?** Follow [`REVIEW.md`](REVIEW.md) — ≤5
+  severity-tagged findings, no nits, aimformat-specific checklist.
 - **`docs/knowledge/` is maintainer-authoritative.** Changes to it go through
   PR review like code; external PRs may propose knowledge edits but the
   maintainer decides what is recorded as fact.

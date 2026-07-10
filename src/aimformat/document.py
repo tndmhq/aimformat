@@ -7,6 +7,7 @@ construction. Verification (:meth:`AimDocument.verify`) replays the log
 backwards over a deep copy and checks payload byte-equality plus checkpoint
 hashes — the same walk that powers :meth:`AimDocument.state_at`.
 """
+
 from __future__ import annotations
 
 import base64
@@ -14,22 +15,31 @@ import contextlib
 import datetime as _dt
 import hashlib
 import re
-from dataclasses import dataclass, field
+from collections.abc import Sequence
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable, Optional, Sequence, Union
+from typing import TYPE_CHECKING
 
 from . import canonical, ids
 from .canonical import canonical_json, serialize, serialize_run
 from .css import generate_aim_css
-from .dom import Comment, Element, Fragment, Text, deep_copy, parse_fragment, parse_html
+from .dom import Comment, Element, Fragment, Text, parse_fragment, parse_html
 from .errors import HistoryError, InvalidOperation, ParseError, TargetNotFound
 from .events import Actor, Event
-from .pagesetup import (PageSetup, doc_settings_element, page_setup_from_obj,
-                        page_setup_from_settings, parse_doc_settings)
+from .note import find_note, is_canonical, render_note
+from .pagesetup import (
+    PageSetup,
+    doc_settings_element,
+    page_setup_from_obj,
+    page_setup_from_settings,
+    parse_doc_settings,
+)
 from .registry import REGISTRY
 
-__all__ = ["AimDocument", "Chunk", "Proposal", "Anchor", "LAST",
-           "load", "loads", "new_document"]
+if TYPE_CHECKING:  # pragma: no cover - import cycle guard, typing only
+    from .reconcile import ReconcileReport
+
+__all__ = ["AimDocument", "Chunk", "Proposal", "Anchor", "LAST", "load", "loads", "new_document"]
 
 
 class _Last:
@@ -40,7 +50,7 @@ class _Last:
 #: Sentinel: insert at the end of the target container (the default).
 LAST = _Last()
 
-AnchorAfter = Union[str, None, _Last]
+AnchorAfter = str | None | _Last
 _BODY_SECTIONS = ("aim-proposals", "aim-assets", "script")
 #: Reserved singleton targets (spec §3.5/§3.6): they can be modified but
 #: never deleted or moved — they have no body anchor to restore them at.
@@ -51,7 +61,8 @@ def _no_delete_move(target: str, action: str) -> None:
     if target in _RESERVED_TARGETS:
         raise InvalidOperation(
             f"{target} is a reserved singleton and cannot be the target of "
-            f"a {action} — modify it instead")
+            f"a {action} — modify it instead"
+        )
 
 
 def _now_iso() -> str:
@@ -69,8 +80,8 @@ class Anchor:
     first body row would un-delete into the header (spec §6.4)."""
 
     container: str
-    after: Optional[str] = None
-    shell: Optional[str] = None
+    after: str | None = None
+    shell: str | None = None
 
     def to_obj(self) -> dict:
         obj: dict = {"container": self.container, "after": self.after}
@@ -79,9 +90,8 @@ class Anchor:
         return obj
 
     @classmethod
-    def from_obj(cls, obj: dict) -> "Anchor":
-        return cls(container=obj["container"], after=obj.get("after"),
-                   shell=obj.get("shell"))
+    def from_obj(cls, obj: dict) -> Anchor:
+        return cls(container=obj["container"], after=obj.get("after"), shell=obj.get("shell"))
 
 
 @dataclass(frozen=True)
@@ -89,9 +99,9 @@ class Chunk:
     """Read-only view of one chunk (possibly a multi-element run)."""
 
     id: str
-    container: str            # "body", a container id, or a slide id
-    tags: tuple[str, ...]     # member tags, in order
-    html: str                 # canonical serialization (run concatenated)
+    container: str  # "body", a container id, or a slide id
+    tags: tuple[str, ...]  # member tags, in order
+    html: str  # canonical serialization (run concatenated)
     text: str
 
     @property
@@ -109,16 +119,43 @@ class Proposal:
 
     id: str
     action: str
-    target: Optional[str]          # data-for (None for add)
+    target: str | None  # data-for (None for add)
     author: Actor
     at: str
-    explanation: Optional[str]
-    payload_html: Optional[str]    # canonical payload serialization
-    anchor_container: Optional[str]
-    anchor_after: Optional[str]    # None = first position OR n/a (see action)
-    depends_on: Optional[str]
-    batch: Optional[str]
-    anchor_shell: Optional[str] = None  # thead/tbody/tfoot for table rows
+    explanation: str | None
+    payload_html: str | None  # canonical payload serialization
+    anchor_container: str | None
+    anchor_after: str | None  # None = first position OR n/a (see action)
+    depends_on: str | None
+    batch: str | None
+    anchor_shell: str | None = None  # thead/tbody/tfoot for table rows
+
+
+def resolution_order(proposals: Sequence[Proposal]) -> list[Proposal]:
+    """A dependency-safe order for resolving a whole pending lane.
+
+    Card order in the file carries no dependency meaning (a manual reorder
+    is legal), so resolve in rounds: an add anchored on another pending add
+    waits for its anchor; within each round deletes go last, so an add
+    anchored on a chunk that a sibling card deletes lands while the anchor
+    still exists. Shared by ``aim accept/reject --all`` and the exporters'
+    resolve-a-copy paths.
+    """
+    pending = list(proposals)
+    order: list[Proposal] = []
+    while pending:
+        pending_ids = {p.id for p in pending}
+        ready = [p for p in pending if not (p.action == "add" and p.anchor_after in pending_ids)]
+        if not ready:
+            raise InvalidOperation(
+                "pending adds anchor on each other in a cycle — the file is "
+                "corrupt (aim lint reports P015)"
+            )
+        ready.sort(key=lambda p: p.action == "delete")
+        order.extend(ready)
+        done = {p.id for p in ready}
+        pending = [p for p in pending if p.id not in done]
+    return order
 
 
 # ===========================================================================
@@ -143,31 +180,34 @@ class DocState:
     def constructs(self) -> list[Element]:
         return [e for e in self.body.elements() if e.tag not in _BODY_SECTIONS]
 
-    def section(self, tag: str) -> Optional[Element]:
+    def section(self, tag: str) -> Element | None:
         return next((e for e in self.body.elements() if e.tag == tag), None)
 
-    def script(self, kind: str) -> Optional[Element]:
+    def script(self, kind: str) -> Element | None:
         want = REGISTRY.script_types[kind]
         where = self.head if kind in ("meta", "doc") else self.body
-        return next((e for e in where.elements()
-                     if e.tag == "script" and e.get("type") == want), None)
+        return next(
+            (e for e in where.elements() if e.tag == "script" and e.get("type") == want), None
+        )
 
-    def theme_el(self) -> Optional[Element]:
-        return next((e for e in self.head.elements()
-                     if e.tag == "style" and e.has("data-aim-theme")), None)
+    def theme_el(self) -> Element | None:
+        return next(
+            (e for e in self.head.elements() if e.tag == "style" and e.has("data-aim-theme")), None
+        )
 
-    def css_el(self) -> Optional[Element]:
-        return next((e for e in self.head.elements()
-                     if e.tag == "style" and e.has("data-aim-css")), None)
+    def css_el(self) -> Element | None:
+        return next(
+            (e for e in self.head.elements() if e.tag == "style" and e.has("data-aim-css")), None
+        )
 
     # -- lookup ----------------------------------------------------------------
-    def top_index(self, target: str) -> Optional[int]:
+    def top_index(self, target: str) -> int | None:
         for i, e in enumerate(self.constructs()):
             if e.chunk_id == target or e.container_id == target:
                 return i
         return None
 
-    def container_node(self, cid: str) -> Optional[Element]:
+    def container_node(self, cid: str) -> Element | None:
         if cid == "body":
             return self.body
         for e in self.constructs():
@@ -176,7 +216,7 @@ class DocState:
                 return hit
         return None
 
-    def find_chunk(self, cid: str) -> tuple[Optional[Element], list[Element]]:
+    def find_chunk(self, cid: str) -> tuple[Element | None, list[Element]]:
         """-> (parent element or None-for-top, member elements of the run)."""
         hits: list[tuple[Element, Element]] = []
 
@@ -219,7 +259,7 @@ class DocState:
         return out
 
     # -- serialization ---------------------------------------------------------
-    def serial(self, target: str) -> Optional[str]:
+    def serial(self, target: str) -> str | None:
         if target == "aim:theme":
             t = self.theme_el()
             return serialize(t) if t is not None else None
@@ -245,8 +285,7 @@ class DocState:
             self.html_open_line(),
             serialize(theme) if theme is not None else None,
             (serialize(c) for c in self.constructs()),
-            doc_settings_line=(serialize(settings)
-                               if settings is not None else None),
+            doc_settings_line=(serialize(settings) if settings is not None else None),
         )
 
     # -- mutation ---------------------------------------------------------------
@@ -258,41 +297,48 @@ class DocState:
         if anchor.container == "body":
             if anchor.after is None:
                 return self.body, 0
-            el = next((e for e in self.constructs()
-                       if e.chunk_id == anchor.after
-                       or e.container_id == anchor.after), None)
+            el = next(
+                (
+                    e
+                    for e in self.constructs()
+                    if e.chunk_id == anchor.after or e.container_id == anchor.after
+                ),
+                None,
+            )
             if el is None:
-                raise TargetNotFound(f"anchor {anchor.after!r} not found "
-                                     "at body level")
+                raise TargetNotFound(f"anchor {anchor.after!r} not found at body level")
             return self.body, self.body.children.index(el) + 1
         cont = self.container_node(anchor.container)
         if cont is None:
             raise TargetNotFound(f"container {anchor.container!r} not found")
         if anchor.after is None:
             if anchor.shell is not None:
-                shell = next((e for e in cont.elements()
-                              if e.tag == anchor.shell), None)
+                shell = next((e for e in cont.elements() if e.tag == anchor.shell), None)
                 if shell is None:
                     raise TargetNotFound(
-                        f"shell <{anchor.shell}> not found in "
-                        f"{anchor.container!r}")
+                        f"shell <{anchor.shell}> not found in {anchor.container!r}"
+                    )
                 return shell, 0
             return cont, 0
         # the anchor construct must be a direct member of this container
-        members = [el for el in cont.iter() if el is not cont
-                   and (el.chunk_id == anchor.after
-                        or el.container_id == anchor.after)]
+        members = [
+            el
+            for el in cont.iter()
+            if el is not cont and (el.chunk_id == anchor.after or el.container_id == anchor.after)
+        ]
         if not members:
-            raise TargetNotFound(
-                f"anchor {anchor.after!r} not found in {anchor.container!r}")
+            raise TargetNotFound(f"anchor {anchor.after!r} not found in {anchor.container!r}")
         parent = self._parent_of(members[-1])
         direct = parent is cont or (
-            cont.tag == "table" and parent.tag in REGISTRY.table_shells
-            and self._parent_of(parent) is cont)
+            cont.tag == "table"
+            and parent.tag in REGISTRY.table_shells
+            and self._parent_of(parent) is cont
+        )
         if not direct:
             raise TargetNotFound(
                 f"anchor {anchor.after!r} is nested content, not a direct "
-                f"member of {anchor.container!r}")
+                f"member of {anchor.container!r}"
+            )
         return parent, parent.children.index(members[-1]) + 1
 
     def insert(self, markup: str, anchor: Anchor) -> None:
@@ -331,13 +377,13 @@ class DocState:
         if i is not None:
             el = self.constructs()[i]
             idx = self.body.children.index(el)
-            self.body.children[idx:idx + 1] = parse_fragment(markup)
+            self.body.children[idx : idx + 1] = parse_fragment(markup)
             return
         cont = self.container_node(target)
         if cont is not None and cont is not self.body:
             parent = self._parent_of(cont)
             idx = parent.children.index(cont)
-            parent.children[idx:idx + 1] = parse_fragment(markup)
+            parent.children[idx : idx + 1] = parse_fragment(markup)
             return
         parent, members = self.find_chunk(target)
         if not members:
@@ -364,7 +410,7 @@ class DocState:
         raise TargetNotFound("element has no parent (corrupt tree)")
 
     # -- theme --------------------------------------------------------------------
-    def set_theme_markup(self, markup: Optional[str]) -> None:
+    def set_theme_markup(self, markup: str | None) -> None:
         current = self.theme_el()
         if markup is None:
             if current is not None:
@@ -386,7 +432,7 @@ class DocState:
                 self.head.children.append(el)
 
     # -- document settings (aim:doc) -------------------------------------------
-    def set_doc_settings_markup(self, markup: Optional[str]) -> None:
+    def set_doc_settings_markup(self, markup: str | None) -> None:
         """Replace (or with ``None`` remove) the head settings block.
 
         Canonical head position: after the aim-meta cache, before the
@@ -414,7 +460,7 @@ class DocState:
             idx = len(self.head.children)
         self.head.children.insert(idx, el)
 
-    def kind_of(self, target: str) -> Optional[str]:
+    def kind_of(self, target: str) -> str | None:
         """``"chunk"`` / ``"container"`` / None for an id in this document."""
         if target == "aim:theme":
             return "theme"
@@ -434,7 +480,7 @@ class DocState:
         parent, members = self.find_chunk(cid)
         if not members:
             raise TargetNotFound(f"chunk {cid!r} not found")
-        node: Optional[Element] = parent
+        node: Element | None = parent
         while node is not None and node is not self.body:
             if node.container_id:
                 return node.container_id
@@ -452,15 +498,15 @@ class AimDocument:
             raise ParseError("not an .aim document (no <html> element)")
         self._fragment = fragment
         self._state = DocState(html)
-        self._batch: Optional[str] = None
+        self._batch: str | None = None
 
     # -- constructors ---------------------------------------------------------
     @classmethod
-    def loads(cls, text: str) -> "AimDocument":
+    def loads(cls, text: str) -> AimDocument:
         return cls(parse_html(text))
 
     @classmethod
-    def load(cls, path: Union[str, Path]) -> "AimDocument":
+    def load(cls, path: str | Path) -> AimDocument:
         return cls.loads(Path(path).read_text("utf-8"))
 
     # -- io ----------------------------------------------------------------------
@@ -479,16 +525,16 @@ class AimDocument:
             css.set("data-aim-css", REGISTRY.spec_version)
         return canonical.document_text(self._fragment)
 
-    def save(self, path: Union[str, Path]) -> None:
+    def save(self, path: str | Path) -> None:
         Path(path).write_text(self.dumps(), "utf-8")
 
     # -- basic accessors ------------------------------------------------------------
     @property
-    def spec_version(self) -> Optional[str]:
+    def spec_version(self) -> str | None:
         return self._state.html.get("data-aim-version")
 
     @property
-    def lang(self) -> Optional[str]:
+    def lang(self) -> str | None:
         return self._state.html.get("lang")
 
     @property
@@ -522,7 +568,7 @@ class AimDocument:
         return out
 
     @property
-    def meta(self) -> Optional[dict]:
+    def meta(self) -> dict | None:
         """The parsed metadata cache, or None when absent.
 
         Raises :class:`ParseError` when the block exists but is not a JSON
@@ -532,6 +578,7 @@ class AimDocument:
         if el is None or not (el.raw or "").strip():
             return None
         import json
+
         try:
             obj = json.loads(el.raw.strip())
         except json.JSONDecodeError as exc:
@@ -559,6 +606,49 @@ class AimDocument:
         settings block is absent or carries no ``page`` field)."""
         return page_setup_from_settings(self.doc_settings)
 
+    @property
+    def note(self) -> str | None:
+        """The agent note's raw comment text, or None (spec §2.5)."""
+        c = find_note(self._state.head)
+        return c.data if c else None
+
+    def has_canonical_note(self) -> bool:
+        """Whether the note is byte-exactly canonical for this spec version."""
+        data = self.note
+        return data is not None and is_canonical(data, self.spec_version)
+
+    def set_note(self) -> None:
+        """Insert or refresh the canonical agent note (spec §2.5).
+
+        Not an edit: no event is appended and ``doc_hash`` is unaffected —
+        the note has the same standing as the derived caches (§7). A stale
+        or foreign aim-note is replaced in place; otherwise the note lands
+        immediately after ``<meta charset>``.
+        """
+        head = self._state.head
+        data = render_note(self.spec_version)
+        existing = find_note(head)
+        if existing is not None:
+            existing.data = data
+            return
+        anchor = 0
+        for i, node in enumerate(head.children):
+            if isinstance(node, Element) and node.tag == "meta" and node.get("charset") is not None:
+                anchor = i + 1
+                break
+        head.children.insert(anchor, Comment(data))
+
+    def remove_note(self) -> None:
+        """Strip the agent note, if present. Not an edit (see set_note).
+
+        Removes every matching comment: a document may carry duplicate
+        notes (the S030 warning case) and "remove the note" must not leave
+        one behind.
+        """
+        head = self._state.head
+        while (c := find_note(head)) is not None:
+            head.children.remove(c)
+
     # -- chunk views -------------------------------------------------------------
     @property
     def chunks(self) -> list[Chunk]:
@@ -570,13 +660,15 @@ class AimDocument:
                 return
             seen.add(cid)
             parent, members = self._state.find_chunk(cid)
-            out.append(Chunk(
-                id=cid,
-                container=self._state.container_of_chunk(cid),
-                tags=tuple(m.tag for m in members),
-                html=serialize_run(members),
-                text="".join(m.text() for m in members),
-            ))
+            out.append(
+                Chunk(
+                    id=cid,
+                    container=self._state.container_of_chunk(cid),
+                    tags=tuple(m.tag for m in members),
+                    html=serialize_run(members),
+                    text="".join(m.text() for m in members),
+                )
+            )
 
         for top in self._state.constructs():
             for el in top.iter():
@@ -609,8 +701,7 @@ class AimDocument:
         el = self._state.script("history")
         if el is None or not el.raw:
             return []
-        return [Event.from_json(line)
-                for line in el.raw.split("\n") if line.strip()]
+        return [Event.from_json(line) for line in el.raw.split("\n") if line.strip()]
 
     def _append_event(self, data: dict) -> Event:
         el = self._state.script("history")
@@ -625,7 +716,7 @@ class AimDocument:
                 self._state.body.children.append(el)
         body = (el.raw or "").rstrip("\n")
         line = canonical_json(data)
-        el.raw = ("\n" + (body + "\n" if body else "") + line + "\n")
+        el.raw = "\n" + (body + "\n" if body else "") + line + "\n"
         return Event(data)
 
     # -- batching -----------------------------------------------------------------
@@ -680,9 +771,14 @@ class AimDocument:
     def _taken_ids(self) -> set[str]:
         return self._state.all_ids() | self._recorded_ids()
 
-    def _normalize_payload(self, markup: str, *, expect_id: Optional[str] = None,
-                           expect_marker: Optional[str] = None,
-                           assign: bool = True) -> tuple[str, str]:
+    def _normalize_payload(
+        self,
+        markup: str,
+        *,
+        expect_id: str | None = None,
+        expect_marker: str | None = None,
+        assign: bool = True,
+    ) -> tuple[str, str]:
         """Parse, validate and canonicalize an edit payload.
 
         Returns ``(chunk_id, canonical_markup)``. New chunks get fresh ids
@@ -697,8 +793,9 @@ class AimDocument:
             if not all(n.chunk_id is None and n.container_id is None for n in nodes):
                 raise InvalidOperation("payload run must share one data-aim value")
         if len(nodes) > 1 and any(n.tag not in REGISTRY.item_carriers for n in nodes):
-            raise InvalidOperation("multi-element payloads (runs) are only legal "
-                                   "for list/table items")
+            raise InvalidOperation(
+                "multi-element payloads (runs) are only legal for list/table items"
+            )
         first = nodes[0]
         payload_id = first.chunk_id or first.container_id
         taken = self._taken_ids()
@@ -715,38 +812,39 @@ class AimDocument:
                 marker = "data-aim"
             else:
                 marker = expect_marker or (
-                    "data-aim-container" if first.container_id is not None
-                    else "data-aim")
-            wrong = ("data-aim" if marker == "data-aim-container"
-                     else "data-aim-container")
+                    "data-aim-container" if first.container_id is not None else "data-aim"
+                )
+            wrong = "data-aim" if marker == "data-aim-container" else "data-aim-container"
             if first.get(wrong) is not None:
                 raise InvalidOperation(
                     f"payload marks the root with {wrong}, but target "
-                    f"{expect_id!r} is a {self._state.kind_of(expect_id)}")
+                    f"{expect_id!r} is a {self._state.kind_of(expect_id)}"
+                )
             if payload_id is None:
                 for n in nodes:
                     n.set(marker, expect_id)
                 payload_id = expect_id
             elif payload_id != expect_id:
                 raise InvalidOperation(
-                    f"payload id {payload_id!r} does not match target {expect_id!r}")
+                    f"payload id {payload_id!r} does not match target {expect_id!r}"
+                )
             # ids currently living inside the target's own subtree may be
             # reused by the replacement; everything else stays off-limits
             _, members = self._state.find_chunk(expect_id)
-            roots = members or ([self._state.container_node(expect_id)]
-                                if self._state.container_node(expect_id)
-                                is not None else [])
+            roots = members or (
+                [self._state.container_node(expect_id)]
+                if self._state.container_node(expect_id) is not None
+                else []
+            )
             for root in roots:
                 for el in root.iter():
                     if el is root:
                         continue
                     owned.update(filter(None, (el.chunk_id, el.container_id)))
         elif assign:
-            if not payload_id or payload_id in taken or \
-                    not ids.is_valid_chunk_id(payload_id):
+            if not payload_id or payload_id in taken or not ids.is_valid_chunk_id(payload_id):
                 new = ids.new_id(taken)
-                marker = ("data-aim-container"
-                          if first.container_id is not None else "data-aim")
+                marker = "data-aim-container" if first.container_id is not None else "data-aim"
                 for n in nodes:
                     n.set(marker, new)
                 payload_id = new
@@ -763,8 +861,7 @@ class AimDocument:
             for n in nodes:
                 if n.container_id is not None:
                     for item in self._direct_payload_items(n):
-                        if item.chunk_id is None and \
-                                item.container_id is None:
+                        if item.chunk_id is None and item.container_id is None:
                             item.set("data-aim", ids.new_id(taken))
                 for el in n.iter():
                     if el is n:
@@ -775,8 +872,7 @@ class AimDocument:
                             continue
                         if val in remap:
                             el.set(marker, remap[val])
-                        elif not val or val in taken or \
-                                not ids.is_valid_chunk_id(val):
+                        elif not val or val in taken or not ids.is_valid_chunk_id(val):
                             fresh = ids.new_id(taken)
                             if val:
                                 remap[val] = fresh
@@ -809,8 +905,9 @@ class AimDocument:
                 out.append(child)
         return out
 
-    def _resolve_end_anchor(self, container: str, after: AnchorAfter, *,
-                            exclude: Optional[str] = None) -> Anchor:
+    def _resolve_end_anchor(
+        self, container: str, after: AnchorAfter, *, exclude: str | None = None
+    ) -> Anchor:
         if isinstance(after, _Last):
             if container == "body":
                 pool = self._state.constructs()
@@ -819,7 +916,7 @@ class AimDocument:
                 if cont is None:
                     raise TargetNotFound(f"container {container!r} not found")
                 pool = self._direct_members(cont)
-            last: Optional[str] = None
+            last: str | None = None
             for el in pool:
                 cid = el.chunk_id or el.container_id
                 if cid and cid != exclude:
@@ -827,32 +924,43 @@ class AimDocument:
             anchor = Anchor(container, last)
         else:
             if exclude is not None and after == exclude:
-                raise InvalidOperation(
-                    f"cannot anchor {exclude!r} after itself")
+                raise InvalidOperation(f"cannot anchor {exclude!r} after itself")
             anchor = Anchor(container, after)
         if anchor.after is None and container != "body":
             cont = self._state.container_node(container)
             if cont is not None and cont.tag == "table":
-                shells = [s.tag for s in cont.elements()
-                          if s.tag in REGISTRY.table_shells]
-                shell = "tbody" if "tbody" in shells else \
-                    (shells[0] if shells else None)
+                shells = [s.tag for s in cont.elements() if s.tag in REGISTRY.table_shells]
+                shell = "tbody" if "tbody" in shells else (shells[0] if shells else None)
                 # data rows default into the body section, not the header
                 anchor = Anchor(container, None, shell=shell)
         return anchor
 
     # -- direct edits -------------------------------------------------------------------
-    def add_chunk(self, markup: str, *, author: Actor, container: str = "body",
-                  after: AnchorAfter = LAST, explanation: Optional[str] = None,
-                  at: Optional[str] = None) -> Chunk:
+    def add_chunk(
+        self,
+        markup: str,
+        *,
+        author: Actor,
+        container: str = "body",
+        after: AnchorAfter = LAST,
+        explanation: str | None = None,
+        at: str | None = None,
+    ) -> Chunk:
         """Add a chunk (direct edit). ``after=None`` inserts at first position."""
         cid, payload = self._normalize_payload(markup)
         anchor = self._resolve_end_anchor(container, after)
         self._state.insert(payload, anchor)
-        data = {"seq": self.seq + 1, "kind": "direct_edit", "t": at or _now_iso(),
-                "target": cid, "action": "add", "anchor": anchor.to_obj(),
-                "after": payload, "author": author.to_obj(),
-                "batch": self._batch_id()}
+        data = {
+            "seq": self.seq + 1,
+            "kind": "direct_edit",
+            "t": at or _now_iso(),
+            "target": cid,
+            "action": "add",
+            "anchor": anchor.to_obj(),
+            "after": payload,
+            "author": author.to_obj(),
+            "batch": self._batch_id(),
+        }
         if explanation:
             data["explanation"] = explanation
         self._append_event(data)
@@ -861,12 +969,19 @@ class AimDocument:
         except TargetNotFound:  # container payload: synthesize the view
             root = parse_fragment(payload)[0]
             assert isinstance(root, Element)
-            return Chunk(id=cid, container=container, tags=(root.tag,),
-                         html=payload, text=root.text())
+            return Chunk(
+                id=cid, container=container, tags=(root.tag,), html=payload, text=root.text()
+            )
 
-    def modify_chunk(self, cid: str, markup: str, *, author: Actor,
-                     explanation: Optional[str] = None,
-                     at: Optional[str] = None) -> Chunk:
+    def modify_chunk(
+        self,
+        cid: str,
+        markup: str,
+        *,
+        author: Actor,
+        explanation: str | None = None,
+        at: str | None = None,
+    ) -> Chunk:
         before = self._state.serial(cid)
         if before is None:
             raise TargetNotFound(f"no chunk {cid!r}")
@@ -874,10 +989,17 @@ class AimDocument:
         if payload == before:
             raise InvalidOperation("modify with identical content")
         self._state.replace(cid, payload)
-        data = {"seq": self.seq + 1, "kind": "direct_edit", "t": at or _now_iso(),
-                "target": cid, "action": "modify", "before": before,
-                "after": payload, "author": author.to_obj(),
-                "batch": self._batch_id()}
+        data = {
+            "seq": self.seq + 1,
+            "kind": "direct_edit",
+            "t": at or _now_iso(),
+            "target": cid,
+            "action": "modify",
+            "before": before,
+            "after": payload,
+            "author": author.to_obj(),
+            "batch": self._batch_id(),
+        }
         if explanation:
             data["explanation"] = explanation
         self._append_event(data)
@@ -894,42 +1016,68 @@ class AimDocument:
                     parent_container = walk.container_id
                     break
                 walk = self._state._parent_of(walk)
-            return Chunk(id=cid, container=parent_container, tags=(root.tag,),
-                         html=payload, text=root.text())
+            return Chunk(
+                id=cid, container=parent_container, tags=(root.tag,), html=payload, text=root.text()
+            )
 
-    def delete_chunk(self, cid: str, *, author: Actor,
-                     explanation: Optional[str] = None,
-                     at: Optional[str] = None) -> None:
+    def delete_chunk(
+        self,
+        cid: str,
+        *,
+        author: Actor,
+        explanation: str | None = None,
+        at: str | None = None,
+    ) -> None:
         _no_delete_move(cid, "delete")
         before = self._state.serial(cid)
         if before is None:
             raise TargetNotFound(f"no chunk {cid!r}")
         anchor = self._anchor_of(cid)
         self._state.remove(cid)
-        data = {"seq": self.seq + 1, "kind": "direct_edit", "t": at or _now_iso(),
-                "target": cid, "action": "delete", "before": before,
-                "anchor": anchor.to_obj(), "author": author.to_obj(),
-                "batch": self._batch_id()}
+        data = {
+            "seq": self.seq + 1,
+            "kind": "direct_edit",
+            "t": at or _now_iso(),
+            "target": cid,
+            "action": "delete",
+            "before": before,
+            "anchor": anchor.to_obj(),
+            "author": author.to_obj(),
+            "batch": self._batch_id(),
+        }
         if explanation:
             data["explanation"] = explanation
         self._append_event(data)
 
-    def move_chunk(self, cid: str, *, author: Actor, container: str = "body",
-                   after: AnchorAfter = LAST, explanation: Optional[str] = None,
-                   at: Optional[str] = None) -> None:
+    def move_chunk(
+        self,
+        cid: str,
+        *,
+        author: Actor,
+        container: str = "body",
+        after: AnchorAfter = LAST,
+        explanation: str | None = None,
+        at: str | None = None,
+    ) -> None:
         _no_delete_move(cid, "move")
         if not self._state.exists(cid):
             raise TargetNotFound(f"no chunk {cid!r}")
         src = self._anchor_of(cid)
         dst = self._resolve_end_anchor(container, after, exclude=cid)
         if (src.container, src.after) == (dst.container, dst.after):
-            raise InvalidOperation(f"move of {cid!r} is a no-op (already "
-                                   "at that position)")
+            raise InvalidOperation(f"move of {cid!r} is a no-op (already at that position)")
         self._state.move(cid, dst)
-        data = {"seq": self.seq + 1, "kind": "direct_edit", "t": at or _now_iso(),
-                "target": cid, "action": "move", "from": src.to_obj(),
-                "to": dst.to_obj(), "author": author.to_obj(),
-                "batch": self._batch_id()}
+        data = {
+            "seq": self.seq + 1,
+            "kind": "direct_edit",
+            "t": at or _now_iso(),
+            "target": cid,
+            "action": "move",
+            "from": src.to_obj(),
+            "to": dst.to_obj(),
+            "author": author.to_obj(),
+            "batch": self._batch_id(),
+        }
         if explanation:
             data["explanation"] = explanation
         self._append_event(data)
@@ -945,12 +1093,17 @@ class AimDocument:
             pattern = REGISTRY.theme_patterns.get(slot["type"])
             if pattern and not pattern.match(value):
                 raise InvalidOperation(
-                    f"theme slot {name} value {value!r} does not match the "
-                    f"{slot['type']} grammar")
+                    f"theme slot {name} value {value!r} does not match the {slot['type']} grammar"
+                )
 
-    def set_theme(self, slots: dict[str, str], *, author: Actor,
-                  explanation: Optional[str] = None,
-                  at: Optional[str] = None) -> None:
+    def set_theme(
+        self,
+        slots: dict[str, str],
+        *,
+        author: Actor,
+        explanation: str | None = None,
+        at: str | None = None,
+    ) -> None:
         """Replace the theme block (aim:theme modify; whole-block payload)."""
         self._check_theme_slots(slots)
         before = self._state.serial("aim:theme")
@@ -959,27 +1112,40 @@ class AimDocument:
         if markup == before:
             raise InvalidOperation("theme unchanged")
         self._state.set_theme_markup(markup)
-        data = {"seq": self.seq + 1, "kind": "direct_edit", "t": at or _now_iso(),
-                "target": "aim:theme", "action": "modify", "after": markup,
-                "author": author.to_obj(), "batch": self._batch_id()}
+        data = {
+            "seq": self.seq + 1,
+            "kind": "direct_edit",
+            "t": at or _now_iso(),
+            "target": "aim:theme",
+            "action": "modify",
+            "after": markup,
+            "author": author.to_obj(),
+            "batch": self._batch_id(),
+        }
         if before is not None:
             data["before"] = before
         if explanation:
             data["explanation"] = explanation
         self._append_event(data)
 
-    def _doc_settings_markup(self, page: Union[PageSetup, dict]) -> str:
+    def _doc_settings_markup(self, page: PageSetup | dict) -> str:
         """The whole settings block with ``page`` replaced — unknown fields
         an aim:doc block already carries are preserved (forward compat)."""
         setup = page if isinstance(page, PageSetup) else page_setup_from_obj(page)
         settings = dict(self.doc_settings)
         settings["page"] = setup.to_obj()
-        return (f'<script type="{REGISTRY.script_types["doc"]}">\n'
-                f"{canonical_json(settings)}\n</script>")
+        return (
+            f'<script type="{REGISTRY.script_types["doc"]}">\n{canonical_json(settings)}\n</script>'
+        )
 
-    def set_page_setup(self, page: Union[PageSetup, dict], *, author: Actor,
-                       explanation: Optional[str] = None,
-                       at: Optional[str] = None) -> PageSetup:
+    def set_page_setup(
+        self,
+        page: PageSetup | dict,
+        *,
+        author: Actor,
+        explanation: str | None = None,
+        at: str | None = None,
+    ) -> PageSetup:
         """Set the page setup (aim:doc modify; whole-block payload).
 
         ``page`` is a :class:`PageSetup` or its object form (``size``,
@@ -990,9 +1156,16 @@ class AimDocument:
         if markup == before:
             raise InvalidOperation("page setup unchanged")
         self._state.set_doc_settings_markup(markup)
-        data = {"seq": self.seq + 1, "kind": "direct_edit", "t": at or _now_iso(),
-                "target": "aim:doc", "action": "modify", "after": markup,
-                "author": author.to_obj(), "batch": self._batch_id()}
+        data = {
+            "seq": self.seq + 1,
+            "kind": "direct_edit",
+            "t": at or _now_iso(),
+            "target": "aim:doc",
+            "action": "modify",
+            "after": markup,
+            "author": author.to_obj(),
+            "batch": self._batch_id(),
+        }
         if before is not None:
             data["before"] = before
         if explanation:
@@ -1000,19 +1173,31 @@ class AimDocument:
         self._append_event(data)
         return self.page_setup
 
-    def propose_page_setup(self, page: Union[PageSetup, dict], *, author: Actor,
-                           explanation: Optional[str] = None,
-                           depends_on: Optional[str] = None,
-                           at: Optional[str] = None) -> Proposal:
+    def propose_page_setup(
+        self,
+        page: PageSetup | dict,
+        *,
+        author: Actor,
+        explanation: str | None = None,
+        depends_on: str | None = None,
+        at: str | None = None,
+    ) -> Proposal:
         """Propose a page setup (pending aim:doc modify, like a theme swap)."""
         markup = self._doc_settings_markup(page)
         pid = self._new_proposal_id()
         with self.batch():
             self._supersede_if_pending("aim:doc", pid, author, at)
-            return self._new_card(action="modify", author=author,
-                                  target="aim:doc", payload=markup,
-                                  anchor=None, explanation=explanation,
-                                  depends_on=depends_on, at=at, pid=pid)
+            return self._new_card(
+                action="modify",
+                author=author,
+                target="aim:doc",
+                payload=markup,
+                anchor=None,
+                explanation=explanation,
+                depends_on=depends_on,
+                at=at,
+                pid=pid,
+            )
 
     def _anchor_of(self, target: str) -> Anchor:
         """The position *target* currently occupies (works for chunks and
@@ -1031,7 +1216,7 @@ class AimDocument:
                 raise TargetNotFound(f"no chunk or container {target!r}")
             first = node
             parent = self._state._parent_of(node)
-        prev_id: Optional[str] = None
+        prev_id: str | None = None
         for sib in parent.elements():
             if sib is first:
                 break
@@ -1039,7 +1224,7 @@ class AimDocument:
             if sid and sid != target:
                 prev_id = sid
         shell = parent.tag if parent.tag in REGISTRY.table_shells else None
-        walk: Optional[Element] = parent
+        walk: Element | None = parent
         container = "body"
         while walk is not None and walk is not self._state.body:
             if walk.container_id and walk.container_id != target:
@@ -1049,25 +1234,39 @@ class AimDocument:
         return Anchor(container, prev_id, shell=shell)
 
     # -- checkpoints / undo ----------------------------------------------------------------
-    def checkpoint(self, label: str, *, at: Optional[str] = None) -> str:
+    def checkpoint(self, label: str, *, at: str | None = None) -> str:
         h = self.doc_hash
-        self._append_event({"seq": self.seq + 1, "kind": "checkpoint",
-                            "t": at or _now_iso(), "label": label, "doc_hash": h})
+        self._append_event(
+            {
+                "seq": self.seq + 1,
+                "kind": "checkpoint",
+                "t": at or _now_iso(),
+                "label": label,
+                "doc_hash": h,
+            }
+        )
         return h
 
-    def undo(self, *, author: Actor, at: Optional[str] = None) -> Event:
+    def undo(self, *, author: Actor, at: str | None = None) -> Event:
         """Append the inverse of the most recent not-yet-undone edit."""
         target_ev = self._undo_candidate()
         if target_ev is None:
             raise InvalidOperation("nothing to undo")
         inverse = self._inverse_data(target_ev)
-        inverse.update({"seq": self.seq + 1, "kind": "direct_edit",
-                        "t": at or _now_iso(), "origin": "undo",
-                        "author": author.to_obj(), "batch": self._batch_id()})
+        inverse.update(
+            {
+                "seq": self.seq + 1,
+                "kind": "direct_edit",
+                "t": at or _now_iso(),
+                "origin": "undo",
+                "author": author.to_obj(),
+                "batch": self._batch_id(),
+            }
+        )
         self._apply_data(inverse)
         return self._append_event(inverse)
 
-    def redo(self, *, author: Actor, at: Optional[str] = None) -> Event:
+    def redo(self, *, author: Actor, at: str | None = None) -> Event:
         """Re-apply the most recent not-yet-redone undo.
 
         Walking back through the trailing undo/redo zone, each redo cancels
@@ -1075,7 +1274,7 @@ class AimDocument:
         undo is the redo target. Any original edit ends the zone.
         """
         redos_pending = 0
-        candidate: Optional[Event] = None
+        candidate: Event | None = None
         for ev in reversed(self.history):
             if not ev.state_changing:
                 continue
@@ -1092,13 +1291,20 @@ class AimDocument:
         if candidate is None:
             raise InvalidOperation("nothing to redo")
         redo_data = self._inverse_data(candidate)
-        redo_data.update({"seq": self.seq + 1, "kind": "direct_edit",
-                          "t": at or _now_iso(), "origin": "redo",
-                          "author": author.to_obj(), "batch": self._batch_id()})
+        redo_data.update(
+            {
+                "seq": self.seq + 1,
+                "kind": "direct_edit",
+                "t": at or _now_iso(),
+                "origin": "redo",
+                "author": author.to_obj(),
+                "batch": self._batch_id(),
+            }
+        )
         self._apply_data(redo_data)
         return self._append_event(redo_data)
 
-    def _undo_candidate(self) -> Optional[Event]:
+    def _undo_candidate(self) -> Event | None:
         """The most recent edit that is not currently undone.
 
         Walk the trailing undo/redo zone backwards. Each undo cancels one
@@ -1136,22 +1342,31 @@ class AimDocument:
                 inv["x_remove"] = True
             return inv
         if action == "add":
-            return {"target": target, "action": "delete",
-                    "before": ev.applied_payload,
-                    "anchor": ev.get("anchor")}
+            return {
+                "target": target,
+                "action": "delete",
+                "before": ev.applied_payload,
+                "anchor": ev.get("anchor"),
+            }
         if action == "delete":
-            return {"target": target, "action": "add",
-                    "after": ev.get("before"), "anchor": ev.get("anchor")}
+            return {
+                "target": target,
+                "action": "add",
+                "after": ev.get("before"),
+                "anchor": ev.get("anchor"),
+            }
         if action == "move":
-            return {"target": target, "action": "move",
-                    "from": ev.get("to"), "to": ev.get("from")}
+            return {"target": target, "action": "move", "from": ev.get("to"), "to": ev.get("from")}
         raise HistoryError(f"cannot invert action {action!r}")
 
     def _apply_data(self, data: dict) -> None:
         action, target = data["action"], data["target"]
         if target in ("aim:theme", "aim:doc"):
-            setter = (self._state.set_theme_markup if target == "aim:theme"
-                      else self._state.set_doc_settings_markup)
+            setter = (
+                self._state.set_theme_markup
+                if target == "aim:theme"
+                else self._state.set_doc_settings_markup
+            )
             if data.get("x_remove"):
                 setter(None)
                 data.pop("x_remove")
@@ -1182,22 +1397,27 @@ class AimDocument:
             payload = None
             if tmpl is not None and tmpl.elements():
                 payload = "".join(serialize(e) for e in tmpl.elements())
-            author = Actor(card.get("data-author") or "human",
-                           id=card.get("data-author-id"),
-                           model=card.get("data-author-model"))
-            out.append(Proposal(
-                id=card.get("id") or "",
-                action=card.get("data-action") or "",
-                target=card.get("data-for"),
-                author=author, at=card.get("data-at") or "",
-                explanation=card.get("data-explanation"),
-                payload_html=payload,
-                anchor_container=card.get("data-anchor-container"),
-                anchor_after=card.get("data-anchor-after"),
-                anchor_shell=card.get("data-anchor-shell"),
-                depends_on=card.get("data-depends-on"),
-                batch=card.get("data-batch"),
-            ))
+            author = Actor(
+                card.get("data-author") or "human",
+                id=card.get("data-author-id"),
+                model=card.get("data-author-model"),
+            )
+            out.append(
+                Proposal(
+                    id=card.get("id") or "",
+                    action=card.get("data-action") or "",
+                    target=card.get("data-for"),
+                    author=author,
+                    at=card.get("data-at") or "",
+                    explanation=card.get("data-explanation"),
+                    payload_html=payload,
+                    anchor_container=card.get("data-anchor-container"),
+                    anchor_after=card.get("data-anchor-after"),
+                    anchor_shell=card.get("data-anchor-shell"),
+                    depends_on=card.get("data-depends-on"),
+                    batch=card.get("data-batch"),
+                )
+            )
         return out
 
     def proposal(self, pid: str) -> Proposal:
@@ -1212,8 +1432,7 @@ class AimDocument:
             sec = Element("aim-proposals")
             insert_at = len(self._state.body.children)
             for i, child in enumerate(self._state.body.children):
-                if isinstance(child, Element) and child.tag in (
-                        "aim-assets", "script"):
+                if isinstance(child, Element) and child.tag in ("aim-assets", "script"):
                     insert_at = i
                     break
             self._state.body.children.insert(insert_at, sec)
@@ -1221,8 +1440,7 @@ class AimDocument:
 
     def _card_el(self, pid: str) -> Element:
         sec = self._state.section("aim-proposals")
-        cards = ([] if sec is None
-                 else [c for c in sec.elements() if c.get("id") == pid])
+        cards = [] if sec is None else [c for c in sec.elements() if c.get("id") == pid]
         if not cards:
             raise TargetNotFound(f"no pending proposal {pid!r}")
         # duplicate ids make resolution ambiguous — refuse rather than
@@ -1230,20 +1448,29 @@ class AimDocument:
         if len(cards) > 1:
             raise InvalidOperation(
                 f"duplicate proposal id {pid!r}: document integrity error, "
-                "cannot resolve ambiguously")
+                "cannot resolve ambiguously"
+            )
         return cards[0]
 
     def _new_proposal_id(self) -> str:
         taken = self._taken_ids() | {p.id for p in self.proposals}
         return ids.new_proposal_id(taken)
 
-    def _new_card(self, *, action: str, author: Actor, target: Optional[str],
-                  payload: Optional[str], anchor: Optional[Anchor],
-                  explanation: Optional[str], depends_on: Optional[str],
-                  at: Optional[str], pid: Optional[str] = None) -> Proposal:
+    def _new_card(
+        self,
+        *,
+        action: str,
+        author: Actor,
+        target: str | None,
+        payload: str | None,
+        anchor: Anchor | None,
+        explanation: str | None,
+        depends_on: str | None,
+        at: str | None,
+        pid: str | None = None,
+    ) -> Proposal:
         pid = pid or self._new_proposal_id()
-        attrs: list[tuple[str, Optional[str]]] = [("id", pid),
-                                                  ("data-action", action)]
+        attrs: list[tuple[str, str | None]] = [("id", pid), ("data-action", action)]
         if anchor is not None:
             if anchor.after is not None:
                 attrs.append(("data-anchor-after", anchor.after))
@@ -1271,17 +1498,25 @@ class AimDocument:
         self._proposals_section().children.append(card)
         return self.proposal(pid)
 
-    def _supersede_if_pending(self, target: str, new_pid: str,
-                              author: Actor, at: Optional[str]) -> None:
+    def _supersede_if_pending(
+        self, target: str, new_pid: str, author: Actor, at: str | None
+    ) -> None:
         for p in self.proposals:
             if p.target == target and p.action in ("modify", "delete"):
-                self._resolve(p, decision="superseded", decided_by=author,
-                              superseded_by=new_pid, at=at)
+                self._resolve(
+                    p, decision="superseded", decided_by=author, superseded_by=new_pid, at=at
+                )
 
-    def propose_modify(self, target: str, markup: str, *, author: Actor,
-                       explanation: Optional[str] = None,
-                       depends_on: Optional[str] = None,
-                       at: Optional[str] = None) -> Proposal:
+    def propose_modify(
+        self,
+        target: str,
+        markup: str,
+        *,
+        author: Actor,
+        explanation: str | None = None,
+        depends_on: str | None = None,
+        at: str | None = None,
+    ) -> Proposal:
         if not self._state.exists(target):
             raise TargetNotFound(f"no chunk {target!r}")
         if target == "aim:theme":
@@ -1293,30 +1528,56 @@ class AimDocument:
         pid = self._new_proposal_id()
         with self.batch():  # the supersede + the new card are one intention
             self._supersede_if_pending(target, pid, author, at)
-            return self._new_card(action="modify", author=author,
-                                  target=target, payload=payload, anchor=None,
-                                  explanation=explanation,
-                                  depends_on=depends_on, at=at, pid=pid)
+            return self._new_card(
+                action="modify",
+                author=author,
+                target=target,
+                payload=payload,
+                anchor=None,
+                explanation=explanation,
+                depends_on=depends_on,
+                at=at,
+                pid=pid,
+            )
 
-    def propose_theme(self, slots: dict[str, str], *, author: Actor,
-                      explanation: Optional[str] = None,
-                      depends_on: Optional[str] = None,
-                      at: Optional[str] = None) -> Proposal:
+    def propose_theme(
+        self,
+        slots: dict[str, str],
+        *,
+        author: Actor,
+        explanation: str | None = None,
+        depends_on: str | None = None,
+        at: str | None = None,
+    ) -> Proposal:
         self._check_theme_slots(slots)
         body = "; ".join(f"{k}:{v}" for k, v in sorted(slots.items()))
         markup = f"<style data-aim-theme>:root{{{body}}}</style>"
         pid = self._new_proposal_id()
         with self.batch():
             self._supersede_if_pending("aim:theme", pid, author, at)
-            return self._new_card(action="modify", author=author,
-                                  target="aim:theme", payload=markup,
-                                  anchor=None, explanation=explanation,
-                                  depends_on=depends_on, at=at, pid=pid)
+            return self._new_card(
+                action="modify",
+                author=author,
+                target="aim:theme",
+                payload=markup,
+                anchor=None,
+                explanation=explanation,
+                depends_on=depends_on,
+                at=at,
+                pid=pid,
+            )
 
-    def propose_add(self, markup: str, *, author: Actor, container: str = "body",
-                    after: AnchorAfter = LAST, explanation: Optional[str] = None,
-                    depends_on: Optional[str] = None,
-                    at: Optional[str] = None) -> Proposal:
+    def propose_add(
+        self,
+        markup: str,
+        *,
+        author: Actor,
+        container: str = "body",
+        after: AnchorAfter = LAST,
+        explanation: str | None = None,
+        depends_on: str | None = None,
+        at: str | None = None,
+    ) -> Proposal:
         _, payload = self._normalize_payload(markup)
         if isinstance(after, str) and ids.is_valid_proposal_id(after):
             pending = {p.id: p for p in self.proposals if p.action == "add"}
@@ -1328,7 +1589,8 @@ class AimDocument:
             if anchored != container:
                 raise InvalidOperation(
                     f"add into {container!r} cannot anchor on pending proposal "
-                    f"{after!r} in {anchored!r}")
+                    f"{after!r} in {anchored!r}"
+                )
             anchor = Anchor(container, after)
         else:
             anchor = self._resolve_end_anchor(container, after)
@@ -1336,15 +1598,25 @@ class AimDocument:
             # anchor must be a legal insertion point in `container`, not merely
             # exist somewhere in the document (AIM-03)
             self._state.resolve_insert_point(anchor)
-        return self._new_card(action="add", author=author, target=None,
-                              payload=payload, anchor=anchor,
-                              explanation=explanation, depends_on=depends_on,
-                              at=at)
+        return self._new_card(
+            action="add",
+            author=author,
+            target=None,
+            payload=payload,
+            anchor=anchor,
+            explanation=explanation,
+            depends_on=depends_on,
+            at=at,
+        )
 
-
-    def propose_delete(self, target: str, *, author: Actor,
-                       explanation: Optional[str] = None,
-                       at: Optional[str] = None) -> Proposal:
+    def propose_delete(
+        self,
+        target: str,
+        *,
+        author: Actor,
+        explanation: str | None = None,
+        at: str | None = None,
+    ) -> Proposal:
         # reject reserved targets at propose time: the card would lint clean
         # but explode at accept (reserved heads have no body anchor)
         _no_delete_move(target, "delete proposal")
@@ -1353,15 +1625,28 @@ class AimDocument:
         pid = self._new_proposal_id()
         with self.batch():
             self._supersede_if_pending(target, pid, author, at)
-            return self._new_card(action="delete", author=author,
-                                  target=target, payload=None, anchor=None,
-                                  explanation=explanation, depends_on=None,
-                                  at=at, pid=pid)
+            return self._new_card(
+                action="delete",
+                author=author,
+                target=target,
+                payload=None,
+                anchor=None,
+                explanation=explanation,
+                depends_on=None,
+                at=at,
+                pid=pid,
+            )
 
-    def propose_move(self, target: str, *, author: Actor, container: str,
-                     after: AnchorAfter = LAST,
-                     explanation: Optional[str] = None,
-                     at: Optional[str] = None) -> Proposal:
+    def propose_move(
+        self,
+        target: str,
+        *,
+        author: Actor,
+        container: str,
+        after: AnchorAfter = LAST,
+        explanation: str | None = None,
+        at: str | None = None,
+    ) -> Proposal:
         _no_delete_move(target, "move proposal")
         if not self._state.exists(target):
             raise TargetNotFound(f"no chunk {target!r}")
@@ -1371,22 +1656,33 @@ class AimDocument:
         # destination container-scoped so the proposal can actually be
         # accepted (AIM-03)
         if (src.container, src.after) == (anchor.container, anchor.after):
-            raise InvalidOperation(f"move of {target!r} is a no-op (already "
-                                   "at that position)")
+            raise InvalidOperation(f"move of {target!r} is a no-op (already at that position)")
         self._state.resolve_insert_point(anchor)
-        return self._new_card(action="move", author=author, target=target,
-                              payload=None, anchor=anchor,
-                              explanation=explanation, depends_on=None, at=at)
+        return self._new_card(
+            action="move",
+            author=author,
+            target=target,
+            payload=None,
+            anchor=anchor,
+            explanation=explanation,
+            depends_on=None,
+            at=at,
+        )
 
     # -- resolution ---------------------------------------------------------------------------
-    def accept(self, pid: str, *, decided_by: Actor,
-               applied: Optional[str] = None,
-               explanation: Optional[str] = None,
-               at: Optional[str] = None) -> Event:
+    def accept(
+        self,
+        pid: str,
+        *,
+        decided_by: Actor,
+        applied: str | None = None,
+        explanation: str | None = None,
+        at: str | None = None,
+    ) -> Event:
         """Accept a pending proposal; ``applied`` overrides the payload
         (accept-with-tweaks)."""
         prop = self.proposal(pid)
-        applied_payload: Optional[str] = None
+        applied_payload: str | None = None
         if prop.action in ("modify", "add"):
             if applied is not None:
                 expect = prop.target if prop.action == "modify" else None
@@ -1395,33 +1691,36 @@ class AimDocument:
                 elif prop.target == "aim:doc":
                     applied_payload = self._validated_doc_markup(applied)
                 else:
-                    _, applied_payload = self._normalize_payload(
-                        applied, expect_id=expect,
-                        assign=False) if expect else self._payload_like(
-                            prop.payload_html or "", applied)
+                    _, applied_payload = (
+                        self._normalize_payload(applied, expect_id=expect, assign=False)
+                        if expect
+                        else self._payload_like(prop.payload_html or "", applied)
+                    )
             else:
                 applied_payload = prop.payload_html
-        return self._resolve(prop, decision="accepted", decided_by=decided_by,
-                             applied=applied_payload, explanation=explanation,
-                             at=at)
+        return self._resolve(
+            prop,
+            decision="accepted",
+            decided_by=decided_by,
+            applied=applied_payload,
+            explanation=explanation,
+            at=at,
+        )
 
     def _payload_like(self, original: str, replacement: str) -> tuple[str, str]:
         """Canonicalize an add-tweak payload, keeping the proposed chunk id
         and marker kind."""
         orig_nodes = [n for n in parse_fragment(original) if isinstance(n, Element)]
         keep = orig_nodes[0].chunk_id or orig_nodes[0].container_id
-        marker = ("data-aim-container"
-                  if orig_nodes[0].container_id is not None else "data-aim")
-        return self._normalize_payload(replacement, expect_id=keep,
-                                       expect_marker=marker)
+        marker = "data-aim-container" if orig_nodes[0].container_id is not None else "data-aim"
+        return self._normalize_payload(replacement, expect_id=keep, expect_marker=marker)
 
     def _validated_theme_markup(self, markup: str) -> str:
         """Validate + canonicalize a whole-theme-block payload."""
         nodes = [n for n in parse_fragment(markup) if isinstance(n, Element)]
         el = nodes[0] if len(nodes) == 1 else None
         if el is None or el.tag != "style" or not el.has("data-aim-theme"):
-            raise InvalidOperation(
-                "theme payload must be a single <style data-aim-theme> block")
+            raise InvalidOperation("theme payload must be a single <style data-aim-theme> block")
         m = re.fullmatch(r"\s*:root\{([^{}]*)\}\s*", el.raw or "")
         if m is None:
             raise InvalidOperation("theme payload must be one :root{…} rule")
@@ -1440,26 +1739,46 @@ class AimDocument:
             page_setup_from_obj(settings["page"])
         return serialize(el)
 
-    def reject(self, pid: str, *, decided_by: Actor,
-               explanation: Optional[str] = None,
-               at: Optional[str] = None) -> Event:
-        return self._resolve(self.proposal(pid), decision="rejected",
-                             decided_by=decided_by, explanation=explanation,
-                             at=at)
+    def reject(
+        self,
+        pid: str,
+        *,
+        decided_by: Actor,
+        explanation: str | None = None,
+        at: str | None = None,
+    ) -> Event:
+        return self._resolve(
+            self.proposal(pid),
+            decision="rejected",
+            decided_by=decided_by,
+            explanation=explanation,
+            at=at,
+        )
 
-    def _resolve(self, prop: Proposal, *, decision: str, decided_by: Actor,
-                 applied: Optional[str] = None,
-                 superseded_by: Optional[str] = None,
-                 explanation: Optional[str] = None,
-                 at: Optional[str] = None) -> Event:
+    def _resolve(
+        self,
+        prop: Proposal,
+        *,
+        decision: str,
+        decided_by: Actor,
+        applied: str | None = None,
+        superseded_by: str | None = None,
+        explanation: str | None = None,
+        at: str | None = None,
+    ) -> Event:
         card = self._card_el(prop.id)
-        data: dict = {"seq": self.seq + 1, "kind": "resolution",
-                      "t": at or _now_iso(), "proposal": prop.id,
-                      "action": prop.action, "decision": decision,
-                      "proposed_by": prop.author.to_obj(),
-                      "proposed_at": prop.at,
-                      "decided_by": decided_by.to_obj(),
-                      "batch": self._batch_id()}
+        data: dict = {
+            "seq": self.seq + 1,
+            "kind": "resolution",
+            "t": at or _now_iso(),
+            "proposal": prop.id,
+            "action": prop.action,
+            "decision": decision,
+            "proposed_by": prop.author.to_obj(),
+            "proposed_at": prop.at,
+            "decided_by": decided_by.to_obj(),
+            "batch": self._batch_id(),
+        }
         if superseded_by:
             data["superseded_by"] = superseded_by
         if explanation:
@@ -1468,16 +1787,17 @@ class AimDocument:
             data["explanation"] = prop.explanation
 
         if prop.action == "add":
-            anchor = Anchor(prop.anchor_container or "body", prop.anchor_after,
-                            shell=prop.anchor_shell)
+            anchor = Anchor(
+                prop.anchor_container or "body", prop.anchor_after, shell=prop.anchor_shell
+            )
             data["target"] = self._payload_root_id(prop.payload_html or "")
             data["proposed"] = prop.payload_html
             data["anchor"] = anchor.to_obj()
             if decision == "accepted":
                 if anchor.after and ids.is_valid_proposal_id(anchor.after):
                     raise InvalidOperation(
-                        f"anchor proposal {anchor.after!r} is still pending — "
-                        "resolve it first")
+                        f"anchor proposal {anchor.after!r} is still pending — resolve it first"
+                    )
                 payload = applied if applied is not None else prop.payload_html
                 if applied is not None and applied != prop.payload_html:
                     data["applied"] = applied
@@ -1503,8 +1823,9 @@ class AimDocument:
             elif prop.action == "move" and decision == "accepted":
                 _no_delete_move(prop.target or "", "move proposal")
                 src = self._anchor_of(prop.target or "")
-                dst = Anchor(prop.anchor_container or "body", prop.anchor_after,
-                             shell=prop.anchor_shell)
+                dst = Anchor(
+                    prop.anchor_container or "body", prop.anchor_after, shell=prop.anchor_shell
+                )
                 data["anchor"] = dst.to_obj()
                 data["from"] = src.to_obj()
                 data["to"] = dst.to_obj()
@@ -1544,14 +1865,13 @@ class AimDocument:
         problems: list[str] = []
         events = self.history
         if any(not isinstance(e.data.get("seq"), int) for e in events):
-            problems.append("history has an event with a missing or "
-                            "non-integer seq")
+            problems.append("history has an event with a missing or non-integer seq")
             return problems
         seqs = [e.seq for e in events]
         if seqs != sorted(seqs) or len(set(seqs)) != len(seqs):
             problems.append("history seq is not strictly ascending")
             return problems
-        gaps = [(a, b) for a, b in zip(seqs, seqs[1:]) if b != a + 1]
+        gaps = [(a, b) for a, b in zip(seqs, seqs[1:], strict=False) if b != a + 1]
         if gaps:
             problems.append(f"history has internal seq gaps: {gaps}")
             return problems
@@ -1564,7 +1884,8 @@ class AimDocument:
                 if want != got:
                     problems.append(
                         f"checkpoint seq {ev.seq} ({ev.get('label')!r}): doc_hash "
-                        f"mismatch — recorded {want}, reconstructed {got}")
+                        f"mismatch — recorded {want}, reconstructed {got}"
+                    )
                 continue
             if not ev.state_changing:
                 continue
@@ -1574,12 +1895,10 @@ class AimDocument:
                 problems.append(f"seq {ev.seq}: replay failed — {exc}")
             except Exception as exc:  # a malformed payload/anchor is a chain
                 # problem to report, never a verifier crash → S000 (AIM-05)
-                problems.append(f"seq {ev.seq}: replay failed — "
-                                f"{type(exc).__name__}: {exc}")
+                problems.append(f"seq {ev.seq}: replay failed — {type(exc).__name__}: {exc}")
         return problems
 
-    def _invert_on(self, state: DocState, ev: Event,
-                   problems: list[str]) -> None:
+    def _invert_on(self, state: DocState, ev: Event, problems: list[str]) -> None:
         action, target = ev.action, ev.target or ""
         applied = ev.applied_payload
         if action == "modify":
@@ -1587,7 +1906,8 @@ class AimDocument:
             if current != applied:
                 problems.append(
                     f"seq {ev.seq}: payload mismatch on {target!r} — the document "
-                    f"does not match this event's result (external edit?)")
+                    f"does not match this event's result (external edit?)"
+                )
             if ev.get("before") is not None:
                 state.replace(target, ev.get("before"))
             elif target == "aim:theme":
@@ -1597,8 +1917,7 @@ class AimDocument:
         elif action == "add":
             current = state.serial(target)
             if current != applied:
-                problems.append(
-                    f"seq {ev.seq}: add payload mismatch on {target!r}")
+                problems.append(f"seq {ev.seq}: add payload mismatch on {target!r}")
             state.remove(target)
         elif action == "delete":
             anchor = ev.get("anchor")
@@ -1608,17 +1927,16 @@ class AimDocument:
         elif action == "move":
             frm = ev.get("from")
             if frm is None:
-                raise HistoryError(
-                    "move event carries no 'from' — not invertible")
+                raise HistoryError("move event carries no 'from' — not invertible")
             state.move(target, Anchor.from_obj(frm))
 
-    def state_at(self, seq: int) -> "AimDocument":
+    def state_at(self, seq: int) -> AimDocument:
         """Reconstruct the document as of *seq* (pending lane + caches dropped)."""
         events = self.history
         if events and seq < min(e.seq for e in events) - 1:
             raise HistoryError(
-                f"cannot reconstruct below seq {min(e.seq for e in events) - 1} "
-                "(history pruned)")
+                f"cannot reconstruct below seq {min(e.seq for e in events) - 1} (history pruned)"
+            )
         clone = AimDocument(parse_html(canonical.document_text(self._fragment)))
         state = clone._state
         for ev in reversed(events):
@@ -1626,7 +1944,8 @@ class AimDocument:
                 break
             if not ev.state_changing:
                 continue
-            clone._invert_on(state, ev, problems := [])
+            problems: list[str] = []
+            clone._invert_on(state, ev, problems)
             if problems:
                 raise HistoryError("; ".join(problems))
         # drop pending lane, caches, and future history
@@ -1642,12 +1961,15 @@ class AimDocument:
             state.head.children.remove(meta)
         hist = state.script("history")
         if hist is not None and hist.raw:
-            kept = [line for line in hist.raw.split("\n")
-                    if line.strip() and Event.from_json(line).seq <= seq]
+            kept = [
+                line
+                for line in hist.raw.split("\n")
+                if line.strip() and Event.from_json(line).seq <= seq
+            ]
             hist.raw = "\n" + "\n".join(kept) + "\n" if kept else "\n"
         return clone
 
-    # -- lifecycle operations ------------------------------------------------------------------------
+    # -- lifecycle operations --------------------------------------------------------------------
     def flatten(self, *, drop_embeddings: bool = True) -> None:
         """Drop the history (and by default the embeddings) — a clean file."""
         for kind in ("history",) + (("embeddings",) if drop_embeddings else ()):
@@ -1655,12 +1977,13 @@ class AimDocument:
             if s is not None:
                 self._state.body.children.remove(s)
 
-    def prune(self, *, before: Union[int, str]) -> int:
+    def prune(self, *, before: int | str) -> int:
         """Truncate history before a seq or checkpoint label; returns dropped count."""
         events = self.history
         if isinstance(before, str):
-            match = next((e for e in events if e.kind == "checkpoint"
-                          and e.get("label") == before), None)
+            match = next(
+                (e for e in events if e.kind == "checkpoint" and e.get("label") == before), None
+            )
             if match is None:
                 raise TargetNotFound(f"no checkpoint labeled {before!r}")
             cut = match.seq
@@ -1670,17 +1993,17 @@ class AimDocument:
         if events and not kept:
             raise InvalidOperation(
                 "prune would drop the entire log — seq/batch identities must "
-                "stay anchored; use flatten() to drop history wholesale")
+                "stay anchored; use flatten() to drop history wholesale"
+            )
         dropped = len(events) - len(kept)
         el = self._state.script("history")
         if el is not None:
-            el.raw = ("\n" + "\n".join(e.to_json() for e in kept) + "\n"
-                      if kept else "\n")
+            el.raw = "\n" + "\n".join(e.to_json() for e in kept) + "\n" if kept else "\n"
         return dropped
 
-    def reconcile(self, *, author: Optional[Actor] = None,
-                  at: Optional[str] = None,
-                  dry_run: bool = False) -> "ReconcileReport":
+    def reconcile(
+        self, *, author: Actor | None = None, at: str | None = None, dry_run: bool = False
+    ) -> ReconcileReport:
         """Detect out-of-band edits and repair the history (spec §6.8).
 
         Compares the body against the state the full log reconstructs and
@@ -1698,33 +2021,37 @@ class AimDocument:
         :mod:`aimformat.reconcile` for the full contract.
         """
         from .reconcile import reconcile_document
+
         return reconcile_document(self, author=author, at=at, dry_run=dry_run)
 
-    # -- caches: summary / toc / embeddings ------------------------------------------------------------
+    # -- caches: summary / toc / embeddings ------------------------------------------------------
     def set_summary(self, text: str, *, model: str) -> None:
         meta = self.meta or {}
-        meta["summary"] = {"text": text, "model": model,
-                           "as_of_seq": self.seq, "doc_hash": self.doc_hash}
+        meta["summary"] = {
+            "text": text,
+            "model": model,
+            "as_of_seq": self.seq,
+            "doc_hash": self.doc_hash,
+        }
         self._write_meta(meta)
 
     def generate_toc(self) -> list[dict]:
         """Derive the TOC cache from heading chunks (deterministic)."""
         toc: list[dict] = []
-        current: Optional[dict] = None
+        current: dict | None = None
         for top in self._state.constructs():
             cid = top.chunk_id or top.container_id
             if top.tag in ("h1", "h2", "h3", "h4", "h5", "h6"):
-                current = {"title": top.text(), "level": int(top.tag[1]),
-                           "chunks": [cid]}
+                current = {"title": top.text(), "level": int(top.tag[1]), "chunks": [cid]}
                 toc.append(current)
             elif top.tag == "aim-slide":
-                heading = top.find(lambda e: e.tag in (
-                    "h1", "h2", "h3", "h4", "h5", "h6"))
-                entry = {"title": heading.text() if heading else "",
-                         "level": 1, "chunks": [cid]}
-                entry["chunks"] += [e.chunk_id or e.container_id
-                                    for e in top.elements()
-                                    if (e.chunk_id or e.container_id)]
+                heading = top.find(lambda e: e.tag in ("h1", "h2", "h3", "h4", "h5", "h6"))
+                entry = {"title": heading.text() if heading else "", "level": 1, "chunks": [cid]}
+                entry["chunks"] += [
+                    e.chunk_id or e.container_id
+                    for e in top.elements()
+                    if (e.chunk_id or e.container_id)
+                ]
                 toc.append(entry)
                 current = None
             elif current is not None:
@@ -1742,34 +2069,41 @@ class AimDocument:
         if el is None:
             el = Element("script", [("type", REGISTRY.script_types["meta"])])
             title = self._state.head.find(lambda e: e.tag == "title")
-            idx = (self._state.head.children.index(title) + 1
-                   if title is not None else len(self._state.head.children))
+            idx = (
+                self._state.head.children.index(title) + 1
+                if title is not None
+                else len(self._state.head.children)
+            )
             self._state.head.children.insert(idx, el)
         el.raw = "\n" + canonical_json(meta) + "\n"
 
-    def set_embedding(self, chunk_id: str, *, model: str,
-                      vec: Sequence[float], **extra: object) -> None:
+    def set_embedding(
+        self, chunk_id: str, *, model: str, vec: Sequence[float], **extra: object
+    ) -> None:
         payload = self._state.serial(chunk_id)
         if payload is None:
             raise TargetNotFound(f"no chunk {chunk_id!r}")
-        line = {"chunk": chunk_id, "model": model,
-                "text_hash": canonical.sha256_prefixed(payload),
-                "vec": list(vec), **extra}
+        line = {
+            "chunk": chunk_id,
+            "model": model,
+            "text_hash": canonical.sha256_prefixed(payload),
+            "vec": list(vec),
+            **extra,
+        }
         el = self._state.script("embeddings")
         if el is None:
-            el = Element("script",
-                         [("type", REGISTRY.script_types["embeddings"])])
+            el = Element("script", [("type", REGISTRY.script_types["embeddings"])])
             el.raw = "\n"
             self._state.body.children.append(el)
-        lines = [l for l in (el.raw or "").split("\n") if l.strip()]
-        lines = [l for l in lines
-                 if not (self._emb_key(l) == (chunk_id, model))]
+        lines = [ln for ln in (el.raw or "").split("\n") if ln.strip()]
+        lines = [ln for ln in lines if not (self._emb_key(ln) == (chunk_id, model))]
         lines.append(canonical_json(line))
         el.raw = "\n" + "\n".join(lines) + "\n"
 
     @staticmethod
     def _emb_key(line: str) -> tuple[str, str]:
         import json
+
         try:
             obj = json.loads(line)
             return obj.get("chunk", ""), obj.get("model", "")
@@ -1781,6 +2115,7 @@ class AimDocument:
         """Parsed embedding lines. Raises :class:`ParseError` on lines that
         are not JSON objects."""
         import json
+
         el = self._state.script("embeddings")
         if el is None or not el.raw:
             return []
@@ -1791,11 +2126,9 @@ class AimDocument:
             try:
                 obj = json.loads(line)
             except json.JSONDecodeError as exc:
-                raise ParseError(
-                    f"embeddings line is not valid JSON: {exc}") from exc
+                raise ParseError(f"embeddings line is not valid JSON: {exc}") from exc
             if not isinstance(obj, dict):
-                raise ParseError(
-                    f"embeddings line is not a JSON object: {line[:60]!r}")
+                raise ParseError(f"embeddings line is not a JSON object: {line[:60]!r}")
             out.append(obj)
         return out
 
@@ -1803,13 +2136,12 @@ class AimDocument:
         out = []
         for emb in self.embeddings:
             payload = self._state.serial(emb.get("chunk", ""))
-            if payload is None or \
-                    canonical.sha256_prefixed(payload) != emb.get("text_hash"):
+            if payload is None or canonical.sha256_prefixed(payload) != emb.get("text_hash"):
                 out.append(emb)
         return out
 
-    # -- assets ----------------------------------------------------------------------------------------
-    def pack_assets(self, *, author: Actor, at: Optional[str] = None) -> int:
+    # -- assets ----------------------------------------------------------------------------------
+    def pack_assets(self, *, author: Actor, at: str | None = None) -> int:
         """Hoist ``data:image`` payloads into the asset registry (spec §9).
 
         Each affected chunk is rewritten through an ordinary modify event —
@@ -1818,12 +2150,16 @@ class AimDocument:
         with self.batch():  # one packing run = one editing intention
             return self._pack_assets_inner(author, at)
 
-    def _pack_assets_inner(self, author: Actor, at: Optional[str]) -> int:
+    def _pack_assets_inner(self, author: Actor, at: str | None) -> int:
         packed = 0
         for chunk in self.chunks:
             parent, members = self._state.find_chunk(chunk.id)
-            imgs = [el for m in members for el in m.iter()
-                    if el.tag == "img" and (el.get("src") or "").startswith("data:image/")]
+            imgs = [
+                el
+                for m in members
+                for el in m.iter()
+                if el.tag == "img" and (el.get("src") or "").startswith("data:image/")
+            ]
             if not imgs:
                 continue
             # every image of the chunk must decode BEFORE the first swap —
@@ -1833,24 +2169,27 @@ class AimDocument:
                 self._decode_asset_datauri(img.get("src") or "")
             before = serialize_run(members)
             for img in imgs:
-                asset_id = self._register_asset_datauri(img.get("src") or "",
-                                                        img.get("alt") or "")
-                svg = Element("svg", [("role", "img"),
-                                      ("aria-label", img.get("alt") or "")])
+                asset_id = self._register_asset_datauri(img.get("src") or "", img.get("alt") or "")
+                svg = Element("svg", [("role", "img"), ("aria-label", img.get("alt") or "")])
                 if img.get("style"):
                     svg.set("style", img.get("style"))
-                use = Element("use", [("href", f"#{asset_id}")],
-                              self_closing=True)
+                use = Element("use", [("href", f"#{asset_id}")], self_closing=True)
                 svg.children.append(use)
                 for m in members:
                     self._swap_node(m, img, svg)
             after = serialize_run(members)
-            data = {"seq": self.seq + 1, "kind": "direct_edit",
-                    "t": at or _now_iso(), "target": chunk.id,
-                    "action": "modify", "before": before, "after": after,
-                    "author": author.to_obj(), "batch": self._batch_id(),
-                    "explanation": "aim pack --inline: hoist embedded images "
-                                   "into the asset registry"}
+            data = {
+                "seq": self.seq + 1,
+                "kind": "direct_edit",
+                "t": at or _now_iso(),
+                "target": chunk.id,
+                "action": "modify",
+                "before": before,
+                "after": after,
+                "author": author.to_obj(),
+                "batch": self._batch_id(),
+                "explanation": "aim pack --inline: hoist embedded images into the asset registry",
+            }
             self._append_event(data)
             packed += len(imgs)
         return packed
@@ -1859,8 +2198,7 @@ class AimDocument:
     def _decode_asset_datauri(data_uri: str) -> bytes:
         m = re.match(r"^data:(image/[a-z+.-]+);base64,(.*)$", data_uri, re.S)
         if not m:
-            raise InvalidOperation(
-                "only base64 data:image/* payloads can be packed")
+            raise InvalidOperation("only base64 data:image/* payloads can be packed")
         try:
             return base64.b64decode(m.group(2), validate=True)
         except Exception as exc:
@@ -1877,8 +2215,7 @@ class AimDocument:
         sec = self._state.section("aim-assets")
         if sec is None:
             sec = Element("aim-assets")
-            svg = Element("svg", [("aria-hidden", "true"), ("height", "0"),
-                                  ("width", "0")])
+            svg = Element("svg", [("aria-hidden", "true"), ("height", "0"), ("width", "0")])
             sec.children.append(svg)
             insert_at = len(self._state.body.children)
             for i, child in enumerate(self._state.body.children):
@@ -1894,10 +2231,10 @@ class AimDocument:
         svg = self._assets_section().elements()[0]
         if any(s.get("id") == asset_id for s in svg.elements()):
             return asset_id
-        symbol = Element("symbol", [("id", asset_id),
-                                    ("viewBox", "0 0 100 100")])
-        image = Element("image", [("height", "100"), ("width", "100"),
-                                  ("href", data_uri)], self_closing=True)
+        symbol = Element("symbol", [("id", asset_id), ("viewBox", "0 0 100 100")])
+        image = Element(
+            "image", [("height", "100"), ("width", "100"), ("href", data_uri)], self_closing=True
+        )
         symbol.children.append(image)
         svg.children.append(symbol)
         return asset_id
@@ -1910,8 +2247,11 @@ class AimDocument:
             return 0
         live: set[str] = set()
         hay = [serialize(c) for c in self._state.constructs()]
-        hay += [ev.get(k) or "" for ev in self.history
-                for k in ("before", "after", "proposed", "applied")]
+        hay += [
+            ev.get(k) or ""
+            for ev in self.history
+            for k in ("before", "after", "proposed", "applied")
+        ]
         hay += [p.payload_html or "" for p in self.proposals]
         text = "\n".join(hay)
         for m in re.finditer(r'href="#(asset-[0-9a-f]{12})"', text):
@@ -1928,15 +2268,16 @@ class AimDocument:
 
 
 # ===========================================================================
-def new_document(*, title: str, lang: str = "en",
-                 theme: Optional[dict[str, str]] = None) -> AimDocument:
+def new_document(
+    *, title: str, lang: str = "en", theme: dict[str, str] | None = None
+) -> AimDocument:
     """A minimal valid, empty .aim document."""
     frag = Fragment()
     frag.doctype = "doctype html"
-    html = Element("html", [("data-aim-version", REGISTRY.spec_version),
-                            ("lang", lang)])
+    html = Element("html", [("data-aim-version", REGISTRY.spec_version), ("lang", lang)])
     head = Element("head")
     head.children.append(Element("meta", [("charset", "utf-8")]))
+    head.children.append(Comment(render_note()))
     title_el = Element("title")
     title_el.children.append(Text(title))
     head.children.append(title_el)
@@ -1961,7 +2302,7 @@ def new_document(*, title: str, lang: str = "en",
     return AimDocument(frag)
 
 
-def load(path: Union[str, Path]) -> AimDocument:
+def load(path: str | Path) -> AimDocument:
     return AimDocument.load(path)
 
 

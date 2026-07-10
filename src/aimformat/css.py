@@ -7,6 +7,7 @@ utilities, and the ``aim-*`` chrome (slide canvas, proposal cards). The
 stylesheet is machine-managed and excluded from content hashing — tools
 regenerate it freely; documents stay valid.
 """
+
 from __future__ import annotations
 
 from functools import lru_cache
@@ -30,24 +31,20 @@ def _base_layer() -> list[str]:
         "ul,ol{margin:.75em 0;padding-left:1.5rem}li{margin:.25em 0}",
         "ul{list-style:disc}ol{list-style:decimal}",
         "table{border-collapse:collapse;margin:1em 0;width:100%;font-size:.9375rem}",
-        "th,td{border:1px solid #d1d5db;padding:.5rem .75rem;text-align:left;"
-        "vertical-align:top}",
+        "th,td{border:1px solid #d1d5db;padding:.5rem .75rem;text-align:left;vertical-align:top}",
         "thead th{background:#f3f4f6;font-weight:600}",
-        "blockquote{margin:1em 0;padding:.25rem 1rem;border-left:3px solid #d1d5db;"
-        "color:#4b5563}",
+        "blockquote{margin:1em 0;padding:.25rem 1rem;border-left:3px solid #d1d5db;color:#4b5563}",
         "code{font-family:var(--aim-font-mono);font-size:.875em;background:#f3f4f6;"
         "padding:.125rem .375rem;border-radius:.25rem}",
         "pre{background:#f3f4f6;padding:.75rem 1rem;border-radius:.375rem;"
         "overflow-x:auto;margin:1em 0}pre code{background:none;padding:0}",
-        "figure{margin:1.5em 0}figcaption{font-size:.875rem;color:#6b7280;"
-        "margin-top:.5rem}",
+        "figure{margin:1.5em 0}figcaption{font-size:.875rem;color:#6b7280;margin-top:.5rem}",
         "img,svg{max-width:100%;height:auto}",
         "hr{border:0;border-top:1px solid #e5e7eb;margin:2em 0}",
         "a{color:var(--aim-brand-1)}",
         # hard page break: on screen a subtle dashed marker; in print the
         # actual break (chrome layer). Distinct from hr (a thematic break).
-        "aim-page-break{display:block;border:0;border-top:1px dashed #d1d5db;"
-        "margin:2em 0}",
+        "aim-page-break{display:block;border:0;border-top:1px dashed #d1d5db;margin:2em 0}",
     ]
 
 
@@ -60,8 +57,7 @@ def _chrome_layer() -> list[str]:
         "background:#fff;border:1px solid #e5e7eb;"
         "box-shadow:0 1px 4px rgba(0,0,0,.08);"
         "zoom:var(--aim-slide-scale,.42);margin-bottom:1.5rem}",
-        "aim-slide>[data-aim],aim-slide>[data-aim-container]{position:absolute;"
-        "margin:0}",
+        "aim-slide>[data-aim],aim-slide>[data-aim-container]{position:absolute;margin:0}",
         "@media (max-width:1000px){aim-slide{zoom:var(--aim-slide-scale,.28)}}",
         "@media (max-width:640px){aim-slide{zoom:var(--aim-slide-scale,.17)}}",
         "@media print{aim-slide{zoom:1;margin-bottom:0;page-break-after:always;"
@@ -116,5 +112,9 @@ def generate_aim_css() -> str:
 def css_stats() -> dict:
     css = generate_aim_css()
     import gzip
-    return {"rules": css.count("{"), "raw_bytes": len(css.encode()),
-            "gzip_bytes": len(gzip.compress(css.encode(), 9))}
+
+    return {
+        "rules": css.count("{"),
+        "raw_bytes": len(css.encode()),
+        "gzip_bytes": len(gzip.compress(css.encode(), 9)),
+    }

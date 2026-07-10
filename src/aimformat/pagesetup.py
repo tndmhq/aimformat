@@ -18,11 +18,11 @@ a function of fonts and renderer and would go stale on every edit (OOXML's
 ``w:lastRenderedPageBreak`` is the cautionary precedent). The format stores
 intent only: this setup block plus explicit ``<aim-page-break>`` chunks.
 """
+
 from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
-from typing import Optional
 
 from .errors import InvalidOperation
 from .registry import REGISTRY
@@ -71,17 +71,23 @@ class PageSetup:
     # -- serializations ----------------------------------------------------------
     def to_obj(self) -> dict:
         """The ``page`` field as stored in the aim-doc block."""
-        return {"size": self.size, "orientation": self.orientation,
-                "margins": {s: _fmt_mm(self.margins_mm[s]) for s in _SIDES}}
+        return {
+            "size": self.size,
+            "orientation": self.orientation,
+            "margins": {s: _fmt_mm(self.margins_mm[s]) for s in _SIDES},
+        }
 
     def resolved(self) -> dict:
         """Flat geometry dict for renderers (all lengths in mm)."""
-        return {"size": self.size, "orientation": self.orientation,
-                "margins_mm": dict(self.margins_mm),
-                "page_width_mm": self.page_width_mm,
-                "page_height_mm": self.page_height_mm,
-                "content_width_mm": self.content_width_mm,
-                "content_height_mm": self.content_height_mm}
+        return {
+            "size": self.size,
+            "orientation": self.orientation,
+            "margins_mm": dict(self.margins_mm),
+            "page_width_mm": self.page_width_mm,
+            "page_height_mm": self.page_height_mm,
+            "content_width_mm": self.content_width_mm,
+            "content_height_mm": self.content_height_mm,
+        }
 
 
 def _fmt_mm(value: float) -> str:
@@ -111,13 +117,15 @@ def page_setup_from_obj(obj: object) -> PageSetup:
     orientation = obj.get("orientation", base["orientation"])
     if not isinstance(size, str) or size not in REGISTRY.page_sizes_mm:
         raise _invalid(
-            f"unknown page size {size!r} (registered: "
-            f"{', '.join(sorted(REGISTRY.page_sizes_mm))})", "D003")
-    if not isinstance(orientation, str) or \
-            orientation not in REGISTRY.page_orientations:
+            f"unknown page size {size!r} (registered: {', '.join(sorted(REGISTRY.page_sizes_mm))})",
+            "D003",
+        )
+    if not isinstance(orientation, str) or orientation not in REGISTRY.page_orientations:
         raise _invalid(
             f"unknown orientation {orientation!r} (registered: "
-            f"{', '.join(sorted(REGISTRY.page_orientations))})", "D003")
+            f"{', '.join(sorted(REGISTRY.page_orientations))})",
+            "D003",
+        )
     raw_margins = obj.get("margins", base["margins"])
     if not isinstance(raw_margins, dict):
         raise _invalid("page margins must be an object", "D004")
@@ -127,17 +135,19 @@ def page_setup_from_obj(obj: object) -> PageSetup:
         if not isinstance(value, str) or not REGISTRY.margin_pattern.match(value):
             raise _invalid(
                 f"page margin {side} {value!r} does not match the margin "
-                f"grammar {REGISTRY.margin_pattern.pattern}", "D004")
+                f"grammar {REGISTRY.margin_pattern.pattern}",
+                "D004",
+            )
         mm = float(value[:-2])
         if mm > REGISTRY.margin_max_mm:
             raise _invalid(
-                f"page margin {side} {value!r} exceeds the maximum "
-                f"{REGISTRY.margin_max_mm}mm", "D004")
+                f"page margin {side} {value!r} exceeds the maximum {REGISTRY.margin_max_mm}mm",
+                "D004",
+            )
         margins[side] = mm
     setup = PageSetup(size=size, orientation=orientation, margins_mm=margins)
     if setup.content_width_mm <= 0 or setup.content_height_mm <= 0:
-        raise _invalid(
-            f"margins leave no content area on {size} {orientation}", "D004")
+        raise _invalid(f"margins leave no content area on {size} {orientation}", "D004")
     return setup
 
 
@@ -149,22 +159,26 @@ def doc_settings_element(markup: str):
     proposal validator, and the linter all call this, so the "single typed
     script block" rule cannot drift between writer and verifier."""
     from .dom import Element, parse_fragment
+
     nodes = [n for n in parse_fragment(markup) if isinstance(n, Element)]
     el = nodes[0] if len(nodes) == 1 else None
-    if el is None or el.tag != "script" or \
-            el.get("type") != REGISTRY.script_types["doc"]:
+    if el is None or el.tag != "script" or el.get("type") != REGISTRY.script_types["doc"]:
         raise _invalid(
             "settings payload must be a single "
-            f'<script type="{REGISTRY.script_types["doc"]}"> block', "D001")
+            f'<script type="{REGISTRY.script_types["doc"]}"> block',
+            "D001",
+        )
     if el.self_closing:
         raise _invalid(
             "settings payload must use explicit open+close script tags — "
             "in HTML a self-closed <script/> is still an open tag and "
-            "swallows the following markup", "D001")
+            "swallows the following markup",
+            "D001",
+        )
     return el
 
 
-def parse_doc_settings(raw: Optional[str]) -> dict:
+def parse_doc_settings(raw: str | None) -> dict:
     """The aim-doc block's JSON object (``{}`` when absent/blank).
 
     Raises :class:`InvalidOperation` when present but not a JSON object —
@@ -175,8 +189,7 @@ def parse_doc_settings(raw: Optional[str]) -> dict:
     try:
         obj = json.loads(raw.strip())
     except json.JSONDecodeError as exc:
-        raise _invalid(
-            f"aim-doc settings block is not valid JSON: {exc}", "D001") from exc
+        raise _invalid(f"aim-doc settings block is not valid JSON: {exc}", "D001") from exc
     if not isinstance(obj, dict):
         raise _invalid("aim-doc settings block is not a JSON object", "D001")
     return obj
@@ -200,6 +213,12 @@ def page_css(setup: PageSetup) -> str:
     alone govern the content inset.
     """
     m = setup.margins_mm
-    return ("@page{size:" + _fmt_mm(setup.page_width_mm) + " "
-            + _fmt_mm(setup.page_height_mm) + ";margin:"
-            + " ".join(_fmt_mm(m[s]) for s in _SIDES) + "}")
+    return (
+        "@page{size:"
+        + _fmt_mm(setup.page_width_mm)
+        + " "
+        + _fmt_mm(setup.page_height_mm)
+        + ";margin:"
+        + " ".join(_fmt_mm(m[s]) for s in _SIDES)
+        + "}"
+    )

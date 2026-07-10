@@ -21,11 +21,12 @@ checkpoints. The rules implemented here:
   tag, the theme line, and each body content construct line, LF-joined with
   a trailing LF
 """
+
 from __future__ import annotations
 
 import hashlib
 import json
-from typing import Iterable, Optional, Union
+from collections.abc import Iterable
 
 from .dom import Comment, Element, Fragment, Nodeish, Text
 from .registry import REGISTRY
@@ -73,7 +74,7 @@ def canonical_attrs(el: Element, *, in_svg: bool) -> str:
         return adjust.get(name, name) if in_svg else name
 
     remaining = {k: v for k, v in el.attrs}
-    ordered: list[tuple[str, Optional[str]]] = []
+    ordered: list[tuple[str, str | None]] = []
     for k in REGISTRY.attr_first:
         if k in remaining:
             ordered.append((k, remaining.pop(k)))
@@ -148,9 +149,11 @@ def _lines(node: Nodeish, *, in_svg: bool = False) -> list[str]:
         body = node.raw
         body = body[1:] if body.startswith("\n") else body
         body = body[:-1] if body.endswith("\n") else body
-        return ([f"<{node.tag}{canonical_attrs(node, in_svg=svg_here)}>"]
-                + (body.split("\n") if body else [])
-                + [f"</{node.tag}>"])
+        return (
+            [f"<{node.tag}{canonical_attrs(node, in_svg=svg_here)}>"]
+            + (body.split("\n") if body else [])
+            + [f"</{node.tag}>"]
+        )
     return [serialize(node, in_svg=in_svg)]
 
 
@@ -166,21 +169,26 @@ def document_text(fragment: Fragment) -> str:
 # JSON canonical form
 def canonical_json(obj: object) -> str:
     """RFC 8785-flavoured canonical JSON, safe to embed in a script block."""
-    return json.dumps(obj, ensure_ascii=False, sort_keys=True,
-                      separators=(",", ":")).replace("</", "<\\/")
+    return json.dumps(obj, ensure_ascii=False, sort_keys=True, separators=(",", ":")).replace(
+        "</", "<\\/"
+    )
 
 
 # --------------------------------------------------------------------------
 # hashing
-def sha256_prefixed(data: Union[str, bytes]) -> str:
+def sha256_prefixed(data: str | bytes) -> str:
     if isinstance(data, str):
         data = data.encode("utf-8")
     return "sha256:" + hashlib.sha256(data).hexdigest()
 
 
-def doc_hash(html_open_line: str, theme_line: Optional[str],
-             construct_lines: Iterable[str], *,
-             doc_settings_line: Optional[str] = None) -> str:
+def doc_hash(
+    html_open_line: str,
+    theme_line: str | None,
+    construct_lines: Iterable[str],
+    *,
+    doc_settings_line: str | None = None,
+) -> str:
     """The reduced-projection hash anchoring checkpoints (spec §11.4).
 
     The settings block participates only when present, so documents without

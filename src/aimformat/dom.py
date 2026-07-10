@@ -12,10 +12,12 @@ The HTML tokenizer lowercases attribute names; foreign (SVG) attribute case
 is re-adjusted at serialization time from the registry table, mirroring what
 browser tree-construction does.
 """
+
 from __future__ import annotations
 
+from collections.abc import Callable, Iterator
 from html.parser import HTMLParser
-from typing import Callable, Iterator, Optional, Union
+from typing import Union
 
 from .errors import ParseError
 from .registry import REGISTRY
@@ -46,16 +48,21 @@ class Comment:
 class Element:
     __slots__ = ("tag", "attrs", "children", "self_closing", "raw")
 
-    def __init__(self, tag: str, attrs: Optional[list[tuple[str, Optional[str]]]] = None,
-                 *, self_closing: bool = False):
+    def __init__(
+        self,
+        tag: str,
+        attrs: list[tuple[str, str | None]] | None = None,
+        *,
+        self_closing: bool = False,
+    ):
         self.tag = tag
-        self.attrs: list[tuple[str, Optional[str]]] = list(attrs or [])
+        self.attrs: list[tuple[str, str | None]] = list(attrs or [])
         self.children: list[Nodeish] = []
         self.self_closing = self_closing
-        self.raw: Optional[str] = None  # script/style raw content
+        self.raw: str | None = None  # script/style raw content
 
     # -- attribute helpers ---------------------------------------------------
-    def get(self, name: str, default: Optional[str] = None) -> Optional[str]:
+    def get(self, name: str, default: str | None = None) -> str | None:
         for k, v in self.attrs:
             if k == name:
                 return v if v is not None else ""
@@ -64,7 +71,7 @@ class Element:
     def has(self, name: str) -> bool:
         return any(k == name for k, _ in self.attrs)
 
-    def set(self, name: str, value: Optional[str]) -> None:
+    def set(self, name: str, value: str | None) -> None:
         for i, (k, _) in enumerate(self.attrs):
             if k == name:
                 self.attrs[i] = (name, value)
@@ -76,26 +83,26 @@ class Element:
 
     # -- convenience ---------------------------------------------------------
     @property
-    def chunk_id(self) -> Optional[str]:
+    def chunk_id(self) -> str | None:
         return self.get("data-aim")
 
     @property
-    def container_id(self) -> Optional[str]:
+    def container_id(self) -> str | None:
         return self.get("data-aim-container")
 
-    def elements(self) -> list["Element"]:
+    def elements(self) -> list[Element]:
         return [c for c in self.children if isinstance(c, Element)]
 
-    def iter(self) -> Iterator["Element"]:
+    def iter(self) -> Iterator[Element]:
         """Depth-first over this element and all element descendants."""
         yield self
         for c in self.elements():
             yield from c.iter()
 
-    def find(self, pred: Callable[["Element"], bool]) -> Optional["Element"]:
+    def find(self, pred: Callable[[Element], bool]) -> Element | None:
         return next((e for e in self.iter() if pred(e)), None)
 
-    def find_all(self, pred: Callable[["Element"], bool]) -> list["Element"]:
+    def find_all(self, pred: Callable[[Element], bool]) -> list[Element]:
         return [e for e in self.iter() if pred(e)]
 
     def text(self) -> str:
@@ -117,7 +124,7 @@ class Fragment:
     """Root holder for parsed content: a doctype plus top-level nodes."""
 
     def __init__(self) -> None:
-        self.doctype: Optional[str] = None
+        self.doctype: str | None = None
         self.children: list[Nodeish] = []
 
     def elements(self) -> list[Element]:
@@ -129,7 +136,7 @@ class _Reader(HTMLParser):
         super().__init__(convert_charrefs=True)
         self.fragment = Fragment()
         self._stack: list[Element] = []
-        self._raw: Optional[Element] = None
+        self._raw: Element | None = None
 
     # ----------------------------------------------------------------------
     def _append(self, node: Nodeish) -> None:

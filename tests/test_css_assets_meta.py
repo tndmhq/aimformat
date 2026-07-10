@@ -1,18 +1,17 @@
 """aim.css generation, asset pack/gc, and the cache layer (meta/embeddings)."""
-import base64
-import gzip
-import hashlib
 
-import pytest
+import base64
+import hashlib
 
 import aimformat as aim
 from aimformat.css import css_stats, generate_aim_css
-
 from conftest import BOT, ME, ts
 
 # 1x1 red pixel PNG
-PNG_B64 = ("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4"
-           "z8DwHwAFBQIAX8jx0gAAAABJRU5ErkJggg==")
+PNG_B64 = (
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4"
+    "z8DwHwAFBQIAX8jx0gAAAABJRU5ErkJggg=="
+)
 DATA_URI = "data:image/png;base64," + PNG_B64
 
 
@@ -49,9 +48,12 @@ class TestCss:
 class TestAssets:
     def make_doc(self):
         doc = aim.new_document(title="T")
-        doc.add_chunk(f'<figure data-aim="fig"><img alt="dot" src="{DATA_URI}">'
-                      "<figcaption>A dot.</figcaption></figure>",
-                      author=BOT, at=ts(0))
+        doc.add_chunk(
+            f'<figure data-aim="fig"><img alt="dot" src="{DATA_URI}">'
+            "<figcaption>A dot.</figcaption></figure>",
+            author=BOT,
+            at=ts(0),
+        )
         return doc
 
     def test_pack_hoists_data_uri(self):
@@ -59,7 +61,7 @@ class TestAssets:
         n = doc.pack_assets(author=aim.external("packer"), at=ts(1))
         assert n == 1
         html = doc.chunk("fig").html
-        assert "<use href=\"#asset-" in html and "data:image" not in html
+        assert '<use href="#asset-' in html and "data:image" not in html
         assert "<aim-assets>" in doc.dumps()
 
     def test_pack_is_a_recorded_modify(self):
@@ -78,10 +80,13 @@ class TestAssets:
 
     def test_pack_dedupes_identical_images(self):
         doc = self.make_doc()
-        doc.add_chunk(f'<figure data-aim="fig2"><img alt="same" '
-                      f'src="{DATA_URI}"></figure>', author=BOT, at=ts(1))
+        doc.add_chunk(
+            f'<figure data-aim="fig2"><img alt="same" src="{DATA_URI}"></figure>',
+            author=BOT,
+            at=ts(1),
+        )
         doc.pack_assets(author=aim.external("packer"), at=ts(2))
-        assert doc.dumps().count("<symbol id=\"asset-") == 1
+        assert doc.dumps().count('<symbol id="asset-') == 1
 
     def test_gc_respects_history_liveness(self):
         doc = self.make_doc()
@@ -96,8 +101,7 @@ class TestAssets:
     def test_packed_doc_lints_clean(self):
         doc = self.make_doc()
         doc.pack_assets(author=aim.external("packer"), at=ts(1))
-        assert not [f for f in aim.lint_text(doc.dumps())
-                    if f.level == "error"]
+        assert not [f for f in aim.lint_text(doc.dumps()) if f.level == "error"]
 
 
 class TestCaches:
@@ -118,8 +122,7 @@ class TestCaches:
     def test_embeddings_roundtrip_and_staleness(self, basic_doc):
         basic_doc.set_embedding("intro", model="m", vec=[0.25, -0.5])
         assert basic_doc.stale_embeddings() == []
-        basic_doc.modify_chunk("intro", '<p data-aim="intro">Changed.</p>',
-                               author=ME, at=ts(5))
+        basic_doc.modify_chunk("intro", '<p data-aim="intro">Changed.</p>', author=ME, at=ts(5))
         assert [e["chunk"] for e in basic_doc.stale_embeddings()] == ["intro"]
         basic_doc.set_embedding("intro", model="m", vec=[0.3, -0.4])
         assert basic_doc.stale_embeddings() == []

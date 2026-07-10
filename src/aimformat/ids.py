@@ -7,6 +7,7 @@ ids — including UUIDs — are equally valid. Models emitting placeholder ids
 never win: tooling assigns the real id at write time, and ids are never
 reused within a document's lifetime (deleted ids stay burned).
 """
+
 from __future__ import annotations
 
 import re
@@ -28,9 +29,11 @@ def is_valid_chunk_id(value: str) -> bool:
     that namespace, and sharing it would make anchor references ambiguous
     (a chained add's ``after`` must dispatch on the id alone).
     """
-    return (bool(CHUNK_ID_RE.match(value))
-            and value not in RESERVED_TARGETS
-            and not value.startswith("p-"))
+    return (
+        bool(CHUNK_ID_RE.match(value))
+        and value not in RESERVED_TARGETS
+        and not value.startswith("p-")
+    )
 
 
 def is_valid_proposal_id(value: str) -> bool:

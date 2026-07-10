@@ -1,18 +1,19 @@
 """Mini-DOM parsing behavior and id assignment."""
+
 import pytest
 
 import aimformat as aim
 from aimformat import ids
-from aimformat.dom import Element, parse_fragment, parse_html
+from aimformat.dom import parse_fragment, parse_html
 from aimformat.errors import ParseError
-
 from conftest import BOT, ts
 
 
 class TestDom:
     def test_raw_script_content_preserved(self):
-        frag = parse_html('<script type="application/aim-history+jsonl">\n'
-                          '{"a":"<\\/script>"}\n</script>')
+        frag = parse_html(
+            '<script type="application/aim-history+jsonl">\n{"a":"<\\/script>"}\n</script>'
+        )
         el = frag.elements()[0]
         assert '{"a":"<\\/script>"}' in el.raw
 
@@ -55,8 +56,8 @@ class TestIds:
         assert ids.is_valid_chunk_id("chunk-name_2")
         assert not ids.is_valid_chunk_id("-leading")
         assert not ids.is_valid_chunk_id("UPPER")
-        assert not ids.is_valid_chunk_id("body")          # reserved
-        assert not ids.is_valid_chunk_id("aim:theme")     # reserved
+        assert not ids.is_valid_chunk_id("body")  # reserved
+        assert not ids.is_valid_chunk_id("aim:theme")  # reserved
         assert ids.is_valid_proposal_id("p-1a")
         assert not ids.is_valid_proposal_id("x-1a")
 

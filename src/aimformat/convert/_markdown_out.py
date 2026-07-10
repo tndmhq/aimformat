@@ -25,10 +25,10 @@ A stdlib chunk walker over the canonical document tree. Fidelity notes:
   container-level proposals; critic delimiters occurring in content are
   neutralized with a zero-width space so spans cannot terminate early.
 """
+
 from __future__ import annotations
 
 import re
-from typing import Optional
 
 from ..document import AimDocument, Proposal
 from ..dom import Element, Text, parse_html
@@ -41,7 +41,8 @@ _MD_ESCAPE = re.compile(r"([\\`*_\[\]~&<])")
 _LINE_START = re.compile(
     r"^(\s{0,3})"
     r"(#{1,6}(?=\s|$)|[>+*-](?=\s|$)|\d{1,9}[.)](?=\s|$)"
-    r"|(?:-\s*){3,}$|(?:\*\s*){3,}$|(?:_\s*){3,}$|=+\s*$|-+\s*$)")
+    r"|(?:-\s*){3,}$|(?:\*\s*){3,}$|(?:_\s*){3,}$|=+\s*$|-+\s*$)"
+)
 
 
 def _esc(text: str, *, in_table: bool = False) -> str:
@@ -78,8 +79,7 @@ def _code_span(text: str, *, in_table: bool = False) -> str:
     text = text.replace("\n", " ")
     runs = re.findall(r"`+", text)
     fence = "`" * (max((len(r) for r in runs), default=0) + 1)
-    pad = " " if (not text or text.startswith("`") or text.endswith("`")) \
-        else ""
+    pad = " " if (not text or text.startswith("`") or text.endswith("`")) else ""
     return f"{fence}{pad}{text}{pad}{fence}"
 
 
@@ -129,14 +129,11 @@ def _inline_nodes(nodes: list, *, in_table: bool = False) -> str:
             parts.append(_code_span(child.text(), in_table=in_table))
         elif tag == "a":
             href = child.get("href") or ""
-            parts.append(
-                f"[{inner}]({_dest(href, in_table=in_table)})"
-                if href else inner)
+            parts.append(f"[{inner}]({_dest(href, in_table=in_table)})" if href else inner)
         elif tag == "img":
             alt = child.get("alt") or ""
             src = child.get("src") or ""
-            parts.append(f"![{_esc(alt, in_table=in_table)}]"
-                         f"({_dest(src, in_table=in_table)})")
+            parts.append(f"![{_esc(alt, in_table=in_table)}]({_dest(src, in_table=in_table)})")
         elif tag == "br":
             parts.append(" " if in_table else "  \n")
         else:  # u/mark/sub/sup/span/svg…: text only
@@ -145,10 +142,12 @@ def _inline_nodes(nodes: list, *, in_table: bool = False) -> str:
 
 
 class _Renderer:
-    def __init__(self,
-                 adds_by_anchor: dict[tuple[Optional[str], Optional[str]],
-                                      list[Proposal]],
-                 mods: dict[str, Proposal], critic: bool):
+    def __init__(
+        self,
+        adds_by_anchor: dict[tuple[str | None, str | None], list[Proposal]],
+        mods: dict[str, Proposal],
+        critic: bool,
+    ):
         self.adds = adds_by_anchor
         self.mods = mods
         self.critic = critic
@@ -186,8 +185,7 @@ class _Renderer:
             for i, blk in enumerate(inner):
                 if i:
                     lines.append(">")
-                lines.extend("> " + line if line else ">"
-                             for line in blk.splitlines())
+                lines.extend("> " + line if line else ">" for line in blk.splitlines())
             return ["\n".join(lines)]
         if tag == "pre":
             return [_code_fence(el.text().rstrip("\n"))]
@@ -222,26 +220,27 @@ class _Renderer:
                 inline_parts.append(_esc(child.data))
             elif isinstance(child, Element):
                 tag = child.tag
-                if tag == "p" and not first_paragraph_taken \
-                        and not blocks:
+                if tag == "p" and not first_paragraph_taken and not blocks:
                     inline_parts.append(_inline(child))
                     first_paragraph_taken = True
                 elif tag in ("ul", "ol"):
                     blocks.append(self._list(child, indent=content_indent))
                 elif tag in ("p", "pre", "blockquote", "table", "hr"):
                     blocks.extend(
-                        "\n".join(content_indent + line if line else ""
-                                  for line in b.splitlines())
-                        for b in self.block(child))
+                        "\n".join(content_indent + line if line else "" for line in b.splitlines())
+                        for b in self.block(child)
+                    )
                 elif tag == "br":
                     inline_parts.append("  \n" + content_indent)
                 elif tag == "a":
                     inline_parts.append(_inline_nodes([child]))
                 else:
                     inline_parts.append(_inline_nodes([child]))
-        first = indent + marker + \
-            _protect_line_starts("".join(inline_parts)).replace(
-                "\n", "\n" + content_indent)
+        first = (
+            indent
+            + marker
+            + _protect_line_starts("".join(inline_parts)).replace("\n", "\n" + content_indent)
+        )
         lines = [first]
         for blk in blocks:
             lines.append("")  # loose separation keeps blocks in the item
@@ -260,8 +259,7 @@ class _Renderer:
         while i < len(items):
             cid = items[i].chunk_id
             group = [items[i]]  # a run chunk = consecutive same-id items
-            while cid and i + 1 < len(items) \
-                    and items[i + 1].chunk_id == cid:
+            while cid and i + 1 < len(items) and items[i + 1].chunk_id == cid:
                 i += 1
                 group.append(items[i])
             i += 1
@@ -278,15 +276,19 @@ class _Renderer:
 
     def _table(self, el: Element) -> str:
         container_id = el.container_id
-        head: list[tuple[Optional[str], list[str]]] = []
-        body: list[tuple[Optional[str], list[str]]] = []
+        head: list[tuple[str | None, list[str]]] = []
+        body: list[tuple[str | None, list[str]]] = []
         for section in el.elements():
-            rows = ([section] if section.tag == "tr"
-                    else [r for r in section.elements() if r.tag == "tr"])
+            rows = (
+                [section]
+                if section.tag == "tr"
+                else [r for r in section.elements() if r.tag == "tr"]
+            )
             target = head if section.tag == "thead" else body
             for tr in rows:
-                cells = [_inline(td, in_table=True)
-                         for td in tr.elements() if td.tag in ("td", "th")]
+                cells = [
+                    _inline(td, in_table=True) for td in tr.elements() if td.tag in ("td", "th")
+                ]
                 target.append((tr.chunk_id, cells))
         if not head and body:
             head = [body.pop(0)]
@@ -335,8 +337,7 @@ class _Renderer:
         return _neutralize_critic("\n\n".join(b for b in blocks if b))
 
     def _note(self, prop: Proposal) -> str:
-        return (f"{{>>{_neutralize_critic(prop.explanation)}<<}}"
-                if prop.explanation else "")
+        return f"{{>>{_neutralize_critic(prop.explanation)}<<}}" if prop.explanation else ""
 
     def _critic_wrap_lines(self, cid: str, lines: list[str]) -> list[str]:
         prop = self.mods.get(cid)
@@ -348,21 +349,19 @@ class _Renderer:
         new = self._payload_md(prop)
         return [f"{{~~{old}~>{new}~~}}{self._note(prop)}"]
 
-    def _critic_adds(self, key: tuple[Optional[str], Optional[str]]
-                     ) -> list[str]:
+    def _critic_adds(self, key: tuple[str | None, str | None]) -> list[str]:
         out: list[str] = []
         for prop in self.adds.get(key, []):
             out.append(f"{{++{self._payload_md(prop)}++}}{self._note(prop)}")
             out.extend(self._critic_adds((prop.anchor_container, prop.id)))
         return out
 
-    def chunk_blocks(self, el: Element, cid: Optional[str]) -> list[str]:
+    def chunk_blocks(self, el: Element, cid: str | None) -> list[str]:
         blocks = self.block(el)
         if self.critic and cid:
             if cid in self.mods:
                 blocks = self._critic_wrap_lines(cid, blocks)
-            blocks = blocks + self._critic_adds((None, cid)) \
-                + self._critic_adds(("body", cid))
+            blocks = blocks + self._critic_adds((None, cid)) + self._critic_adds(("body", cid))
         return blocks
 
 
@@ -373,12 +372,10 @@ def to_markdown(doc: AimDocument, *, pending: str = "drop") -> str:
     ``pending="criticmarkup"`` renders pending proposals as CriticMarkup.
     """
     if pending not in ("drop", "criticmarkup"):
-        raise InvalidOperation(
-            f"pending must be 'drop' or 'criticmarkup', got {pending!r}")
+        raise InvalidOperation(f"pending must be 'drop' or 'criticmarkup', got {pending!r}")
     critic = pending == "criticmarkup"
 
-    adds_by_anchor: dict[tuple[Optional[str], Optional[str]],
-                         list[Proposal]] = {}
+    adds_by_anchor: dict[tuple[str | None, str | None], list[Proposal]] = {}
     mods: dict[str, Proposal] = {}
     notes: list[str] = []
     if critic:
@@ -386,13 +383,13 @@ def to_markdown(doc: AimDocument, *, pending: str = "drop") -> str:
             if p.action == "add":
                 key = (p.anchor_container, p.anchor_after)
                 adds_by_anchor.setdefault(key, []).append(p)
-            elif p.action in ("modify", "delete") and p.target \
-                    and p.target != "aim:theme":
+            elif p.action in ("modify", "delete") and p.target and p.target != "aim:theme":
                 mods[p.target] = p
             else:  # theme changes / moves have no textual place in Markdown
                 what = p.target or p.action
-                notes.append(f"{{>>pending {p.action} on {what}: "
-                             f"{p.explanation or 'no explanation'}<<}}")
+                notes.append(
+                    f"{{>>pending {p.action} on {what}: {p.explanation or 'no explanation'}<<}}"
+                )
 
     frag = parse_html(doc.dumps())
     html = next(e for e in frag.elements() if e.tag == "html")
@@ -409,8 +406,7 @@ def to_markdown(doc: AimDocument, *, pending: str = "drop") -> str:
         el = elements[i]
         cid = el.chunk_id
         group = [el]  # a run chunk = consecutive same-id siblings
-        while cid and i + 1 < len(elements) \
-                and elements[i + 1].chunk_id == cid:
+        while cid and i + 1 < len(elements) and elements[i + 1].chunk_id == cid:
             i += 1
             group.append(elements[i])
         i += 1

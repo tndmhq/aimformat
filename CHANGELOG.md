@@ -5,6 +5,32 @@ version tracks the spec version it implements (0.x minors may break).
 
 ## Unreleased
 
+- **The agent note** (spec §2.5): every new/imported document opens with a
+  declarative head comment (`aim-note:`) telling LLM agents what the file
+  is, where the docs live (aimformat.com/llms.txt), and the hand-editing
+  invariants. Informative-only by spec — tools never execute anything
+  because of it. SDK: `doc.note` / `set_note()` / `remove_note()` /
+  `has_canonical_note()`; CLI: `aim note FILE... [--check|--remove]`;
+  linter: S030 (warning) flags duplicate notes. The note text contains no
+  markup, so structural substring checks never false-positive on it.
+- **Pending-lane CLI verbs**: `aim propose {modify,add,delete,move,theme}`,
+  `aim accept` / `aim reject` (by id or `--all`), with `--author human:ID |
+  agent:MODEL | external:ID` attribution (`aim.parse_actor`), and
+  `aim show --format json` for machine reads.
+- **MCP server**: `pip install 'aimformat[mcp]'` (pinned `mcp==1.28.1`)
+  then `aim mcp` — local stdio, six workflow tools: `aim_read` (projected
+  view), `aim_edit`, `aim_propose`, `aim_resolve`, `aim_lint`,
+  `aim_export`.
+- **Agent Skill** under `skills/aimformat/` (open Agent Skills standard):
+  `npx skills add tndmhq/aimformat`, or in Claude Code
+  `/plugin marketplace add tndmhq/aimformat` (`.claude-plugin/` manifest).
+- **docs/for-agents.md** — the canonical LLM-facing guide, served as
+  https://aimformat.com/llms.txt.
+- **evals/** — id-preservation harness measuring invariant compliance of
+  naked LLM edits with vs without the agent note.
+- **Packaging**: second console script `aimformat` (AimStack `aim`
+  collision), version single-sourced from `__init__.py`, PyPI
+  trusted-publishing workflow (`.github/workflows/publish.yml`).
 - **Reconcile** (spec §6.8): `AimDocument.reconcile()` and `aim reconcile
   FILE [-o OUT] [--check]` detect out-of-band edits — hand edits,
   corruption, files that never had history — and repair the document by

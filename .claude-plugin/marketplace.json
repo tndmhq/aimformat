@@ -1,0 +1,14 @@
+{
+  "name": "aimformat",
+  "owner": {
+    "name": "Tndm",
+    "email": "contact@usetndm.com"
+  },
+  "plugins": [
+    {
+      "name": "aimformat",
+      "source": "./",
+      "description": "Work with AIM documents (.aim): read, edit, propose and resolve suggestions, import/export, validate — via the aimformat SDK and aim CLI."
+    }
+  ]
+}

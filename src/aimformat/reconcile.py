@@ -31,11 +31,11 @@ Scope and honesty:
   invalid body valid — vocabulary or structure violations the hand edit
   introduced are declared as-is and remain the linter's to flag.
 """
+
 from __future__ import annotations
 
 from collections import Counter
 from dataclasses import dataclass, field
-from typing import Optional
 
 from . import ids
 from .canonical import document_text, serialize
@@ -62,7 +62,7 @@ class ReconcileReport:
     """
 
     events: list[Event] = field(default_factory=list)
-    assigned_ids: list[tuple[Optional[str], str]] = field(default_factory=list)
+    assigned_ids: list[tuple[str | None, str]] = field(default_factory=list)
     rejected_proposals: list[str] = field(default_factory=list)
     residual: list[str] = field(default_factory=list)
 
@@ -73,20 +73,19 @@ class ReconcileReport:
     def summary(self) -> str:
         if not self.changed:
             return "no out-of-band changes detected"
-        counts = Counter(e.action or e.kind for e in self.events
-                         if e.kind == "direct_edit")
+        counts = Counter(e.action or e.kind for e in self.events if e.kind == "direct_edit")
         bits = ", ".join(f"{n} {a}" for a, n in sorted(counts.items()))
         out = f"reconciled {sum(counts.values())} out-of-band change(s): {bits}"
         if self.assigned_ids:
             out += f"; {len(self.assigned_ids)} id(s) assigned"
         if self.rejected_proposals:
-            out += (f"; {len(self.rejected_proposals)} pending proposal(s) "
-                    "rejected")
+            out += f"; {len(self.rejected_proposals)} pending proposal(s) rejected"
         return out
 
 
 # ===========================================================================
 # expected state: forward replay of the full log
+
 
 def _check_log(events: list[Event]) -> None:
     if not events:
@@ -95,19 +94,20 @@ def _check_log(events: list[Event]) -> None:
     if not all(isinstance(s, int) for s in seqs):
         raise HistoryError("cannot reconcile: history has a non-integer seq")
     if seqs != sorted(seqs) or len(set(seqs)) != len(seqs):
-        raise HistoryError(
-            "cannot reconcile: history seq is not strictly ascending")
-    if any(b != a + 1 for a, b in zip(seqs, seqs[1:])):
+        raise HistoryError("cannot reconcile: history seq is not strictly ascending")
+    if any(b != a + 1 for a, b in zip(seqs, seqs[1:], strict=False)):
         raise HistoryError("cannot reconcile: history has internal seq gaps")
     if seqs[0] != 1:
         raise HistoryError(
             f"cannot reconcile a pruned history (log starts at seq "
             f"{seqs[0]}): the baseline below the prune floor is "
-            "unrecoverable — reconcile before pruning")
+            "unrecoverable — reconcile before pruning"
+        )
     for ev in events:
         if ev.kind not in REGISTRY.event_fields:
-            raise HistoryError(f"cannot reconcile: unknown event kind "
-                               f"{ev.kind!r} at seq {ev.data.get('seq')}")
+            raise HistoryError(
+                f"cannot reconcile: unknown event kind {ev.kind!r} at seq {ev.data.get('seq')}"
+            )
 
 
 def _apply_event(state: DocState, ev: Event) -> None:
@@ -149,7 +149,8 @@ def _replay(S: AimDocument, events: list[Event]) -> None:
             raise HistoryError(
                 f"cannot reconcile: the log does not replay cleanly (seq "
                 f"{ev.data.get('seq')}: {exc}) — reconcile repairs the body "
-                "against an intact history, not the history itself") from exc
+                "against an intact history, not the history itself"
+            ) from exc
 
 
 def _clone(doc: AimDocument) -> AimDocument:
@@ -164,8 +165,7 @@ def _strip_body_state(S: AimDocument) -> None:
     state.set_doc_settings_markup(None)
 
 
-def _align_theme_baseline(S: AimDocument, events: list[Event],
-                          work: AimDocument) -> None:
+def _align_theme_baseline(S: AimDocument, events: list[Event], work: AimDocument) -> None:
     """A theme or settings block no event ever touched (constructor-set /
     imported) has no recoverable baseline: expected := actual, so it is
     left untracked."""
@@ -178,12 +178,13 @@ def _align_theme_baseline(S: AimDocument, events: list[Event],
 # ===========================================================================
 # the unit model: everything the format addresses by id
 
+
 @dataclass
 class _Unit:
     id: str
-    scope: str                # "body" or the containing container's id
-    shell: Optional[str]      # thead/tbody/tfoot for table rows
-    serial: str               # canonical serialization (runs concatenated)
+    scope: str  # "body" or the containing container's id
+    shell: str | None  # thead/tbody/tfoot for table rows
+    serial: str  # canonical serialization (runs concatenated)
     is_container: bool
 
 
@@ -194,8 +195,7 @@ def _units(state: DocState) -> dict[str, _Unit]:
 
     def descend(cont: Element, cid: str) -> None:
         if cont.tag == "table":
-            bare = [c for c in cont.elements()
-                    if c.tag not in REGISTRY.table_shells]
+            bare = [c for c in cont.elements() if c.tag not in REGISTRY.table_shells]
             if bare:
                 visit(bare, cid, None)
             for child in cont.elements():
@@ -204,8 +204,7 @@ def _units(state: DocState) -> dict[str, _Unit]:
         else:
             visit(cont.elements(), cid, None)
 
-    def visit(members: list[Element], scope: str,
-              shell: Optional[str]) -> None:
+    def visit(members: list[Element], scope: str, shell: str | None) -> None:
         i = 0
         while i < len(members):
             el = members[i]
@@ -222,8 +221,7 @@ def _units(state: DocState) -> dict[str, _Unit]:
                 while j < len(members) and members[j].chunk_id == kid:
                     group.append(members[j])
                     j += 1
-                out[kid] = _Unit(kid, scope, shell,
-                                 "".join(serialize(m) for m in group), False)
+                out[kid] = _Unit(kid, scope, shell, "".join(serialize(m) for m in group), False)
             i = j
 
     visit(state.constructs(), "body", None)
@@ -235,6 +233,7 @@ def _skeleton(el: Element) -> str:
     remains is the open tag (attrs), table shells, and any stray interior
     text. Equal skeletons mean item-level events can explain the diff."""
     from .dom import deep_copy
+
     clone = deep_copy(el)
 
     def scrub(node: Element, keep_shells: bool) -> None:
@@ -255,8 +254,8 @@ def _skeleton(el: Element) -> str:
 # ===========================================================================
 # id fix-up: ids are tooling's job (spec §4.4)
 
-def _fixup_ids(work: AimDocument,
-               expected_alive: set[str]) -> list[tuple[Optional[str], str]]:
+
+def _fixup_ids(work: AimDocument, expected_alive: set[str]) -> list[tuple[str | None, str]]:
     """Give every unit in *work*'s body a usable id: assign fresh ids to
     unmarked constructs/items, to ids burned by history or the pending lane,
     to duplicates (first occurrence in document order keeps the id), and to
@@ -264,15 +263,19 @@ def _fixup_ids(work: AimDocument,
     state = work._state
     recorded = work._recorded_ids()
     pool = work._taken_ids() | expected_alive  # fresh draws avoid all of it
-    assigned: list[tuple[Optional[str], str]] = []
+    assigned: list[tuple[str | None, str]] = []
     seen: set[str] = set()
     member_els: set[int] = set()
 
-    def usable(val: Optional[str]) -> bool:
-        return bool(val) and ids.is_valid_chunk_id(val) and val not in seen \
+    def usable(val: str | None) -> bool:
+        return (
+            bool(val)
+            and ids.is_valid_chunk_id(val)
+            and val not in seen
             and (val in expected_alive or val not in recorded)
+        )
 
-    def assign(group: list[Element], marker: str, old: Optional[str]) -> None:
+    def assign(group: list[Element], marker: str, old: str | None) -> None:
         nid = ids.new_id(pool)
         for el in group:
             el.set(marker, nid)
@@ -281,8 +284,7 @@ def _fixup_ids(work: AimDocument,
 
     def descend(cont: Element) -> None:
         if cont.tag == "table":
-            bare = [c for c in cont.elements()
-                    if c.tag not in REGISTRY.table_shells]
+            bare = [c for c in cont.elements() if c.tag not in REGISTRY.table_shells]
             if bare:
                 visit(bare)
             for child in cont.elements():
@@ -312,8 +314,11 @@ def _fixup_ids(work: AimDocument,
             group = [el]
             j = i + 1
             if val:  # a run shares one id across consecutive members
-                while j < len(members) and members[j].chunk_id == val \
-                        and members[j].container_id is None:
+                while (
+                    j < len(members)
+                    and members[j].chunk_id == val
+                    and members[j].container_id is None
+                ):
                     member_els.add(id(members[j]))
                     group.append(members[j])
                     j += 1
@@ -336,8 +341,7 @@ def _fixup_ids(work: AimDocument,
                 val = el.get(marker)
                 if not val:
                     continue
-                if val in seen or (val in recorded
-                                   and val not in expected_alive):
+                if val in seen or (val in recorded and val not in expected_alive):
                     assign([el], marker, val)
     return assigned
 
@@ -346,56 +350,53 @@ def _fixup_ids(work: AimDocument,
 # event builders: mutate the scratch state AND append the matching event —
 # the same data shapes the SDK operations write, plus origin: "reconcile"
 
-def _base(S: AimDocument, author: Actor, at: Optional[str]) -> dict:
-    return {"seq": S.seq + 1, "kind": "direct_edit", "t": at or _now_iso(),
-            "author": author.to_obj(), "batch": S._batch_id(),
-            "origin": "reconcile"}
+
+def _base(S: AimDocument, author: Actor, at: str | None) -> dict:
+    return {
+        "seq": S.seq + 1,
+        "kind": "direct_edit",
+        "t": at or _now_iso(),
+        "author": author.to_obj(),
+        "batch": S._batch_id(),
+        "origin": "reconcile",
+    }
 
 
-def _ev_modify(S: AimDocument, target: str, after: str,
-               author: Actor, at: Optional[str]) -> None:
+def _ev_modify(S: AimDocument, target: str, after: str, author: Actor, at: str | None) -> None:
     before = S._state.serial(target)
     S._state.replace(target, after)
     data = _base(S, author, at)
-    data.update({"target": target, "action": "modify",
-                 "before": before, "after": after})
+    data.update({"target": target, "action": "modify", "before": before, "after": after})
     S._append_event(data)
 
 
-def _ev_delete(S: AimDocument, target: str,
-               author: Actor, at: Optional[str]) -> None:
+def _ev_delete(S: AimDocument, target: str, author: Actor, at: str | None) -> None:
     before = S._state.serial(target)
     anchor = S._anchor_of(target)
     S._state.remove(target)
     data = _base(S, author, at)
-    data.update({"target": target, "action": "delete",
-                 "before": before, "anchor": anchor.to_obj()})
+    data.update({"target": target, "action": "delete", "before": before, "anchor": anchor.to_obj()})
     S._append_event(data)
 
 
-def _ev_add(S: AimDocument, serial: str, anchor: Anchor,
-            author: Actor, at: Optional[str]) -> None:
+def _ev_add(S: AimDocument, serial: str, anchor: Anchor, author: Actor, at: str | None) -> None:
     nodes = [n for n in parse_fragment(serial) if isinstance(n, Element)]
     target = nodes[0].chunk_id or nodes[0].container_id or ""
     S._state.insert(serial, anchor)
     data = _base(S, author, at)
-    data.update({"target": target, "action": "add",
-                 "anchor": anchor.to_obj(), "after": serial})
+    data.update({"target": target, "action": "add", "anchor": anchor.to_obj(), "after": serial})
     S._append_event(data)
 
 
-def _ev_move(S: AimDocument, target: str, to: Anchor,
-             author: Actor, at: Optional[str]) -> None:
+def _ev_move(S: AimDocument, target: str, to: Anchor, author: Actor, at: str | None) -> None:
     src = S._anchor_of(target)
     S._state.move(target, to)
     data = _base(S, author, at)
-    data.update({"target": target, "action": "move",
-                 "from": src.to_obj(), "to": to.to_obj()})
+    data.update({"target": target, "action": "move", "from": src.to_obj(), "to": to.to_obj()})
     S._append_event(data)
 
 
-def _ev_theme(S: AimDocument, after: Optional[str],
-              author: Actor, at: Optional[str]) -> None:
+def _ev_theme(S: AimDocument, after: str | None, author: Actor, at: str | None) -> None:
     before = S._state.serial("aim:theme")
     S._state.set_theme_markup(after)
     data = _base(S, author, at)
@@ -407,8 +408,7 @@ def _ev_theme(S: AimDocument, after: Optional[str],
     S._append_event(data)
 
 
-def _ev_doc_settings(S: AimDocument, after: Optional[str],
-                     author: Actor, at: Optional[str]) -> None:
+def _ev_doc_settings(S: AimDocument, after: str | None, author: Actor, at: str | None) -> None:
     before = S._state.serial("aim:doc")
     S._state.set_doc_settings_markup(after)
     data = _base(S, author, at)
@@ -423,8 +423,8 @@ def _ev_doc_settings(S: AimDocument, after: Optional[str],
 # ===========================================================================
 # the drive: append the edit script E -> A
 
-def _drive(S: AimDocument, work: AimDocument,
-           author: Actor, at: Optional[str]) -> None:
+
+def _drive(S: AimDocument, work: AimDocument, author: Actor, at: str | None) -> None:
     E = _units(S._state)
     A = _units(work._state)
 
@@ -460,14 +460,13 @@ def _drive(S: AimDocument, work: AimDocument,
         if eu.is_container and au.is_container:
             e_el = S._state.container_node(uid)
             a_el = work._state.container_node(uid)
-            if e_el is not None and a_el is not None and \
-                    _skeleton(e_el) == _skeleton(a_el):
+            if e_el is not None and a_el is not None and _skeleton(e_el) == _skeleton(a_el):
                 continue  # item-level events suffice
         whole.add(uid)
     # a whole-modified/deleted ancestor governs everything inside it
-    whole = {uid for uid in whole
-             if not (chain(E, uid) & (whole | gone))
-             and not (chain(A, uid) & whole)}
+    whole = {
+        uid for uid in whole if not (chain(E, uid) & (whole | gone)) and not (chain(A, uid) & whole)
+    }
 
     def covered_e(uid: str) -> bool:
         return bool(chain(E, uid) & (whole | gone))
@@ -477,9 +476,12 @@ def _drive(S: AimDocument, work: AimDocument,
 
     # deletes — including units whose A-side landed inside a whole-modified
     # container (the modify materializes them there; their old spot empties)
-    doomed = [uid for uid in E
-              if (uid in gone and not covered_e(uid))
-              or (uid in A and covered_a(uid) and not covered_e(uid))]
+    doomed = [
+        uid
+        for uid in E
+        if (uid in gone and not covered_e(uid))
+        or (uid in A and covered_a(uid) and not covered_e(uid))
+    ]
     for uid in reversed(doomed):
         _ev_delete(S, uid, author, at)
 
@@ -500,55 +502,63 @@ def _drive(S: AimDocument, work: AimDocument,
     # a container add/modify come out as no-ops.
     scopes: dict[str, list[str]] = {}
     for uid, u in A.items():
-        scopes.setdefault(u.scope if u.shell is None
-                          else f"{u.scope}\x00{u.shell}", []).append(uid)
+        scopes.setdefault(u.scope if u.shell is None else f"{u.scope}\x00{u.shell}", []).append(uid)
     for key, uids in scopes.items():
         scope, _, shell = key.partition("\x00")
-        prev: Optional[str] = None
+        prev: str | None = None
         for uid in uids:
-            want = Anchor(scope, prev,
-                          shell=(shell or None) if prev is None else None)
+            want = Anchor(scope, prev, shell=(shell or None) if prev is None else None)
             if not S._state.exists(uid):
                 _ev_add(S, A[uid].serial, want, author, at)
             else:
                 cur = S._anchor_of(uid)
-                if (cur.container, cur.after) != (scope, prev) or \
-                        (prev is None and (shell or None) is not None
-                         and cur.shell != shell):
+                if (cur.container, cur.after) != (scope, prev) or (
+                    prev is None and (shell or None) is not None and cur.shell != shell
+                ):
                     _ev_move(S, uid, want, author, at)
             prev = uid
 
 
-def _reject_dangling(S: AimDocument, author: Actor, at: Optional[str],
-                     report: ReconcileReport) -> None:
+def _reject_dangling(
+    S: AimDocument, author: Actor, at: str | None, report: ReconcileReport
+) -> None:
     """Pending proposals whose target or anchor vanished can never resolve;
     reject them so the reconciled document lints clean."""
     pending_adds = {p.id for p in S.proposals if p.action == "add"}
     for p in list(S.proposals):
         dangling = False
-        if p.action in ("modify", "delete", "move") and p.target \
-                and p.target not in ("aim:theme", "aim:doc"):
+        if (
+            p.action in ("modify", "delete", "move")
+            and p.target
+            and p.target not in ("aim:theme", "aim:doc")
+        ):
             dangling = not S._state.exists(p.target)
         if not dangling and p.action in ("add", "move"):
             cont = p.anchor_container
-            if cont and cont != "body" \
-                    and S._state.container_node(cont) is None:
+            if cont and cont != "body" and S._state.container_node(cont) is None:
                 dangling = True
             after = p.anchor_after
-            if after and not S._state.exists(after) \
-                    and after not in pending_adds:
+            if after and not S._state.exists(after) and after not in pending_adds:
                 dangling = True
         if dangling:
-            S.reject(p.id, decided_by=author, at=at,
-                     explanation="reconcile: the proposal's target or anchor "
-                                 "was removed by an out-of-band edit")
+            S.reject(
+                p.id,
+                decided_by=author,
+                at=at,
+                explanation="reconcile: the proposal's target or anchor "
+                "was removed by an out-of-band edit",
+            )
             report.rejected_proposals.append(p.id)
 
 
 # ===========================================================================
-def reconcile_document(doc: AimDocument, *, author: Optional[Actor] = None,
-                       at: Optional[str] = None,
-                       dry_run: bool = False) -> ReconcileReport:
+def reconcile_document(
+    doc: AimDocument,
+    *,
+    author: Actor | None = None,
+    at: str | None = None,
+    dry_run: bool = False,
+) -> ReconcileReport:
     """Detect out-of-band edits and repair *doc* (see the module docstring).
 
     Returns a :class:`ReconcileReport`; mutates *doc* only when something
@@ -558,23 +568,24 @@ def reconcile_document(doc: AimDocument, *, author: Optional[Actor] = None,
     events = doc.history
     _check_log(events)
 
-    S = _clone(doc)                 # becomes E, then is driven to A
+    S = _clone(doc)  # becomes E, then is driven to A
     _strip_body_state(S)
     _replay(S, events)
     expected_alive = S._state.all_ids()
 
-    work = _clone(doc)              # A: the actual body, ids fixed up
+    work = _clone(doc)  # A: the actual body, ids fixed up
     report = ReconcileReport()
     report.assigned_ids = _fixup_ids(work, expected_alive)
     _align_theme_baseline(S, events, work)
 
     n0 = len(events)
-    with S.batch():                 # one reconcile = one editing intention
+    with S.batch():  # one reconcile = one editing intention
         _drive(S, work, actor, at)
         _reject_dangling(S, actor, at, report)
     if S._state.doc_hash() != work._state.doc_hash():
-        raise HistoryError("reconcile did not converge — this is a bug in "
-                           "aimformat, please report it")
+        raise HistoryError(
+            "reconcile did not converge — this is a bug in aimformat, please report it"
+        )
     report.events = S.history[n0:]
     report.residual = S.verify()
 
