@@ -76,12 +76,12 @@ def main() -> None:
     deck = aim.new_document(title="Deck fixture")
     deck.add_chunk(
         '<aim-slide data-aim-container="s1" '
-        'style="width:1920px; height:1080px">'
+        'style="width:960px; height:540px">'
         '<h2 data-aim="t1" class="font-bold text-5xl" '
-        'style="left:120px; top:100px; width:1200px; z-index:2">'
+        'style="left:60px; top:50px; width:600px; z-index:2">'
         "Slide one</h2>"
         '<p data-aim="b1" class="text-2xl" '
-        'style="left:120px; top:300px; width:1200px">Body</p>'
+        'style="left:60px; top:150px; width:600px">Body</p>'
         "</aim-slide>",
         author=BOT,
         at=t(0),
@@ -139,6 +139,11 @@ def main() -> None:
         "nok_S011_uncovered_body_child.aim": flat.replace('<p data-aim="p1">', "<p>"),
         "nok_S012_chunk_and_container.aim": flat.replace(
             "</body>", '<ul data-aim="lx" data-aim-container="l9"></ul>\n</body>'
+        ),
+        "nok_S031_slide_as_chunk.aim": flat.replace(
+            "</body>",
+            '<aim-slide data-aim="sx" style="width:960px; height:540px">'
+            '<h2 style="left:60px; top:50px; width:600px">T</h2></aim-slide>\n</body>',
         ),
         "nok_S016_id_reused_across_parents.aim": flat.replace(
             '<li data-aim="i1">First</li>', '<li data-aim="p1">First</li>'

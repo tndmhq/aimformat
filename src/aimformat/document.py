@@ -65,6 +65,19 @@ def _no_delete_move(target: str, action: str) -> None:
         )
 
 
+def _payload_marker(el: Element) -> str:
+    """The identity marker an unmarked payload root receives.
+
+    ``aim-slide`` is the one tag that can only ever be a container (§4.3),
+    so a bare slide payload always takes the container path — otherwise it
+    would be silently demoted to an opaque chunk with unaddressable
+    children. A bare ``ul``/``ol``/``table`` stays an atomic chunk by
+    default (the vocabulary deliberately allows both readings)."""
+    if el.tag == "aim-slide":
+        return "data-aim-container"
+    return "data-aim-container" if el.container_id is not None else "data-aim"
+
+
 def _now_iso() -> str:
     return _dt.datetime.now(_dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
@@ -771,6 +784,22 @@ class AimDocument:
     def _taken_ids(self) -> set[str]:
         return self._state.all_ids() | self._recorded_ids()
 
+    def _guard_replacement_kind(self, target: str, first: Element, kind: str | None = None) -> None:
+        """A replacement keeps the target's kind (§4.3): an ``aim-slide``
+        root can only ever be a container, and a container target can only
+        take a container-capable root — otherwise the write demotes one into
+        the other and the document fails S030/S031 on the very next lint."""
+        kind = kind or self._state.kind_of(target)
+        if kind == "chunk" and first.tag == "aim-slide":
+            raise InvalidOperation(
+                f"an aim-slide payload cannot replace chunk {target!r} "
+                "(slides are containers; delete the chunk and add the slide)"
+            )
+        if kind == "container" and first.tag not in REGISTRY.containers:
+            raise InvalidOperation(
+                f"payload root <{first.tag}> cannot replace container {target!r}"
+            )
+
     def _normalize_payload(
         self,
         markup: str,
@@ -806,14 +835,14 @@ class AimDocument:
             # For accept-with-tweaks on adds the target isn't live yet — the
             # caller passes the proposed root's marker via expect_marker.
             live_kind = self._state.kind_of(expect_id)
+            if live_kind in ("chunk", "container"):
+                self._guard_replacement_kind(expect_id, first, live_kind)
             if live_kind == "container":
                 marker = "data-aim-container"
             elif live_kind == "chunk":
                 marker = "data-aim"
             else:
-                marker = expect_marker or (
-                    "data-aim-container" if first.container_id is not None else "data-aim"
-                )
+                marker = expect_marker or _payload_marker(first)
             wrong = "data-aim" if marker == "data-aim-container" else "data-aim-container"
             if first.get(wrong) is not None:
                 raise InvalidOperation(
@@ -844,7 +873,7 @@ class AimDocument:
         elif assign:
             if not payload_id or payload_id in taken or not ids.is_valid_chunk_id(payload_id):
                 new = ids.new_id(taken)
-                marker = "data-aim-container" if first.container_id is not None else "data-aim"
+                marker = _payload_marker(first)
                 for n in nodes:
                     n.set(marker, new)
                 payload_id = new
@@ -885,7 +914,12 @@ class AimDocument:
 
     @staticmethod
     def _direct_payload_items(root: Element) -> list[Element]:
-        """li/tr elements that are items of a payload container root."""
+        """Direct members of a payload container root that must carry ids:
+        li/tr items of list/table shells, and — since every slide child is a
+        positioned chunk (or nested container) — all element children of an
+        aim-slide."""
+        if root.tag == "aim-slide":
+            return root.elements()
         out: list[Element] = []
         for child in root.elements():
             if child.tag in REGISTRY.table_shells and root.tag == "table":
@@ -1813,6 +1847,11 @@ class AimDocument:
                     payload = applied if applied is not None else prop.payload_html
                     if applied is not None and applied != prop.payload_html:
                         data["applied"] = applied
+                    # externally-authored proposals bypass creation-time
+                    # normalization: re-guard the kind before the write
+                    roots = [n for n in parse_fragment(payload or "") if isinstance(n, Element)]
+                    if roots:
+                        self._guard_replacement_kind(prop.target or "", roots[0])
                     self._state.replace(prop.target or "", payload or "")
             elif prop.action == "delete" and decision == "accepted":
                 # a hand-authored card can still carry a reserved target;

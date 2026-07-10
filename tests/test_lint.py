@@ -293,3 +293,14 @@ class TestHistoryAndCacheRules:
 
     def test_S000_unparseable(self):
         assert "S000" in {f.code for f in lint_text("<html><p></html>")}
+
+
+def test_S031_slide_marked_as_chunk(good_text=None):
+    doc = aim.new_document(title="t")
+    doc.add_chunk("<p>anchor</p>", author=ME, at=ts(0))
+    text = doc.dumps().replace(
+        "</body>",
+        '<aim-slide data-aim="sx" style="width:960px; height:540px">'
+        '<h2 style="left:60px; top:50px; width:600px">T</h2></aim-slide>\n</body>',
+    )
+    assert "S031" in codes(text)

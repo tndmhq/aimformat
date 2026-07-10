@@ -248,6 +248,16 @@ class _Linter:
                     self.add(
                         "S011", ERROR, f"<body> child <{el.tag}> is neither a chunk nor a container"
                     )
+                if el.tag == "aim-slide" and el.chunk_id:
+                    # a slide can only ever be a container (§4.3): marked as
+                    # a chunk it is an opaque blob with unaddressable
+                    # children (the invariant reconcile already enforces)
+                    self.add(
+                        "S031",
+                        ERROR,
+                        "aim-slide marked as a chunk (slides are containers)",
+                        el.chunk_id,
+                    )
             if rank:
                 seen[rank] = seen.get(rank, 0) + 1
                 if seen[rank] > 1:

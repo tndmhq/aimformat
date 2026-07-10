@@ -9,6 +9,7 @@ required to add entries.)
 
 | Date | Type | Entry | Status | What |
 |---|---|---|---|---|
+| 2026-07-10 12:45 | plan | [fixed-layout-pages](2026-07-10_1245_plan_fixed-layout-pages.md) | done | Canvas-as-points convention; per-canvas PDF pages; DOCX linearizes slides + honors image width |
 | 2026-07-10 04:14 | decision | [agent-native-surfaces](2026-07-10_0414_decision_agent-native-surfaces.md) | done | aim-note header (spec §2.5), propose/accept CLI, MCP server, Agent Skill, for-agents docs, PyPI publishing |
 | 2026-07-09 23:12 | plan | [normalize-cli-and-inline-ingest](2026-07-09_2312_plan_normalize-cli-and-inline-ingest.md) | done | aim normalize CLI verb + from_docling inline formatting/hyperlinks (fixes inline-group shatter/drop) |
 | 2026-07-08 06:26 | plan | [reconcile](2026-07-08_0626_plan_reconcile.md) | done | Implement AimDocument.reconcile() + aim reconcile CLI verb (spec §6.8): detect out-of-band body edits against the full history and synthesize origin:reconcile events so the file verifies again — shipped same day with 30 tests |

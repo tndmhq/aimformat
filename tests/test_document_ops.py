@@ -214,3 +214,91 @@ class TestBatchesAndViews:
     def test_seq_monotonic(self, rich_doc):
         seqs = [e.seq for e in rich_doc.history]
         assert seqs == list(range(1, len(seqs) + 1))
+
+
+class TestBareSlidePayload:
+    """A payload whose root is aim-slide ALWAYS takes the container path —
+    a bare slide (no markers at all, e.g. an editor's new-page template)
+    must never be demoted to an opaque chunk with unaddressable children."""
+
+    def test_add_bare_slide_becomes_container(self):
+        import aimformat as aim
+
+        doc = aim.new_document(title="t")
+        created = doc.add_chunk(
+            '<aim-slide style="width:420px; height:595px">'
+            '<h2 style="left:42px; top:42px; width:336px">Title</h2>'
+            "</aim-slide>",
+            author=aim.human("u"),
+        )
+        assert created.id in doc.containers
+        text = doc.dumps()
+        assert f'data-aim-container="{created.id}"' in text
+        # the child got covered with its own chunk id
+        assert '<h2 data-aim="' in text
+        assert not [f for f in aim.lint(doc) if f.level == "error"]
+
+    def test_propose_bare_slide_add_accepts_clean(self):
+        import aimformat as aim
+
+        doc = aim.new_document(title="t")
+        me, bot = aim.human("u"), aim.agent("m")
+        doc.add_chunk("<p>anchor</p>", author=me)
+        p = doc.propose_add(
+            '<aim-slide style="width:960px; height:540px">'
+            '<p style="left:60px; top:50px; width:600px">Body</p></aim-slide>',
+            container="body",
+            author=bot,
+        )
+        doc.accept(p.id, decided_by=me)
+        assert any(True for _ in doc.containers)
+        assert not [f for f in aim.lint(doc) if f.level == "error"]
+
+
+class TestReplacementKindGuard:
+    """A replacement keeps the target's kind: a slide payload can never take
+    a chunk's place (and a container never becomes a flat block) — the write
+    would produce exactly the S030/S031 states the linter rejects."""
+
+    SLIDE = (
+        '<aim-slide style="width:420px; height:595px">'
+        '<h2 style="left:10px; top:10px; width:300px">X</h2></aim-slide>'
+    )
+
+    def test_modify_chunk_to_slide_rejected(self):
+        doc = aim.new_document(title="g")
+        doc.add_chunk('<p data-aim="p1">text</p>', author=ME, at=ts(0))
+        with pytest.raises(InvalidOperation, match="slides are containers"):
+            doc.modify_chunk("p1", self.SLIDE, author=ME, at=ts(1))
+
+    def test_propose_modify_chunk_to_slide_rejected(self):
+        doc = aim.new_document(title="g")
+        doc.add_chunk('<p data-aim="p1">text</p>', author=ME, at=ts(0))
+        with pytest.raises(InvalidOperation, match="slides are containers"):
+            doc.propose_modify("p1", self.SLIDE, author=BOT, at=ts(1))
+
+    def test_modify_container_to_flat_block_rejected(self):
+        doc = aim.new_document(title="g")
+        doc.add_chunk(
+            '<ul data-aim-container="lst"><li data-aim="i1">one</li></ul>',
+            author=ME,
+            at=ts(0),
+        )
+        with pytest.raises(InvalidOperation, match="cannot replace container"):
+            doc.modify_chunk("lst", "<p>flattened</p>", author=ME, at=ts(1))
+
+    def test_external_slide_modify_proposal_rejected_at_accept(self):
+        # an externally-authored file can carry the bad proposal (creation-time
+        # normalization never ran): the accept path must re-guard, not write
+        # a slide-as-chunk into the body
+        doc = aim.new_document(title="g")
+        doc.add_chunk('<p data-aim="p1">text</p>', author=ME, at=ts(0))
+        prop = doc.propose_modify("p1", '<p data-aim="p1">tweak</p>', author=BOT, at=ts(1))
+        surgical = doc.dumps().replace(
+            '<p data-aim="p1">tweak</p>',
+            '<aim-slide data-aim="p1" style="width:420px; height:595px"><h2>X</h2></aim-slide>',
+            1,
+        )
+        external = aim.loads(surgical)
+        with pytest.raises(InvalidOperation, match="slides are containers"):
+            external.accept(prop.id, decided_by=ME)
