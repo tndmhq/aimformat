@@ -530,9 +530,7 @@ class TestMarkdownPendingResolution:
         doc = aim.new_document(title="T")
         u = aim.human("u")
         doc.add_chunk('<p data-aim="p1">Old wording.</p>', author=u)
-        doc.propose_modify(
-            "p1", '<p data-aim="p1">New wording.</p>', author=aim.agent("m")
-        )
+        doc.propose_modify("p1", '<p data-aim="p1">New wording.</p>', author=aim.agent("m"))
         return doc
 
     def test_accept_all(self):

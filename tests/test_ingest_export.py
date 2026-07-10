@@ -395,8 +395,10 @@ class TestExportDocxSlides:
     def test_in_slide_pending_modify_rides_tracked_changes(self, tmp_path):
         doc = _deck()
         doc.propose_modify(
-            "b1", '<p data-aim="b1" style="left:10px; top:60px; width:300px">Sharper body.</p>',
-            author=BOT, at=ts(3),
+            "b1",
+            '<p data-aim="b1" style="left:10px; top:60px; width:300px">Sharper body.</p>',
+            author=BOT,
+            at=ts(3),
         )
         out = aim.to_docx(doc, tmp_path / "deck.docx", pending="tracked")
         assert _revision_authors(out, "ins") and _revision_authors(out, "del")
@@ -407,7 +409,10 @@ class TestExportDocxSlides:
         doc = _deck()
         doc.propose_add(
             '<p style="left:10px; top:110px; width:300px">Added into the page.</p>',
-            container="s1", after="b1", author=BOT, at=ts(3),
+            container="s1",
+            after="b1",
+            author=BOT,
+            at=ts(3),
         )
         out = aim.to_docx(doc, tmp_path / "deck.docx", pending="tracked")
         xml = docx.Document(str(out)).element.body.xml
@@ -421,8 +426,10 @@ class TestExportDocxSlides:
     def test_accept_all_deck_exports_clean(self, tmp_path):
         doc = _deck()
         doc.propose_modify(
-            "b2", '<p data-aim="b2" style="left:10px; top:10px; width:300px">Final body.</p>',
-            author=BOT, at=ts(3),
+            "b2",
+            '<p data-aim="b2" style="left:10px; top:10px; width:300px">Final body.</p>',
+            author=BOT,
+            at=ts(3),
         )
         out = aim.to_docx(doc, tmp_path / "deck.docx", pending="accept-all")
         texts = [t for _, t in _docx_paragraphs(out)]
