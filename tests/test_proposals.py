@@ -235,6 +235,41 @@ class TestAmend:
         again = reloaded.proposal(p.id)
         assert ">v2</p>" in (again.payload_html or "") and again.explanation == "better"
 
+    def test_amend_add_cannot_flip_root_kind(self, basic_doc):
+        """Codex finding: an add amended across the container↔chunk line
+        would mint a V003 card (container marker on <p>) or an S031
+        document (aim-slide marked as a chunk)."""
+        slide = (
+            '<aim-slide style="width:960px; height:540px">'
+            '<h2 style="left:10px; top:10px; width:400px">T</h2></aim-slide>'
+        )
+        p_slide = basic_doc.propose_add(slide, author=BOT, at=ts(7))
+        with pytest.raises(InvalidOperation):
+            basic_doc.amend_proposal(p_slide.id, "<p>now prose?</p>")
+        p_chunk = basic_doc.propose_add("<p>Prose.</p>", author=BOT, at=ts(8))
+        with pytest.raises(InvalidOperation):
+            basic_doc.amend_proposal(p_chunk.id, slide)
+        # same-kind amends keep working on both sides
+        amended = basic_doc.amend_proposal(
+            p_slide.id,
+            '<aim-slide style="width:960px; height:540px">'
+            '<h2 style="left:20px; top:20px; width:400px">T2</h2></aim-slide>',
+        )
+        assert "T2" in (amended.payload_html or "")
+        assert basic_doc.amend_proposal(p_chunk.id, "<h2>Heading now.</h2>").payload_html
+
+    def test_accept_with_tweaks_cannot_flip_add_root_kind(self, basic_doc):
+        """_payload_like is shared with accept(applied=…) on adds — the
+        same kind guard applies there."""
+        p = basic_doc.propose_add("<p>Prose.</p>", author=BOT, at=ts(7))
+        with pytest.raises(InvalidOperation):
+            basic_doc.accept(
+                p.id,
+                decided_by=ME,
+                at=ts(8),
+                applied='<aim-slide style="width:960px; height:540px"></aim-slide>',
+            )
+
     def test_amend_dangling_modify_fails_fast(self, basic_doc):
         """Target deleted out from under a pending modify: amend refuses
         with a clear error instead of rewriting a card that can only

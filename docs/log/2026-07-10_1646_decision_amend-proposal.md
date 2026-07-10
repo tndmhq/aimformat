@@ -12,12 +12,13 @@ at=None)` replaces a pending proposal's payload and/or explanation **in
 place**, preserving its id, action, target, anchor, author, batch, and
 dependencies. Shipped in 0.2.1 with tests (`tests/test_proposals.py::TestAmend`).
 
-**Why:** the tndm editor's agent loop needs follow-up turns to be able to
-change content the user hasn't accepted yet ("make the section you just
-added shorter") without churning proposal ids or spamming the history with
-supersede events. Decided in the editor's agentic-architecture plan
-(tndm `docs/log/2026-07-10_1338_plan_agentic-architecture-v1.md`, amendment
-A15); logged here because proposal semantics are format-owned.
+**Why:** agent loops that drive the pending lane iterate on suggestions
+across turns — a follow-up instruction ("make the section you just added
+shorter") must update a proposal the user hasn't accepted yet without
+churning its id (review UIs hold a stable reference to the card) and
+without spamming the history with supersede events. The SDK previously
+offered only supersede-and-recreate. Logged here because proposal
+semantics are format-owned.
 
 **Design points:**
 

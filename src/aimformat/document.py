@@ -1800,11 +1800,21 @@ class AimDocument:
         )
 
     def _payload_like(self, original: str, replacement: str) -> tuple[str, str]:
-        """Canonicalize an add-tweak payload, keeping the proposed chunk id
-        and marker kind."""
+        """Canonicalize an add-tweak/amend payload, keeping the proposed
+        chunk id and marker kind. The replacement must also keep the
+        proposed root's KIND (§4.3): flipping container↔chunk would mint a
+        card whose marker contradicts its tag (V003) or accept an
+        ``aim-slide`` marked as a chunk (S031) — review finding."""
         orig_nodes = [n for n in parse_fragment(original) if isinstance(n, Element)]
         keep = orig_nodes[0].chunk_id or orig_nodes[0].container_id
         marker = "data-aim-container" if orig_nodes[0].container_id is not None else "data-aim"
+        new_nodes = [n for n in parse_fragment(replacement) if isinstance(n, Element)]
+        if new_nodes:  # empty payloads fail in _normalize_payload below
+            self._guard_replacement_kind(
+                keep or orig_nodes[0].tag,
+                new_nodes[0],
+                kind="container" if marker == "data-aim-container" else "chunk",
+            )
         return self._normalize_payload(replacement, expect_id=keep, expect_marker=marker)
 
     def _validated_theme_markup(self, markup: str) -> str:

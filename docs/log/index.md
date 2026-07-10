@@ -9,7 +9,7 @@ required to add entries.)
 
 | Date | Type | Entry | Status | What |
 |---|---|---|---|---|
-| 2026-07-10 16:46 | decision | [amend-proposal](2026-07-10_1646_decision_amend-proposal.md) | done | amend_proposal SDK method: in-place amend of a pending proposal's payload/explanation (spec §5.4 already sanctions it), added for the tndm agent loop (editor plan A15) |
+| 2026-07-10 16:46 | decision | [amend-proposal](2026-07-10_1646_decision_amend-proposal.md) | done | amend_proposal SDK method: in-place amend of a pending proposal's payload/explanation (spec §5.4 already sanctions it) — lets agent loops iterate on pending suggestions without id churn or supersede noise |
 | 2026-07-10 12:45 | plan | [fixed-layout-pages](2026-07-10_1245_plan_fixed-layout-pages.md) | done | Canvas-as-points convention; per-canvas PDF pages; DOCX linearizes slides + honors image width |
 | 2026-07-10 04:14 | decision | [agent-native-surfaces](2026-07-10_0414_decision_agent-native-surfaces.md) | done | aim-note header (spec §2.5), propose/accept CLI, MCP server, Agent Skill, for-agents docs, PyPI publishing |
 | 2026-07-09 23:12 | plan | [normalize-cli-and-inline-ingest](2026-07-09_2312_plan_normalize-cli-and-inline-ingest.md) | done | aim normalize CLI verb + from_docling inline formatting/hyperlinks (fixes inline-group shatter/drop) |
