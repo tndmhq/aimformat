@@ -76,6 +76,21 @@ class TestInlineGroups:
         para = next(h for h in chunk_htmls(doc) if h.startswith("<p"))
         assert "H<sub>2</sub>O and x<sup>2</sup>" in para
 
+    def test_existing_boundary_whitespace_is_not_doubled(self):
+        """Backends that keep run-trailing whitespace must not get a second
+        separator space (Codex review, aimformat#2)."""
+        d = DoclingDocument(name="ws")
+        d.add_title(text="Ws")
+        g = d.add_group(label=GroupLabel.INLINE)
+        d.add_text(label=DocItemLabel.TEXT, text="Docling supports ",
+                   parent=g, formatting=fmt())
+        d.add_text(label=DocItemLabel.TEXT, text="italic", parent=g,
+                   formatting=fmt(italic=True))
+        doc = aim.from_docling(d)
+        para = next(h for h in chunk_htmls(doc) if h.startswith("<p"))
+        assert "Docling supports <em>italic</em>" in para
+        assert "supports  <em>" not in para  # no doubled space
+
     def test_script_join_is_directional(self):
         """Sub glues both sides (H2O); sup glues left only (x² grows)."""
         d = DoclingDocument(name="dir")

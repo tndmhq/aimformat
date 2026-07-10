@@ -167,6 +167,11 @@ def _hugs(prev: dict, cur: dict) -> bool:
         return True  # …O in H2O
     prev_text = prev.get("text") or ""
     cur_text = cur.get("text") or ""
+    # some backends keep run-boundary whitespace (DOCX strips it, HTML/
+    # programmatic documents may not): an existing boundary space must not
+    # be doubled by the separator (Codex review, aimformat#2)
+    if prev_text[-1:].isspace() or cur_text[:1].isspace():
+        return True
     return (cur_text.startswith(_NO_SPACE_BEFORE)
             or prev_text.endswith(_NO_SPACE_AFTER))
 
