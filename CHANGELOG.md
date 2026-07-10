@@ -3,6 +3,25 @@
 All notable changes to the spec and the reference toolkit. The package
 version tracks the spec version it implements (0.x minors may break).
 
+## Unreleased
+
+Fixed-layout pages: slides become correct pages end to end.
+
+- **PDF**: each `aim-slide` prints as its own page **at its own canvas
+  size** via per-slide CSS named pages (previously slides landed clipped
+  on the document's global page). Flowing content keeps the `aim:doc`
+  page setup; mixed documents interleave both.
+- **Canvas-pt convention** (spec §3.3, informative): canvas px are
+  point-equivalent at print — `960×540` is the native 16:9 slide,
+  paper pages are their point size (A5 portrait `420×595`). Examples,
+  fixtures, and spec snippets regenerated; new `examples/booklet.aim`
+  shows fixed-layout A5 paper pages with a positioned image figure.
+- **DOCX**: slides now **linearize** (page break + chunks in reading
+  order, in-slide proposals ride the tracked-changes lane) instead of
+  being silently dropped — a deck previously exported as an empty
+  document. Figures honor an authored inline-style width (CSS px at
+  96 dpi, clamped to the content box) instead of a hardcoded 4.5 in.
+
 ## 0.2.0 — 2026-07-10
 
 First release published to PyPI: `pip install aimformat`.
