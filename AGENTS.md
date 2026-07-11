@@ -15,7 +15,7 @@ the pointer in `CLAUDE.md`.)
 
 `aimformat` — the open `.aim` document format: an AI-native format where AI
 proposals and human accept/reject are first-class file primitives. This repo
-holds the **spec (v0.1 draft, [`spec.md`](spec.md))**, the Python SDK +
+holds the **spec (v0.2 draft, [`spec.md`](spec.md))**, the Python SDK +
 verifier + CLI (`src/aimformat/`), the MCP server (`aim mcp`, extra
 `[mcp]`), the Agent Skill (`skills/aimformat/`), the conformance suite, and
 the developer docs; the reference viewer is planned. Open design questions
@@ -99,7 +99,7 @@ technical content only (see Governance below).
   PR review like code; external PRs may propose knowledge edits but the
   maintainer decides what is recorded as fact.
 - **The log stays light and technical.** Durable decisions and major
-  plans/reviews only — this is a fast-moving pre-v0.1 repo, not a working
+  plans/reviews only — this is a fast-moving pre-1.0 repo, not a working
   journal. External contributors are **not** required to append log entries
   (see [`CONTRIBUTING.md`](CONTRIBUTING.md)).
 - **No strategy in public.** Business reasoning, positioning, pricing, or
