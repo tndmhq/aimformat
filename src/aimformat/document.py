@@ -882,19 +882,20 @@ class AimDocument:
                         continue
                     owned.update(filter(None, (el.chunk_id, el.container_id)))
         elif assign:
+            # whether the id is re-minted or honored, it lands on the
+            # tag-derived marker ONLY: an aim-slide root arriving as data-aim
+            # would otherwise be written as an S031-failing chunk (§4.3 —
+            # slides can only ever be containers), and a stale wrong-marker
+            # attribute surviving a re-mint would double-mark the root
+            marker = _payload_marker(first)
+            wrong = "data-aim" if marker == "data-aim-container" else "data-aim-container"
             if not payload_id or payload_id in taken or not ids.is_valid_chunk_id(payload_id):
                 new = ids.new_id(taken)
-                marker = _payload_marker(first)
                 for n in nodes:
+                    n.remove_attr(wrong)
                     n.set(marker, new)
                 payload_id = new
             else:
-                # an honored caller id still lands on the tag-derived marker:
-                # an aim-slide root arriving as data-aim would otherwise be
-                # written as an S031-failing chunk (§4.3 — slides can only
-                # ever be containers)
-                marker = _payload_marker(first)
-                wrong = "data-aim" if marker == "data-aim-container" else "data-aim-container"
                 if first.get(wrong) is not None:
                     for n in nodes:
                         n.remove_attr(wrong)

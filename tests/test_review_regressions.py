@@ -889,6 +889,23 @@ class TestSlideRootsForceTheContainerMarker:
         assert not [f for f in aim.lint(doc) if f.level == "error"]
         assert doc.verify() == []
 
+    def test_reminted_slide_id_drops_the_stale_chunk_marker(self):
+        # follow-up (Codex, third pass): when the supplied id is already
+        # taken, the fresh-id branch re-mints — but must also REMOVE the
+        # stale data-aim, or the card carries both markers and accepting
+        # writes an S012/S031 document
+        doc = aim.new_document(title="T")
+        doc.add_chunk(self.SLIDE, author=ME, at=ts(0))
+        assert "sx" in doc.containers  # the id is now taken
+        p = doc.propose_add(self.SLIDE, author=BOT, at=ts(1))
+        assert 'data-aim="' not in p.payload_html.split(">")[0]  # root carries no chunk marker
+        assert "data-aim-container=" in p.payload_html.split(">")[0]
+        assert not [f for f in aim.lint(doc) if f.level == "error"]
+        doc.accept(p.id, decided_by=ME, at=ts(2))
+        assert len([c for c in doc.containers if c != "sx"]) >= 1
+        assert not [f for f in aim.lint(doc) if f.level == "error"]
+        assert doc.verify() == []
+
 
 class TestDefaultCanvasSlidesGetPrintSize:
     """A5: a slide that omits its canvas size got a 960×540 named page but
