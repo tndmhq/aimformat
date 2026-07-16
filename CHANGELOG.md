@@ -14,6 +14,23 @@ version tracks the spec version it implements (0.x minors may break).
   the proposed root id, so chained anchors stay stable). delete/move
   proposals are explanation-only. No spec change.
 
+Exporter and MCP fixes (2026-07-16 deep-review round 2):
+
+- **DOCX tracked changes**: a pending add of a whole `ul`/`ol`/`table`
+  now exports as an inserted list/table instead of flattening to empty
+  paragraphs; `<br>` survives inside tracked ins/del runs; a lint-clean
+  table whose `rowspan`/`colspan` overruns the grid no longer crashes the
+  export (the grid widens/clamps instead); chained and sibling row-adds
+  land in accepted order rather than reversed; a run-chunk list item (or
+  table row) with a pending modify emits its payload exactly once instead
+  of once per member.
+- **Markdown (CriticMarkup)**: pending adds anchored inside a slide are
+  now emitted (previously silently dropped).
+- **MCP server**: optional `AIMFORMAT_MCP_ROOT` confines every path
+  argument (including export destinations) to one directory tree; unset
+  keeps the local trusted-client default. Tool descriptions now state the
+  local-only trust model.
+
 Fixed-layout pages: slides become correct pages end to end.
 
 - **PDF**: each `aim-slide` prints as its own page **at its own canvas

@@ -615,6 +615,69 @@ class TestProposeMoveNoop:
         assert not [f for f in aim.lint_text(basic_doc.dumps()) if f.level == "error"]
 
 
+# ===========================================================================
+# Wave 4: findings from the agent-core round-2 review (2026-07-13)
+# ===========================================================================
+
+
+class TestTableGridOverflow:
+    """A-13: spans exceeding the grid must clamp/widen, never crash the
+    DOCX export of a lint-clean table."""
+
+    def _export(self, html, tmp_path):
+        docx = pytest.importorskip("docx")
+        doc = aim.new_document(title="T")
+        doc.add_chunk(html, author=ME, at=ts(0))
+        assert aim.lint(doc) == []
+        out = aim.to_docx(doc, tmp_path / "t.docx")
+        return docx.Document(str(out))
+
+    def test_rowspan_exceeding_rows_exports(self, tmp_path):
+        d = self._export(
+            '<table data-aim-container="t1">'
+            '<tr data-aim="r1"><td rowspan="3">A</td><td>B</td></tr>'
+            '<tr data-aim="r2"><td>C</td></tr></table>',
+            tmp_path,
+        )
+        assert len(d.tables) == 1 and len(d.tables[0].rows) == 2
+        texts = {c.text for row in d.tables[0].rows for c in row.cells}
+        assert {"A", "B", "C"} <= texts
+
+    def test_colspan_shifted_past_grid_exports(self, tmp_path):
+        d = self._export(
+            '<table data-aim-container="t1">'
+            '<tr data-aim="r1"><td rowspan="2">A</td><td>B</td></tr>'
+            '<tr data-aim="r2"><td colspan="2">C</td></tr></table>',
+            tmp_path,
+        )
+        texts = {c.text for row in d.tables[0].rows for c in row.cells}
+        assert {"A", "B", "C"} <= texts
+
+    def test_base_cell_pushed_past_grid_widens(self, tmp_path):
+        # the surplus cell is a legitimate grid column — it must survive,
+        # not be dropped to dodge the crash
+        d = self._export(
+            '<table data-aim-container="t1">'
+            '<tr data-aim="r1"><td rowspan="2">A</td><td>B</td></tr>'
+            '<tr data-aim="r2"><td>C</td><td>D</td></tr></table>',
+            tmp_path,
+        )
+        texts = {c.text for row in d.tables[0].rows for c in row.cells}
+        assert "D" in texts
+
+    def test_valid_rowspan_still_merges(self, tmp_path):
+        d = self._export(
+            '<table data-aim-container="t1">'
+            '<tr data-aim="r1"><td rowspan="2">A</td><td>B</td></tr>'
+            '<tr data-aim="r2"><td>C</td></tr></table>',
+            tmp_path,
+        )
+        table = d.tables[0]
+        assert "vMerge" in table._tbl.xml
+        assert table.cell(0, 0).text == table.cell(1, 0).text == "A"
+        assert table.cell(0, 1).text == "B" and table.cell(1, 1).text == "C"
+
+
 def _mini(construct: str) -> str:
     doc = aim.new_document(title="mini")
     text = doc.dumps()

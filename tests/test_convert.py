@@ -319,6 +319,61 @@ class TestCriticMarkup:
         md = aim.to_markdown(self._doc())
         assert "{~~" not in md and "{++" not in md
 
+    def _slide_doc(self):
+        doc = aim.new_document(title="Deck")
+        u = aim.human("u")
+        doc.add_chunk(
+            '<aim-slide data-aim-container="pg1">'
+            '<h2 data-aim="t1" style="left:10px; top:10px; width:300px">Slide title</h2>'
+            '<p data-aim="t2" style="left:10px; top:60px; width:300px">Existing bullet</p>'
+            "</aim-slide>",
+            author=u,
+        )
+        return doc
+
+    def test_slide_add_after_chunk_renders_in_place(self):
+        doc = self._slide_doc()
+        doc.propose_add("<p>SLIDE ADD.</p>", author=aim.agent("m"), container="pg1", after="t1")
+        md = aim.to_markdown(doc, pending="criticmarkup")
+        assert "{++SLIDE ADD" in md
+        assert md.index("Slide title") < md.index("{++SLIDE ADD") < md.index("Existing bullet")
+
+    def test_slide_add_at_end_renders_after_last_child(self):
+        doc = self._slide_doc()
+        doc.propose_add("<p>TAIL ADD.</p>", author=aim.agent("m"), container="pg1")
+        md = aim.to_markdown(doc, pending="criticmarkup")
+        assert "{++TAIL ADD" in md
+        assert md.index("Existing bullet") < md.index("{++TAIL ADD")
+
+    def test_slide_add_after_nested_container_renders(self):
+        doc = self._slide_doc()
+        u = aim.human("u")
+        doc.add_chunk(
+            '<ul data-aim-container="lst1" style="left:10px; top:120px; width:300px">'
+            '<li data-aim="i1">Point</li></ul>',
+            author=u,
+            container="pg1",
+        )
+        doc.propose_add("<p>AFTER LIST.</p>", author=aim.agent("m"), container="pg1", after="lst1")
+        md = aim.to_markdown(doc, pending="criticmarkup")
+        assert "{++AFTER LIST" in md
+        assert md.index("Point") < md.index("{++AFTER LIST")
+
+    def test_slide_chained_add_follows_its_anchor(self):
+        doc = self._slide_doc()
+        bot = aim.agent("m")
+        first = doc.propose_add("<p>FIRST ADD.</p>", author=bot, container="pg1", after="t1")
+        doc.propose_add("<p>CHAINED ADD.</p>", author=bot, container="pg1", after=first.id)
+        md = aim.to_markdown(doc, pending="criticmarkup")
+        assert md.index("{++FIRST ADD") < md.index("{++CHAINED ADD")
+        assert md.index("{++CHAINED ADD") < md.index("Existing bullet")
+
+    def test_slide_adds_dropped_without_critic(self):
+        doc = self._slide_doc()
+        doc.propose_add("<p>SLIDE ADD.</p>", author=aim.agent("m"), container="pg1", after="t1")
+        md = aim.to_markdown(doc, pending="drop")
+        assert "SLIDE ADD" not in md and "{++" not in md
+
 
 class TestToHtml:
     def _doc(self):

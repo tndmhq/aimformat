@@ -142,6 +142,12 @@ Configure your MCP client:
 {"mcpServers": {"aimformat": {"command": "aimformat", "args": ["mcp"]}}}
 ```
 
+The server runs over local stdio and takes absolute host paths, so it
+assumes a trusted client. To confine it to one directory tree, set the
+`AIMFORMAT_MCP_ROOT` environment variable: every path argument (including
+export destinations) must then resolve inside that root. Unset means
+unscoped.
+
 Six tools:
 
 - `aim_read` — projected read: summary, TOC, chunks, pending lane

@@ -160,8 +160,13 @@ class _Renderer:
             return []
         if tag == "aim-slide":
             out = ["---"]
+            sid = el.container_id
+            if self.critic and sid:
+                out.extend(self._critic_adds((sid, None)))
             for child in el.elements():
                 out.extend(self.chunk_blocks(child, child.chunk_id))
+                if self.critic and sid:
+                    out.extend(self._critic_adds((sid, child.chunk_id or child.container_id)))
             return out
         if tag in ("ul", "ol"):
             return [self._list(el)]

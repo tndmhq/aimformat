@@ -184,6 +184,21 @@ class TestSecurityRules:
         broken = good_text.replace('<p data-aim="intro">', '<p data-aim="intro" onclick="steal()">')
         assert "X002" in codes(broken)
 
+    def test_X002_inside_slide(self, good_text):
+        # editors render slide markup verbatim — the linter is the boundary
+        broken = good_text.replace('<h2 data-aim="st"', '<h2 data-aim="st" onclick="steal()"')
+        assert "X002" in codes(broken)
+
+    def test_X002_inside_figure(self, basic_doc):
+        basic_doc.add_chunk(
+            '<figure data-aim="fig"><img src="https://e.org/a.png" alt="a"></figure>',
+            author=BOT,
+            at=ts(5),
+        )
+        # canonical form sorts attributes, so anchor the splice on alt=
+        text = basic_doc.dumps().replace('<img alt="a"', '<img alt="a" onerror="steal()"')
+        assert "X002" in codes(text)
+
     def test_X003_javascript_url(self, basic_doc):
         basic_doc.add_chunk(
             '<p data-aim="lnk"><a href="https://ok.org">ok</a></p>', author=BOT, at=ts(5)

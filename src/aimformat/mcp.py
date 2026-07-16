@@ -1,14 +1,17 @@
 """The aimformat MCP server — the SDK's workflows as six typed tools.
 
 Local stdio only: tools operate on ``.aim`` files by absolute path and touch
-nothing else. Run via ``aim mcp`` (the CLI lazy-imports this module) after
-``pip install 'aimformat[mcp]'``. Tool surface mirrors
+nothing else. Set ``AIMFORMAT_MCP_ROOT`` to confine every path argument
+(including export destinations) to one directory tree; unset means unscoped —
+the local trusted-client default. Run via ``aim mcp`` (the CLI lazy-imports
+this module) after ``pip install 'aimformat[mcp]'``. Tool surface mirrors
 ``docs/for-agents.md``: read projected, edit or propose, resolve, lint,
 export — few workflow-shaped tools, not a 1:1 SDK mapping.
 """
 
 from __future__ import annotations
 
+import os
 import re
 from pathlib import Path
 from typing import Any
@@ -40,8 +43,20 @@ https://aimformat.com/llms.txt — human review happens in AIM editors
 _DATA_URI = re.compile(r"data:[^\"'\s]{64,}")
 
 
+def _guard(path: str) -> Path:
+    """Resolve *path* (canonicalizing symlinks) and, when the
+    ``AIMFORMAT_MCP_ROOT`` environment variable is set, reject anything
+    escaping that root. The env var is read per call so it can be set or
+    changed without reimporting; unset keeps the unscoped local default."""
+    p = Path(path).resolve()
+    root = os.environ.get("AIMFORMAT_MCP_ROOT")
+    if root and not p.is_relative_to(Path(root).resolve()):
+        raise ValueError(f"aim: path escapes workspace root: {path}")
+    return p
+
+
 def _load(path: str) -> AimDocument:
-    p = Path(path)
+    p = _guard(path)
     if not p.is_file():
         raise ValueError(f"aim: not a file: {path}")
     return AimDocument.load(p)
@@ -102,7 +117,8 @@ def create_server() -> FastMCP:
         summary (with staleness flag), table of contents, every chunk with
         its stable data-aim id, and the pending proposals awaiting a
         decision. Long data: URIs are elided; the stylesheet is never
-        included. Start here before editing."""
+        included. Start here before editing. Operates on any absolute path
+        on the host; intended for local, trusted stdio use only."""
         doc = _load(path)
         summary = None
         meta = doc.meta
@@ -156,7 +172,8 @@ def create_server() -> FastMCP:
         action: add | modify | delete | move | set_theme. add/modify take
         html; add/move take container and after ('first' = first position,
         omitted = end); set_theme takes theme_slots. Set author to
-        'agent:<model-id>' for attribution."""
+        'agent:<model-id>' for attribution. Operates on any absolute path
+        on the host; intended for local, trusted stdio use only."""
         _require(
             action,
             target,
@@ -220,7 +237,9 @@ def create_server() -> FastMCP:
         the right tool for reviewable or unsolicited changes; a human
         accepts or rejects it later (in an AIM editor, or via aim_resolve).
         action: modify | add | delete | move | theme. Write an explanation
-        that stands alone: raw-tier readers see it without the payload."""
+        that stands alone: raw-tier readers see it without the payload.
+        Operates on any absolute path on the host; intended for local,
+        trusted stdio use only."""
         _require(
             action,
             target,
@@ -282,7 +301,9 @@ def create_server() -> FastMCP:
         """Accept or reject pending proposals by id and save. decision:
         accept | reject. applied (accept only, single id) records
         accept-with-tweaks: the payload as actually applied. Resolution is
-        all-or-nothing: on any bad id nothing is saved."""
+        all-or-nothing: on any bad id nothing is saved. Operates on any
+        absolute path on the host; intended for local, trusted stdio use
+        only."""
         if decision not in ("accept", "reject"):
             raise ValueError(f"aim: unknown decision {decision!r} (use accept | reject)")
         if applied and (decision != "accept" or len(proposal_ids) != 1):
@@ -307,8 +328,9 @@ def create_server() -> FastMCP:
         """Run the conformance verifier: structure, vocabulary, security,
         pending lane, history chain, caches, canonical form. Returns every
         finding; level 'error' means non-conforming. Works on broken files
-        too — that is what it is for."""
-        if not Path(path).is_file():
+        too — that is what it is for. Operates on any absolute path on the
+        host; intended for local, trusted stdio use only."""
+        if not _guard(path).is_file():
             raise ValueError(f"aim: not a file: {path}")
         findings = lint_path(path)
         return {
@@ -323,10 +345,13 @@ def create_server() -> FastMCP:
         extension: .docx (pending: tracked | accept-all | reject-all),
         .md (drop | criticmarkup), .html (keep | accept-all | reject-all),
         .pdf (keep | accept-all | reject-all). Heavier formats need extras:
-        pip install 'aimformat[docx]' (or [convert], [pdf])."""
+        pip install 'aimformat[docx]' (or [convert], [pdf]). Reads from and
+        writes to any absolute path on the host; intended for local,
+        trusted stdio use only."""
         from .cli import _EXPORT_PENDING
 
         doc = _load(path)
+        _guard(out_path)
         out = Path(out_path)
         suffix = out.suffix.lower()
         if suffix not in _EXPORT_PENDING:

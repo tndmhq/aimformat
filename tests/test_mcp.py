@@ -1,6 +1,7 @@
 """MCP server: tool surface, read projection, propose/resolve round-trip."""
 
 import json
+from pathlib import Path
 
 import pytest
 
@@ -193,3 +194,76 @@ def test_export_markdown(tmp_path):
     out = _payload(_call("aim_export", {"path": str(path), "out_path": str(out_md)}))
     assert out["ok"] and out["pending"] == "drop"
     assert "Original text." in out_md.read_text()
+
+
+def test_root_gate_allows_inside_root(tmp_path, monkeypatch):
+    monkeypatch.setenv("AIMFORMAT_MCP_ROOT", str(tmp_path))
+    path = _make_doc(tmp_path)
+    out = _payload(_call("aim_read", {"path": str(path)}))
+    assert [c["id"] for c in out["chunks"]] == ["p1", "p2"]
+    out = _payload(_call("aim_lint", {"path": str(path)}))
+    assert out["errors"] == 0
+    out_md = tmp_path / "doc.md"
+    out = _payload(_call("aim_export", {"path": str(path), "out_path": str(out_md)}))
+    assert out["ok"] and "Original text." in out_md.read_text()
+
+
+def test_root_gate_rejects_outside_root(tmp_path, monkeypatch):
+    root = tmp_path / "root"
+    root.mkdir()
+    monkeypatch.setenv("AIMFORMAT_MCP_ROOT", str(root))
+    outside = _make_doc(tmp_path)
+    for tool in ("aim_read", "aim_lint"):
+        result = _call(tool, {"path": str(outside)})
+        assert result.isError, tool
+        assert "escapes workspace root" in result.content[0].text
+    # out_path is the write target — escaping there must fail even when the
+    # source document sits safely inside the root
+    inside = _make_doc(root)
+    result = _call("aim_export", {"path": str(inside), "out_path": str(tmp_path / "escape.md")})
+    assert result.isError
+    assert "escapes workspace root" in result.content[0].text
+    assert not (tmp_path / "escape.md").exists()
+
+
+def test_root_gate_rejects_symlink_escape(tmp_path, monkeypatch):
+    root = tmp_path / "root"
+    root.mkdir()
+    monkeypatch.setenv("AIMFORMAT_MCP_ROOT", str(root))
+    outside = _make_doc(tmp_path)
+    link = root / "doc.aim"
+    link.symlink_to(outside)
+    result = _call("aim_read", {"path": str(link)})
+    assert result.isError
+    assert "escapes workspace root" in result.content[0].text
+
+
+def test_no_root_env_is_unscoped(tmp_path, monkeypatch):
+    # deliberate default: with AIMFORMAT_MCP_ROOT unset the server keeps the
+    # local trusted-stdio trust model — any absolute path works
+    monkeypatch.delenv("AIMFORMAT_MCP_ROOT", raising=False)
+    path = _make_doc(tmp_path)
+    out = _payload(_call("aim_read", {"path": str(path)}))
+    assert [c["id"] for c in out["chunks"]] == ["p1", "p2"]
+    out_md = tmp_path / "doc.md"
+    out = _payload(_call("aim_export", {"path": str(path), "out_path": str(out_md)}))
+    assert out["ok"] and out_md.exists()
+
+
+def test_guard_resolves_and_scopes(tmp_path, monkeypatch):
+    from aimformat.mcp import _guard
+
+    inside = tmp_path / "in.txt"
+    inside.write_text("x")
+    monkeypatch.delenv("AIMFORMAT_MCP_ROOT", raising=False)
+    assert _guard(str(inside)) == inside.resolve()
+    assert _guard("/etc/hosts") == Path("/etc/hosts").resolve()
+
+    monkeypatch.setenv("AIMFORMAT_MCP_ROOT", str(tmp_path))
+    assert _guard(str(inside)) == inside.resolve()
+    with pytest.raises(ValueError, match="escapes workspace root"):
+        _guard("/etc/hosts")
+    link = tmp_path / "link.txt"
+    link.symlink_to("/etc/hosts")
+    with pytest.raises(ValueError, match="escapes workspace root"):
+        _guard(str(link))

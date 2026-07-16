@@ -193,6 +193,8 @@ class _Revisions:
             from docx.enum.text import WD_BREAK
 
             run.add_break(WD_BREAK.PAGE)
+        elif spec.get("break"):
+            run.add_break()
         else:
             _format_run(run, spec)
         r = run._r
@@ -330,12 +332,29 @@ class _Exporter:
                 self._page_break()
         for el in els:
             for block in _block_children(el):
+                if block.tag in ("ul", "ol"):
+                    self._emit_added_list(block, prop)
+                    continue
+                if block.tag == "table":
+                    self.emit_table(block, force="ins", prop=prop)
+                    continue
                 para = self.out.add_paragraph(
                     style=style or self._safe_style(_style_for(block.tag))
                 )
                 self.rev.ins(para, _block_runs(block), _actor_label(prop.author), prop.at)
         if slide_payload:
             self._break_before_next = True
+
+    def _emit_added_list(self, el: Element, prop: Proposal) -> None:
+        """A pending add of a whole list: one inserted paragraph per item —
+        the ins half of ``emit_tracked_list_container``. Nested lists inside
+        payload items flatten via ``_runs_of``, the same granularity the
+        container-modify path has."""
+        style = self._safe_style("List Bullet" if el.tag == "ul" else "List Number")
+        label, date = _actor_label(prop.author), prop.at
+        for li in el.elements():
+            para = self.out.add_paragraph(style=style)
+            self.rev.ins(para, _runs_of(li), label, date)
 
     def _payload_elements(self, prop: Proposal) -> list[Element]:
         return [n for n in parse_fragment(prop.payload_html or "") if isinstance(n, Element)]
@@ -382,12 +401,17 @@ class _Exporter:
                 self.emit_block(block, cid)
 
     # -- tracked replacements (exactly once per chunk, never per child) -------
-    def emit_tracked_chunk(self, el: Element, prop: Proposal, style: str | None = None) -> None:
+    def emit_tracked_chunk(
+        self, el: Element, prop: Proposal, style: str | None = None, *, payload: bool = True
+    ) -> None:
+        """``payload=False`` deletes *el* without re-emitting the modify
+        payload — used for all but the last member of a run chunk, so the
+        replacement lands exactly once per chunk id."""
         label, date = _actor_label(prop.author), prop.at
         for block in _block_children(el):
             para = self.out.add_paragraph(style=style or self._safe_style(_style_for(block.tag)))
             self.rev.dele(para, _block_runs(block), label, date)
-        if prop.action == "modify":
+        if payload and prop.action == "modify":
             for new_el in self._payload_elements(prop):
                 for block in _block_children(new_el):
                     para = self.out.add_paragraph(
@@ -538,20 +562,28 @@ class _Exporter:
         container_id = el.container_id
         if container_id:
             self._emit_list_adds(container_id, None, style)
-        for li in el.elements():
-            cid = li.chunk_id or ""
+        items = el.elements()
+        i = 0
+        while i < len(items):
+            cid = items[i].chunk_id or ""
+            group = [items[i]]  # a run chunk = consecutive same-id items
+            while cid and i + 1 < len(items) and items[i + 1].chunk_id == cid:
+                i += 1
+                group.append(items[i])
+            i += 1
             prop = (self.pending_del.get(cid) or self.pending_mod.get(cid)) if cid else None
-            nested = [c for c in li.elements() if c.tag in ("ul", "ol")]
-            content = Element("li")
-            content.children = [
-                c for c in li.children if not (isinstance(c, Element) and c.tag in ("ul", "ol"))
-            ]
-            if prop is not None:
-                self.emit_tracked_chunk(content, prop, style=style)
-            else:
-                self.emit_block(content, cid, style=style)
-            for sub in nested:
-                self.emit_list(sub, level + 1)
+            for li in group:
+                nested = [c for c in li.elements() if c.tag in ("ul", "ol")]
+                content = Element("li")
+                content.children = [
+                    c for c in li.children if not (isinstance(c, Element) and c.tag in ("ul", "ol"))
+                ]
+                if prop is not None:
+                    self.emit_tracked_chunk(content, prop, style=style, payload=li is group[-1])
+                else:
+                    self.emit_block(content, cid, style=style)
+                for sub in nested:
+                    self.emit_list(sub, level + 1)
             if container_id and cid:
                 self._emit_list_adds(container_id, cid, style)
 
@@ -567,13 +599,30 @@ class _Exporter:
         rows = el.find_all(lambda e: e.tag == "tr")
         if not rows:
             return
-        ncols = max(
-            sum(int(c.get("colspan") or 1) for c in r.elements() if c.tag in ("td", "th"))
-            for r in rows
-        )
+        # true grid width: simulate the emit loop's cursor (spans shift later
+        # cells right; a rowspan reaching below the last row is clamped), so
+        # every (ri, ci) the loop touches exists in the table
+        ncols = 0
+        spanned: set[tuple[int, int]] = set()
+        for ri, row in enumerate(rows):
+            ci = 0
+            for c in row.elements():
+                if c.tag not in ("td", "th"):
+                    continue
+                while (ri, ci) in spanned:
+                    ci += 1
+                cs = int(c.get("colspan") or 1)
+                rs = min(int(c.get("rowspan") or 1), len(rows) - ri)
+                if cs > 1 or rs > 1:
+                    for dr in range(rs):
+                        for dc in range(cs):
+                            spanned.add((ri + dr, ci + dc))
+                ci += cs
+            ncols = max(ncols, ci)
         table = self.out.add_table(rows=len(rows), cols=ncols)
         table.style = "Table Grid" if self._has_style("Table Grid") else None
         occupied: set[tuple[int, int]] = set()
+        done_mods: set[str] = set()  # payload once per run chunk; later rows dele-only
         container_id = el.container_id
         for ri, row in enumerate(rows):
             rid = row.chunk_id or ""
@@ -582,7 +631,8 @@ class _Exporter:
             if force == "del":
                 prop_del = prop  # container-level: everything deleted
             new_cells = None
-            if prop_mod is not None:
+            if prop_mod is not None and rid not in done_mods:
+                done_mods.add(rid)
                 payload = self._payload_elements(prop_mod)
                 new_cells = [c for p in payload for c in p.elements() if c.tag in ("td", "th")]
             cells = [c for c in row.elements() if c.tag in ("td", "th")]
@@ -590,8 +640,8 @@ class _Exporter:
             for orig_idx, cell_el in enumerate(cells):
                 while (ri, ci) in occupied:
                     ci += 1
-                colspan = int(cell_el.get("colspan") or 1)
-                rowspan = int(cell_el.get("rowspan") or 1)
+                colspan = min(int(cell_el.get("colspan") or 1), ncols - ci)
+                rowspan = min(int(cell_el.get("rowspan") or 1), len(rows) - ri)
                 cell = table.cell(ri, ci)
                 if colspan > 1 or rowspan > 1:
                     cell = cell.merge(table.cell(ri + rowspan - 1, ci + colspan - 1))
@@ -621,21 +671,28 @@ class _Exporter:
                 else:
                     _apply_runs(para, runs)
                 ci += colspan
-            if container_id and not force:
-                self._emit_row_adds(table, ri, container_id, rid or None, ncols)
+        # row-adds only after the content loop: inserting rows mid-loop would
+        # shift the (ri, ci) coordinates the loop and the merges rely on
         if container_id and not force:
-            self._emit_row_adds(table, -1, container_id, None, ncols, first=True)
+            orig_trs = [r._tr for r in table.rows]  # 1:1 with the AIM rows
+            self._emit_row_adds(table, None, container_id, None, ncols, first=True)
+            for ri, row in enumerate(rows):
+                rid = row.chunk_id
+                if rid:
+                    self._emit_row_adds(table, orig_trs[ri], container_id, rid, ncols)
 
     def _emit_row_adds(
         self,
         table,
-        after_index: int,
+        anchor_tr,
         container: str,
         after: str | None,
         ncols: int,
         first: bool = False,
     ) -> None:
-        """Insert pending row-adds as fully-inserted (w:ins) table rows."""
+        """Insert pending row-adds as fully-inserted (w:ins) table rows,
+        each positioned right after its anchor ``w:tr`` (the container start
+        when ``first``)."""
         props = self._pop_adds(container, after)
         for prop in props:
             new_row = table.add_row()  # appended; repositioned below
@@ -650,9 +707,10 @@ class _Exporter:
                 self.rev.ins(para, _runs_of(payload_cells[idx]), _actor_label(prop.author), prop.at)
             if first:
                 table.rows[0]._tr.addprevious(new_row._tr)
-            elif after_index >= 0:
-                table.rows[after_index]._tr.addnext(new_row._tr)
-            self._emit_row_adds(table, after_index, container, prop.id, ncols)
+            else:
+                anchor_tr.addnext(new_row._tr)
+            # chained adds anchor on the row just inserted
+            self._emit_row_adds(table, new_row._tr, container, prop.id, ncols)
 
 
 # --------------------------------------------------------------------------
