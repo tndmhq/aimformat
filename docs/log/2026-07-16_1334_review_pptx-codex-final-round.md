@@ -15,9 +15,9 @@ b9baae3), and doubles as the fix plan. Each verdict below was established by an
 independent triage agent and confirmed by an adversarial verifier; every
 Python-reachable claim was reproduced live before being accepted.
 
-The editor-side twin of this round (5 findings on tndm PR #9) is triaged in
-tndm's `docs/log/2026-07-16_1334_review_pptx-codex-final-round.md`. All five
-findings here are format-side only; no cross-repo coupling.
+The same review wave also covered the commercial editor; those findings are
+triaged in the editor repo's own log entry of the same name. All five findings
+here are format-side only; no cross-repo coupling.
 
 ## Verdicts
 

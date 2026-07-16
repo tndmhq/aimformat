@@ -715,6 +715,21 @@ class _Linter:
                             "multi-element modify payload is only legal for list/table item runs",
                             where,
                         )
+                    else:
+                        # marker/kind parity with accept: a payload keeping the
+                        # target id but on the wrong kind of root would pass the
+                        # id check yet be rejected at accept time — the card
+                        # must not lint green while being unacceptable
+                        live = self.state.kind_of(p.target)
+                        marked = "container" if roots[0].container_id is not None else "chunk"
+                        if live in ("chunk", "container") and marked != live:
+                            self.add(
+                                "P010",
+                                ERROR,
+                                f"modify payload root is marked as a {marked}, "
+                                f"but target {p.target!r} is a {live}",
+                                where,
+                            )
             if p.action == "add" and p.anchor_after:
                 ok = self.state.exists(p.anchor_after) or p.anchor_after in pending_ids
                 if not ok:

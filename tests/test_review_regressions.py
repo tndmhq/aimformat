@@ -744,6 +744,23 @@ class TestModifyAcceptValidatesEveryRoot:
         assert rich_doc.history[-1].get("applied") is None
         assert rich_doc.verify() == []
 
+    def test_kind_mismatched_card_fails_lint_before_accept(self, rich_doc):
+        # follow-up (Codex on the fix PR): a hand-authored card can keep the
+        # target id but put it on the wrong KIND of root — accept rejects it,
+        # so lint must flag the card while it is still pending
+        p = rich_doc.propose_modify(
+            "list",
+            '<ul data-aim-container="list"><li data-aim="li1">First</li></ul>',
+            author=BOT,
+            at=ts(30),
+        )
+        needle = p.payload_html
+        doc = aim.loads(rich_doc.dumps().replace(needle, '<p data-aim="list">oops</p>', 1))
+        assert "P010" in {f.code for f in aim.lint(doc) if f.level == "error"}
+        with pytest.raises(InvalidOperation):
+            doc.accept(p.id, decided_by=ME, at=ts(31))
+        assert doc.verify() == []
+
 
 class TestEmptySlidesKeepTheirDocxPage:
     """A2: a childless slide is a valid blank page (PDF prints it); the
