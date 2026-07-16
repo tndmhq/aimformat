@@ -1,7 +1,7 @@
 ---
 date: 2026-07-16 13:34
 type: review
-status: active
+status: done
 related: ["2026-07-10_1245_plan_fixed-layout-pages.md", "2026-07-16_1259_report_review-round2-exporter-mcp-fixes.md"]
 ---
 
@@ -48,3 +48,22 @@ here are format-side only; no cross-repo coupling.
   unconditionally (inline styles still win when present).
 
 Every fix lands with a regression test in `tests/test_review_regressions.py`.
+
+## Outcome (PR #10)
+
+All four fixes landed as designed (A1 additionally grew `skip_payload_of`
+plumbing so a plain accept does not remap ids the card itself minted).
+Codex's review of the fix PR surfaced three follow-ups, all fixed with
+red-first regression tests:
+
+- lint `P010` now enforces marker/kind **parity with accept**: a card keeping
+  the target id on the wrong kind of root linted green while accept rejects
+  it;
+- …including the **double-marker** variant (right marker plus the wrong one on
+  the same root), which read as kind-consistent;
+- the accept-side wrong-marker guard now scans **every run root** — a
+  container marker smuggled onto the second `li` of a run was previously
+  written into the body verbatim.
+
+Final: 643 tests passing, ruff/mypy clean; a private-repo reference in the
+first version of this entry was generalized per REVIEW.md public-repo hygiene.

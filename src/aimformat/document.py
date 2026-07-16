@@ -852,11 +852,14 @@ class AimDocument:
             else:
                 marker = expect_marker or _payload_marker(first)
             wrong = "data-aim" if marker == "data-aim-container" else "data-aim-container"
-            if first.get(wrong) is not None:
-                raise InvalidOperation(
-                    f"payload marks the root with {wrong}, but target "
-                    f"{expect_id!r} is a {self._state.kind_of(expect_id)}"
-                )
+            # every run root, not just the first: a wrong marker on a later
+            # root would survive normalization and be written into the body
+            for n in nodes:
+                if n.get(wrong) is not None:
+                    raise InvalidOperation(
+                        f"payload marks a root with {wrong}, but target "
+                        f"{expect_id!r} is a {self._state.kind_of(expect_id)}"
+                    )
             if payload_id is None:
                 for n in nodes:
                     n.set(marker, expect_id)

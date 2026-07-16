@@ -761,6 +761,46 @@ class TestModifyAcceptValidatesEveryRoot:
             doc.accept(p.id, decided_by=ME, at=ts(31))
         assert doc.verify() == []
 
+    def test_double_marked_card_fails_lint_before_accept(self, rich_doc):
+        # follow-up (Codex, second pass): the RIGHT marker plus the WRONG one
+        # on the same root read as kind-consistent, yet accept rejects the
+        # wrong marker — the pending card must not lint green
+        p = rich_doc.propose_modify(
+            "list",
+            '<ul data-aim-container="list"><li data-aim="li1">Rewritten</li></ul>',
+            author=BOT,
+            at=ts(30),
+        )
+        needle = '<ul data-aim-container="list"><li data-aim="li1">Rewritten</li></ul>'
+        assert p.payload_html == needle
+        evil = needle.replace(
+            '<ul data-aim-container="list">', '<ul data-aim="list" data-aim-container="list">', 1
+        )
+        doc = aim.loads(rich_doc.dumps().replace(needle, evil, 1))
+        assert "P010" in {f.code for f in aim.lint(doc) if f.level == "error"}
+        with pytest.raises(InvalidOperation):
+            doc.accept(p.id, decided_by=ME, at=ts(31))
+        assert doc.verify() == []
+
+    def test_wrong_marker_on_a_later_run_root_is_rejected(self, rich_doc):
+        # the wrong-marker guard must scan every run root: a container marker
+        # smuggled onto the SECOND li of a run would previously be written
+        # into the body verbatim
+        p = rich_doc.propose_modify(
+            "li2",
+            '<li data-aim="li2">part one</li><li data-aim="li2">part two</li>',
+            author=BOT,
+            at=ts(30),
+        )
+        needle = '<li data-aim="li2">part two</li>'
+        evil = '<li data-aim="li2" data-aim-container="li2">part two</li>'
+        doc = aim.loads(rich_doc.dumps().replace(needle, evil, 1))
+        assert "P010" in {f.code for f in aim.lint(doc) if f.level == "error"}
+        with pytest.raises(InvalidOperation):
+            doc.accept(p.id, decided_by=ME, at=ts(31))
+        assert doc.verify() == []
+        assert 'data-aim-container="li2"' not in doc.dumps().split("<aim-proposals")[0]
+
 
 class TestEmptySlidesKeepTheirDocxPage:
     """A2: a childless slide is a valid blank page (PDF prints it); the

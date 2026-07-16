@@ -717,9 +717,11 @@ class _Linter:
                         )
                     else:
                         # marker/kind parity with accept: a payload keeping the
-                        # target id but on the wrong kind of root would pass the
-                        # id check yet be rejected at accept time — the card
-                        # must not lint green while being unacceptable
+                        # target id but on the wrong kind of root — or carrying
+                        # the opposite marker alongside the right one, on any
+                        # run root — would pass the id check yet be rejected at
+                        # accept time. The card must not lint green while being
+                        # unacceptable.
                         live = self.state.kind_of(p.target)
                         marked = "container" if roots[0].container_id is not None else "chunk"
                         if live in ("chunk", "container") and marked != live:
@@ -727,6 +729,18 @@ class _Linter:
                                 "P010",
                                 ERROR,
                                 f"modify payload root is marked as a {marked}, "
+                                f"but target {p.target!r} is a {live}",
+                                where,
+                            )
+                        elif live in ("chunk", "container") and any(
+                            (r.chunk_id if live == "container" else r.container_id) is not None
+                            for r in roots
+                        ):
+                            wrong = "data-aim" if live == "container" else "data-aim-container"
+                            self.add(
+                                "P010",
+                                ERROR,
+                                f"modify payload root also carries {wrong}, "
                                 f"but target {p.target!r} is a {live}",
                                 where,
                             )
