@@ -89,7 +89,15 @@ def _slide_page_css(doc: AimDocument) -> str:
             continue
         w, h = _canvas_size(el.get("style"))
         pages.append(f"@page pg-{sid}{{size:{_fmt_pt(w)}pt {_fmt_pt(h)}pt;margin:0}}")
-        assigns.append(f'aim-slide[data-aim-container="{sid}"]{{page:pg-{sid};zoom:{_PRINT_ZOOM}}}')
+        # the resolved size rides the element rule too: inline canvas styles
+        # win the cascade when present, and a slide that omits them would
+        # otherwise collapse to a zero-height box (the stylesheet gives
+        # aim-slide no width/height) and print blank on its named page
+        assigns.append(
+            f'aim-slide[data-aim-container="{sid}"]'
+            f"{{page:pg-{sid};zoom:{_PRINT_ZOOM};"
+            f"width:{_fmt_pt(w)}px;height:{_fmt_pt(h)}px}}"
+        )
     if not pages:
         return ""
     return "\n".join(pages) + "\n@media print{" + "".join(assigns) + "}"

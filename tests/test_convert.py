@@ -535,8 +535,12 @@ class TestPdfSlidePages:
         assert "@page pg-pg1{size:420pt 595pt;margin:0}" in html
         # … an unsized canvas gets the 16:9 convention default …
         assert "@page pg-pg2{size:960pt 540pt;margin:0}" in html
-        # … slides are assigned their page and print-scaled px→pt (×4/3) …
-        assert 'aim-slide[data-aim-container="pg1"]{page:pg-pg1;zoom:1.33333}' in html
+        # … slides are assigned their page, print-scaled px→pt (×4/3), and
+        # given the resolved canvas box (unsized slides would collapse) …
+        assert (
+            'aim-slide[data-aim-container="pg1"]'
+            "{page:pg-pg1;zoom:1.33333;width:420px;height:595px}" in html
+        )
         # … and the flow keeps the document page setup (A4 default).
         assert "@page{size:210mm 297mm" in html
 

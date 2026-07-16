@@ -477,12 +477,19 @@ class _Exporter:
         self._break_before_next = False
         if self._has_content() and not self._ends_with_page_break():
             self._page_break()
+        opened_at = len(self.out.element.body)
         if sid:
             self._emit_anchored_adds(sid, None)
         for child in el.elements():
             self.emit_construct(child)
             if sid:
                 self._emit_anchored_adds(sid, child.chunk_id or child.container_id)
+        if len(self.out.element.body) == opened_at:
+            # a blank canvas is still a page (PDF prints it): without at
+            # least one paragraph the slide leaves no mark for
+            # _has_content(), the next slide resets _break_before_next,
+            # and the page silently vanishes from the DOCX
+            self.out.add_paragraph()
         # content following the slide belongs to the next page — mirror of
         # the print layer's page-break-after; nothing is emitted when the
         # slide is last, so the document gains no trailing blank page

@@ -703,10 +703,47 @@ class _Linter:
                 else:
                     from .dom import parse_fragment
 
+                    # every root is checked, not just the first: a second
+                    # root would be written wholesale on accept
                     roots = [n for n in parse_fragment(p.payload_html) if isinstance(n, Element)]
-                    root_id = roots[0].chunk_id or roots[0].container_id if roots else None
-                    if root_id != p.target:
+                    if not roots or any((r.chunk_id or r.container_id) != p.target for r in roots):
                         self.add("P010", ERROR, "modify payload id must equal data-for", where)
+                    elif len(roots) > 1 and any(r.tag not in REGISTRY.item_carriers for r in roots):
+                        self.add(
+                            "P010",
+                            ERROR,
+                            "multi-element modify payload is only legal for list/table item runs",
+                            where,
+                        )
+                    else:
+                        # marker/kind parity with accept: a payload keeping the
+                        # target id but on the wrong kind of root — or carrying
+                        # the opposite marker alongside the right one, on any
+                        # run root — would pass the id check yet be rejected at
+                        # accept time. The card must not lint green while being
+                        # unacceptable.
+                        live = self.state.kind_of(p.target)
+                        marked = "container" if roots[0].container_id is not None else "chunk"
+                        if live in ("chunk", "container") and marked != live:
+                            self.add(
+                                "P010",
+                                ERROR,
+                                f"modify payload root is marked as a {marked}, "
+                                f"but target {p.target!r} is a {live}",
+                                where,
+                            )
+                        elif live in ("chunk", "container") and any(
+                            (r.chunk_id if live == "container" else r.container_id) is not None
+                            for r in roots
+                        ):
+                            wrong = "data-aim" if live == "container" else "data-aim-container"
+                            self.add(
+                                "P010",
+                                ERROR,
+                                f"modify payload root also carries {wrong}, "
+                                f"but target {p.target!r} is a {live}",
+                                where,
+                            )
             if p.action == "add" and p.anchor_after:
                 ok = self.state.exists(p.anchor_after) or p.anchor_after in pending_ids
                 if not ok:

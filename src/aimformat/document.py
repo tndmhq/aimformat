@@ -761,8 +761,12 @@ class AimDocument:
     # -- payload plumbing ------------------------------------------------------------
     _PAYLOAD_ID_RE = re.compile(r'data-aim(?:-container)?="([^"]+)"')
 
-    def _recorded_ids(self) -> set[str]:
-        """Ids mentioned by history or the pending lane (live or burned)."""
+    def _recorded_ids(self, *, skip_payload_of: str | None = None) -> set[str]:
+        """Ids mentioned by history or the pending lane (live or burned).
+
+        ``skip_payload_of`` leaves one pending card's payload ids out: at
+        resolution time they are the write's own reservations (minted when
+        the card was created), not competing claims."""
         taken: set[str] = set()
         for ev in self.history:  # ids are never reused, deleted ones stay burned
             for key in ("target", "proposal"):
@@ -777,12 +781,12 @@ class AimDocument:
                     taken.update(self._PAYLOAD_ID_RE.findall(v))
         for p in self.proposals:
             taken.add(p.id)
-            if p.payload_html:
+            if p.payload_html and p.id != skip_payload_of:
                 taken.update(self._PAYLOAD_ID_RE.findall(p.payload_html))
         return taken
 
-    def _taken_ids(self) -> set[str]:
-        return self._state.all_ids() | self._recorded_ids()
+    def _taken_ids(self, *, skip_payload_of: str | None = None) -> set[str]:
+        return self._state.all_ids() | self._recorded_ids(skip_payload_of=skip_payload_of)
 
     def _guard_replacement_kind(self, target: str, first: Element, kind: str | None = None) -> None:
         """A replacement keeps the target's kind (§4.3): an ``aim-slide``
@@ -807,12 +811,16 @@ class AimDocument:
         expect_id: str | None = None,
         expect_marker: str | None = None,
         assign: bool = True,
+        skip_payload_of: str | None = None,
     ) -> tuple[str, str]:
         """Parse, validate and canonicalize an edit payload.
 
         Returns ``(chunk_id, canonical_markup)``. New chunks get fresh ids
         assigned (a valid, unused id already present in the payload is
-        honored so callers can pick deterministic ids).
+        honored so callers can pick deterministic ids). ``skip_payload_of``
+        names a pending card whose payload is being written: the ids that
+        card reserved for itself stay honored instead of reading as
+        collisions with the card's own record.
         """
         nodes = [n for n in parse_fragment(markup) if isinstance(n, Element)]
         if not nodes:
@@ -827,7 +835,7 @@ class AimDocument:
             )
         first = nodes[0]
         payload_id = first.chunk_id or first.container_id
-        taken = self._taken_ids()
+        taken = self._taken_ids(skip_payload_of=skip_payload_of)
         owned: set[str] = set()
         if expect_id is not None:
             # the target's live kind decides the marker; a mismatched marker
@@ -844,11 +852,14 @@ class AimDocument:
             else:
                 marker = expect_marker or _payload_marker(first)
             wrong = "data-aim" if marker == "data-aim-container" else "data-aim-container"
-            if first.get(wrong) is not None:
-                raise InvalidOperation(
-                    f"payload marks the root with {wrong}, but target "
-                    f"{expect_id!r} is a {self._state.kind_of(expect_id)}"
-                )
+            # every run root, not just the first: a wrong marker on a later
+            # root would survive normalization and be written into the body
+            for n in nodes:
+                if n.get(wrong) is not None:
+                    raise InvalidOperation(
+                        f"payload marks a root with {wrong}, but target "
+                        f"{expect_id!r} is a {self._state.kind_of(expect_id)}"
+                    )
             if payload_id is None:
                 for n in nodes:
                     n.set(marker, expect_id)
@@ -871,13 +882,24 @@ class AimDocument:
                         continue
                     owned.update(filter(None, (el.chunk_id, el.container_id)))
         elif assign:
+            # whether the id is re-minted or honored, it lands on the
+            # tag-derived marker ONLY: an aim-slide root arriving as data-aim
+            # would otherwise be written as an S031-failing chunk (§4.3 —
+            # slides can only ever be containers), and a stale wrong-marker
+            # attribute surviving a re-mint would double-mark the root
+            marker = _payload_marker(first)
+            wrong = "data-aim" if marker == "data-aim-container" else "data-aim-container"
             if not payload_id or payload_id in taken or not ids.is_valid_chunk_id(payload_id):
                 new = ids.new_id(taken)
-                marker = _payload_marker(first)
                 for n in nodes:
+                    n.remove_attr(wrong)
                     n.set(marker, new)
                 payload_id = new
             else:
+                if first.get(wrong) is not None:
+                    for n in nodes:
+                        n.remove_attr(wrong)
+                        n.set(marker, payload_id)
                 taken.add(payload_id)
         if expect_id is not None or assign:
             # item chunks / nested containers inside a container payload:
@@ -1913,13 +1935,26 @@ class AimDocument:
                 data["proposed"] = prop.payload_html
                 if decision == "accepted":
                     payload = applied if applied is not None else prop.payload_html
-                    if applied is not None and applied != prop.payload_html:
-                        data["applied"] = applied
-                    # externally-authored proposals bypass creation-time
-                    # normalization: re-guard the kind before the write
-                    roots = [n for n in parse_fragment(payload or "") if isinstance(n, Element)]
-                    if roots:
-                        self._guard_replacement_kind(prop.target or "", roots[0])
+                    if prop.target not in _RESERVED_TARGETS:
+                        # externally-authored proposals bypass creation-time
+                        # normalization: re-validate the FULL payload (every
+                        # root's id and kind, run shape, nested ids) before
+                        # the write — guarding only the first root lets a
+                        # second one smuggle arbitrary structure past accept.
+                        # aim:theme/aim:doc payloads have their own grammar,
+                        # enforced by _state.replace.
+                        _, payload = self._normalize_payload(
+                            payload or "",
+                            expect_id=prop.target,
+                            assign=False,
+                            skip_payload_of=prop.id,
+                        )
+                    if payload != prop.payload_html:
+                        # the written form diverged from the card (a tweak,
+                        # or a hand-authored card in non-canonical form) —
+                        # record what actually landed, so verify() replays
+                        # against the true result
+                        data["applied"] = payload
                     self._state.replace(prop.target or "", payload or "")
             elif prop.action == "delete" and decision == "accepted":
                 # a hand-authored card can still carry a reserved target;
