@@ -14,6 +14,27 @@ version tracks the spec version it implements (0.x minors may break).
   the proposed root id, so chained anchors stay stable). delete/move
   proposals are explanation-only. No spec change.
 
+Fixed-layout-pages fixes (2026-07-16, final review round on the PR):
+
+- **Accepting a modify validates the whole payload**: a hand-authored
+  card whose payload hid a second root element behind a valid first one
+  was written wholesale, corrupting the document past lint and history
+  verification. Accept now re-validates every root (id, kind, run shape,
+  nested ids) and rejects what the SDK would never have proposed; the
+  linter's P010 likewise checks every payload root, so such cards fail
+  `aim lint` while still pending. When the written form differs from the
+  card (a tweak, or a non-canonical hand-authored payload), the
+  resolution event records it as `applied`.
+- **DOCX**: an empty slide keeps its page (one placeholder paragraph)
+  instead of silently vanishing whenever its neighbor was another slide.
+- **SDK**: `add_chunk`/`propose_add` of an `aim-slide` carrying a
+  caller-supplied id on `data-aim` now moves the id to
+  `data-aim-container` (slides are always containers) instead of minting
+  an S031-failing document.
+- **PDF**: a slide that omits its inline canvas size now gets the
+  resolved default box (`960×540`) in the print CSS instead of
+  collapsing to zero height and printing a blank page.
+
 Exporter and MCP fixes (2026-07-16 deep-review round 2):
 
 - **DOCX tracked changes**: a pending add of a whole `ul`/`ol`/`table`

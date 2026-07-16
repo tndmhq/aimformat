@@ -9,6 +9,7 @@ required to add entries.)
 
 | Date | Type | Entry | Status | What |
 |---|---|---|---|---|
+| 2026-07-16 13:34 | review | [pptx-codex-final-round](2026-07-16_1334_review_pptx-codex-final-round.md) | active | Triage of the untriaged post-merge Codex round on PR #5 (fixed-layout pages): 5 findings, 4 still present, 1 already fixed |
 | 2026-07-16 12:59 | report | [review-round2-exporter-mcp-fixes](2026-07-16_1259_report_review-round2-exporter-mcp-fixes.md) | done | Fix the six round-2 review findings: DOCX tracked-changes emitters (A-11..A-15), Markdown slide adds (A-16), MCP root scoping (A-01) |
 | 2026-07-10 16:46 | decision | [amend-proposal](2026-07-10_1646_decision_amend-proposal.md) | done | amend_proposal SDK method: in-place amend of a pending proposal's payload/explanation (spec §5.4 already sanctions it) — lets agent loops iterate on pending suggestions without id churn or supersede noise |
 | 2026-07-10 12:45 | plan | [fixed-layout-pages](2026-07-10_1245_plan_fixed-layout-pages.md) | done | Canvas-as-points convention; per-canvas PDF pages; DOCX linearizes slides + honors image width |

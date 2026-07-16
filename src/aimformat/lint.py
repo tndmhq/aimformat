@@ -703,10 +703,18 @@ class _Linter:
                 else:
                     from .dom import parse_fragment
 
+                    # every root is checked, not just the first: a second
+                    # root would be written wholesale on accept
                     roots = [n for n in parse_fragment(p.payload_html) if isinstance(n, Element)]
-                    root_id = roots[0].chunk_id or roots[0].container_id if roots else None
-                    if root_id != p.target:
+                    if not roots or any((r.chunk_id or r.container_id) != p.target for r in roots):
                         self.add("P010", ERROR, "modify payload id must equal data-for", where)
+                    elif len(roots) > 1 and any(r.tag not in REGISTRY.item_carriers for r in roots):
+                        self.add(
+                            "P010",
+                            ERROR,
+                            "multi-element modify payload is only legal for list/table item runs",
+                            where,
+                        )
             if p.action == "add" and p.anchor_after:
                 ok = self.state.exists(p.anchor_after) or p.anchor_after in pending_ids
                 if not ok:

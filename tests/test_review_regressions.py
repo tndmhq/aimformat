@@ -678,6 +678,194 @@ class TestTableGridOverflow:
         assert table.cell(0, 1).text == "B" and table.cell(1, 1).text == "C"
 
 
+# ===========================================================================
+# Wave 5: findings from the final Codex round on the fixed-layout-pages PR
+# (docs/log/2026-07-16_1334_review_pptx-codex-final-round.md)
+# ===========================================================================
+
+
+class TestModifyAcceptValidatesEveryRoot:
+    """A1: accept must validate EVERY root of a modify payload before the
+    write — a hand-edited card whose payload smuggles a second root behind
+    a valid first one lints clean, then accept corrupts the document
+    (S031/S024 in the body plus a permanent H006 history mismatch)."""
+
+    def _smuggled(self, basic_doc):
+        p = basic_doc.propose_modify(
+            "intro", '<p data-aim="intro">changed</p>', author=BOT, at=ts(10)
+        )
+        needle = '<p data-aim="intro">changed</p>'
+        evil = needle + '<aim-slide data-aim="intro"><p data-aim="x9">smuggled</p></aim-slide>'
+        return aim.loads(basic_doc.dumps().replace(needle, evil, 1)), p.id
+
+    def test_accept_rejects_smuggled_second_root(self, basic_doc):
+        doc, pid = self._smuggled(basic_doc)
+        body_before = doc._state.serial("intro")
+        with pytest.raises(InvalidOperation):
+            doc.accept(pid, decided_by=ME, at=ts(11))
+        # the failed accept wrote nothing: body intact, history replays,
+        # and the document still round-trips
+        assert doc._state.serial("intro") == body_before
+        assert doc.verify() == []
+        assert aim.loads(doc.dumps()).dumps() == doc.dumps()
+        codes = {f.code for f in aim.lint(doc) if f.level == "error"}
+        assert not codes & {"S031", "S024", "H006"}
+
+    def test_smuggled_card_fails_lint_before_accept(self, basic_doc):
+        doc, _ = self._smuggled(basic_doc)
+        assert "P010" in {f.code for f in aim.lint(doc) if f.level == "error"}
+
+    def test_multi_root_li_run_modify_still_accepts(self, rich_doc):
+        p = rich_doc.propose_modify(
+            "li2",
+            '<li data-aim="li2">rewritten, part one…</li>'
+            '<li data-aim="li2">…rewritten, part two</li>',
+            author=BOT,
+            at=ts(30),
+        )
+        rich_doc.accept(p.id, decided_by=ME, at=ts(31))
+        assert "rewritten, part one" in rich_doc._state.serial("li2")
+        assert rich_doc.verify() == []
+        assert not [f for f in aim.lint(rich_doc) if f.level == "error"]
+
+    def test_plain_accept_keeps_card_reserved_item_ids(self, rich_doc):
+        # ids the card itself minted for new items are its own to spend:
+        # the accept-time re-validation must not remap them (nor record a
+        # spurious "applied" divergence for an untouched SDK card)
+        p = rich_doc.propose_modify(
+            "list",
+            '<ul data-aim-container="list"><li data-aim="li1">First</li><li>NEW</li></ul>',
+            author=BOT,
+            at=ts(30),
+        )
+        new_id = re.findall(r'data-aim="([a-z0-9_-]+)"', p.payload_html)[-1]
+        rich_doc.accept(p.id, decided_by=ME, at=ts(31))
+        assert f'data-aim="{new_id}"' in rich_doc._state.serial("list")
+        assert rich_doc.history[-1].get("applied") is None
+        assert rich_doc.verify() == []
+
+
+class TestEmptySlidesKeepTheirDocxPage:
+    """A2: a childless slide is a valid blank page (PDF prints it); the
+    DOCX linearization dropped it whenever the neighbor was another slide —
+    nothing emitted, and the next slide reset ``_break_before_next``."""
+
+    @staticmethod
+    def _slide(sid, *blocks):
+        return (
+            f'<aim-slide data-aim-container="{sid}" style="width:420px; height:595px">'
+            + "".join(blocks)
+            + "</aim-slide>"
+        )
+
+    BODY = '<p data-aim="{cid}" style="left:10px; top:10px; width:300px">{text}</p>'
+
+    def _breaks(self, d):
+        from docx.oxml.ns import qn
+
+        return d.element.body.findall(".//" + qn("w:br") + "[@" + qn("w:type") + "='page']")
+
+    def test_leading_empty_slide_keeps_its_page(self, tmp_path):
+        docx = pytest.importorskip("docx")
+        doc = aim.new_document(title="Deck")
+        doc.add_chunk(self._slide("s1"), author=ME, at=ts(0))
+        doc.add_chunk(
+            self._slide("s2", self.BODY.format(cid="b2", text="Second body.")), author=ME, at=ts(1)
+        )
+        assert not [f for f in aim.lint(doc) if f.level == "error"]  # blank slides are valid
+        d = docx.Document(str(aim.to_docx(doc, tmp_path / "deck.docx")))
+        assert len(self._breaks(d)) == 1  # blank page → s2's page
+        # placeholder paragraph, page break, s2 body
+        assert [p.text for p in d.paragraphs] == ["", "", "Second body."]
+
+    def test_mid_deck_empty_slide_keeps_its_page(self, tmp_path):
+        docx = pytest.importorskip("docx")
+        doc = aim.new_document(title="Deck")
+        doc.add_chunk(
+            self._slide("s1", self.BODY.format(cid="b1", text="First body.")), author=ME, at=ts(0)
+        )
+        doc.add_chunk(self._slide("s2"), author=ME, at=ts(1))
+        doc.add_chunk(
+            self._slide("s3", self.BODY.format(cid="b3", text="Third body.")), author=ME, at=ts(2)
+        )
+        d = docx.Document(str(aim.to_docx(doc, tmp_path / "deck.docx")))
+        assert len(self._breaks(d)) == 2  # s1 → blank page → s3
+        assert [p.text for p in d.paragraphs] == ["First body.", "", "", "", "Third body."]
+
+    def test_only_empty_slide_exports_one_blank_page(self, tmp_path):
+        docx = pytest.importorskip("docx")
+        doc = aim.new_document(title="Deck")
+        doc.add_chunk(self._slide("s1"), author=ME, at=ts(0))
+        d = docx.Document(str(aim.to_docx(doc, tmp_path / "deck.docx")))
+        assert len(d.paragraphs) == 1 and not self._breaks(d)
+
+
+class TestSlideRootsForceTheContainerMarker:
+    """A4: a caller-supplied valid unused id was honored on whatever marker
+    it arrived on — so ``add_chunk('<aim-slide data-aim="sx">…')`` minted an
+    S031-failing document, and the propose_add card lint-passed while
+    pending only to fail after acceptance."""
+
+    SLIDE = (
+        '<aim-slide data-aim="sx" style="width:420px; height:595px">'
+        '<h2 style="left:10px; top:10px; width:300px">X</h2></aim-slide>'
+    )
+
+    def test_add_chunk_moves_the_id_to_the_container_marker(self):
+        doc = aim.new_document(title="T")
+        doc.add_chunk(self.SLIDE, author=ME, at=ts(0))
+        assert "sx" in doc.containers
+        text = doc.dumps()
+        assert 'data-aim-container="sx"' in text
+        assert 'data-aim="sx"' not in text
+        # the slide's children are addressable chunks, not swallowed content
+        slide = doc._state.container_node("sx")
+        assert all(e.chunk_id for e in slide.elements())
+        assert not [f for f in aim.lint(doc) if f.level == "error"]
+
+    def test_propose_add_then_accept_ends_lint_clean(self):
+        doc = aim.new_document(title="T")
+        p = doc.propose_add(self.SLIDE, author=BOT, at=ts(0))
+        assert not [f for f in aim.lint(doc) if f.level == "error"]
+        doc.accept(p.id, decided_by=ME, at=ts(1))
+        assert "sx" in doc.containers
+        assert not [f for f in aim.lint(doc) if f.level == "error"]
+        assert doc.verify() == []
+
+
+class TestDefaultCanvasSlidesGetPrintSize:
+    """A5: a slide that omits its canvas size got a 960×540 named page but
+    an element rule with only page+zoom — the slide box collapsed (children
+    are absolutely positioned, overflow hidden) and printed blank. The
+    element rule must carry the same resolved geometry as its @page rule."""
+
+    def _css(self, style):
+        from aimformat.convert._pdf_out import _slide_page_css
+
+        doc = aim.new_document(title="T")
+        s = f' style="{style}"' if style else ""
+        doc.add_chunk(
+            f'<aim-slide data-aim-container="s1"{s}>'
+            '<p data-aim="b1" style="left:10px; top:10px; width:300px">x</p>'
+            "</aim-slide>",
+            author=ME,
+            at=ts(0),
+        )
+        css = _slide_page_css(doc)
+        rule = re.search(r'aim-slide\[data-aim-container="s1"\]\{([^}]*)\}', css)
+        return css, rule.group(1)
+
+    def test_unsized_slide_rule_carries_the_default_box(self):
+        css, rule = self._css(None)
+        assert "@page pg-s1{size:960pt 540pt;margin:0}" in css
+        assert "width:960px" in rule and "height:540px" in rule
+
+    def test_partial_size_defaults_only_the_missing_axis(self):
+        css, rule = self._css("height:595px")
+        assert "@page pg-s1{size:960pt 595pt;margin:0}" in css
+        assert "width:960px" in rule and "height:595px" in rule
+
+
 def _mini(construct: str) -> str:
     doc = aim.new_document(title="mini")
     text = doc.dumps()
