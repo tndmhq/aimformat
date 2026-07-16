@@ -214,6 +214,29 @@ def _revision_authors(path, tag):
     return [el.get(qn("w:author")) for el in d.element.body.iter(qn(f"w:{tag}"))]
 
 
+def _table_row_texts(path):
+    """Per-table, per-row text in XML order (runs inside w:ins included —
+    python-docx cell.text does not see them)."""
+    d = docx.Document(str(path))
+    return [
+        ["".join(t.text or "" for t in tr.iter(qn("w:t"))) for tr in tbl._tbl.findall(qn("w:tr"))]
+        for tbl in d.tables
+    ]
+
+
+def _ins_del_para_texts(path):
+    """Per-paragraph inserted (w:ins) and deleted (w:del) text, in order."""
+    ins, dele = [], []
+    for p in docx.Document(str(path)).paragraphs:
+        it = "".join(t.text or "" for w in p._p.iter(qn("w:ins")) for t in w.iter(qn("w:t")))
+        dt = "".join(t.text or "" for w in p._p.iter(qn("w:del")) for t in w.iter(qn("w:delText")))
+        if it:
+            ins.append(it)
+        if dt:
+            dele.append(dt)
+    return ins, dele
+
+
 class TestExportDocx:
     def test_structure_maps_to_word_styles(self, ingested, tmp_path):
         out = aim.to_docx(ingested, tmp_path / "out.docx")
@@ -272,6 +295,170 @@ class TestExportDocx:
         xml = d.element.body.xml
         assert "Brand new paragraph." in xml
         assert _revision_authors(out, "ins")
+
+    @pytest.mark.parametrize("tag,style", [("ul", "List Bullet"), ("ol", "List Number")])
+    def test_pending_list_add_tracked_keeps_items(self, tmp_path, tag, style):
+        doc = aim.new_document(title="T")
+        doc.add_chunk('<p data-aim="p1">base</p>', author=ME, at=ts(0))
+        doc.propose_add(
+            f"<{tag}><li>Item one</li><li>Item two</li><li>Item three</li></{tag}>",
+            author=BOT,
+            after="p1",
+            at=ts(1),
+        )
+        out = aim.to_docx(doc, tmp_path / "add-list.docx", pending="tracked")
+        # one inserted paragraph per item, never a concatenated flattening
+        assert _paragraph_sequence(out) == ["base", "Item one", "Item two", "Item three"]
+        assert "Item oneItem two" not in docx.Document(str(out)).element.body.xml
+        item_styles = [
+            p.style.name
+            for p in docx.Document(str(out)).paragraphs
+            if "Item" in "".join(t.text or "" for t in p._p.iter(qn("w:t")))
+        ]
+        assert item_styles == [style] * 3
+        authors = _revision_authors(out, "ins")
+        assert authors and all(a.startswith("agent:") for a in authors)
+
+    def test_pending_table_add_tracked_emits_table(self, tmp_path):
+        doc = aim.new_document(title="T")
+        doc.add_chunk('<p data-aim="p1">base</p>', author=ME, at=ts(0))
+        doc.propose_add(
+            "<table><tr><td>C1</td><td>C2</td></tr><tr><td>C3</td><td>C4</td></tr></table>",
+            author=BOT,
+            after="p1",
+            at=ts(1),
+        )
+        out = aim.to_docx(doc, tmp_path / "add-table.docx", pending="tracked")
+        d = docx.Document(str(out))
+        assert len(d.tables) == 1
+        for (r, c), text in {(0, 0): "C1", (0, 1): "C2", (1, 0): "C3", (1, 1): "C4"}.items():
+            cell_xml = d.tables[0].cell(r, c)._tc.xml
+            assert "w:ins" in cell_xml and text in cell_xml
+        # nothing leaks into flattened body paragraphs
+        assert _paragraph_sequence(out) == ["base"]
+
+    def test_pending_container_add_matches_accept_all_texts(self, tmp_path):
+        doc = aim.new_document(title="T")
+        doc.add_chunk('<p data-aim="p1">base</p>', author=ME, at=ts(0))
+        p = doc.propose_add(
+            "<ul><li>Item one</li><li>Item two</li></ul>", author=BOT, after="p1", at=ts(1)
+        )
+        doc.propose_add(
+            "<table><tr><td>C1</td><td>C2</td></tr></table>", author=BOT, after=p.id, at=ts(2)
+        )
+        tracked = aim.to_docx(doc, tmp_path / "t.docx", pending="tracked")
+        accepted = aim.to_docx(doc, tmp_path / "a.docx", pending="accept-all")
+        assert _paragraph_sequence(tracked) == _paragraph_sequence(accepted)
+        assert _table_row_texts(tracked) == _table_row_texts(accepted)
+
+    def test_pending_tracked_preserves_br(self, tmp_path):
+        doc = aim.new_document(title="T")
+        doc.add_chunk('<p data-aim="p1">Old A<br>Old B</p>', author=ME, at=ts(0))
+        doc.add_chunk('<p data-aim="p2">Doomed X<br>Doomed Y</p>', author=ME, at=ts(1))
+        doc.propose_modify(
+            "p1", '<p data-aim="p1">New line A<br>New line B</p>', author=BOT, at=ts(2)
+        )
+        doc.propose_delete("p2", author=BOT, at=ts(3))
+        out = aim.to_docx(doc, tmp_path / "br.docx", pending="tracked")
+        body = docx.Document(str(out)).element.body
+
+        def run_items(wrap):
+            items = []
+            for r in wrap.iter(qn("w:r")):
+                for child in r:
+                    if child.tag in (qn("w:t"), qn("w:delText")):
+                        items.append(child.text)
+                    elif child.tag == qn("w:br"):
+                        items.append("BR")
+            return items
+
+        ins_seqs = [run_items(w) for w in body.iter(qn("w:ins"))]
+        del_seqs = [run_items(w) for w in body.iter(qn("w:del"))]
+        assert ["New line A", "BR", "New line B"] in ins_seqs
+        assert ["Doomed X", "BR", "Doomed Y"] in del_seqs
+
+    @pytest.mark.parametrize(
+        "shape", ["single-mid", "chained-mid", "siblings-mid", "chained-last", "chained-start"]
+    )
+    def test_pending_row_adds_keep_accept_all_order(self, tmp_path, shape):
+        doc = aim.new_document(title="T")
+        doc.add_chunk(
+            '<table data-aim-container="tbl">'
+            '<tr data-aim="r1"><td>one</td><td>1</td></tr>'
+            '<tr data-aim="r2"><td>two</td><td>2</td></tr></table>',
+            author=ME,
+            at=ts(0),
+        )
+
+        def add(after, text, i):
+            return doc.propose_add(
+                f"<tr><td>{text}</td><td>{text.lower()}</td></tr>",
+                author=BOT,
+                container="tbl",
+                after=after,
+                at=ts(i),
+            )
+
+        if shape == "single-mid":
+            add("r1", "A", 1)
+        elif shape == "chained-mid":
+            add(add("r1", "A", 1).id, "B", 2)
+        elif shape == "siblings-mid":
+            add("r1", "A", 1)
+            add("r1", "B", 2)
+        elif shape == "chained-last":
+            add(add("r2", "A", 1).id, "B", 2)
+        else:  # chained on a container-start add
+            add(add(None, "A", 1).id, "B", 2)
+        tracked = aim.to_docx(doc, tmp_path / "t.docx", pending="tracked")
+        accepted = aim.to_docx(doc, tmp_path / "a.docx", pending="accept-all")
+        # tracked row order must match what accepting the changes yields
+        assert _table_row_texts(tracked) == _table_row_texts(accepted)
+        trs = docx.Document(str(tracked)).tables[0]._tbl.findall(qn("w:tr"))
+        added = 0
+        for tr in trs:
+            ins_ts = {id(t) for w in tr.iter(qn("w:ins")) for t in w.iter(qn("w:t"))}
+            all_ts = list(tr.iter(qn("w:t")))
+            assert all_ts  # no empty orphan rows
+            inside = [t for t in all_ts if id(t) in ins_ts]
+            assert len(inside) in (0, len(all_ts))  # never mixes inserted and original
+            added += bool(inside)
+        assert added == (1 if shape == "single-mid" else 2)
+
+    def test_run_chunk_modify_tracked_emits_payload_once(self, rich_doc, tmp_path):
+        rich_doc.propose_modify("li2", '<li data-aim="li2">Rewritten</li>', author=BOT, at=ts(9))
+        out = aim.to_docx(rich_doc, tmp_path / "run.docx", pending="tracked")
+        ins, dele = _ins_del_para_texts(out)
+        assert ins == ["Rewritten"]
+        assert dele == ["Second, part one…", "…second, part two"]
+        acc = aim.to_docx(rich_doc, tmp_path / "acc.docx", pending="accept-all")
+        texts = [p.text for p in docx.Document(str(acc)).paragraphs]
+        assert texts.count("Rewritten") == 1
+
+    def test_run_chunk_delete_tracked_stays_delete_only(self, rich_doc, tmp_path):
+        rich_doc.propose_delete("li2", author=BOT, at=ts(9))
+        out = aim.to_docx(rich_doc, tmp_path / "rundel.docx", pending="tracked")
+        ins, dele = _ins_del_para_texts(out)
+        assert ins == []
+        assert dele == ["Second, part one…", "…second, part two"]
+
+    def test_run_chunk_row_modify_tracked_emits_payload_once(self, tmp_path):
+        doc = aim.new_document(title="T")
+        doc.add_chunk(
+            '<table data-aim-container="tbl">'
+            '<tr data-aim="r1"><td>one</td></tr>'
+            '<tr data-aim="rr"><td>two-a</td></tr>'
+            '<tr data-aim="rr"><td>two-b</td></tr></table>',
+            author=ME,
+            at=ts(0),
+        )
+        doc.propose_modify("rr", '<tr data-aim="rr"><td>NEWCELL</td></tr>', author=BOT, at=ts(1))
+        out = aim.to_docx(doc, tmp_path / "trrun.docx", pending="tracked")
+        body = docx.Document(str(out)).element.body
+        ins_texts = [
+            "".join(t.text or "" for t in w.iter(qn("w:t"))) for w in body.iter(qn("w:ins"))
+        ]
+        assert ins_texts.count("NEWCELL") == 1
 
     def test_pending_delete_tracked(self, tmp_path):
         doc = aim.new_document(title="T")
