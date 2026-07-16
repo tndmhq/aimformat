@@ -1,6 +1,6 @@
 # Toolkit architecture
 
-Curated map of how the v0.1 reference toolkit fits together. Read this
+Curated map of how the v0.2 reference toolkit fits together. Read this
 before changing code; update it when the shape changes.
 
 ## One registry drives everything
@@ -61,7 +61,7 @@ codes bidirectionally in sync with what `lint.py` can actually emit.
 python3 scripts/gen_spec_appendix.py   # after registry changes
 python3 scripts/gen_fixtures.py        # after lint/canonical changes
 python3 scripts/gen_examples.py        # after SDK-visible changes
-python3 -m pytest                      # 300+ tests, a few seconds
+python3 -m pytest                      # 598+ tests, a few seconds
 ```
 
 ## Dependency pins (search-then-pin convention)

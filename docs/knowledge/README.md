@@ -9,5 +9,5 @@ keep it current. Rules → [`docs/README.md`](../README.md).
 Technical content only — no strategy or business reasoning in this public
 repo.
 
-Currently sparse by design: the repo is pre-v0.1 and the spec is an open
-design question. Do not seed this folder with speculative spec content.
+Currently sparse by design: the repo is pre-1.0 and the spec is still subject
+to breaking changes. Do not seed this folder with speculative spec content.

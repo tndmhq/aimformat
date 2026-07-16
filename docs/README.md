@@ -16,8 +16,8 @@ Two tiers:
 ## [`knowledge/`](knowledge/) — semantic memory (curated, always fresh)
 
 Stable facts and rules about the format and this repo. **Edit in place; keep
-it current** — stale knowledge is worse than none. Currently sparse (pre-v0.1);
-it grows as the spec and SDK land. The generic working conventions are *not*
+it current** — stale knowledge is worse than none. Currently sparse (pre-1.0);
+it grows as the spec and SDK evolve. The generic working conventions are *not*
 duplicated here — they live in [`AGENTS.md`](../AGENTS.md) (canonical).
 
 ## [`log/`](log/) — episodic memory (append-only, timestamped, light)
