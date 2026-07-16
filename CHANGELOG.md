@@ -3,7 +3,16 @@
 All notable changes to the spec and the reference toolkit. The package
 version tracks the spec version it implements (0.x minors may break).
 
-## Unreleased
+## 0.2.1 — unreleased
+
+- **`AimDocument.amend_proposal(pid, markup=None, *, explanation=None,
+  at=None)`** — in-place amend of a pending proposal's payload and/or
+  explanation, preserving id, anchor, author, batch, and dependencies.
+  Implements what spec §5.4 already sanctions ("editing a pending payload
+  in place is allowed and unrecorded"): no history event is appended;
+  payload validation matches the original propose path (add payloads keep
+  the proposed root id, so chained anchors stay stable). delete/move
+  proposals are explanation-only. No spec change.
 
 Fixed-layout pages: slides become correct pages end to end.
 

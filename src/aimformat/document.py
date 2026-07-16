@@ -1703,6 +1703,64 @@ class AimDocument:
             at=at,
         )
 
+    def amend_proposal(
+        self,
+        pid: str,
+        markup: str | None = None,
+        *,
+        explanation: str | None = None,
+        at: str | None = None,
+    ) -> Proposal:
+        """Replace a pending proposal's payload and/or explanation IN PLACE.
+
+        Spec §5.4 sanctions this: editing a pending payload is allowed and
+        unrecorded — no history event is appended (provenance is preserved
+        at resolution via ``proposed`` vs ``applied``). The proposal keeps
+        its id, action, target, anchor, author, batch, and dependencies;
+        re-anchoring or re-targeting is a reject + new propose, not an
+        amend. Payloads are validated exactly like the original propose
+        call (modify: against the live target; add: keeping the proposed
+        root id and marker kind, so chained anchors stay stable).
+        delete/move proposals carry no payload — only their explanation
+        can be amended. ``explanation=""`` clears it.
+        """
+        card = self._card_el(pid)
+        prop = self.proposal(pid)
+        if markup is None and explanation is None:
+            raise InvalidOperation("amend_proposal needs a new payload and/or explanation")
+        if markup is not None:
+            if prop.action == "modify":
+                target = prop.target or ""
+                if target == "aim:theme":
+                    payload = self._validated_theme_markup(markup)
+                elif target == "aim:doc":
+                    payload = self._validated_doc_markup(markup)
+                else:
+                    # fail fast on a dangling proposal (target deleted out
+                    # from under it) — mirroring propose_modify; otherwise
+                    # the amend silently rewrites a card that can only
+                    # explode later, at accept time (review finding)
+                    if not self._state.exists(target):
+                        raise TargetNotFound(f"no chunk {target!r}")
+                    _, payload = self._normalize_payload(markup, expect_id=target)
+            elif prop.action == "add":
+                _, payload = self._payload_like(prop.payload_html or "", markup)
+            else:
+                raise InvalidOperation(f"a {prop.action} proposal carries no payload to amend")
+            tmpl = next((c for c in card.elements() if c.tag == "template"), None)
+            if tmpl is None:  # defensive: modify/add cards always carry one
+                tmpl = Element("template")
+                card.children.append(tmpl)
+            tmpl.children = list(parse_fragment(payload))
+        if explanation is not None:
+            if explanation:
+                card.set("data-explanation", explanation)
+            else:
+                card.remove_attr("data-explanation")
+        if at is not None:
+            card.set("data-at", at)
+        return self.proposal(pid)
+
     # -- resolution ---------------------------------------------------------------------------
     def accept(
         self,
@@ -1742,11 +1800,21 @@ class AimDocument:
         )
 
     def _payload_like(self, original: str, replacement: str) -> tuple[str, str]:
-        """Canonicalize an add-tweak payload, keeping the proposed chunk id
-        and marker kind."""
+        """Canonicalize an add-tweak/amend payload, keeping the proposed
+        chunk id and marker kind. The replacement must also keep the
+        proposed root's KIND (§4.3): flipping container↔chunk would mint a
+        card whose marker contradicts its tag (V003) or accept an
+        ``aim-slide`` marked as a chunk (S031) — review finding."""
         orig_nodes = [n for n in parse_fragment(original) if isinstance(n, Element)]
         keep = orig_nodes[0].chunk_id or orig_nodes[0].container_id
         marker = "data-aim-container" if orig_nodes[0].container_id is not None else "data-aim"
+        new_nodes = [n for n in parse_fragment(replacement) if isinstance(n, Element)]
+        if new_nodes:  # empty payloads fail in _normalize_payload below
+            self._guard_replacement_kind(
+                keep or orig_nodes[0].tag,
+                new_nodes[0],
+                kind="container" if marker == "data-aim-container" else "chunk",
+            )
         return self._normalize_payload(replacement, expect_id=keep, expect_marker=marker)
 
     def _validated_theme_markup(self, markup: str) -> str:

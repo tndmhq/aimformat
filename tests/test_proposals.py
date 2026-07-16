@@ -1,8 +1,10 @@
-"""The pending lane: propose, supersede, chains, accept/reject, tweaks."""
+"""The pending lane: propose, supersede, chains, accept/reject, tweaks, amend."""
 
 import pytest
 
+from aimformat.document import AimDocument
 from aimformat.errors import InvalidOperation, TargetNotFound
+from aimformat.lint import lint
 from conftest import BOT, ME, ts
 
 
@@ -173,3 +175,120 @@ class TestResolve:
         assert "<aim-proposals>" in basic_doc.dumps()
         basic_doc.reject(p.id, decided_by=ME, at=ts(9))
         assert "<aim-proposals>" not in basic_doc.dumps()
+
+
+class TestAmend:
+    """In-place amend of a pending proposal (spec §5.4: allowed, unrecorded)."""
+
+    def test_amend_modify_replaces_payload_keeps_identity(self, basic_doc):
+        p = basic_doc.propose_modify(
+            "intro", '<p data-aim="intro">v1</p>', author=BOT, explanation="first", at=ts(8)
+        )
+        h = basic_doc.doc_hash
+        events = len(basic_doc.history)
+        out = basic_doc.amend_proposal(p.id, '<p data-aim="intro">v2</p>')
+        assert out.id == p.id and out.payload_html and ">v2</p>" in out.payload_html
+        assert out.explanation == "first"  # untouched unless passed
+        assert out.at == ts(8) and out.batch == p.batch and out.author == p.author
+        assert basic_doc.doc_hash == h  # body untouched
+        assert len(basic_doc.history) == events  # unrecorded (spec §5.4)
+        assert [str(f) for f in lint(basic_doc) if f.level == "error"] == []
+
+    def test_amend_payload_without_marker_inherits_target(self, basic_doc):
+        p = basic_doc.propose_modify("intro", '<p data-aim="intro">v1</p>', author=BOT, at=ts(8))
+        out = basic_doc.amend_proposal(p.id, "<p>bare replacement</p>")
+        assert out.payload_html and 'data-aim="intro"' in out.payload_html
+
+    def test_amend_explanation_only_and_clear(self, basic_doc):
+        p = basic_doc.propose_delete("intro", author=BOT, explanation="old", at=ts(8))
+        assert basic_doc.amend_proposal(p.id, explanation="new").explanation == "new"
+        assert basic_doc.amend_proposal(p.id, explanation="").explanation is None
+
+    def test_amend_add_keeps_proposed_root_id(self, basic_doc):
+        p1 = basic_doc.propose_add('<p data-aim="n1">One.</p>', author=ME, at=ts(7))
+        p2 = basic_doc.propose_add("<p>Two.</p>", author=ME, after=p1.id, at=ts(8))
+        basic_doc.amend_proposal(p1.id, "<p>One, reworded.</p>")
+        assert 'data-aim="n1"' in (basic_doc.proposal(p1.id).payload_html or "")
+        basic_doc.accept(p1.id, decided_by=ME, at=ts(9))
+        assert basic_doc.proposal(p2.id).anchor_after == "n1"  # chain intact
+        assert basic_doc.chunk("n1").text == "One, reworded."
+
+    def test_accept_after_amend_applies_amended_payload(self, basic_doc):
+        p = basic_doc.propose_modify("intro", '<p data-aim="intro">v1</p>', author=BOT, at=ts(8))
+        basic_doc.amend_proposal(p.id, '<p data-aim="intro">v2</p>')
+        ev = basic_doc.accept(p.id, decided_by=ME, at=ts(9))
+        assert basic_doc.chunk("intro").text == "v2"
+        assert ">v2</p>" in ev.get("proposed")  # the amended payload IS the proposal
+        assert "applied" not in ev.data
+
+    def test_amend_theme_payload(self, basic_doc):
+        p = basic_doc.propose_theme({"--aim-brand-1": "#333333"}, author=BOT, at=ts(8))
+        out = basic_doc.amend_proposal(
+            p.id, "<style data-aim-theme>:root{--aim-brand-1:#444444}</style>"
+        )
+        assert "#444444" in (out.payload_html or "")
+
+    def test_amend_survives_roundtrip(self, basic_doc):
+        p = basic_doc.propose_modify("intro", '<p data-aim="intro">v1</p>', author=BOT, at=ts(8))
+        basic_doc.amend_proposal(p.id, '<p data-aim="intro">v2</p>', explanation="better")
+        reloaded = AimDocument.loads(basic_doc.dumps())
+        again = reloaded.proposal(p.id)
+        assert ">v2</p>" in (again.payload_html or "") and again.explanation == "better"
+
+    def test_amend_add_cannot_flip_root_kind(self, basic_doc):
+        """Codex finding: an add amended across the container↔chunk line
+        would mint a V003 card (container marker on <p>) or an S031
+        document (aim-slide marked as a chunk)."""
+        slide = (
+            '<aim-slide style="width:960px; height:540px">'
+            '<h2 style="left:10px; top:10px; width:400px">T</h2></aim-slide>'
+        )
+        p_slide = basic_doc.propose_add(slide, author=BOT, at=ts(7))
+        with pytest.raises(InvalidOperation):
+            basic_doc.amend_proposal(p_slide.id, "<p>now prose?</p>")
+        p_chunk = basic_doc.propose_add("<p>Prose.</p>", author=BOT, at=ts(8))
+        with pytest.raises(InvalidOperation):
+            basic_doc.amend_proposal(p_chunk.id, slide)
+        # same-kind amends keep working on both sides
+        amended = basic_doc.amend_proposal(
+            p_slide.id,
+            '<aim-slide style="width:960px; height:540px">'
+            '<h2 style="left:20px; top:20px; width:400px">T2</h2></aim-slide>',
+        )
+        assert "T2" in (amended.payload_html or "")
+        assert basic_doc.amend_proposal(p_chunk.id, "<h2>Heading now.</h2>").payload_html
+
+    def test_accept_with_tweaks_cannot_flip_add_root_kind(self, basic_doc):
+        """_payload_like is shared with accept(applied=…) on adds — the
+        same kind guard applies there."""
+        p = basic_doc.propose_add("<p>Prose.</p>", author=BOT, at=ts(7))
+        with pytest.raises(InvalidOperation):
+            basic_doc.accept(
+                p.id,
+                decided_by=ME,
+                at=ts(8),
+                applied='<aim-slide style="width:960px; height:540px"></aim-slide>',
+            )
+
+    def test_amend_dangling_modify_fails_fast(self, basic_doc):
+        """Target deleted out from under a pending modify: amend refuses
+        with a clear error instead of rewriting a card that can only
+        explode later at accept (review finding)."""
+        p = basic_doc.propose_modify("intro", '<p data-aim="intro">v1</p>', author=BOT, at=ts(8))
+        basic_doc.delete_chunk("intro", author=ME, at=ts(9))
+        with pytest.raises(TargetNotFound):
+            basic_doc.amend_proposal(p.id, '<p data-aim="intro">v2</p>')
+        # explanation-only amends still work (no payload validation needed)
+        assert basic_doc.amend_proposal(p.id, explanation="still here").explanation == "still here"
+
+    def test_amend_errors(self, basic_doc, rich_doc):
+        p = basic_doc.propose_modify("intro", '<p data-aim="intro">v1</p>', author=BOT, at=ts(8))
+        with pytest.raises(TargetNotFound):
+            basic_doc.amend_proposal("p-ghost", "<p>x</p>")
+        with pytest.raises(InvalidOperation):  # nothing to amend
+            basic_doc.amend_proposal(p.id)
+        with pytest.raises(InvalidOperation):  # wrong id in replacement
+            basic_doc.amend_proposal(p.id, '<p data-aim="other">x</p>')
+        d = rich_doc.propose_delete("li1", author=BOT, at=ts(8))
+        with pytest.raises(InvalidOperation):  # payloadless action
+            rich_doc.amend_proposal(d.id, "<p>x</p>")
