@@ -3696,6 +3696,85 @@ class TestPendingLaneCreationOrder:
         assert doc.verify() == []
 
 
+class TestNoOpGuardsJudgeTheCurrentDocument:
+    """Meaningfulness (no-op) guards compare against the CURRENT document.
+
+    The projection exists for structural legality only. A proposal that
+    becomes a no-op once earlier pendings resolve is fine — accepting a
+    no-op modify/move is harmless — but the legal move-then-modify order
+    must not be rejected as "identical content" just because the
+    projection already moved the chunk out.
+    """
+
+    @staticmethod
+    def _base():
+        doc = aim.new_document(title="T")
+        doc.add_chunk(
+            '<ul data-aim-container="l2"><li data-aim="a">A</li><li data-aim="z">Z</li></ul>',
+            author=ME,
+            at=ts(0),
+        )
+        doc.add_chunk(
+            '<ul data-aim-container="l3"><li data-aim="b">B</li></ul>',
+            author=ME,
+            at=ts(1),
+        )
+        return doc
+
+    L2_WITHOUT_Z = '<ul data-aim-container="l2"><li data-aim="a">A</li></ul>'
+
+    def test_legal_order_move_then_modify_accepts_cleanly(self):
+        doc = self._base()
+        doc.propose_move("z", author=BOT, container="l3", at=ts(2))
+        doc.propose_modify("l2", self.L2_WITHOUT_Z, author=BOT, at=ts(3))
+
+        doc.accept_all(decided_by=ME, at=ts(4))
+
+        assert doc._state.serial("l2") == self.L2_WITHOUT_Z
+        assert [chunk.id for chunk in doc.chunks if chunk.container == "l3"] == ["b", "z"]
+        assert doc.verify() == []
+        assert aim.lint(doc) == []
+
+    def test_illegal_order_modify_then_move_fails_at_propose_time(self):
+        doc = self._base()
+        modify = doc.propose_modify("l2", self.L2_WITHOUT_Z, author=BOT, at=ts(2))
+        before = doc.dumps()
+
+        with pytest.raises(InvalidOperation, match=modify.id):
+            doc.propose_move("z", author=BOT, container="l3", at=ts(3))
+
+        assert doc.dumps() == before
+
+    def test_modify_identical_to_current_is_still_rejected(self):
+        doc = self._base()
+        doc.propose_move("z", author=BOT, container="l3", at=ts(2))
+        with pytest.raises(InvalidOperation, match="identical content"):
+            doc.propose_modify(
+                "l2",
+                '<ul data-aim-container="l2"><li data-aim="a">A</li><li data-aim="z">Z</li></ul>',
+                author=BOT,
+                at=ts(3),
+            )
+
+    def test_move_that_projects_to_a_noop_is_proposable(self):
+        doc = self._base()
+        doc.propose_delete("a", author=BOT, at=ts(2))
+        # meaningful now (z is second in l2), a no-op once the delete lands
+        doc.propose_move("z", author=BOT, container="l2", after=None, at=ts(3))
+
+        doc.accept_all(decided_by=ME, at=ts(4))
+
+        assert doc._state.serial("l2") == '<ul data-aim-container="l2"><li data-aim="z">Z</li></ul>'
+        assert doc.verify() == []
+        assert aim.lint(doc) == []
+
+    def test_move_noop_against_current_is_still_rejected(self):
+        doc = self._base()
+        doc.propose_delete("b", author=BOT, at=ts(2))
+        with pytest.raises(InvalidOperation, match="no-op"):
+            doc.propose_move("z", author=BOT, container="l2", after="a", at=ts(3))
+
+
 class TestReconcileRejectsRescuableMoves:
     """Reconcile fails closed instead of solving transient nested rescues."""
 

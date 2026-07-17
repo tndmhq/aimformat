@@ -58,6 +58,16 @@ _RESERVED_TARGETS = ("aim:theme", "aim:doc")
 _T = TypeVar("_T")
 
 
+class _NoOpEdit(InvalidOperation):
+    """A direct edit that would leave the document unchanged.
+
+    Distinct from structural illegality: propose-time validation judges
+    meaningfulness against the CURRENT document only, while the pending
+    projection answers structural questions. A proposal that becomes a
+    no-op once earlier pendings resolve stays legal — accepting a no-op
+    modify/move is harmless."""
+
+
 def _no_delete_move(target: str, action: str) -> None:
     if target in _RESERVED_TARGETS:
         raise InvalidOperation(
@@ -704,6 +714,21 @@ class AimDocument:
                 ) from exc
             raise
 
+    def _noop_guard(self, operation: Callable[[AimDocument], object]) -> None:
+        """Reject a proposal that is a no-op against the CURRENT document.
+
+        Meaningfulness is not the projection's question: a card that only
+        becomes a no-op after earlier pendings resolve stays legal (accepting
+        it is harmless), but one that changes nothing right now is an
+        authoring error. Structural failures here are ignored — legality is
+        judged by :meth:`_projected_operation`."""
+        try:
+            operation(self._clone())
+        except _NoOpEdit:
+            raise
+        except AimError:
+            pass
+
     # -- basic accessors ------------------------------------------------------------
     @property
     def spec_version(self) -> str | None:
@@ -1267,7 +1292,7 @@ class AimDocument:
         else:
             _, payload = self._normalize_payload(markup, expect_id=cid)
         if payload == before:
-            raise InvalidOperation("modify with identical content")
+            raise _NoOpEdit("modify with identical content")
         self._state.replace(cid, payload)
         data = {
             "seq": self.seq + 1,
@@ -1354,7 +1379,7 @@ class AimDocument:
         src = self._anchor_of(cid)
         dst = self._resolve_end_anchor(container, after, exclude=cid, shell=shell)
         if src == dst:  # full anchors: first-of-thead ≠ first-of-tbody
-            raise InvalidOperation(f"move of {cid!r} is a no-op (already at that position)")
+            raise _NoOpEdit(f"move of {cid!r} is a no-op (already at that position)")
         self._state.move(cid, dst)
         data = {
             "seq": self.seq + 1,
@@ -1835,11 +1860,15 @@ class AimDocument:
         at: str | None = None,
     ) -> Proposal:
         def validate(projected: AimDocument) -> str:
-            projected.modify_chunk(target, markup, author=author, at=at)
+            try:
+                projected.modify_chunk(target, markup, author=author, at=at)
+            except _NoOpEdit:
+                pass  # no-op only after earlier pendings resolve — harmless
             payload = projected._state.serial(target)
             assert payload is not None
             return payload
 
+        self._noop_guard(lambda current: current.modify_chunk(target, markup, author=author, at=at))
         payload = self._projected_operation(f"new modify of {target!r}", validate)
         pid = self._new_proposal_id()
         with self.batch():  # the supersede + the new card are one intention
@@ -1983,18 +2012,28 @@ class AimDocument:
         _no_delete_move(target, "move proposal")
 
         def validate(projected: AimDocument) -> Anchor:
-            projected.move_chunk(
-                target,
-                author=author,
-                container=container,
-                after=after,
-                shell=shell,
-                at=at,
-            )
+            try:
+                projected.move_chunk(
+                    target,
+                    author=author,
+                    container=container,
+                    after=after,
+                    shell=shell,
+                    at=at,
+                )
+            except _NoOpEdit:
+                # no-op only after earlier pendings resolve — harmless at
+                # accept; record the anchor the move would have used
+                return projected._resolve_end_anchor(container, after, exclude=target, shell=shell)
             to = projected.history[-1].get("to")
             assert to is not None
             return Anchor.from_obj(to)
 
+        self._noop_guard(
+            lambda current: current.move_chunk(
+                target, author=author, container=container, after=after, shell=shell, at=at
+            )
+        )
         anchor = self._projected_operation(f"new move of {target!r}", validate)
         return self._new_card(
             action="move",
