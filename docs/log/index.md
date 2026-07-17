@@ -9,7 +9,7 @@ required to add entries.)
 
 | Date | Type | Entry | Status | What |
 |---|---|---|---|---|
-| 2026-07-17 17:16 | plan | [pr15-p2-postmerge-fixes](2026-07-17_1716_plan_pr15-p2-postmerge-fixes.md) | active | Fix four Codex P2 findings on PR #15: reject-dangling fixpoint for reordered chained adds; final-location-aware move/modify conflict detection; outer-row-only proposed table widths; member-guard revalidation for reconciled move destinations |
+| 2026-07-17 17:16 | plan | [pr15-p2-postmerge-fixes](2026-07-17_1716_plan_pr15-p2-postmerge-fixes.md) | done | Fix four Codex P2 findings on PR #15: reject-dangling fixpoint for reordered chained adds; final-location-aware move/modify conflict detection; outer-row-only proposed table widths; member-guard revalidation for reconciled move destinations |
 | 2026-07-17 16:59 | plan | [pr14-blank-pending-slide-boundary](2026-07-17_1659_plan_pr14-blank-pending-slide-boundary.md) | done | Preserve a blank pending slide canvas when a following pending slide is rejected in DOCX tracked changes |
 | 2026-07-17 16:43 | plan | [revalidate-rebound-chained-add-anchors](2026-07-17_1643_plan_revalidate-rebound-chained-add-anchors.md) | done | Revalidate chained-add anchors rebound by reconcile rejection so no cross-container P016 survives |
 | 2026-07-17 16:23 | plan | [pr14-codex-empty-list-followup](2026-07-17_1623_plan_pr14-codex-empty-list-followup.md) | done | Preserve legitimate empty Docling list items while still dropping cyclic contentless nested-list edges |

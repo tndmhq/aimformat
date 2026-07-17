@@ -1684,6 +1684,60 @@ class TestReconcileHandlesWrappingContainers:
         assert "P016" not in {finding.code for finding in aim.lint(repaired)}
 
 
+class TestReconcileValidatesMoveMembership:
+    """codex-pr15-p2-4: _reject_dangling only resolved a move's destination
+    anchor, not whether the moved element is still a LEGAL member of that
+    container after the out-of-band edit. Turning a <ul> into a <table>
+    that keeps its container id let the anchor resolve, so reconcile kept
+    the pending move with no lint error — and accepting it later exploded
+    with \"<li> cannot be a direct member of <table>\". The destination is
+    now re-checked with the same member guard propose_move applies."""
+
+    def _reconciled_kind_flip(self, after):
+        doc = aim.new_document(title="T")
+        doc.add_chunk(
+            '<ul data-aim-container="l1"><li data-aim="x">X</li></ul>', author=ME, at=ts(0)
+        )
+        doc.add_chunk(
+            '<ul data-aim-container="l2"><li data-aim="m">M</li></ul>', author=ME, at=ts(1)
+        )
+        proposal = doc.propose_move("x", author=BOT, container="l2", after=after, at=ts(2))
+        edited = doc.dumps().replace(
+            '<ul data-aim-container="l2"><li data-aim="m">M</li></ul>',
+            '<table data-aim-container="l2"><tbody>'
+            '<tr data-aim="m"><td>M</td></tr></tbody></table>',
+        )
+        repaired = aim.loads(edited)
+        report = repaired.reconcile(at=ts(3))
+        return repaired, report, proposal
+
+    @pytest.mark.parametrize("after", ["m", None])
+    def test_move_into_a_kind_flipped_container_is_rejected(self, after):
+        repaired, report, proposal = self._reconciled_kind_flip(after)
+        assert report.rejected_proposals == [proposal.id]
+        assert repaired.proposals == []
+        assert repaired.verify() == []
+        assert not [finding for finding in aim.lint(repaired) if finding.level == "error"]
+
+    def test_move_whose_membership_survives_is_kept(self):
+        doc = aim.new_document(title="T")
+        doc.add_chunk(
+            '<ul data-aim-container="l1"><li data-aim="x">X</li></ul>', author=ME, at=ts(0)
+        )
+        doc.add_chunk(
+            '<ul data-aim-container="l2"><li data-aim="m">M</li></ul>', author=ME, at=ts(1)
+        )
+        proposal = doc.propose_move("x", author=BOT, container="l2", after="m", at=ts(2))
+        edited = doc.dumps().replace('<li data-aim="m">M</li>', '<li data-aim="m">M!</li>')
+        repaired = aim.loads(edited)
+        report = repaired.reconcile(at=ts(3))
+        assert report.rejected_proposals == []
+        assert [p.id for p in repaired.proposals] == [proposal.id]
+        repaired.accept(proposal.id, decided_by=ME, at=ts(4))
+        assert repaired.chunk("x").container == "l2"
+        assert repaired.verify() == []
+
+
 class TestEveryAimCssBlockIsVerified:
     """AF-21: the X006 byte-match ran only when data-aim-css equalled the
     CURRENT spec version, and only on the first head block — a

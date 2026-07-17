@@ -580,6 +580,19 @@ def _reject_dangling(
                                 shell=p.anchor_shell,
                             )
                         )
+                        if p.action == "move" and p.target:
+                            # a resolving anchor is not enough for a move: an
+                            # out-of-band edit can flip the destination
+                            # container's kind (ul → table, same id), leaving
+                            # the moved element an illegal member that only
+                            # explodes at accept. Re-run the same member
+                            # guard propose_move applies at creation time.
+                            cont = S._state.container_node(p.anchor_container or "body")
+                            if cont is not None:
+                                S._state._guard_item_members(
+                                    cont,
+                                    [el for _, el in S._state._target_elements(p.target)],
+                                )
                     except AimError:
                         dangling = True
             if dangling:
