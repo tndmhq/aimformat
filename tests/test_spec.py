@@ -27,9 +27,18 @@ def test_spec_snippet_lints_clean(idx):
     assert not errors, "\n".join(str(e) for e in errors)
 
 
-def test_spec_snippets_verify_their_history(idx=1):
+@pytest.mark.parametrize(
+    "idx", range(len(SNIPPETS)), ids=[f"snippet{i}" for i in range(len(SNIPPETS))]
+)
+def test_spec_snippets_verify_their_history(idx):
     doc = aim.loads(SNIPPETS[idx])
     assert doc.verify() == []
+
+
+def test_some_spec_snippet_has_a_nonempty_history():
+    """An editorial reorder must not quietly retarget the verify coverage
+    onto history-less snippets where verify()==[] is vacuous (AF-31)."""
+    assert any(aim.loads(s).history for s in SNIPPETS)
 
 
 def test_generated_appendix_is_fresh(tmp_path):
