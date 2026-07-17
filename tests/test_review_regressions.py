@@ -2977,3 +2977,59 @@ class TestEveryWorkflowActionIsShaPinned:
                 if not re.fullmatch(r"[0-9a-f]{40}", pin):
                     offenders.append(f"{wf.name}: {ref}")
         assert offenders == []
+
+
+class TestAddRootIdStaysReservedInTweaks:
+    """codex-r3-1: accept-with-tweaks / amend on a pending add dropped the
+    card's reserved ids from the collision set wholesale — root included —
+    so a replacement payload whose DESCENDANT reused the add root's id was
+    honored, and the accepted document carried an S019 duplicate id while
+    ``verify()`` stayed clean. The root stays reserved; only the card's
+    owned descendant ids remain reusable."""
+
+    @pytest.fixture
+    def pending_add(self):
+        doc = aim.new_document(title="T")
+        prop = doc.propose_add(
+            '<ul data-aim-container="outer"><li data-aim="child">x</li></ul>',
+            author=BOT,
+            at=ts(0),
+        )
+        return doc, prop
+
+    def test_accept_with_tweaks_remints_a_descendant_on_the_root_id(self, pending_add):
+        doc, prop = pending_add
+        doc.accept(
+            prop.id,
+            decided_by=ME,
+            applied='<ul data-aim-container="outer"><li data-aim="outer">x</li></ul>',
+            at=ts(1),
+        )
+        written = doc._state.serial("outer") or ""
+        assert written.count('"outer"') == 1  # the li was reminted
+        assert not [f for f in aim.lint_text(doc.dumps()) if f.code == "S019"]
+        assert doc.verify() == []
+
+    def test_amend_remints_a_descendant_on_the_root_id(self, pending_add):
+        doc, prop = pending_add
+        doc.amend_proposal(
+            prop.id,
+            '<ul data-aim-container="outer"><li data-aim="outer">x</li></ul>',
+            at=ts(1),
+        )
+        doc.accept(prop.id, decided_by=ME, at=ts(2))
+        written = doc._state.serial("outer") or ""
+        assert written.count('"outer"') == 1
+        assert not [f for f in aim.lint_text(doc.dumps()) if f.code == "S019"]
+        assert doc.verify() == []
+
+    def test_owned_descendant_ids_stay_honored(self, pending_add):
+        doc, prop = pending_add
+        doc.accept(
+            prop.id,
+            decided_by=ME,
+            applied='<ul data-aim-container="outer"><li data-aim="child">tweaked</li></ul>',
+            at=ts(1),
+        )
+        assert 'data-aim="child"' in (doc._state.serial("outer") or "")
+        assert doc.verify() == []

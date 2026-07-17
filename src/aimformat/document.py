@@ -1018,6 +1018,13 @@ class AimDocument:
             # that carry no marker at all are covered with fresh ids too —
             # a container payload must never introduce unaddressable rows.
             taken -= owned
+            # the roots' own id stays reserved: for a pending add,
+            # ``skip_payload_of`` dropped it from *taken* along with the
+            # card's nested ids, and a descendant reusing it must be
+            # reminted, never honored — the write would land an S019
+            # duplicate that verify() cannot see
+            if payload_id:
+                taken.add(payload_id)
             remap: dict[str, str] = {}
             for n in nodes:
                 if n.container_id is not None:
