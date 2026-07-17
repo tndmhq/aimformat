@@ -28,7 +28,7 @@ from . import ids
 from .canonical import document_text
 from .css import generate_aim_css
 from .document import AimDocument, Anchor
-from .dom import Comment, Element, Text
+from .dom import Comment, Element, Text, parse_fragment
 from .errors import AimError, HistoryError, InvalidOperation, ParseError, TargetNotFound
 from .events import _ISO_RE
 from .pagesetup import page_setup_from_obj, parse_doc_settings
@@ -969,6 +969,24 @@ class _Linter:
 
         for el in self.doc._fragment.elements():
             visit(el, in_svg=False)
+
+        try:
+            events = self.doc.history
+        except HistoryError:
+            return  # malformed history is already reported as H002
+        for ev in events:
+            for field in ("before", "after", "proposed", "applied"):
+                markup = ev.get(field)
+                if not isinstance(markup, str):
+                    continue
+                try:
+                    nodes = parse_fragment(markup)
+                except ParseError:
+                    continue  # replay/history validation reports malformed payloads
+                where = f"seq {ev.data.get('seq')} {field}"
+                for node in nodes:
+                    if isinstance(node, Element):
+                        visit(node, in_svg=False, where=where)
 
     def canonical_form(self) -> None:
         if self.text is None:

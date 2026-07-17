@@ -1469,6 +1469,22 @@ class TestCanonicalSelfClosingNormalization:
 
         assert "C002" not in {f.code for f in aim.lint(doc)}
 
+    def test_C002_scans_rejected_history_markup(self, basic_doc):
+        proposal = basic_doc.propose_modify(
+            "intro",
+            '<p data-aim="intro"><span></span></p>',
+            author=BOT,
+            at=ts(5),
+        )
+        basic_doc.reject(proposal.id, decided_by=ME, at=ts(6))
+        canonical = basic_doc.dumps()
+        broken = canonical.replace("<span><\\/span>", "<span/>", 1)
+
+        assert broken != canonical
+        assert aim.loads(broken).verify() == []
+        errors = {f.code for f in aim.lint_text(broken) if f.level == "error"}
+        assert errors == {"C002"}
+
     @pytest.mark.parametrize(
         "markup",
         [
