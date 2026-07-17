@@ -106,6 +106,21 @@ def _inline(children: list[Any] | None) -> str:
     return "".join(out)
 
 
+def _inline_text(children: list[Any] | None) -> str:
+    """Plain text represented by an inline token list."""
+    out: list[str] = []
+    for tok in children or []:
+        if tok.type in ("text", "code_inline", "html_inline", "image"):
+            out.append(tok.content)
+        elif tok.type in ("softbreak", "hardbreak"):
+            out.append(" ")
+        elif tok.children:
+            out.append(_inline_text(tok.children))
+        elif not tok.type.endswith(("_open", "_close")) and tok.content:
+            out.append(tok.content)
+    return "".join(out)
+
+
 class _Walker:
     """Token-stream walker producing block markup strings."""
 
@@ -129,7 +144,7 @@ class _Walker:
                 self.i += 2  # inline + heading_close
                 text = _inline(inline.children)
                 if self.first_heading is None:
-                    self.first_heading = inline.content
+                    self.first_heading = _inline_text(inline.children)
                 out.append(f"<{tok.tag}>{text}</{tok.tag}>")
             elif t == "paragraph_open":
                 inline = self.toks[self.i]

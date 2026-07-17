@@ -3463,3 +3463,14 @@ class TestMarkdownUppercaseSchemes:
         assert 'href="HTTP://example.com"' in html
         assert 'src="DATA:image/png;base64,AAAA"' in html
         assert aim.lint(doc) == []
+
+
+class TestMarkdownFormattedHeadingTitle:
+    """AF-52: the derived document title used a heading's raw Markdown
+    source, including emphasis and code markers."""
+
+    def test_title_uses_inline_plain_text(self):
+        doc = aim.from_markdown("# **Bold** *day* with `code`")
+
+        assert doc.title == "Bold day with code"
+        assert aim.lint(doc) == []
