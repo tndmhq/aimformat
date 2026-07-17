@@ -1426,6 +1426,97 @@ class TestPruneCliResolvesNumericCheckpointLabels:
         assert [e.seq for e in aim.load(path).history][0] == 2
 
 
+class TestCanonicalSelfClosingNormalization:
+    """AF-06: canonical serialization echoed ``Element.self_closing`` for
+    ordinary HTML/custom elements. That forked ``doc_hash`` for equivalent
+    empty elements and preserved browser-unsafe ``<aim-slide/>`` markup."""
+
+    def test_span_spellings_share_canonical_form_and_doc_hash(self):
+        self_closed = aim.loads(_mini('<p data-aim="x"><span/></p>'))
+        explicit = aim.loads(_mini('<p data-aim="x"><span></span></p>'))
+
+        assert self_closed._state.serial("x") == '<p data-aim="x"><span></span></p>'
+        assert self_closed.doc_hash == explicit.doc_hash
+
+    def test_self_closed_slide_is_closed_before_its_sibling(self):
+        doc = aim.loads(
+            _mini('<aim-slide data-aim-container="s1"/><p data-aim="after">still a sibling</p>')
+        )
+
+        canonical = doc.dumps()
+        assert (
+            '<aim-slide data-aim-container="s1"></aim-slide>\n'
+            '<p data-aim="after">still a sibling</p>'
+        ) in canonical
+        assert aim.loads(canonical).body_ids == ["s1", "after"]
+
+    def test_authored_non_void_self_close_is_C002(self):
+        errors = {
+            f.code
+            for f in aim.lint_text(_mini('<p data-aim="x"><span/></p>'))
+            if f.level == "error"
+        }
+        assert errors == {"C002"}
+
+    def test_C002_does_not_suppress_independent_C001(self):
+        text = _mini('<p data-aim="x"><span/></p>').removesuffix("\n")
+
+        errors = {f.code for f in aim.lint_text(text) if f.level == "error"}
+        assert errors == {"C001", "C002"}
+
+    def test_C002_requires_authored_source(self):
+        doc = aim.loads(_mini('<p data-aim="x"><span/></p>'))
+
+        assert "C002" not in {f.code for f in aim.lint(doc)}
+
+    def test_C002_scans_rejected_history_markup(self, basic_doc):
+        proposal = basic_doc.propose_modify(
+            "intro",
+            '<p data-aim="intro"><span></span></p>',
+            author=BOT,
+            at=ts(5),
+        )
+        basic_doc.reject(proposal.id, decided_by=ME, at=ts(6))
+        canonical = basic_doc.dumps()
+        broken = canonical.replace("<span><\\/span>", "<span/>", 1)
+
+        assert broken != canonical
+        assert aim.loads(broken).verify() == []
+        errors = {f.code for f in aim.lint_text(broken) if f.level == "error"}
+        assert errors == {"C002"}
+
+    def test_C002_suppression_preserves_block_container_layout(self):
+        canonical = aim.new_document(title="T").dumps()
+        broken = canonical.replace(
+            '<script type="application/aim-history+jsonl">',
+            '<aim-assets/>\n<script type="application/aim-history+jsonl">',
+        )
+
+        errors = {f.code for f in aim.lint_text(broken) if f.level == "error"}
+        assert errors == {"C002"}
+
+    @pytest.mark.parametrize(
+        "markup",
+        [
+            '<p data-aim="x">before<br>after</p>',
+            '<p data-aim="x">before<br/>after</p>',
+            '<p data-aim="x"><svg><use href="#asset-x"/></svg></p>',
+        ],
+    )
+    def test_C002_ignores_void_and_svg_context(self, markup):
+        assert "C002" not in {f.code for f in aim.lint_text(_mini(markup))}
+
+    def test_empty_registry_svg_round_trips_self_closed_without_C002(self):
+        source = _mini(
+            '<aim-assets>\n<svg aria-hidden="true" height="0" width="0"/>\n</aim-assets>'
+        )
+
+        canonical = aim.loads(source).dumps()
+        assert canonical == source
+        assert aim.loads(canonical).dumps() == canonical
+        assert "C002" not in {f.code for f in aim.lint_text(canonical)}
+
+
 class TestReconcileHandlesWrappingContainers:
     """AF-07: a hand edit that wraps existing units into a NEW container is
     one of the most natural out-of-band edits, but _drive counted a

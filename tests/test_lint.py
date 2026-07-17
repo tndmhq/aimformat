@@ -306,6 +306,13 @@ class TestHistoryAndCacheRules:
         broken = good_text.replace('class="font-bold text-3xl"', 'class="text-3xl font-bold"')
         assert "C001" in codes(broken)
 
+    def test_C002_self_closing_non_void_element(self):
+        doc = aim.new_document(title="T")
+        doc.add_chunk('<p data-aim="x"><span></span></p>', author=ME, at=ts(0))
+        doc.flatten()
+        broken = doc.dumps().replace("<span></span>", "<span/>")
+        assert codes(broken) == {"C002"}
+
     def test_S000_unparseable(self):
         assert "S000" in {f.code for f in lint_text("<html><p></html>")}
 

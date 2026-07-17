@@ -21,13 +21,14 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import dataclass
+from html.parser import HTMLParser
 from pathlib import Path
 
 from . import ids
-from .canonical import document_text
+from .canonical import LINE_CONTAINERS, document_text
 from .css import generate_aim_css
 from .document import AimDocument, Anchor
-from .dom import Comment, Element, Text
+from .dom import Comment, Element, Text, parse_fragment
 from .errors import AimError, HistoryError, InvalidOperation, ParseError, TargetNotFound
 from .events import _ISO_RE
 from .pagesetup import page_setup_from_obj, parse_doc_settings
@@ -37,6 +38,56 @@ __all__ = ["Finding", "lint", "lint_text", "lint_path"]
 
 ERROR = "error"
 WARNING = "warning"
+
+
+class _SelfClosingSourceNormalizer(HTMLParser):
+    """Expand only C002 spellings while preserving every other source byte."""
+
+    def __init__(self, text: str):
+        super().__init__(convert_charrefs=False)
+        self.text = text
+        self.line_offsets = [0]
+        self.line_offsets.extend(match.end() for match in re.finditer("\n", text))
+        self.stack: list[str] = []
+        self.replacements: list[tuple[int, int, str]] = []
+
+    def handle_starttag(self, tag: str, attrs: list) -> None:
+        if tag not in REGISTRY.void_elements:
+            self.stack.append(tag)
+
+    def handle_startendtag(self, tag: str, attrs: list) -> None:
+        if tag in REGISTRY.void_elements or tag == "svg" or "svg" in self.stack:
+            return
+        raw = self.get_starttag_text()
+        if raw is None:
+            return
+        line, column = self.getpos()
+        start = self.line_offsets[line - 1] + column
+        opening = raw[:-2].rstrip() + ">"
+        separator = "\n" if tag in LINE_CONTAINERS else ""
+        self.replacements.append((start, start + len(raw), opening + separator + f"</{tag}>"))
+
+    def handle_endtag(self, tag: str) -> None:
+        for i in range(len(self.stack) - 1, -1, -1):
+            if self.stack[i] == tag:
+                del self.stack[i:]
+                return
+
+    def normalized(self) -> str:
+        parts: list[str] = []
+        cursor = 0
+        for start, end, replacement in self.replacements:
+            parts.extend((self.text[cursor:start], replacement))
+            cursor = end
+        parts.append(self.text[cursor:])
+        return "".join(parts)
+
+
+def _without_c002_differences(text: str) -> str:
+    normalizer = _SelfClosingSourceNormalizer(text)
+    normalizer.feed(text)
+    normalizer.close()
+    return normalizer.normalized()
 
 
 @dataclass(frozen=True)
@@ -73,6 +124,8 @@ class _Linter:
         self.proposals()
         self.history()
         self.caches()
+        if self.text is not None:
+            self.authored_self_closing()
         self.canonical_form()
         return self.findings
 
@@ -892,13 +945,63 @@ class _Linter:
             self.add("M003", ERROR, f"embeddings cache: {exc}")
 
     # -- C: canonical form ---------------------------------------------------------------------
+    def authored_self_closing(self) -> None:
+        """Reject HTML's unsafe ``<tag/>`` spelling outside foreign content.
+
+        The transparent parser preserves the authored spelling on
+        ``Element.self_closing``. Propagate SVG context exactly as the
+        canonical serializer does so empty foreign elements remain the one
+        non-void case where ``/>`` is canonical.
+        """
+
+        def visit(el: Element, *, in_svg: bool, where: str = "") -> None:
+            svg_here = in_svg or el.tag == "svg"
+            loc = el.chunk_id or el.container_id or el.get("id") or where
+            if el.self_closing and el.tag not in REGISTRY.void_elements and not svg_here:
+                self.add(
+                    "C002",
+                    ERROR,
+                    f"non-void HTML element <{el.tag}> must use explicit open+close "
+                    "tags (self-closing breaks HTML parsing)",
+                    loc,
+                )
+            for child in el.elements():
+                visit(child, in_svg=svg_here, where=loc)
+
+        for el in self.doc._fragment.elements():
+            visit(el, in_svg=False)
+
+        try:
+            events = self.doc.history
+        except HistoryError:
+            return  # malformed history is already reported as H002
+        for ev in events:
+            for field in ("before", "after", "proposed", "applied"):
+                markup = ev.get(field)
+                if not isinstance(markup, str):
+                    continue
+                try:
+                    nodes = parse_fragment(markup)
+                except ParseError:
+                    continue  # replay/history validation reports malformed payloads
+                where = f"seq {ev.data.get('seq')} {field}"
+                for node in nodes:
+                    if isinstance(node, Element):
+                        visit(node, in_svg=False, where=where)
+
     def canonical_form(self) -> None:
         if self.text is None:
             return
+        compared_text = self.text
+        # C002 is the precise error for a non-void authored ``/>``. Expand
+        # only that spelling before the generic comparison so C001 remains
+        # additive for independent defects without aliasing C002 itself.
+        if any(f.code == "C002" for f in self.findings):
+            compared_text = _without_c002_differences(compared_text)
         canon = document_text(self.doc._fragment)
-        if self.text == canon:
+        if compared_text == canon:
             return
-        got, want = self.text.split("\n"), canon.split("\n")
+        got, want = compared_text.split("\n"), canon.split("\n")
         for i, (a, b) in enumerate(zip(got, want, strict=False)):
             if a != b:
                 self.add(

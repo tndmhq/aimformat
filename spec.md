@@ -701,7 +701,18 @@ Byte-deterministic serialization is load-bearing: chain verification and
   line (it is hashed content). In the asset registry, each symbol sits on
   its own line — one data-URI per line, so one changed image is one
   changed diff line.
-- Void elements without `/`; foreign (SVG) empty elements self-close.
+- HTML void elements always serialize without `/`. HTML non-void elements,
+  including empty custom elements, always serialize with explicit open and
+  close tags and never self-close; an authored self-closing spelling for one
+  is a conformance error (C002). Empty elements in foreign (SVG) context always
+  self-close with `/>`; non-empty foreign elements use explicit open and close
+  tags.
+
+**Compatibility note (owner decision):** requiring explicit end tags for empty
+non-void HTML elements is an intentionally incompatible canonical-form and
+`doc_hash` change. Because this draft change was adopted before any `.aim`
+documents were deployed, it is intentionally not assigned a new format version
+and has no migration or legacy-hash-preservation path.
 
 ### 11.2 JSON serialization
 
@@ -1016,6 +1027,7 @@ Total registered utilities: **243**.
 | D005 | error | aim-page-break must be empty (explicit open+close tags) |
 | D006 | error | aim-page-break outside the top-level body flow |
 | C001 | error | file is not in canonical form |
+| C002 | error | non-void HTML element uses self-closing syntax outside foreign content |
 <!-- END GENERATED REGISTRY REFERENCE -->
 
 ## Appendix B. Recommendations (informative)
