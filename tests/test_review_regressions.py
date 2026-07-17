@@ -3410,33 +3410,70 @@ class TestCyclicNestedListIngestion:
 
 
 class TestPendingSlideBreakRevision:
-    """AF-49: the page break that introduces a pending slide is part of
-    that addition. Emitting it outside ``w:ins`` left a blank page after a
-    Word user rejected the slide."""
+    """AF-49: page breaks introduced by a pending slide are part of that
+    addition. Emitting either boundary outside ``w:ins`` changes pagination
+    after a Word user rejects the slide."""
 
-    def test_slide_break_is_inserted_revision(self, tmp_path):
+    def test_slide_boundary_breaks_are_inserted_revisions(self, tmp_path):
         docx = pytest.importorskip("docx")
         from docx.oxml.ns import qn
 
         doc = aim.new_document(title="Deck")
-        doc.add_chunk("<p>Before.</p>", author=ME, at=ts(0))
+        doc.add_chunk('<p data-aim="before">Before.</p>', author=ME, at=ts(0))
+        doc.add_chunk('<p data-aim="after">After.</p>', author=ME, at=ts(1))
         doc.propose_add(
             '<aim-slide style="width:420px; height:595px">'
             '<p style="left:10px; top:10px; width:300px">Pending page.</p>'
             "</aim-slide>",
             author=BOT,
-            at=ts(1),
+            after="before",
+            at=ts(2),
         )
 
         tracked = aim.to_docx(doc, tmp_path / "tracked.docx", pending="tracked")
         body = docx.Document(str(tracked)).element.body
         breaks = [br for br in body.iter(qn("w:br")) if br.get(qn("w:type")) == "page"]
-        assert len(breaks) == 1
-        assert breaks[0].getparent().getparent().tag == qn("w:ins")
+        assert len(breaks) == 2
+        assert all(br.getparent().getparent().tag == qn("w:ins") for br in breaks)
 
         rejected = aim.to_docx(doc, tmp_path / "rejected.docx", pending="reject-all")
         rejected_body = docx.Document(str(rejected)).element.body
         assert not [br for br in rejected_body.iter(qn("w:br")) if br.get(qn("w:type")) == "page"]
+
+    def test_preexisting_accepted_slide_break_remains_untracked(self, tmp_path):
+        docx = pytest.importorskip("docx")
+        from docx.oxml.ns import qn
+
+        doc = aim.new_document(title="Deck")
+        doc.add_chunk(
+            '<aim-slide data-aim-container="accepted" style="width:420px; height:595px">'
+            '<p style="left:10px; top:10px; width:300px">Accepted page.</p>'
+            "</aim-slide>",
+            author=ME,
+            at=ts(0),
+        )
+        doc.add_chunk('<p data-aim="after">After.</p>', author=ME, at=ts(1))
+        doc.propose_add(
+            '<aim-slide style="width:420px; height:595px">'
+            '<p style="left:10px; top:10px; width:300px">Pending page.</p>'
+            "</aim-slide>",
+            author=BOT,
+            after="accepted",
+            at=ts(2),
+        )
+
+        tracked = aim.to_docx(doc, tmp_path / "tracked-existing.docx", pending="tracked")
+        body = docx.Document(str(tracked)).element.body
+        breaks = [br for br in body.iter(qn("w:br")) if br.get(qn("w:type")) == "page"]
+        assert len(breaks) == 2
+        assert sum(br.getparent().getparent().tag == qn("w:ins") for br in breaks) == 1
+
+        rejected = aim.to_docx(doc, tmp_path / "rejected-existing.docx", pending="reject-all")
+        rejected_body = docx.Document(str(rejected)).element.body
+        rejected_breaks = [
+            br for br in rejected_body.iter(qn("w:br")) if br.get(qn("w:type")) == "page"
+        ]
+        assert len(rejected_breaks) == 1
 
 
 class TestMarkdownPageBreakExport:
