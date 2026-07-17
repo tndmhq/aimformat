@@ -203,11 +203,11 @@ placed immediately after `<meta charset="utf-8">` — the note sits at the
 top of the file, SPDX-style, while the charset stays within sniffing range.
 Parsers MUST accept an aim-note anywhere in the head.
 
-The canonical v0.1 note:
+The canonical note for this spec version:
 
 ```html
 <!--
-aim-note: This file is an AIM document (open format, v0.1) — valid HTML plus
+aim-note: This file is an AIM document (open format, v0.2) — valid HTML plus
 chunk identity, a pending-suggestions lane, and an edit history.
 Agent docs: https://aimformat.com/llms.txt
 The reliable way to edit this file is the `aimformat` tooling, which manages
