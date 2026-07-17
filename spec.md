@@ -688,9 +688,12 @@ Byte-deterministic serialization is load-bearing: chain verification and
   `preserveAspectRatio`, …) — a naive all-lowercase rule is unimplementable
   because HTML tokenization lowercases and tree construction re-adjusts.
 - Attribute order: `data-aim`/`data-aim-container`, `id`, `class`, `style`
-  first; remaining attributes alphabetical; `src`/`href` always last.
-- `class` tokens sorted alphabetically. Inline style properties in
-  whitelist order (§3.3), `; `-separated, no trailing semicolon.
+  first; remaining attributes alphabetical; `src`/`href` always last. If an
+  attribute name occurs more than once, its first value wins.
+- `class` tokens sorted alphabetically and deduplicated. Inline style
+  properties appear in whitelist order (§3.3), `; `-separated, with no trailing
+  semicolon; if a whitelisted property occurs more than once, its last value
+  wins.
 - Double-quoted attributes. Text escapes `& < >` only; attribute values
   escape `& "` only. Raw UTF-8 (no entity-encoding of non-ASCII). LF line
   endings.
@@ -872,7 +875,7 @@ stylesheet. Do not edit it by hand.*
 
 - **Block chunk carriers** (top level and inside slides): `h1` `h2` `h3` `h4` `h5` `h6` `p` `section` `blockquote` `figure` `pre` `div` `hr` `aim-page-break` `ul` `ol` `table`
 - **Item chunk carriers**: `li` inside `ul` `ol`; `tr` inside `table`
-- **Containers** (`data-aim-container`): `ul` `ol` `table` `aim-slide` plus `aim-slide`
+- **Containers** (`data-aim-container`): `ul` `ol` `table` `aim-slide`
 - **Table shells** (scaffolding between container and row chunks): `thead` `tbody` `tfoot`
 - **Allowed inside chunk subtrees**: `h1` `h2` `h3` `h4` `h5` `h6` `p` `section` `blockquote` `figure` `figcaption` `pre` `div` `hr` `aim-page-break` `ul` `ol` `li` `table` `thead` `tbody` `tfoot` `tr` `td` `th` `img` `svg` `use` `code` `a` `strong` `em` `b` `i` `u` `s` `sub` `sup` `mark` `br` `span`
 - **Asset registry content**: `svg` `symbol` `image` `rect` `circle` `ellipse` `path` `g`
@@ -884,7 +887,7 @@ stylesheet. Do not edit it by hand.*
 - **Weights** `font-*`: `normal` `medium` `semibold` `bold`
 - **Leading** `leading-*`: `tight` `snug` `normal` `relaxed`
 - **Alignment** `text-*`: `left` `center` `right`
-- **Palette** for `text-` / `bg-` / `border-`: `gray` (50, 100, 200, 300, 400, 500, 600, 700, 800, 900); `red` (50, 600); `green` (50, 600); `amber` (50, 600); plus `white` and theme-backed `brand-1…4`
+- **Palette** for `text-` / `bg-` / `border-`: `gray` (50, 100, 200, 300, 400, 500, 600, 700, 800, 900); `red` (50, 600); `green` (50, 600); `amber` (50, 600); plus theme-backed `brand-1…4`. White is available only as `text-white` and `bg-white`.
 - **Spacing** `m`, `mt`, `mb`, `ml`, `mr`, `mx`, `my`, `p`, `pt`, `pb`, `pl`, `pr`, `px`, `py` × scale `0` `1` `2` `3` `4` `6` `8` `10` `12` `16`
 - **Singles**: `bg-white` `border` `border-b` `border-t` `font-body` `font-heading` `font-mono` `italic` `line-through` `list-decimal` `list-disc` `list-none` `rounded` `rounded-full` `rounded-lg` `rounded-md` `shadow` `text-white` `tracking-tight` `tracking-wide` `underline` `uppercase`
 

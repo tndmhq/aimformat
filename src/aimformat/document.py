@@ -926,7 +926,7 @@ class AimDocument:
         """A replacement keeps the target's kind (§4.3): an ``aim-slide``
         root can only ever be a container, and a container target can only
         take a container-capable root — otherwise the write demotes one into
-        the other and the document fails S030/S031 on the very next lint."""
+        the other and the document fails V003/S031 on the very next lint."""
         kind = kind or self._state.kind_of(target)
         if kind == "chunk" and first.tag == "aim-slide":
             raise InvalidOperation(
@@ -2210,16 +2210,17 @@ class AimDocument:
                 _no_delete_move(prop.target or "", "delete proposal")
                 data["anchor"] = self._anchor_of(prop.target or "").to_obj()
                 self._state.remove(prop.target or "")
-            elif prop.action == "move" and decision == "accepted":
-                _no_delete_move(prop.target or "", "move proposal")
-                src = self._anchor_of(prop.target or "")
+            elif prop.action == "move":
                 dst = Anchor(
                     prop.anchor_container or "body", prop.anchor_after, shell=prop.anchor_shell
                 )
-                data["anchor"] = dst.to_obj()
-                data["from"] = src.to_obj()
                 data["to"] = dst.to_obj()
-                self._state.move(prop.target or "", dst)
+                if decision == "accepted":
+                    _no_delete_move(prop.target or "", "move proposal")
+                    src = self._anchor_of(prop.target or "")
+                    data["anchor"] = dst.to_obj()
+                    data["from"] = src.to_obj()
+                    self._state.move(prop.target or "", dst)
 
         # drop the card; rebind chained adds that anchored on this proposal
         sec = self._state.section("aim-proposals")

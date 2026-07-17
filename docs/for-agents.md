@@ -74,6 +74,7 @@ pip install aimformat    # zero runtime dependencies (stdlib only)
 | `aim new -o FILE` | scaffold a minimal valid document |
 | `aim show FILE` | human-readable chunks / pending-lane / history overview; `--format json` for machine reads |
 | `aim note FILE...` | add or refresh the canonical agent-note head comment; `--check` verifies without writing; `--remove` strips it |
+| `aim normalize FILE [-o OUT] [--check]` | rewrite in canonical form; `--check` reports non-canonical input without writing |
 | `aim propose {modify,add,delete,move,theme} FILE ...` | append a proposal card to the pending lane |
 | `aim accept FILE [PID...] [--all]` | accept pending proposals by id, or all of them |
 | `aim reject FILE [PID...] [--all]` | reject pending proposals by id, or all of them |
@@ -195,10 +196,12 @@ invariants or you will corrupt identity and history:
   check `summary.doc_hash` before trusting it — but do not leave a wrong
   summary you know is misleading; deleting the whole meta script is always
   safe (it is a derived cache, §7).
-- **Afterwards, run `aim lint FILE`** to catch structure, vocabulary, and
-  security violations, and run `aim reconcile FILE` so your out-of-band
-  edits are recorded into history as attributed events instead of dangling
-  as unexplained divergence.
+- **Afterwards, run `aim lint FILE` on the authored file first** to catch
+  structure, vocabulary, and security violations before normalization can
+  discard their evidence. Then run `aim normalize FILE` to restore canonical
+  spelling, optionally lint again, and run `aim reconcile FILE` so your
+  out-of-band edits are recorded into history as attributed events instead of
+  dangling as unexplained divergence.
 
 ## Slides and fixed-layout pages
 

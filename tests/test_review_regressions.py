@@ -3368,3 +3368,339 @@ class TestOrderedMarkersInListItemModifications:
         assert "~>1. A" in md
         assert "2. B~~}" in md
         assert "3. c" in md  # the trailing item's own ordinal is untouched
+
+
+class TestCyclicNestedListIngestion:
+    """AF-53: nested-list refs need the same cycle guard as body and inline
+    refs. A list reachable through a list item could point back to an
+    ancestor and recurse until Python raised ``RecursionError``."""
+
+    def test_cycle_degrades_without_losing_reachable_items(self):
+        data = {
+            "name": "cyclic-list",
+            "body": {"children": [{"$ref": "#/groups/0"}]},
+            "groups": [
+                {
+                    "label": "list",
+                    "children": [{"$ref": "#/texts/0"}],
+                },
+                {
+                    "label": "list",
+                    "children": [{"$ref": "#/texts/1"}],
+                },
+            ],
+            "texts": [
+                {
+                    "label": "list_item",
+                    "text": "outer",
+                    "children": [{"$ref": "#/groups/1"}],
+                },
+                {
+                    "label": "list_item",
+                    "text": "inner",
+                    "children": [{"$ref": "#/groups/0"}],
+                },
+            ],
+        }
+
+        doc = aim.from_docling(data)
+
+        assert [chunk.text for chunk in doc.chunks] == ["outerinner"]
+        assert aim.lint(doc) == []
+
+    def test_contentless_cycle_does_not_create_blank_list_item(self):
+        data = {
+            "name": "empty-cyclic-list",
+            "body": {"children": [{"$ref": "#/groups/0"}]},
+            "groups": [
+                {
+                    "label": "list",
+                    "children": [{"$ref": "#/groups/0"}],
+                }
+            ],
+        }
+
+        doc = aim.from_docling(data)
+
+        assert doc.chunks == []
+        assert aim.lint(doc) == []
+
+    def test_contentless_cycle_through_empty_item_drops_nested_list(self):
+        data = {
+            "name": "empty-item-cyclic-list",
+            "body": {"children": [{"$ref": "#/groups/0"}]},
+            "groups": [
+                {
+                    "label": "list",
+                    "children": [{"$ref": "#/texts/0"}],
+                }
+            ],
+            "texts": [
+                {
+                    "label": "list_item",
+                    "text": "",
+                    "children": [{"$ref": "#/groups/0"}],
+                }
+            ],
+        }
+
+        doc = aim.from_docling(data)
+
+        assert doc.chunks == []
+        assert aim.lint(doc) == []
+
+    def test_noncyclic_empty_item_survives_as_empty_list_item(self):
+        data = {
+            "name": "empty-list-item",
+            "body": {"children": [{"$ref": "#/groups/0"}]},
+            "groups": [
+                {
+                    "label": "list",
+                    "children": [{"$ref": "#/texts/0"}],
+                }
+            ],
+            "texts": [
+                {
+                    "label": "list_item",
+                    "text": "",
+                    "children": [],
+                }
+            ],
+        }
+
+        doc = aim.from_docling(data)
+
+        assert [(chunk.tag, chunk.text) for chunk in doc.chunks] == [("li", "")]
+        assert aim.lint(doc) == []
+
+
+class TestPendingSlideBreakRevision:
+    """AF-49: page breaks introduced by a pending slide are part of that
+    addition. Emitting either boundary outside ``w:ins`` changes pagination
+    after a Word user rejects the slide."""
+
+    def test_slide_boundary_breaks_are_inserted_revisions(self, tmp_path):
+        docx = pytest.importorskip("docx")
+        from docx.oxml.ns import qn
+
+        doc = aim.new_document(title="Deck")
+        doc.add_chunk('<p data-aim="before">Before.</p>', author=ME, at=ts(0))
+        doc.add_chunk('<p data-aim="after">After.</p>', author=ME, at=ts(1))
+        doc.propose_add(
+            '<aim-slide style="width:420px; height:595px">'
+            '<p style="left:10px; top:10px; width:300px">Pending page.</p>'
+            "</aim-slide>",
+            author=BOT,
+            after="before",
+            at=ts(2),
+        )
+
+        tracked = aim.to_docx(doc, tmp_path / "tracked.docx", pending="tracked")
+        body = docx.Document(str(tracked)).element.body
+        breaks = [br for br in body.iter(qn("w:br")) if br.get(qn("w:type")) == "page"]
+        assert len(breaks) == 2
+        assert all(br.getparent().getparent().tag == qn("w:ins") for br in breaks)
+
+        rejected = aim.to_docx(doc, tmp_path / "rejected.docx", pending="reject-all")
+        rejected_body = docx.Document(str(rejected)).element.body
+        assert not [br for br in rejected_body.iter(qn("w:br")) if br.get(qn("w:type")) == "page"]
+
+    def test_preexisting_accepted_slide_break_remains_untracked(self, tmp_path):
+        docx = pytest.importorskip("docx")
+        from docx.oxml.ns import qn
+
+        doc = aim.new_document(title="Deck")
+        doc.add_chunk(
+            '<aim-slide data-aim-container="accepted" style="width:420px; height:595px">'
+            '<p style="left:10px; top:10px; width:300px">Accepted page.</p>'
+            "</aim-slide>",
+            author=ME,
+            at=ts(0),
+        )
+        doc.add_chunk('<p data-aim="after">After.</p>', author=ME, at=ts(1))
+        doc.propose_add(
+            '<aim-slide style="width:420px; height:595px">'
+            '<p style="left:10px; top:10px; width:300px">Pending page.</p>'
+            "</aim-slide>",
+            author=BOT,
+            after="accepted",
+            at=ts(2),
+        )
+
+        tracked = aim.to_docx(doc, tmp_path / "tracked-existing.docx", pending="tracked")
+        body = docx.Document(str(tracked)).element.body
+        breaks = [br for br in body.iter(qn("w:br")) if br.get(qn("w:type")) == "page"]
+        assert len(breaks) == 2
+        assert sum(br.getparent().getparent().tag == qn("w:ins") for br in breaks) == 1
+
+        rejected = aim.to_docx(doc, tmp_path / "rejected-existing.docx", pending="reject-all")
+        rejected_body = docx.Document(str(rejected)).element.body
+        rejected_breaks = [
+            br for br in rejected_body.iter(qn("w:br")) if br.get(qn("w:type")) == "page"
+        ]
+        assert len(rejected_breaks) == 1
+
+    @pytest.mark.parametrize(
+        ("accept_first", "accept_second", "expected_breaks"),
+        [(False, False, 0), (True, False, 2), (False, True, 2), (True, True, 3)],
+    )
+    def test_consecutive_pending_slides_keep_independent_boundaries(
+        self, tmp_path, accept_first, accept_second, expected_breaks
+    ):
+        docx = pytest.importorskip("docx")
+        from docx.oxml.ns import qn
+
+        doc = aim.new_document(title="Deck")
+        doc.add_chunk('<p data-aim="before">Before.</p>', author=ME, at=ts(0))
+        doc.add_chunk('<p data-aim="after">After.</p>', author=ME, at=ts(1))
+        first = doc.propose_add(
+            '<aim-slide style="width:420px; height:595px"><p>First.</p></aim-slide>',
+            author=BOT,
+            after="before",
+            at=ts(2),
+        )
+        doc.propose_add(
+            '<aim-slide style="width:420px; height:595px"><p>Second.</p></aim-slide>',
+            author=BOT,
+            after=first.id,
+            at=ts(3),
+        )
+
+        tracked = aim.to_docx(doc, tmp_path / "consecutive.docx", pending="tracked")
+        body = docx.Document(str(tracked)).element.body
+        decisions = {ts(2): accept_first, ts(3): accept_second}
+
+        def resolve_revisions(parent):
+            for child in list(parent):
+                if child.tag in (qn("w:ins"), qn("w:del")):
+                    accepted = decisions[child.get(qn("w:date"))]
+                    keep = accepted if child.tag == qn("w:ins") else not accepted
+                    if not keep:
+                        parent.remove(child)
+                        continue
+                    resolve_revisions(child)
+                    at = parent.index(child)
+                    for nested in list(child):
+                        child.remove(nested)
+                        parent.insert(at, nested)
+                        at += 1
+                    parent.remove(child)
+                else:
+                    resolve_revisions(child)
+
+        resolve_revisions(body)
+        breaks = [br for br in body.iter(qn("w:br")) if br.get(qn("w:type")) == "page"]
+        assert len(breaks) == expected_breaks
+
+    def test_blank_pending_slide_keeps_boundary_when_follower_is_rejected(self, tmp_path):
+        docx = pytest.importorskip("docx")
+        from docx.oxml.ns import qn
+
+        doc = aim.new_document(title="Deck")
+        doc.add_chunk('<p data-aim="before">Before.</p>', author=ME, at=ts(0))
+        doc.add_chunk('<p data-aim="after">After.</p>', author=ME, at=ts(1))
+        blank = doc.propose_add(
+            '<aim-slide style="width:420px; height:595px"></aim-slide>',
+            author=BOT,
+            after="before",
+            at=ts(2),
+        )
+        doc.propose_add(
+            '<aim-slide style="width:420px; height:595px"><p>Follower.</p></aim-slide>',
+            author=BOT,
+            after=blank.id,
+            at=ts(3),
+        )
+
+        tracked = aim.to_docx(doc, tmp_path / "blank-consecutive.docx", pending="tracked")
+        body = docx.Document(str(tracked)).element.body
+        decisions = {ts(2): True, ts(3): False}
+
+        def resolve_revisions(parent):
+            for child in list(parent):
+                if child.tag in (qn("w:ins"), qn("w:del")):
+                    accepted = decisions[child.get(qn("w:date"))]
+                    keep = accepted if child.tag == qn("w:ins") else not accepted
+                    if not keep:
+                        parent.remove(child)
+                        continue
+                    resolve_revisions(child)
+                    at = parent.index(child)
+                    for nested in list(child):
+                        child.remove(nested)
+                        parent.insert(at, nested)
+                        at += 1
+                    parent.remove(child)
+                else:
+                    resolve_revisions(child)
+
+        resolve_revisions(body)
+        breaks = [br for br in body.iter(qn("w:br")) if br.get(qn("w:type")) == "page"]
+        # The first break opens the accepted blank canvas; the second keeps
+        # the following accepted paragraph off that canvas.
+        assert len(breaks) == 2
+
+
+class TestMarkdownPageBreakExport:
+    """AF-50: an empty ``aim-page-break`` fell through the generic block
+    renderer and disappeared from Markdown output."""
+
+    def test_page_break_renders_as_thematic_break(self):
+        doc = aim.new_document(title="Pages")
+        doc.add_chunk("<p>Before.</p>", author=ME, at=ts(0))
+        doc.add_chunk("<aim-page-break></aim-page-break>", author=ME, at=ts(1))
+        doc.add_chunk("<p>After.</p>", author=ME, at=ts(2))
+
+        assert aim.to_markdown(doc) == "Before.\n\n---\n\nAfter.\n"
+
+
+class TestMarkdownUppercaseSchemes:
+    """AF-51: Markdown import used lowercase prefix checks instead of the
+    registry's case-insensitive URL policy."""
+
+    def test_registry_allowed_uppercase_schemes_survive(self):
+        pytest.importorskip("markdown_it")
+        doc = aim.from_markdown("[site](HTTP://example.com) ![pixel](DATA:image/png;base64,AAAA)")
+
+        html = doc.chunks[0].html
+        assert 'href="HTTP://example.com"' in html
+        assert 'src="DATA:image/png;base64,AAAA"' in html
+        assert aim.lint(doc) == []
+
+
+class TestMarkdownFormattedHeadingTitle:
+    """AF-52: the derived document title used a heading's raw Markdown
+    source, including emphasis and code markers."""
+
+    def test_title_uses_inline_plain_text(self):
+        pytest.importorskip("markdown_it")
+        doc = aim.from_markdown("# **Bold** *day* with `code`")
+
+        assert doc.title == "Bold day with code"
+        assert aim.lint(doc) == []
+
+    def test_title_uses_parsed_formatted_image_alt_text(self):
+        pytest.importorskip("markdown_it")
+        doc = aim.from_markdown("# ![**Bold**](https://example.com/x.png)")
+
+        assert doc.title == "Bold"
+        assert aim.lint(doc) == []
+
+
+class TestRejectedMoveAuditDestination:
+    """AF-11: rejecting a move removed its proposal card, the only record
+    of the proposed destination, without copying that destination into the
+    resolution event."""
+
+    def test_rejected_move_keeps_proposed_destination(self, basic_doc):
+        before = basic_doc.body_ids
+        proposal = basic_doc.propose_move(
+            "intro", container="body", after=None, author=BOT, at=ts(8)
+        )
+
+        event = basic_doc.reject(proposal.id, decided_by=ME, at=ts(9))
+
+        assert event.get("to") == {"container": "body", "after": None}
+        assert basic_doc.body_ids == before
+        assert event.validate() == []
+        assert basic_doc.verify() == []

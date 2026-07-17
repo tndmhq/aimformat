@@ -30,11 +30,9 @@ from ..canonical import escape_attr, escape_text
 from ..document import AimDocument, new_document
 from ..events import Actor, external
 from ..ingest import _containerize
+from ..registry import REGISTRY
 
 __all__ = ["from_markdown"]
-
-_LINK_SCHEMES = ("http://", "https://", "mailto:", "#")
-_IMG_SCHEMES = ("http://", "https://", "data:image/")
 
 
 def _md():
@@ -48,11 +46,11 @@ def _md():
 
 
 def _href_ok(href: str) -> bool:
-    return href.startswith(_LINK_SCHEMES)
+    return REGISTRY.url_allowed("a.href", href)
 
 
 def _src_ok(src: str) -> bool:
-    return src.startswith(_IMG_SCHEMES)
+    return REGISTRY.url_allowed("img.src", src)
 
 
 def _inline(children: list[Any] | None) -> str:
@@ -108,6 +106,23 @@ def _inline(children: list[Any] | None) -> str:
     return "".join(out)
 
 
+def _inline_text(children: list[Any] | None) -> str:
+    """Plain text represented by an inline token list."""
+    out: list[str] = []
+    for tok in children or []:
+        if tok.type == "image":
+            out.append(_inline_text(tok.children) if tok.children else tok.content)
+        elif tok.type in ("text", "code_inline", "html_inline"):
+            out.append(tok.content)
+        elif tok.type in ("softbreak", "hardbreak"):
+            out.append(" ")
+        elif tok.children:
+            out.append(_inline_text(tok.children))
+        elif not tok.type.endswith(("_open", "_close")) and tok.content:
+            out.append(tok.content)
+    return "".join(out)
+
+
 class _Walker:
     """Token-stream walker producing block markup strings."""
 
@@ -131,7 +146,7 @@ class _Walker:
                 self.i += 2  # inline + heading_close
                 text = _inline(inline.children)
                 if self.first_heading is None:
-                    self.first_heading = inline.content
+                    self.first_heading = _inline_text(inline.children)
                 out.append(f"<{tok.tag}>{text}</{tok.tag}>")
             elif t == "paragraph_open":
                 inline = self.toks[self.i]

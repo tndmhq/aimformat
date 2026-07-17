@@ -9,6 +9,12 @@ required to add entries.)
 
 | Date | Type | Entry | Status | What |
 |---|---|---|---|---|
+| 2026-07-17 16:59 | plan | [pr14-blank-pending-slide-boundary](2026-07-17_1659_plan_pr14-blank-pending-slide-boundary.md) | done | Preserve a blank pending slide canvas when a following pending slide is rejected in DOCX tracked changes |
+| 2026-07-17 16:23 | plan | [pr14-codex-empty-list-followup](2026-07-17_1623_plan_pr14-codex-empty-list-followup.md) | done | Preserve legitimate empty Docling list items while still dropping cyclic contentless nested-list edges |
+| 2026-07-17 14:19 | plan | [pr14-codex-round3-minors](2026-07-17_1419_plan_pr14-codex-round3-minors.md) | done | Address Codex PR #14 round-3 minors for cyclic empty list wrappers, formatted image alt titles, and optional markdown test skips |
+| 2026-07-17 13:53 | plan | [pr14-codex-round2-followups](2026-07-17_1353_plan_pr14-codex-round2-followups.md) | done | Address Codex PR #14 round-2 follow-ups for consecutive pending-slide pagination, authored-file lint ordering, and cyclic empty-list ingestion |
+| 2026-07-17 13:34 | plan | [pr14-codex-followups](2026-07-17_1334_plan_pr14-codex-followups.md) | done | Address the two Codex PR #14 follow-ups: track pending-slide trailing DOCX breaks and correct normalization lint guidance |
+| 2026-07-17 13:08 | plan | [review-cleanup-batch](2026-07-17_1308_plan_review-cleanup-batch.md) | done | Fix the 15 assigned deep-review findings in converters, docling ingestion, proposal audit history, and public documentation |
 | 2026-07-17 12:40 | plan | [af-06-final-review-findings](2026-07-17_1240_plan_af-06-final-review-findings.md) | done | Address the three selected PR #13 findings: record the owner-declined version bump, scan history markup for C002, and preserve C002 block layout |
 | 2026-07-17 12:26 | plan | [af-06-empty-registry-svg](2026-07-17_1226_plan_af-06-empty-registry-svg.md) | done | Clarify canonical self-closing rules and regress empty asset-registry SVG serialization |
 | 2026-07-17 12:09 | plan | [af-06-c002-review-fixes](2026-07-17_1209_plan_af-06-c002-review-fixes.md) | done | Address both C002 PR review findings with additive canonical linting, source-backed gating, and focused regressions |

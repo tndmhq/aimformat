@@ -94,7 +94,7 @@ Fixed-layout pages: slides become correct pages end to end.
   Replacements now keep the target's kind: an `aim-slide` payload can
   never replace a chunk (and a container never becomes a flat block) —
   `modify_chunk`, `propose_modify`, and the accept path all reject what
-  would fail S030/S031 on the next lint, including proposals authored
+  would fail V003/S031 on the next lint, including proposals authored
   by external tools.
 
 ## 0.2.0 — 2026-07-10
@@ -123,6 +123,14 @@ First release published to PyPI: `pip install aimformat`.
   `aim accept` / `aim reject` (by id or `--all`), with `--author human:ID |
   agent:MODEL | external:ID` attribution (`aim.parse_actor`), and
   `aim show --format json` for machine reads.
+- **Format converters**: `from_text`, `from_markdown`, `from_docx`,
+  `from_pdf`, and extension-dispatched `from_path`; `to_markdown`, `to_html`,
+  `to_pdf`, and the existing `to_docx`. The matching CLI verbs are `aim import`
+  and `aim export`; non-stdlib dependencies remain behind optional extras.
+- **Canonical normalization**: `aim normalize FILE [-o OUT] [--check]`
+  rewrites a loadable document in the spec §11 canonical form, or checks it
+  without writing. The operation is idempotent. Lint the authored file first:
+  normalization can discard invalid declarations and their diagnostic evidence.
 - **MCP server**: `pip install 'aimformat[mcp]'` (pinned `mcp==1.28.1`)
   then `aim mcp` — local stdio, six workflow tools: `aim_read` (projected
   view), `aim_edit`, `aim_propose`, `aim_resolve`, `aim_lint`,

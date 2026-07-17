@@ -7,7 +7,7 @@ lints them in CI.
 
 | file | shows |
 |---|---|
-| [`proposal.aim`](proposal.aim) | prose document: heading/paragraph/section chunks, a list with a run chunk, a pricing table with row chunks, an accepted and a rejected resolution, accept-with-tweaks provenance, a checkpoint, and a still-pending lane (a table-row add + a theme swap) with a fresh summary/TOC cache |
+| [`proposal.aim`](proposal.aim) | prose document: heading/paragraph/section chunks, a list with a run chunk, a pricing table with row chunks, an accepted and a rejected resolution, a checkpoint, and a still-pending lane (a table-row add + a theme swap) with a fresh summary/TOC cache |
 | [`deck.aim`](deck.aim) | slides: fixed-canvas `aim-slide` containers (960×540; canvas px ≡ pt, spec §3.3), positioned chunks with explicit z-index layering, a pending text proposal, a checkpoint |
 | [`booklet.aim`](booklet.aim) | fixed-layout *paper* pages: A5 canvases (420×595, printing as true A5 PDF pages), a positioned image figure with an embedded data-URI photo, a positioned list container |
 
