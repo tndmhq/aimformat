@@ -816,19 +816,70 @@ class _Exporter:
             prop_mod = self.pending_mod[rows[ri].chunk_id or ""]
             label, date = _actor_label(prop_mod.author), prop_mod.at
             cur = orig_trs[ri]
-            for p_row in payload_rows:
+            # grid col -> (continuation rows still owed, colspan) for rowspans
+            # opened by an earlier payload row of THIS replacement
+            vmerge: dict[int, tuple[int, int]] = {}
+            for pi, p_row in enumerate(payload_rows):
                 new_row = table.add_row()  # appended; repositioned below
-                p_cells = [c for c in p_row.elements() if c.tag in ("td", "th")]
-                while len(new_row._tr.tc_lst) < len(p_cells):
-                    new_row._tr.add_tc()
-                while len(new_row._tr.tc_lst) > len(p_cells):
-                    new_row._tr.remove(new_row._tr.tc_lst[-1])
-                for idx in range(len(p_cells)):
-                    para = new_row.cells[idx].paragraphs[0]
-                    self.rev.ins(para, _runs_of(p_cells[idx]), label, date)
-                self.rev.row_ins(new_row._tr, label, date)
-                cur.addnext(new_row._tr)
-                cur = new_row._tr
+                tr = new_row._tr
+                for tc in list(tr.tc_lst):  # rebuilt cell by cell: the payload
+                    tr.remove(tc)  # rows carry their own span structure
+                ci = 0
+                for c in p_row.elements():
+                    if c.tag not in ("td", "th"):
+                        continue
+                    ci = self._continue_vmerges(table, tr, ci, vmerge)
+                    cs = int(c.get("colspan") or 1)
+                    rs = min(int(c.get("rowspan") or 1), len(payload_rows) - pi)
+                    para = self._new_span_cell(
+                        table, tr, colspan=cs, vmerge="restart" if rs > 1 else None
+                    )
+                    self.rev.ins(para, _runs_of(c), label, date)
+                    if rs > 1:
+                        vmerge[ci] = (rs - 1, cs)
+                    ci += cs
+                self._continue_vmerges(table, tr, ci, vmerge, trailing=True)
+                self.rev.row_ins(tr, label, date)
+                cur.addnext(tr)
+                cur = tr
+
+    def _new_span_cell(self, table, tr, *, colspan: int, vmerge: str | None):
+        """Append one cell to a rebuilt payload row, carrying its span
+        structure (w:gridSpan / w:vMerge); returns the cell's paragraph."""
+        from docx.oxml import OxmlElement
+        from docx.oxml.ns import qn
+        from docx.table import _Cell
+
+        tc = tr.add_tc()
+        if colspan > 1:
+            span = OxmlElement("w:gridSpan")
+            span.set(qn("w:val"), str(colspan))
+            tc.get_or_add_tcPr().append(span)
+        if vmerge is not None:
+            merge = OxmlElement("w:vMerge")
+            if vmerge == "restart":
+                merge.set(qn("w:val"), "restart")
+            tc.get_or_add_tcPr().append(merge)
+        return _Cell(tc, table).paragraphs[0]
+
+    def _continue_vmerges(
+        self, table, tr, ci: int, vmerge: dict[int, tuple[int, int]], *, trailing: bool = False
+    ) -> int:
+        """Emit the vertical-merge continuation cells owed at grid position
+        *ci* (and, when *trailing*, any owed further right); returns the
+        advanced position. Content lives in the restart cell — a
+        continuation is an empty spanned cell."""
+        while True:
+            if ci in vmerge:
+                left, cs = vmerge.pop(ci)
+                self._new_span_cell(table, tr, colspan=cs, vmerge="continue")
+                if left > 1:
+                    vmerge[ci] = (left - 1, cs)
+                ci += cs
+            elif trailing and vmerge and min(vmerge) > ci:
+                ci = min(vmerge)
+            else:
+                return ci
 
     def _emit_row_adds(
         self,

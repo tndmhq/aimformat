@@ -1695,6 +1695,91 @@ class TestTrackedStructuralRowModify:
         assert ins_rows[first + 1] == ["P", "Q"]  # both rows, in payload order
 
 
+class TestStructuralReplacementRecreatesSpans:
+    """codex-r2-2 (refines AF-39): a shape-changing row modify created one
+    unspanned Word cell per payload cell, so ``<td colspan="2">X</td>``
+    became a single one-column cell and no accept sequence in Word could
+    reach the proposed AIM grid. Inserted replacement rows now carry the
+    payload's gridSpan/vMerge structure."""
+
+    @pytest.fixture
+    def two_col_doc(self):
+        doc = aim.new_document(title="T")
+        doc.add_chunk(
+            '<table data-aim-container="tbl">'
+            '<tbody><tr data-aim="r1"><td>A</td><td>B</td></tr></tbody></table>',
+            author=ME,
+            at=ts(0),
+        )
+        return doc
+
+    @staticmethod
+    def _inserted_rows(path):
+        import docx
+        from docx.oxml.ns import qn
+
+        rows = docx.Document(str(path)).tables[0]._tbl.findall(qn("w:tr"))
+        return [
+            r
+            for r in rows
+            if (pr := r.find(qn("w:trPr"))) is not None and pr.find(qn("w:ins")) is not None
+        ]
+
+    def test_colspan_payload_cell_gets_a_gridspan(self, two_col_doc, tmp_path):
+        pytest.importorskip("docx")
+        from docx.oxml.ns import qn
+
+        two_col_doc.propose_modify(
+            "r1", '<tr data-aim="r1"><td colspan="2">X</td></tr>', author=BOT, at=ts(1)
+        )
+        out = aim.to_docx(two_col_doc, tmp_path / "colspan.docx")
+        (new_row,) = self._inserted_rows(out)
+        (tc,) = new_row.findall(qn("w:tc"))  # one cell spanning the grid,
+        span = tc.find(qn("w:tcPr")).find(qn("w:gridSpan"))  # not one column
+        assert span is not None and span.get(qn("w:val")) == "2"
+
+    def test_rowspan_payload_recreates_the_vertical_merge(self, two_col_doc, tmp_path):
+        pytest.importorskip("docx")
+        from docx.oxml.ns import qn
+
+        two_col_doc.propose_modify(
+            "r1",
+            '<tr data-aim="r1"><td rowspan="2">X</td><td>Y</td></tr>'
+            '<tr data-aim="r1"><td>Z</td></tr>',
+            author=BOT,
+            at=ts(1),
+        )
+        out = aim.to_docx(two_col_doc, tmp_path / "rowspan.docx")
+        first, second = self._inserted_rows(out)
+
+        top = first.findall(qn("w:tc"))[0].find(qn("w:tcPr")).find(qn("w:vMerge"))
+        assert top is not None and top.get(qn("w:val")) == "restart"
+        cont_tc = second.findall(qn("w:tc"))[0]
+        cont = cont_tc.find(qn("w:tcPr")).find(qn("w:vMerge"))
+        assert cont is not None and cont.get(qn("w:val")) in (None, "continue")
+        assert "".join(t.text or "" for t in cont_tc.iter(qn("w:t"))) == ""
+        # Z sits beside the continuation, in the second grid column
+        tcs = second.findall(qn("w:tc"))
+        texts = ["".join(t.text or "" for t in tc.iter(qn("w:t"))) for tc in tcs]
+        assert len(tcs) == 2 and texts == ["", "Z"]
+
+    def test_unspanned_payload_rows_stay_unspanned(self, two_col_doc, tmp_path):
+        pytest.importorskip("docx")
+        from docx.oxml.ns import qn
+
+        two_col_doc.propose_modify(
+            "r1", '<tr data-aim="r1"><td>X</td><td>Y</td><td>Z</td></tr>', author=BOT, at=ts(1)
+        )
+        out = aim.to_docx(two_col_doc, tmp_path / "plain.docx")
+        (new_row,) = self._inserted_rows(out)
+        tcs = new_row.findall(qn("w:tc"))
+        assert len(tcs) == 3
+        assert all(
+            tc.find(qn("w:tcPr")) is None or tc.find(qn("w:tcPr")).find(qn("w:gridSpan")) is None
+            for tc in tcs
+        )
+
+
 class TestDocxSplitsGroupingBlocks:
     """AF-40: ``_block_children`` unpacked only section/slides, so a
     div/blockquote fell through whole to one ``add_paragraph`` whose
