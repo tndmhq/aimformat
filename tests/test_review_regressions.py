@@ -2386,6 +2386,100 @@ class TestMcpWarnsWhenUnscoped:
         assert capsys.readouterr().err == ""
 
 
+_HISTORY_OPEN = '<script type="application/aim-history+jsonl">'
+
+
+def _before_history(text, insert):
+    """Insert a body section right before the history script (keeps the
+    content → proposals → assets → history order valid)."""
+    return text.replace(_HISTORY_OPEN, insert + "\n" + _HISTORY_OPEN, 1)
+
+
+def _card(attrs):
+    return (
+        f"<aim-proposals><aim-proposal {attrs}>"
+        "<template><p>x</p></template></aim-proposal></aim-proposals>"
+    )
+
+
+_ADD_ATTRS = (
+    'id="p-aaaaaaaa" data-action="add" data-anchor-container="body" '
+    'data-at="2026-07-07T10:00:05Z" data-author="agent" data-author-model="m"'
+)
+_MOD_ATTRS = (
+    'id="p-aaaaaaaa" data-action="modify" '
+    'data-at="2026-07-07T10:00:05Z" data-author="agent" data-author-model="m"'
+)
+
+_RULE_PROBES = {
+    "H002": lambda t: t.replace(_HISTORY_OPEN, _HISTORY_OPEN + "\nnot json", 1),
+    "P001": lambda t: _before_history(t, "<aim-proposals><div>bad</div></aim-proposals>"),
+    "P002": lambda t: _before_history(t, _card(_ADD_ATTRS.replace("p-aaaaaaaa", "bad id"))),
+    "P003": lambda t: _before_history(t, _card(_ADD_ATTRS.replace("add", "frobnicate"))),
+    "P004": lambda t: _before_history(t, _card(_MOD_ATTRS)),  # modify without data-for
+    "P005": lambda t: _before_history(
+        t, _card(_ADD_ATTRS.replace(' data-anchor-container="body"', ""))
+    ),
+    "P012": lambda t: _before_history(t, _card(_ADD_ATTRS + ' data-depends-on="p-00000000"')),
+    "P013": lambda t: _before_history(
+        t, _card(_ADD_ATTRS.replace('data-at="2026-07-07T10:00:05Z"', 'data-at="yesterday"'))
+    ),
+    "S006": lambda t: re.sub(
+        r'<style data-aim-css="[^"]*">.*?</style>',
+        '<style data-aim-css="0.1">/* aim.css placeholder */</style>',
+        t,
+        flags=re.S,
+    ),
+    "S010": lambda t: _before_history(t, '<script type="application/weird+json">{}</script>'),
+    "S013": lambda t: t.replace(
+        "</body>", _HISTORY_OPEN + "\n</script>\n</body>", 1
+    ),  # a second rank-3 history section
+    "S018": lambda t: _before_history(
+        t,
+        '<ul data-aim-container="dupc"><li data-aim="lia">x</li></ul>'
+        '<ul data-aim-container="dupc"><li data-aim="lib">y</li></ul>',
+    ),
+    "S019": lambda t: _before_history(
+        t, '<ul data-aim-container="intro"><li data-aim="lic">y</li></ul>'
+    ),  # 'intro' is already a chunk id
+    "S022": lambda t: _before_history(
+        t, '<ul data-aim-container="badlist"><p data-aim="pbad">x</p></ul>'
+    ),
+    "S026": lambda t: _before_history(
+        t,
+        '<aim-slide data-aim-container="sl1" style="width:420px; height:595px">'
+        '<aim-slide data-aim-container="sl2" style="width:420px; height:595px">'
+        "</aim-slide></aim-slide>",
+    ),
+    "S027": lambda t: t.replace(
+        "</title>",
+        '</title>\n<script type="application/aim-meta+json">{}</script>'
+        '\n<script type="application/aim-meta+json">{}</script>',
+        1,
+    ),
+    "V001": lambda t: _before_history(t, "<aim-assets><div>x</div></aim-assets>"),
+    "V006": lambda t: t.replace(
+        '<p data-aim="intro">', '<p data-aim="intro" style="left">', 1
+    ),
+}
+
+
+class TestUncoveredLintRulesFire:
+    """AF-24: 18 of 83 lint rule codes fired in no test — the only pin
+    regex-grepped the code strings out of lint.py source, so a refactor
+    that drops or inverts a check while the string survives passes CI
+    (S022 had already rotted exactly that way). One firing probe per
+    previously-uncovered code."""
+
+    @pytest.mark.parametrize("code", sorted(_RULE_PROBES))
+    def test_rule_fires(self, code, basic_doc):
+        text = _RULE_PROBES[code](basic_doc.dumps())
+        assert code in {f.code for f in aim.lint_text(text)}
+
+    def test_the_probe_base_is_clean(self, basic_doc):
+        assert aim.lint_text(basic_doc.dumps()) == []
+
+
 class TestEveryWorkflowActionIsShaPinned:
     """AF-25: publish.yml — the OIDC→PyPI workflow, the repo's highest
     privilege — was the only workflow with floating action refs; a moved
