@@ -1024,9 +1024,7 @@ class TestAcceptedAddValidatesItsPayload:
             f'data-at="{ts(5)}" data-author="human" data-author-id="eve">'
             f"<template>{payload}</template></aim-proposal>"
         )
-        text = doc.dumps().replace(
-            "</body>", f"<aim-proposals>\n{card}\n</aim-proposals>\n</body>"
-        )
+        text = doc.dumps().replace("</body>", f"<aim-proposals>\n{card}\n</aim-proposals>\n</body>")
         return aim.loads(text)
 
     def test_unmarked_root_fails_closed(self):
@@ -1044,9 +1042,7 @@ class TestAcceptedAddValidatesItsPayload:
         assert doc.verify() == []
 
     def test_nested_live_id_is_reminted_not_duplicated(self):
-        doc = self._with_hand_card(
-            '<ul data-aim-container="c9"><li data-aim="live">x</li></ul>'
-        )
+        doc = self._with_hand_card('<ul data-aim-container="c9"><li data-aim="live">x</li></ul>')
         doc.accept("p-handmade", decided_by=ME, at=ts(6))
         all_ids = doc._state.all_ids()
         assert doc.body_ids == ["live", "c9"]
@@ -1107,7 +1103,9 @@ class TestContainersHoldOnlyItemCarriers:
 
     def test_propose_paths_reject_at_creation(self, rich_doc):
         with pytest.raises(InvalidOperation):
-            rich_doc.propose_add('<p data-aim="px">bad</p>', author=BOT, container="list", at=ts(20))
+            rich_doc.propose_add(
+                '<p data-aim="px">bad</p>', author=BOT, container="list", at=ts(20)
+            )
         with pytest.raises(InvalidOperation):
             rich_doc.propose_move("intro", author=BOT, container="list", at=ts(21))
 
@@ -1118,9 +1116,7 @@ class TestContainersHoldOnlyItemCarriers:
             f'data-at="{ts(20)}" data-author="human" data-author-id="eve">'
             '<template><p data-aim="px">bad</p></template></aim-proposal>'
         )
-        text = rich_doc.dumps().replace(
-            "<aim-proposals>", f"<aim-proposals>\n{card}", 1
-        )
+        text = rich_doc.dumps().replace("<aim-proposals>", f"<aim-proposals>\n{card}", 1)
         if "<aim-proposals>" not in text:
             text = rich_doc.dumps().replace(
                 "</body>", f"<aim-proposals>\n{card}\n</aim-proposals>\n</body>"
@@ -1131,7 +1127,9 @@ class TestContainersHoldOnlyItemCarriers:
         assert doc.verify() == []
 
     def test_legal_item_writes_still_work(self, rich_doc):
-        rich_doc.add_chunk('<li data-aim="li9">new item</li>', author=ME, container="list", at=ts(20))
+        rich_doc.add_chunk(
+            '<li data-aim="li9">new item</li>', author=ME, container="list", at=ts(20)
+        )
         rich_doc.add_chunk(
             '<tr data-aim="row9"><td>gamma</td><td>3</td></tr>',
             author=ME,
@@ -1160,7 +1158,9 @@ class TestResolutionOrderProtectsAnchors:
         )
         # move card BEFORE the add that anchors on its target
         doc.propose_move("x1", author=BOT, container="s1", at=ts(2))
-        doc.propose_add('<p data-aim="n1">new</p>', author=BOT, container="body", after="x1", at=ts(3))
+        doc.propose_add(
+            '<p data-aim="n1">new</p>', author=BOT, container="body", after="x1", at=ts(3)
+        )
         return doc
 
     def test_add_orders_before_the_move_of_its_anchor(self, doc_with_lane):
@@ -1187,7 +1187,9 @@ class TestResolutionOrderProtectsAnchors:
         doc = aim.new_document(title="T")
         doc.add_chunk('<p data-aim="x1">anchor</p>', author=BOT, at=ts(0))
         doc.propose_delete("x1", author=BOT, at=ts(1))
-        doc.propose_add('<p data-aim="n1">new</p>', author=BOT, container="body", after="x1", at=ts(2))
+        doc.propose_add(
+            '<p data-aim="n1">new</p>', author=BOT, container="body", after="x1", at=ts(2)
+        )
         from aimformat.document import resolution_order
 
         for p in resolution_order(doc.proposals):
@@ -1279,7 +1281,9 @@ class TestReconcileHandlesWrappingContainers:
 
     def test_wrapper_swallowing_a_whole_container_reconciles(self):
         doc = aim.new_document(title="T")
-        doc.add_chunk('<ul data-aim-container="l1"><li data-aim="i1">x</li></ul>', author=BOT, at=ts(0))
+        doc.add_chunk(
+            '<ul data-aim-container="l1"><li data-aim="i1">x</li></ul>', author=BOT, at=ts(0)
+        )
         text = doc.dumps()
         wrapped = text.replace(
             '<ul data-aim-container="l1"><li data-aim="i1">x</li></ul>',
@@ -1306,8 +1310,7 @@ class TestEveryAimCssBlockIsVerified:
     def test_stale_version_css_is_X006(self, basic_doc):
         text = re.sub(
             r'<style data-aim-css="[^"]*">.*?</style>',
-            '<style data-aim-css="0.1">@import url(https://evil.example/x.css);'
-            "</style>",
+            '<style data-aim-css="0.1">@import url(https://evil.example/x.css);</style>',
             self._text(basic_doc),
             flags=re.S,
         )

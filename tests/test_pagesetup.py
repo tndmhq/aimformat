@@ -236,8 +236,7 @@ class TestPageBreakChunk:
             )
         text = rich_doc.dumps().replace(
             '<li data-aim="li1">First</li>',
-            '<li data-aim="li1">First</li>'
-            '<aim-page-break data-aim="pbx"></aim-page-break>',
+            '<li data-aim="li1">First</li><aim-page-break data-aim="pbx"></aim-page-break>',
         )
         codes = {f.code for f in aim.lint_text(text)}
         assert "D006" in codes
