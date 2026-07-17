@@ -3813,6 +3813,41 @@ class TestSupersedeSurvivesProjection:
         assert doc.verify() == []
 
 
+class TestProposalsTargetOnlyExistingChunks:
+    """data-for must name a chunk of the CURRENT document (lint P008): the
+    projection answers how a lane composes, it cannot mint targets. A
+    modify card aimed at a pending add's chunk lints P008 and — because
+    its payload reserves the add's root id — makes accept-all reject the
+    whole lane the propose call itself validated."""
+
+    @staticmethod
+    def _base():
+        doc = aim.new_document(title="T")
+        doc.add_chunk('<p data-aim="c1">Hello</p>', author=ME, at=ts(0))
+        doc.propose_add('<p data-aim="new1">New</p>', author=BOT, at=ts(1))
+        return doc
+
+    def test_modify_of_pending_add_chunk_is_rejected(self):
+        doc = self._base()
+        before = doc.dumps()
+        with pytest.raises(aim.TargetNotFound, match="new1"):
+            doc.propose_modify("new1", '<p data-aim="new1">New v2</p>', author=BOT, at=ts(2))
+        assert doc.dumps() == before
+        assert aim.lint(doc) == []
+
+    def test_delete_of_pending_add_chunk_is_rejected(self):
+        doc = self._base()
+        with pytest.raises(aim.TargetNotFound, match="new1"):
+            doc.propose_delete("new1", author=BOT, at=ts(2))
+        assert aim.lint(doc) == []
+
+    def test_move_of_pending_add_chunk_is_rejected(self):
+        doc = self._base()
+        with pytest.raises(aim.TargetNotFound, match="new1"):
+            doc.propose_move("new1", author=BOT, container="body", after=None, at=ts(2))
+        assert aim.lint(doc) == []
+
+
 class TestReconcileRejectsRescuableMoves:
     """Reconcile fails closed instead of solving transient nested rescues."""
 

@@ -1868,6 +1868,15 @@ class AimDocument:
             p for p in self.proposals if p.target == target and p.action in ("modify", "delete")
         ]
 
+    def _require_current_target(self, target: str) -> None:
+        """Proposal targets must exist in the CURRENT document (lint P008).
+
+        The projection answers how the pending lane composes; it cannot
+        mint targets. A card aimed at a chunk only a pending add would
+        create lints P008 and cannot reliably resolve."""
+        if not self._state.exists(target):
+            raise TargetNotFound(f"no chunk {target!r}")
+
     def propose_modify(
         self,
         target: str,
@@ -1887,6 +1896,7 @@ class AimDocument:
             assert payload is not None
             return payload
 
+        self._require_current_target(target)
         self._noop_guard(lambda current: current.modify_chunk(target, markup, author=author, at=at))
         payload = self._projected_operation(
             f"new modify of {target!r}",
@@ -2002,6 +2012,7 @@ class AimDocument:
         # reject reserved targets at propose time: the card would lint clean
         # but explode at accept (reserved heads have no body anchor)
         _no_delete_move(target, "delete proposal")
+        self._require_current_target(target)
         self._projected_operation(
             f"new delete of {target!r}",
             lambda projected: projected.delete_chunk(target, author=author, at=at),
@@ -2053,6 +2064,7 @@ class AimDocument:
             assert to is not None
             return Anchor.from_obj(to)
 
+        self._require_current_target(target)
         self._noop_guard(
             lambda current: current.move_chunk(
                 target, author=author, container=container, after=after, shell=shell, at=at
