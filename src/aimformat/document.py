@@ -2012,14 +2012,15 @@ class AimDocument:
         return serialize(el)
 
     def _validated_doc_markup(self, markup: str) -> str:
-        """Validate + canonicalize a whole-settings-block payload to the
-        exact form ``set_page_setup`` writes (resolved page, canonical
-        JSON) — a raw-authored spelling would replay as a verify
-        mismatch."""
+        """Validate + canonicalize a whole-settings-block payload.
+
+        Registered page fields go through the shared PageSetup grammar,
+        while unknown nested fields remain intact for forward compatibility.
+        """
         el = doc_settings_element(markup)
         settings = parse_doc_settings(el.raw)
         if "page" in settings:
-            settings["page"] = page_setup_from_obj(settings["page"]).to_obj()
+            page_setup_from_obj(settings["page"])
         return (
             f'<script type="{REGISTRY.script_types["doc"]}">\n{canonical_json(settings)}\n</script>'
         )

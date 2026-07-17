@@ -2042,6 +2042,45 @@ class TestDirectModifyOfReservedTargets:
             basic_doc.modify_chunk("aim:theme", "<p>not a theme block</p>", author=ME, at=ts(5))
 
 
+class TestPageSettingsPreserveNestedExtensions:
+    """Codex-2: whole aim:doc validation resolved ``page`` through
+    PageSetup.to_obj(), silently dropping forward-compatible nested data."""
+
+    MARKUP = (
+        '<script type="application/aim-doc+json">'
+        '{"page":{"margins":{"top":"20mm","x_gutter":"5mm"},'
+        '"size":"Letter","x_duplex":"long-edge"}}'
+        "</script>"
+    )
+
+    @staticmethod
+    def assert_extensions_survive(doc):
+        page = doc.doc_settings["page"]
+        assert page["x_duplex"] == "long-edge"
+        assert page["margins"]["x_gutter"] == "5mm"
+        assert doc.page_setup.size == "Letter"
+        assert doc.page_setup.margins_mm["top"] == 20.0
+        assert doc.verify() == []
+
+    def test_direct_modify_preserves_extensions(self, basic_doc):
+        basic_doc.set_page_setup({"size": "A5"}, author=ME, at=ts(5))
+        basic_doc.modify_chunk("aim:doc", self.MARKUP, author=ME, at=ts(6))
+        self.assert_extensions_survive(basic_doc)
+
+    def test_amend_preserves_extensions(self, basic_doc):
+        basic_doc.set_page_setup({"size": "A5"}, author=ME, at=ts(5))
+        proposal = basic_doc.propose_page_setup({"size": "A4"}, author=BOT, at=ts(6))
+        basic_doc.amend_proposal(proposal.id, self.MARKUP, at=ts(7))
+        basic_doc.accept(proposal.id, decided_by=ME, at=ts(8))
+        self.assert_extensions_survive(basic_doc)
+
+    def test_accept_with_tweaks_preserves_extensions(self, basic_doc):
+        basic_doc.set_page_setup({"size": "A5"}, author=ME, at=ts(5))
+        proposal = basic_doc.propose_page_setup({"size": "A4"}, author=BOT, at=ts(6))
+        basic_doc.accept(proposal.id, decided_by=ME, applied=self.MARKUP, at=ts(7))
+        self.assert_extensions_survive(basic_doc)
+
+
 def _tiny_png(width, height):
     """A minimal opaque RGBA PNG of the given size, stdlib-only."""
     import struct
