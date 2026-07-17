@@ -3592,6 +3592,54 @@ class TestPendingSlideBreakRevision:
         breaks = [br for br in body.iter(qn("w:br")) if br.get(qn("w:type")) == "page"]
         assert len(breaks) == expected_breaks
 
+    def test_blank_pending_slide_keeps_boundary_when_follower_is_rejected(self, tmp_path):
+        docx = pytest.importorskip("docx")
+        from docx.oxml.ns import qn
+
+        doc = aim.new_document(title="Deck")
+        doc.add_chunk('<p data-aim="before">Before.</p>', author=ME, at=ts(0))
+        doc.add_chunk('<p data-aim="after">After.</p>', author=ME, at=ts(1))
+        blank = doc.propose_add(
+            '<aim-slide style="width:420px; height:595px"></aim-slide>',
+            author=BOT,
+            after="before",
+            at=ts(2),
+        )
+        doc.propose_add(
+            '<aim-slide style="width:420px; height:595px"><p>Follower.</p></aim-slide>',
+            author=BOT,
+            after=blank.id,
+            at=ts(3),
+        )
+
+        tracked = aim.to_docx(doc, tmp_path / "blank-consecutive.docx", pending="tracked")
+        body = docx.Document(str(tracked)).element.body
+        decisions = {ts(2): True, ts(3): False}
+
+        def resolve_revisions(parent):
+            for child in list(parent):
+                if child.tag in (qn("w:ins"), qn("w:del")):
+                    accepted = decisions[child.get(qn("w:date"))]
+                    keep = accepted if child.tag == qn("w:ins") else not accepted
+                    if not keep:
+                        parent.remove(child)
+                        continue
+                    resolve_revisions(child)
+                    at = parent.index(child)
+                    for nested in list(child):
+                        child.remove(nested)
+                        parent.insert(at, nested)
+                        at += 1
+                    parent.remove(child)
+                else:
+                    resolve_revisions(child)
+
+        resolve_revisions(body)
+        breaks = [br for br in body.iter(qn("w:br")) if br.get(qn("w:type")) == "page"]
+        # The first break opens the accepted blank canvas; the second keeps
+        # the following accepted paragraph off that canvas.
+        assert len(breaks) == 2
+
 
 class TestMarkdownPageBreakExport:
     """AF-50: an empty ``aim-page-break`` fell through the generic block

@@ -448,12 +448,14 @@ class _Exporter:
         # its added boundary breaks, so Word rejects them together.
         if prior_break or (slide_payload and self._has_content()):
             self._break_before_next = False
-            if not self._ends_with_page_break():
-                if slide_payload and isinstance(prior_break, Proposal):
-                    self._shared_pending_slide_break(prior_break, prop)
-                else:
-                    owner = prop if slide_payload else prior_break
-                    self._page_break(owner if isinstance(owner, Proposal) else None)
+            if slide_payload and isinstance(prior_break, Proposal):
+                # A blank pending slide ends with its own opening break. That
+                # break must not suppress the separate boundary shared with
+                # the following pending slide.
+                self._shared_pending_slide_break(prior_break, prop)
+            elif not self._ends_with_page_break():
+                owner = prop if slide_payload else prior_break
+                self._page_break(owner if isinstance(owner, Proposal) else None)
         for el in els:
             for block in _block_children(el):
                 if block.tag in ("ul", "ol"):
