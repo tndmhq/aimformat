@@ -1485,6 +1485,25 @@ class TestCanonicalSelfClosingNormalization:
         errors = {f.code for f in aim.lint_text(broken) if f.level == "error"}
         assert errors == {"C002"}
 
+    def test_C002_survives_an_independently_malformed_history_payload(self, basic_doc):
+        proposal = basic_doc.propose_modify(
+            "intro",
+            '<p data-aim="intro"><span></span></p>',
+            author=BOT,
+            at=ts(5),
+        )
+        basic_doc.reject(proposal.id, decided_by=ME, at=ts(6))
+        canonical = basic_doc.dumps()
+        broken = canonical.replace(
+            '<span><\\/span><\\/p>"',
+            '<span/><\\/bogus><\\/p>"',
+            1,
+        )
+
+        assert broken != canonical
+        assert aim.loads(broken).verify() == []
+        assert "C002" in {f.code for f in aim.lint_text(broken) if f.level == "error"}
+
     def test_C002_suppression_preserves_block_container_layout(self):
         canonical = aim.new_document(title="T").dumps()
         broken = canonical.replace(
