@@ -9,7 +9,7 @@ required to add entries.)
 
 | Date | Type | Entry | Status | What |
 |---|---|---|---|---|
-| 2026-07-17 14:19 | plan | [pr14-codex-round3-minors](2026-07-17_1419_plan_pr14-codex-round3-minors.md) | active | Address Codex PR #14 round-3 minors for cyclic empty list wrappers, formatted image alt titles, and optional markdown test skips |
+| 2026-07-17 14:19 | plan | [pr14-codex-round3-minors](2026-07-17_1419_plan_pr14-codex-round3-minors.md) | done | Address Codex PR #14 round-3 minors for cyclic empty list wrappers, formatted image alt titles, and optional markdown test skips |
 | 2026-07-17 13:53 | plan | [pr14-codex-round2-followups](2026-07-17_1353_plan_pr14-codex-round2-followups.md) | done | Address Codex PR #14 round-2 follow-ups for consecutive pending-slide pagination, authored-file lint ordering, and cyclic empty-list ingestion |
 | 2026-07-17 13:34 | plan | [pr14-codex-followups](2026-07-17_1334_plan_pr14-codex-followups.md) | done | Address the two Codex PR #14 follow-ups: track pending-slide trailing DOCX breaks and correct normalization lint guidance |
 | 2026-07-17 13:08 | plan | [review-cleanup-batch](2026-07-17_1308_plan_review-cleanup-batch.md) | done | Fix the 15 assigned deep-review findings in converters, docling ingestion, proposal audit history, and public documentation |

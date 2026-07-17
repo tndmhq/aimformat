@@ -3587,6 +3587,7 @@ class TestMarkdownUppercaseSchemes:
     registry's case-insensitive URL policy."""
 
     def test_registry_allowed_uppercase_schemes_survive(self):
+        pytest.importorskip("markdown_it")
         doc = aim.from_markdown("[site](HTTP://example.com) ![pixel](DATA:image/png;base64,AAAA)")
 
         html = doc.chunks[0].html
@@ -3600,12 +3601,14 @@ class TestMarkdownFormattedHeadingTitle:
     source, including emphasis and code markers."""
 
     def test_title_uses_inline_plain_text(self):
+        pytest.importorskip("markdown_it")
         doc = aim.from_markdown("# **Bold** *day* with `code`")
 
         assert doc.title == "Bold day with code"
         assert aim.lint(doc) == []
 
     def test_title_uses_parsed_formatted_image_alt_text(self):
+        pytest.importorskip("markdown_it")
         doc = aim.from_markdown("# ![**Bold**](https://example.com/x.png)")
 
         assert doc.title == "Bold"

@@ -1,7 +1,7 @@
 ---
 date: 2026-07-17 14:19
 type: plan
-status: active
+status: done
 related: []
 ---
 
