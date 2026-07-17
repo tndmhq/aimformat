@@ -374,6 +374,19 @@ class DocState:
                 f"container {cont.container_id!r} (expects <{'>/<'.join(legal)}>)"
             )
 
+    def _guard_payload_container_members(self, nodes: list[Element]) -> None:
+        """Validate direct members when a payload root is itself a container."""
+        for root in nodes:
+            if root.tag not in REGISTRY.containers or root.tag == "aim-slide":
+                continue
+            members: list[Element] = []
+            for child in root.elements():
+                if root.tag == "table" and child.tag in REGISTRY.table_shells:
+                    members.extend(child.elements())
+                else:
+                    members.append(child)
+            self._guard_item_members(root, members)
+
     def insert(self, markup: str, anchor: Anchor) -> None:
         nodes = [n for n in parse_fragment(markup) if isinstance(n, Element)]
         if not nodes:
@@ -885,6 +898,7 @@ class AimDocument:
         nodes = [n for n in parse_fragment(markup) if isinstance(n, Element)]
         if not nodes:
             raise InvalidOperation("payload contains no element")
+        self._state._guard_payload_container_members(nodes)
         marker_ids = {n.chunk_id or n.container_id for n in nodes}
         if len(marker_ids) != 1:
             if not all(n.chunk_id is None and n.container_id is None for n in nodes):

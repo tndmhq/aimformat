@@ -1141,6 +1141,49 @@ class TestContainersHoldOnlyItemCarriers:
         assert not [f for f in aim.lint(rich_doc) if f.level == "error"]
 
 
+class TestContainerPayloadsValidateTheirMembers:
+    """Codex-1: body-level container payloads bypassed the destination
+    container guard, so their own direct members could violate S022."""
+
+    def test_add_rejects_invalid_list_container_payload(self):
+        doc = aim.new_document(title="T")
+        before = doc.dumps()
+
+        with pytest.raises(InvalidOperation):
+            doc.add_chunk(
+                '<ul data-aim-container="listx"><p data-aim="p1">bad</p></ul>',
+                author=ME,
+                at=ts(0),
+            )
+
+        assert doc.dumps() == before
+        assert doc.verify() == []
+
+    def test_modify_rejects_invalid_table_container_payload(self):
+        doc = aim.new_document(title="T")
+        doc.add_chunk(
+            '<table data-aim-container="tablex"><tbody>'
+            '<tr data-aim="row1"><td>good</td></tr>'
+            "</tbody></table>",
+            author=ME,
+            at=ts(0),
+        )
+        before = doc.dumps()
+
+        with pytest.raises(InvalidOperation):
+            doc.modify_chunk(
+                "tablex",
+                '<table data-aim-container="tablex"><tbody>'
+                '<p data-aim="p1">bad</p>'
+                "</tbody></table>",
+                author=ME,
+                at=ts(1),
+            )
+
+        assert doc.dumps() == before
+        assert doc.verify() == []
+
+
 class TestResolutionOrderProtectsAnchors:
     """AF-04: resolution_order sorted ready cards only delete-last, so a
     pending MOVE of an existing chunk that a sibling add anchors on could
