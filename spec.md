@@ -688,9 +688,12 @@ Byte-deterministic serialization is load-bearing: chain verification and
   `preserveAspectRatio`, …) — a naive all-lowercase rule is unimplementable
   because HTML tokenization lowercases and tree construction re-adjusts.
 - Attribute order: `data-aim`/`data-aim-container`, `id`, `class`, `style`
-  first; remaining attributes alphabetical; `src`/`href` always last.
-- `class` tokens sorted alphabetically. Inline style properties in
-  whitelist order (§3.3), `; `-separated, no trailing semicolon.
+  first; remaining attributes alphabetical; `src`/`href` always last. If an
+  attribute name occurs more than once, its first value wins.
+- `class` tokens sorted alphabetically and deduplicated. Inline style
+  properties appear in whitelist order (§3.3), `; `-separated, with no trailing
+  semicolon; if a whitelisted property occurs more than once, its last value
+  wins.
 - Double-quoted attributes. Text escapes `& < >` only; attribute values
   escape `& "` only. Raw UTF-8 (no entity-encoding of non-ASCII). LF line
   endings.
