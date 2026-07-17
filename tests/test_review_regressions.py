@@ -1458,6 +1458,17 @@ class TestCanonicalSelfClosingNormalization:
         }
         assert errors == {"C002"}
 
+    def test_C002_does_not_suppress_independent_C001(self):
+        text = _mini('<p data-aim="x"><span/></p>').removesuffix("\n")
+
+        errors = {f.code for f in aim.lint_text(text) if f.level == "error"}
+        assert errors == {"C001", "C002"}
+
+    def test_C002_requires_authored_source(self):
+        doc = aim.loads(_mini('<p data-aim="x"><span/></p>'))
+
+        assert "C002" not in {f.code for f in aim.lint(doc)}
+
     @pytest.mark.parametrize(
         "markup",
         [

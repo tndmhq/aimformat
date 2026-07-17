@@ -21,6 +21,7 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import dataclass
+from html.parser import HTMLParser
 from pathlib import Path
 
 from . import ids
@@ -37,6 +38,55 @@ __all__ = ["Finding", "lint", "lint_text", "lint_path"]
 
 ERROR = "error"
 WARNING = "warning"
+
+
+class _SelfClosingSourceNormalizer(HTMLParser):
+    """Expand only C002 spellings while preserving every other source byte."""
+
+    def __init__(self, text: str):
+        super().__init__(convert_charrefs=False)
+        self.text = text
+        self.line_offsets = [0]
+        self.line_offsets.extend(match.end() for match in re.finditer("\n", text))
+        self.stack: list[str] = []
+        self.replacements: list[tuple[int, int, str]] = []
+
+    def handle_starttag(self, tag: str, attrs: list) -> None:
+        if tag not in REGISTRY.void_elements:
+            self.stack.append(tag)
+
+    def handle_startendtag(self, tag: str, attrs: list) -> None:
+        if tag in REGISTRY.void_elements or tag == "svg" or "svg" in self.stack:
+            return
+        raw = self.get_starttag_text()
+        if raw is None:
+            return
+        line, column = self.getpos()
+        start = self.line_offsets[line - 1] + column
+        opening = raw[:-2].rstrip() + ">"
+        self.replacements.append((start, start + len(raw), opening + f"</{tag}>"))
+
+    def handle_endtag(self, tag: str) -> None:
+        for i in range(len(self.stack) - 1, -1, -1):
+            if self.stack[i] == tag:
+                del self.stack[i:]
+                return
+
+    def normalized(self) -> str:
+        parts: list[str] = []
+        cursor = 0
+        for start, end, replacement in self.replacements:
+            parts.extend((self.text[cursor:start], replacement))
+            cursor = end
+        parts.append(self.text[cursor:])
+        return "".join(parts)
+
+
+def _without_c002_differences(text: str) -> str:
+    normalizer = _SelfClosingSourceNormalizer(text)
+    normalizer.feed(text)
+    normalizer.close()
+    return normalizer.normalized()
 
 
 @dataclass(frozen=True)
@@ -73,7 +123,8 @@ class _Linter:
         self.proposals()
         self.history()
         self.caches()
-        self.authored_self_closing()
+        if self.text is not None:
+            self.authored_self_closing()
         self.canonical_form()
         return self.findings
 
@@ -922,16 +973,16 @@ class _Linter:
     def canonical_form(self) -> None:
         if self.text is None:
             return
-        # C002 is the precise canonical-form error for a non-void authored
-        # ``/>``. Do not also emit the generic C001 for the same byte
-        # difference: conformance nok fixtures must trip exactly their named
-        # error, and one actionable finding is clearer than two aliases.
+        compared_text = self.text
+        # C002 is the precise error for a non-void authored ``/>``. Expand
+        # only that spelling before the generic comparison so C001 remains
+        # additive for independent defects without aliasing C002 itself.
         if any(f.code == "C002" for f in self.findings):
-            return
+            compared_text = _without_c002_differences(compared_text)
         canon = document_text(self.doc._fragment)
-        if self.text == canon:
+        if compared_text == canon:
             return
-        got, want = self.text.split("\n"), canon.split("\n")
+        got, want = compared_text.split("\n"), canon.split("\n")
         for i, (a, b) in enumerate(zip(got, want, strict=False)):
             if a != b:
                 self.add(

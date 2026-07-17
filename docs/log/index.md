@@ -9,6 +9,7 @@ required to add entries.)
 
 | Date | Type | Entry | Status | What |
 |---|---|---|---|---|
+| 2026-07-17 12:09 | plan | [af-06-c002-review-fixes](2026-07-17_1209_plan_af-06-c002-review-fixes.md) | done | Address both C002 PR review findings with additive canonical linting, source-backed gating, and focused regressions |
 | 2026-07-17 11:48 | plan | [af-06-canonical-self-closing](2026-07-17_1148_plan_af-06-canonical-self-closing.md) | done | Normalize authored self-closing non-void HTML elements, reject them in lint, and regenerate canonical hashes and conformance artifacts |
 | 2026-07-17 09:07 | plan | [codex-pr12-followups](2026-07-17_0907_plan_codex-pr12-followups.md) | done | Address the five Codex follow-up findings on PR #12 with one verified regression fix and commit per finding |
 | 2026-07-16 13:34 | review | [pptx-codex-final-round](2026-07-16_1334_review_pptx-codex-final-round.md) | done | Recovered + triaged the post-merge Codex round on PR #5 (fixed-layout pages): 5 findings — 4 still present, all fixed with red-first regression tests (accept validates every payload root, empty slides keep their DOCX page, slide roots forced onto the container marker, default canvases sized in print CSS); plus three lint-parity follow-ups from the fix PR's own review. |
