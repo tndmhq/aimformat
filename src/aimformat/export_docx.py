@@ -208,6 +208,24 @@ class _Revisions:
             wrap.append(self._make_run(paragraph, spec, deleted=True))
         paragraph._p.append(wrap)
 
+    def row_ins(self, tr, author: str, date: str) -> None:
+        self._row_change(tr, "w:ins", author, date)
+
+    def row_dele(self, tr, author: str, date: str) -> None:
+        self._row_change(tr, "w:del", author, date)
+
+    def _row_change(self, tr, tag: str, author: str, date: str) -> None:
+        from docx.oxml import OxmlElement
+        from docx.oxml.ns import qn
+
+        props = tr.find(qn("w:trPr"))
+        if props is None:
+            props = OxmlElement("w:trPr")
+            tr.insert(0, props)
+        change = OxmlElement(tag)
+        self._attrs(change, author, date)
+        props.append(change)
+
     @staticmethod
     def _make_run(paragraph, spec: dict, *, deleted: bool):
         # build a real run for formatting, then detach and retag its text
@@ -691,6 +709,7 @@ class _Exporter:
         # accept/reject sequence in Word could turn into the AIM state
         cellwise_rows: dict[int, list[Element]] = {}  # ri -> payload row cells
         structural_ins: dict[int, list[Element]] = {}  # last-member ri -> payload rows
+        structural_del: set[int] = set()
         if not force:
             member_rows: dict[str, list[int]] = {}
             for ri, row in enumerate(rows):
@@ -710,6 +729,7 @@ class _Exporter:
                         ]
                 else:
                     structural_ins[indices[-1]] = payload_rows
+                    structural_del.update(indices)
         # true grid width: simulate the emit loop's cursor (spans shift later
         # cells right; a rowspan reaching below the last row is clamped), so
         # every (ri, ci) the loop touches exists in the table
@@ -780,6 +800,9 @@ class _Exporter:
         # row-adds only after the content loop: inserting rows mid-loop would
         # shift the (ri, ci) coordinates the loop and the merges rely on
         orig_trs = [r._tr for r in table.rows]  # 1:1 with the AIM rows
+        for ri in sorted(structural_del):
+            prop_mod = self.pending_mod[rows[ri].chunk_id or ""]
+            self.rev.row_dele(orig_trs[ri], _actor_label(prop_mod.author), prop_mod.at)
         if container_id and not force:
             self._emit_row_adds(table, None, container_id, None, ncols, first=True)
             for ri, row in enumerate(rows):
@@ -801,6 +824,7 @@ class _Exporter:
                 for idx in range(min(len(p_cells), ncols)):
                     para = new_row.cells[idx].paragraphs[0]
                     self.rev.ins(para, _runs_of(p_cells[idx]), label, date)
+                self.rev.row_ins(new_row._tr, label, date)
                 cur.addnext(new_row._tr)
                 cur = new_row._tr
 
