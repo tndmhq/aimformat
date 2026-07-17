@@ -37,6 +37,26 @@ from ..errors import InvalidOperation
 __all__ = ["to_markdown"]
 
 _SKIP_TAGS = {"aim-proposals", "aim-assets", "script", "style", "template"}
+_BLOCK_TAGS = {
+    "aim-slide",
+    "ul",
+    "ol",
+    "table",
+    "div",
+    "section",
+    "p",
+    "blockquote",
+    "pre",
+    "hr",
+    "figure",
+    "aim-page-break",
+    "h1",
+    "h2",
+    "h3",
+    "h4",
+    "h5",
+    "h6",
+} | _SKIP_TAGS
 _MD_ESCAPE = re.compile(r"([\\`*_\[\]~&<])")
 _LINE_START = re.compile(
     r"^(\s{0,3})"
@@ -173,19 +193,14 @@ class _Renderer:
         if tag == "table":
             return [self._table(el)]
         if tag in ("div", "section"):
-            out = []
-            for child in el.elements():
-                out.extend(self.block(child))
-            return out
+            return self._grouped(el)
         if tag.startswith("h") and len(tag) == 2 and tag[1].isdigit():
             return [("#" * int(tag[1])) + " " + _inline(el)]
         if tag == "p":
             text = _protect_line_starts(_inline(el))
             return [text] if text else []
         if tag == "blockquote":
-            inner: list[str] = []
-            for child in el.elements():
-                inner.extend(self.block(child))
+            inner = self._grouped(el)
             lines: list[str] = []
             for i, blk in enumerate(inner):
                 if i:
@@ -213,6 +228,30 @@ class _Renderer:
         # unknown block: text content, never dropped silently
         text = _protect_line_starts(_inline(el))
         return [text] if text else []
+
+    def _grouped(self, el: Element) -> list[str]:
+        """Children of a grouping block (div/section/blockquote) in order;
+        runs of direct inline content (text the element carries itself)
+        render as paragraphs of their own instead of being dropped."""
+        out: list[str] = []
+        run: list = []
+
+        def flush() -> None:
+            if not run:
+                return
+            text = _inline_nodes(run).strip()
+            if text:
+                out.append(_protect_line_starts(text))
+            run.clear()
+
+        for child in el.children:
+            if isinstance(child, Element) and child.tag in _BLOCK_TAGS:
+                flush()
+                out.extend(self.block(child))
+            else:
+                run.append(child)
+        flush()
+        return out
 
     # ------------------------------------------------------------------
     def _li_lines(self, li: Element, marker: str, indent: str) -> list[str]:

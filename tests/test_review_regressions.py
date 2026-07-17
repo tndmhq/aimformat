@@ -1385,3 +1385,46 @@ class TestTrackedTableContainerRevisions:
         for text in ("K", "1", "2"):
             assert text in deleted
         assert "only" in inserted
+
+
+class TestMarkdownKeepsGroupingBlockText:
+    """AF-36: the div/section and blockquote branches of the Markdown
+    exporter iterated only ``elements()``, so lint-clean direct text of a
+    grouping block (``<blockquote>Direct quote</blockquote>``) exported as
+    nothing — permanent loss on reimport."""
+
+    def test_blockquote_direct_text_survives(self):
+        doc = aim.new_document(title="T")
+        doc.add_chunk('<blockquote data-aim="q">Direct quote</blockquote>', author=ME, at=ts(0))
+        assert "> Direct quote" in aim.to_markdown(doc)
+
+    def test_div_mixed_content_keeps_order(self):
+        doc = aim.new_document(title="T")
+        doc.add_chunk(
+            '<div data-aim="d">Lead-in text<p>First para.</p>Trailing text</div>',
+            author=ME,
+            at=ts(0),
+        )
+        md = aim.to_markdown(doc)
+        lead = md.index("Lead-in text")
+        para = md.index("First para.")
+        trail = md.index("Trailing text")
+        assert lead < para < trail
+
+    def test_section_direct_text_survives(self):
+        doc = aim.new_document(title="T")
+        doc.add_chunk(
+            '<section data-aim="s"><h2>Head</h2>Loose section text</section>',
+            author=ME,
+            at=ts(0),
+        )
+        md = aim.to_markdown(doc)
+        assert "## Head" in md and "Loose section text" in md
+
+    def test_whitespace_between_blocks_adds_no_paragraph(self):
+        doc = aim.new_document(title="T")
+        doc.add_chunk(
+            '<div data-aim="d">\n  <p>One.</p>\n  <p>Two.</p>\n</div>', author=ME, at=ts(0)
+        )
+        md = aim.to_markdown(doc)
+        assert "One.\n\nTwo." in md
