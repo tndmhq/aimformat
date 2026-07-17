@@ -378,9 +378,7 @@ class _Renderer:
         for node in frag.elements():
             if node.tag == "tr":  # keep cell boundaries: accepting the
                 cells = [  # suggestion must not fuse the row into one word
-                    _inline(td, in_table=True)
-                    for td in node.elements()
-                    if td.tag in ("td", "th")
+                    _inline(td, in_table=True) for td in node.elements() if td.tag in ("td", "th")
                 ]
                 blocks.append("| " + " | ".join(cells) + " |")
             elif node.tag == "li":

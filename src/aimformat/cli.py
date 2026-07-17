@@ -643,7 +643,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument("file")
     p.add_argument("-o", "--output")
-    p.add_argument("--author", default="external:aim-cli", help="human:ID | agent:MODEL | external:ID")
+    p.add_argument(
+        "--author", default="external:aim-cli", help="human:ID | agent:MODEL | external:ID"
+    )
     p.set_defaults(func=_cmd_pack)
 
     p = sub.add_parser(

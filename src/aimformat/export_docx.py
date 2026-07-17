@@ -279,10 +279,7 @@ def _unpack_group(el: Element, wrap_tag: str) -> list[Element]:
 
     def flush() -> None:
         if run:
-            if any(
-                isinstance(n, Element) or (isinstance(n, Text) and n.data.strip())
-                for n in run
-            ):
+            if any(isinstance(n, Element) or (isinstance(n, Text) and n.data.strip()) for n in run):
                 out.append(_wrapped(wrap_tag, run))
             run.clear()
 

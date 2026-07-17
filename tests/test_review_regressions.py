@@ -1359,9 +1359,7 @@ class TestTrackedTableContainerRevisions:
         from docx.oxml.ns import qn
 
         d = docx.Document(str(path))
-        return [
-            t.text for w in d.element.body.iter(qn("w:ins")) for t in w.iter(qn("w:t"))
-        ]
+        return [t.text for w in d.element.body.iter(qn("w:ins")) for t in w.iter(qn("w:t"))]
 
     def test_pending_delete_of_table_container_is_tracked(self, table_doc, tmp_path):
         pytest.importorskip("docx")
@@ -1562,9 +1560,7 @@ class TestTrackedStructuralRowModify:
                 out.append(
                     [
                         "".join(
-                            t.text or ""
-                            for w in tc.iter(qn("w:ins"))
-                            for t in w.iter(qn("w:t"))
+                            t.text or "" for w in tc.iter(qn("w:ins")) for t in w.iter(qn("w:t"))
                         )
                         for tc in tr.findall(qn("w:tc"))
                     ]
@@ -1586,9 +1582,7 @@ class TestTrackedStructuralRowModify:
         ins_rows = self._ins_cells_per_row(out)
         assert ["X", "Y", "Z"] in ins_rows  # one inserted row, one cell each
         assert not any("YZ" in c for row in ins_rows for c in row)  # no fusion
-        deleted = [
-            t.text for t in docx.Document(str(out)).element.body.iter(qn("w:delText"))
-        ]
+        deleted = [t.text for t in docx.Document(str(out)).element.body.iter(qn("w:delText"))]
         assert "A" in deleted and "B" in deleted
 
     def test_same_shape_modify_stays_cellwise(self, two_col_doc, tmp_path):
@@ -1644,18 +1638,14 @@ class TestDocxSplitsGroupingBlocks:
     def test_div_paragraphs_stay_separate(self, tmp_path):
         pytest.importorskip("docx")
         doc = aim.new_document(title="T")
-        doc.add_chunk(
-            '<div data-aim="d"><p>First.</p><p>Second.</p></div>', author=ME, at=ts(0)
-        )
+        doc.add_chunk('<div data-aim="d"><p>First.</p><p>Second.</p></div>', author=ME, at=ts(0))
         texts = [text for _, text in self._paras(aim.to_docx(doc, tmp_path / "d.docx"))]
         assert "First." in texts and "Second." in texts
 
     def test_div_direct_text_is_kept(self, tmp_path):
         pytest.importorskip("docx")
         doc = aim.new_document(title="T")
-        doc.add_chunk(
-            '<div data-aim="d">Lead-in text<p>Body para.</p></div>', author=ME, at=ts(0)
-        )
+        doc.add_chunk('<div data-aim="d">Lead-in text<p>Body para.</p></div>', author=ME, at=ts(0))
         texts = [text for _, text in self._paras(aim.to_docx(doc, tmp_path / "m.docx"))]
         assert "Lead-in text" in texts and "Body para." in texts
 
@@ -1673,8 +1663,7 @@ class TestTrackedTableToListModify:
 
         table_doc.propose_modify(
             "tbl",
-            '<ul data-aim-container="tbl"><li data-aim="a">one</li>'
-            '<li data-aim="b">two</li></ul>',
+            '<ul data-aim-container="tbl"><li data-aim="a">one</li><li data-aim="b">two</li></ul>',
             author=BOT,
             at=ts(1),
         )
@@ -1696,9 +1685,7 @@ class TestCriticMarkupSurfacesPageSetupProposals:
     output; theme changes got the note branch."""
 
     def test_pending_page_setup_gets_a_note(self, basic_doc):
-        basic_doc.propose_page_setup(
-            {"size": "A5"}, author=BOT, at=ts(5), explanation="Booklet."
-        )
+        basic_doc.propose_page_setup({"size": "A5"}, author=BOT, at=ts(5), explanation="Booklet.")
         md = aim.to_markdown(basic_doc, pending="criticmarkup")
         assert "aim:doc" in md and "Booklet." in md
 
@@ -1777,9 +1764,9 @@ class TestMidParagraphBreakAnchorsOnItsOwnParagraph:
         return doc
 
     def test_anchor_is_the_full_paragraph_text(self, broken_docx):
-        from aimformat.convert._docx_pages import _read_break_anchors
-
         import docx
+
+        from aimformat.convert._docx_pages import _read_break_anchors
 
         anchors = _read_break_anchors(docx.Document(str(broken_docx)))
         assert anchors == [("Shared prefix tail", 1)]
@@ -1908,12 +1895,8 @@ class TestSiblingAddOrderMatchesAcceptAll:
     def two_adds(self):
         doc = aim.new_document(title="T")
         doc.add_chunk('<p data-aim="p1">Anchor</p>', author=ME, at=ts(0))
-        doc.propose_add(
-            '<p data-aim="a1">First card</p>', author=BOT, after="p1", at=ts(1)
-        )
-        doc.propose_add(
-            '<p data-aim="a2">Second card</p>', author=BOT, after="p1", at=ts(2)
-        )
+        doc.propose_add('<p data-aim="a1">First card</p>', author=BOT, after="p1", at=ts(1))
+        doc.propose_add('<p data-aim="a2">Second card</p>', author=BOT, after="p1", at=ts(2))
         return doc
 
     def test_accept_all_ground_truth(self, two_adds):
@@ -1974,8 +1957,7 @@ class TestRowAddsAnchorAfterTheWholeRunChunk:
         out = aim.to_docx(doc, tmp_path / "r.docx")
         tbl = docx.Document(str(out)).tables[0]
         row_texts = [
-            "".join(t.text or "" for t in tr.iter(qn("w:t")))
-            for tr in tbl._tbl.findall(qn("w:tr"))
+            "".join(t.text or "" for t in tr.iter(qn("w:t"))) for tr in tbl._tbl.findall(qn("w:tr"))
         ]
         assert row_texts == ["one", "two", "new"]
 
@@ -2014,9 +1996,7 @@ class TestDirectModifyOfReservedTargets:
 
     def test_non_theme_payload_is_rejected(self, basic_doc):
         with pytest.raises(InvalidOperation):
-            basic_doc.modify_chunk(
-                "aim:theme", "<p>not a theme block</p>", author=ME, at=ts(5)
-            )
+            basic_doc.modify_chunk("aim:theme", "<p>not a theme block</p>", author=ME, at=ts(5))
 
 
 def _tiny_png(width, height):
@@ -2093,9 +2073,7 @@ class TestTweaksKeepTheCardsOwnNestedIds:
 
     def test_accept_with_tweaks_keeps_nested_ids(self, basic_doc):
         p = basic_doc.propose_add(self.PAYLOAD.format(text="old"), author=BOT, at=ts(5))
-        basic_doc.accept(
-            p.id, decided_by=ME, applied=self.PAYLOAD.format(text="tweaked"), at=ts(6)
-        )
+        basic_doc.accept(p.id, decided_by=ME, applied=self.PAYLOAD.format(text="tweaked"), at=ts(6))
         assert basic_doc.chunk("child").text == "tweaked"
         assert basic_doc.verify() == []
 
@@ -2160,9 +2138,7 @@ class TestReconcileRejectsSchemaInvalidHistory:
             doc.reconcile(at=ts(60))
 
     def test_intact_history_still_reconciles(self, basic_doc):
-        text = basic_doc.dumps().replace(
-            "Intro paragraph.</p>", "Intro paragraph, edited.</p>"
-        )
+        text = basic_doc.dumps().replace("Intro paragraph.</p>", "Intro paragraph, edited.</p>")
         doc = aim.AimDocument.loads(text)
         report = doc.reconcile(at=ts(60))
         assert report.changed and report.residual == []
@@ -2185,8 +2161,8 @@ class TestEventValidationIsTypeStrict:
             "t": ts(0),
             "target": "x",
             "action": "modify",
-            "before": "<p data-aim=\"x\">a</p>",
-            "after": "<p data-aim=\"x\">b</p>",
+            "before": '<p data-aim="x">a</p>',
+            "after": '<p data-aim="x">b</p>',
             "author": {"type": "human", "id": "luca"},
             "batch": "b-1",
         }
@@ -2215,9 +2191,7 @@ class TestChunkModifyRequiresBefore:
     with no diagnostic once the original add was pruned."""
 
     def _doc_with_strippable_modify(self, basic_doc):
-        basic_doc.modify_chunk(
-            "intro", '<p data-aim="intro">Rewritten.</p>', author=ME, at=ts(5)
-        )
+        basic_doc.modify_chunk("intro", '<p data-aim="intro">Rewritten.</p>', author=ME, at=ts(5))
         text = basic_doc.dumps()
         line_re = re.compile(r'\{[^\n]*"action":"modify"[^\n]*"target":"intro"[^\n]*\}')
         line = line_re.search(text).group(0)
@@ -2458,9 +2432,7 @@ _RULE_PROBES = {
         1,
     ),
     "V001": lambda t: _before_history(t, "<aim-assets><div>x</div></aim-assets>"),
-    "V006": lambda t: t.replace(
-        '<p data-aim="intro">', '<p data-aim="intro" style="left">', 1
-    ),
+    "V006": lambda t: t.replace('<p data-aim="intro">', '<p data-aim="intro" style="left">', 1),
 }
 
 
