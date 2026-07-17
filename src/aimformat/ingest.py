@@ -265,7 +265,10 @@ def _list_items_markup(res: _Resolver, group: dict, _stack: set[int] | None = No
                 parts.append(_li_markup(res, child, _stack))
             elif label in ("list", "ordered_list"):
                 tag = _list_tag(res, child)
-                nested = f"<{tag}>{_list_items_markup(res, child, _stack)}</{tag}>"
+                nested_items = _list_items_markup(res, child, _stack)
+                if not nested_items:
+                    continue
+                nested = f"<{tag}>{nested_items}</{tag}>"
                 if parts:
                     parts[-1] = parts[-1][: -len("</li>")] + nested + "</li>"
                 else:
