@@ -2365,3 +2365,22 @@ class TestWrongMarkerStrippedFromEveryRunMember:
         assert 'data-aim-container="x9"' not in text
         assert not [f for f in aim.lint_text(text) if f.level == "error"]
         assert rich_doc.verify() == []
+
+
+class TestMcpWarnsWhenUnscoped:
+    """AF-22: with AIMFORMAT_MCP_ROOT unset (the default) the MCP server
+    reaches any host path silently. The unscoped default stays — the
+    documented local-trusted-stdio contract — but startup now warns loudly
+    so wiring it to a semi-trusted client is a visible decision."""
+
+    def test_unscoped_startup_warns(self, monkeypatch, capsys):
+        mcp_mod = pytest.importorskip("aimformat.mcp")
+        monkeypatch.delenv("AIMFORMAT_MCP_ROOT", raising=False)
+        assert mcp_mod._warn_if_unscoped() is True
+        assert "AIMFORMAT_MCP_ROOT" in capsys.readouterr().err
+
+    def test_scoped_startup_is_quiet(self, monkeypatch, capsys, tmp_path):
+        mcp_mod = pytest.importorskip("aimformat.mcp")
+        monkeypatch.setenv("AIMFORMAT_MCP_ROOT", str(tmp_path))
+        assert mcp_mod._warn_if_unscoped() is False
+        assert capsys.readouterr().err == ""
