@@ -6,7 +6,6 @@ they look redundant with broader tests — they encode the exact failure.
 """
 
 import re
-import time
 
 import pytest
 
@@ -984,16 +983,12 @@ class TestMoveStaysOutOfItsOwnSubtree:
         assert nested_doc.dumps() == before
         assert nested_doc.verify() == []
 
-    def test_accepting_a_self_move_proposal_fails_closed(self, nested_doc):
-        # an aim-slide destination passes the item-carrier guard (slides
-        # take any member), so this reaches the accept-time self-move check
-        p = nested_doc.propose_move("s1", author=BOT, container="s1", at=ts(2))
+    def test_self_move_proposal_fails_at_creation(self, nested_doc):
         before = nested_doc.dumps()
         with pytest.raises(InvalidOperation):
-            nested_doc.accept(p.id, decided_by=ME, at=ts(3))
-        # fail closed: nothing mutated, the card is still pending
+            nested_doc.propose_move("s1", author=BOT, container="s1", at=ts(2))
         assert nested_doc.dumps() == before
-        assert [q.id for q in nested_doc.proposals] == [p.id]
+        assert nested_doc.proposals == []
         assert nested_doc.verify() == []
 
     def test_low_level_move_rejects_descendant_after_anchor(self, nested_doc):
@@ -1219,14 +1214,11 @@ class TestShellChildrenAreItemCarriers:
         assert not [f for f in aim.lint_text(self._table_text(self.ROW)) if f.level == "error"]
 
 
-class TestResolutionOrderProtectsAnchors:
-    """AF-04: resolution_order sorted ready cards only delete-last, so a
-    pending MOVE of an existing chunk that a sibling add anchors on could
-    resolve first — the add then failed TargetNotFound, aborting
-    `accept --all` and `to_docx(pending="accept-all")` on card order alone."""
+class TestProjectionProtectsAnchors:
+    """A later card cannot name an anchor moved away by an earlier card."""
 
-    @pytest.fixture
-    def doc_with_lane(self):
+    @staticmethod
+    def _doc():
         doc = aim.new_document(title="T")
         doc.add_chunk('<p data-aim="x1">anchor chunk</p>', author=BOT, at=ts(0))
         doc.add_chunk(
@@ -1234,45 +1226,39 @@ class TestResolutionOrderProtectsAnchors:
             author=BOT,
             at=ts(1),
         )
-        # move card BEFORE the add that anchors on its target
-        doc.propose_move("x1", author=BOT, container="s1", at=ts(2))
-        doc.propose_add(
-            '<p data-aim="n1">new</p>', author=BOT, container="body", after="x1", at=ts(3)
-        )
         return doc
 
-    def test_add_orders_before_the_move_of_its_anchor(self, doc_with_lane):
-        from aimformat.document import resolution_order
+    def test_move_then_add_on_old_anchor_fails_at_propose_time(self):
+        doc = self._doc()
+        move = doc.propose_move("x1", author=BOT, container="s1", at=ts(2))
+        before = doc.dumps()
 
-        actions = [p.action for p in resolution_order(doc_with_lane.proposals)]
-        assert actions == ["add", "move"]
+        with pytest.raises(aim.InvalidOperation, match=move.id):
+            doc.propose_add(
+                '<p data-aim="n1">new</p>',
+                author=BOT,
+                container="body",
+                after="x1",
+                at=ts(3),
+            )
 
-    def test_accept_all_resolves_the_whole_lane(self, doc_with_lane):
-        from aimformat.document import resolution_order
+        assert doc.dumps() == before
 
-        for p in resolution_order(doc_with_lane.proposals):
-            doc_with_lane.accept(p.id, decided_by=ME, at=ts(4))
-        assert doc_with_lane.proposals == []
-        assert doc_with_lane.body_ids == ["n1", "s1"]
-        assert doc_with_lane.verify() == []
-
-    def test_docx_accept_all_export_succeeds(self, doc_with_lane, tmp_path):
-        pytest.importorskip("docx")
-        out = aim.to_docx(doc_with_lane, tmp_path / "t.docx", pending="accept-all")
-        assert out.exists()
-
-    def test_delete_still_goes_after_the_anchored_add(self):
-        doc = aim.new_document(title="T")
-        doc.add_chunk('<p data-aim="x1">anchor</p>', author=BOT, at=ts(0))
-        doc.propose_delete("x1", author=BOT, at=ts(1))
-        doc.propose_add(
-            '<p data-aim="n1">new</p>', author=BOT, container="body", after="x1", at=ts(2)
+    def test_add_before_moving_its_anchor_resolves_cleanly(self):
+        doc = self._doc()
+        add = doc.propose_add(
+            '<p data-aim="n1">new</p>',
+            author=BOT,
+            container="body",
+            after="x1",
+            at=ts(2),
         )
-        from aimformat.document import resolution_order
+        move = doc.propose_move("x1", author=BOT, container="s1", at=ts(3))
 
-        for p in resolution_order(doc.proposals):
-            doc.accept(p.id, decided_by=ME, at=ts(3))
-        assert doc.body_ids == ["n1"]
+        doc.accept_all(decided_by=ME, at=ts(4))
+
+        assert [event.get("proposal") for event in doc.history[-2:]] == [add.id, move.id]
+        assert doc.body_ids == ["n1", "s1"]
         assert doc.verify() == []
 
 
@@ -1313,62 +1299,8 @@ class TestMoveThenDeleteResolution:
         assert not [finding for finding in aim.lint(doc) if finding.level == "error"]
 
 
-class TestResolutionOrderScalesWithIndependentCards:
-    """codex-pr15-r5: an impossible pair must not make unrelated cards
-    multiply an exhaustive acceptance-order search."""
-
-    def test_eight_independent_modifies_and_one_conflict_finish_under_half_second(self):
-        from aimformat.document import resolution_order
-
-        doc = aim.new_document(title="T")
-        for index in range(8):
-            chunk_id = f"independent-{index}"
-            doc.add_chunk(
-                f'<p data-aim="{chunk_id}">before</p>',
-                author=ME,
-                at=ts(index),
-            )
-            doc.propose_modify(
-                chunk_id,
-                f'<p data-aim="{chunk_id}">after</p>',
-                author=BOT,
-                at=ts(index + 10),
-            )
-        doc.add_chunk(
-            '<ul data-aim-container="l1"><li data-aim="x">X</li></ul>',
-            author=ME,
-            at=ts(20),
-        )
-        doc.add_chunk(
-            '<ul data-aim-container="l2"><li data-aim="a">A</li><li data-aim="b">B</li></ul>',
-            author=ME,
-            at=ts(21),
-        )
-        doc.propose_move("x", author=BOT, container="l2", after="b", at=ts(22))
-        doc.propose_modify(
-            "l2",
-            '<ul data-aim-container="l2"><li data-aim="a">A</li></ul>',
-            author=BOT,
-            at=ts(23),
-        )
-
-        started = time.perf_counter()
-        with pytest.raises(aim.InvalidOperation, match="would erase moved chunk 'x'"):
-            resolution_order(doc.proposals, doc)
-        elapsed = time.perf_counter() - started
-
-        assert elapsed < 0.5, f"constraint planning took {elapsed:.3f}s"
-
-
 class TestMovesStayAheadOfAncestorReplacements:
-    """codex-r2-5 (refines AF-04): ranking every modify below every move
-    broke lanes where a move rescues a descendant before its container is
-    replaced — ``accept --all`` resolved the container modify first,
-    deleting the member, and the move then raised TargetNotFound after
-    partially resolving the document. A container modify whose payload
-    drops a pending move's target now waits for that move; a payload that
-    keeps the member stays ahead of the move (relocating first would make
-    the payload re-introduce a duplicate id)."""
+    """A correctly sequenced rescue remains valid in creation order."""
 
     @pytest.fixture
     def rescue_lane(self):
@@ -1409,32 +1341,6 @@ class TestMovesStayAheadOfAncestorReplacements:
         pytest.importorskip("docx")
         out = aim.to_docx(rescue_lane, tmp_path / "t.docx", pending="accept-all")
         assert out.exists()
-
-    def test_payload_keeping_the_member_stays_ahead_of_the_move(self):
-        doc = aim.new_document(title="T")
-        doc.add_chunk(
-            '<ul data-aim-container="lst"><li data-aim="x">keep</li></ul>', author=ME, at=ts(0)
-        )
-        doc.propose_move("x", author=BOT, container="body", at=ts(1))
-        doc.propose_modify(
-            "lst",
-            '<ul data-aim-container="lst"><li data-aim="x">keep!</li></ul>',
-            author=BOT,
-            at=ts(2),
-        )
-        from aimformat.document import resolution_order
-
-        assert [p.action for p in resolution_order(doc.proposals, doc)] == ["modify", "move"]
-        for p in resolution_order(doc.proposals, doc):
-            doc.accept(p.id, decided_by=ME, at=ts(3))
-        assert doc.body_ids == ["lst", "x"]
-        assert doc.verify() == []
-
-    def test_without_the_doc_the_static_order_is_unchanged(self, rescue_lane):
-        from aimformat.document import resolution_order
-
-        actions = [p.action for p in resolution_order(rescue_lane.proposals)]
-        assert actions == ["modify", "move"]
 
 
 class TestPruneFlattenKeepBurnedIds:
@@ -1822,7 +1728,7 @@ class TestReconcileValidatesMoveMembership:
         assert repaired.chunk("x").container == "l2"
         assert repaired.verify() == []
 
-    def test_pending_modify_can_restore_a_legal_move_destination(self):
+    def test_later_modify_does_not_rescue_an_invalid_move_destination(self):
         doc = aim.new_document(title="T")
         doc.add_chunk(
             '<ul data-aim-container="l1"><li data-aim="x">X</li></ul>',
@@ -1851,19 +1757,8 @@ class TestReconcileValidatesMoveMembership:
 
         report = repaired.reconcile(at=ts(4))
 
-        assert report.rejected_proposals == []
-        assert {p.id for p in repaired.proposals} == {move.id, modify.id}
-        from aimformat.document import resolution_order
-
-        order = resolution_order(repaired.proposals, repaired)
-        assert [(p.action, p.target) for p in order] == [
-            ("modify", "l2"),
-            ("move", "x"),
-        ]
-        for proposal in order:
-            repaired.accept(proposal.id, decided_by=ME, at=ts(5))
-        assert repaired.chunk("x").container == "l2"
-        assert repaired._state.container_node("l2").tag == "ul"
+        assert report.rejected_proposals == [move.id]
+        assert [proposal.id for proposal in repaired.proposals] == [modify.id]
         assert repaired.verify() == []
 
     def test_pending_modify_that_removes_the_move_anchor_is_not_viable(self):
@@ -3728,563 +3623,83 @@ class TestRecordedShellsBindReplay:
         assert any("not the recorded <thead>" in p for p in problems)
 
 
-class TestMovesStayAheadOfAnchorDroppingModifies:
-    """codex-r3-4 (refines codex-r2-5 / AF-04): the round-2 ordering only
-    delayed a container modify when a sibling move's TARGET was dropped by
-    the payload. A modify that instead drops the move's DESTINATION anchor
-    ordered first, stripped the landing point, and ``accept --all`` failed
-    on the move with TargetNotFound after partially resolving the lane. A
-    container modify now also identifies moves whose destination anchor (or
-    destination container) its payload removes. If the delayed replacement
-    would then erase the incoming chunk, accept-all refuses the incompatible
-    lane; one keeping the anchor stays ahead of the move, as before."""
+class TestPendingLaneCreationOrder:
+    """Pending interactions are validated when the later card is proposed."""
 
-    @pytest.fixture
-    def anchor_drop_lane(self):
+    @staticmethod
+    def _base():
         doc = aim.new_document(title="T")
-        doc.add_chunk(
-            '<ul data-aim-container="l1"><li data-aim="x">X</li></ul>', author=ME, at=ts(0)
-        )
-        doc.add_chunk(
-            '<ul data-aim-container="l2"><li data-aim="a">A</li><li data-aim="b">B</li></ul>',
-            author=ME,
-            at=ts(1),
-        )
-        doc.propose_move("x", author=BOT, container="l2", after="b", at=ts(2))
-        doc.propose_modify(
-            "l2", '<ul data-aim-container="l2"><li data-aim="a">A</li></ul>', author=BOT, at=ts(3)
-        )
-        return doc
-
-    def test_anchor_dropping_modify_conflicts_with_the_incoming_move(self, anchor_drop_lane):
-        from aimformat.document import resolution_order
-
-        with pytest.raises(aim.InvalidOperation, match="would erase moved chunk 'x'"):
-            resolution_order(anchor_drop_lane.proposals, anchor_drop_lane)
-
-    def test_conflict_is_detected_before_accept_all_mutates(self, anchor_drop_lane):
-        from aimformat.document import resolution_order
-
-        before = anchor_drop_lane.dumps()
-        with pytest.raises(aim.InvalidOperation, match="reject one of the proposals"):
-            for p in resolution_order(anchor_drop_lane.proposals, anchor_drop_lane):
-                anchor_drop_lane.accept(p.id, decided_by=ME, at=ts(4))
-        assert anchor_drop_lane.dumps() == before
-
-    def test_accept_all_refuses_a_move_the_delayed_modify_would_erase(self, anchor_drop_lane):
-        from aimformat.export_docx import _resolve_copy
-
-        before = anchor_drop_lane.dumps()
-        with pytest.raises(aim.InvalidOperation, match="would erase moved chunk"):
-            _resolve_copy(anchor_drop_lane, "accept-all")
-        assert anchor_drop_lane.dumps() == before
-
-    def test_reject_all_can_clear_the_incompatible_lane(self, anchor_drop_lane):
-        from aimformat.export_docx import _resolve_copy
-
-        resolved = _resolve_copy(anchor_drop_lane, "reject-all")
-        assert resolved.proposals == []
-        assert resolved.body_ids == ["l1", "l2"]
-        assert resolved.verify() == []
-
-    def test_dropped_destination_container_is_also_a_conflict(self):
-        doc = aim.new_document(title="T")
-        doc.add_chunk(
-            '<ul data-aim-container="l1"><li data-aim="x">X</li></ul>', author=ME, at=ts(0)
-        )
-        doc.add_chunk(
-            '<ul data-aim-container="l2"><li data-aim="a">A'
-            '<ul data-aim-container="l3"><li data-aim="c">C</li></ul></li></ul>',
-            author=ME,
-            at=ts(1),
-        )
-        doc.propose_move("x", author=BOT, container="l3", at=ts(2))
-        doc.propose_modify(
-            "l2", '<ul data-aim-container="l2"><li data-aim="a">A</li></ul>', author=BOT, at=ts(3)
-        )
-        from aimformat.document import resolution_order
-
-        with pytest.raises(aim.InvalidOperation, match="would erase moved chunk 'x'"):
-            resolution_order(doc.proposals, doc)
-
-    def test_modify_keeping_the_anchor_stays_ahead(self):
-        doc = aim.new_document(title="T")
-        doc.add_chunk(
-            '<ul data-aim-container="l1"><li data-aim="x">X</li></ul>', author=ME, at=ts(0)
-        )
-        doc.add_chunk(
-            '<ul data-aim-container="l2"><li data-aim="a">A</li><li data-aim="b">B</li></ul>',
-            author=ME,
-            at=ts(1),
-        )
-        doc.propose_move("x", author=BOT, container="l2", after="b", at=ts(2))
-        doc.propose_modify(
-            "l2",
-            '<ul data-aim-container="l2"><li data-aim="a">A!</li><li data-aim="b">B</li></ul>',
-            author=BOT,
-            at=ts(3),
-        )
-        from aimformat.document import resolution_order
-
-        assert [p.action for p in resolution_order(doc.proposals, doc)] == ["modify", "move"]
-        for p in resolution_order(doc.proposals, doc):
-            doc.accept(p.id, decided_by=ME, at=ts(4))
-        written = doc._state.serial("l2") or ""
-        assert 'data-aim="x"' in written  # the move landed after the modify
-        assert doc.verify() == []
-
-
-class TestLaterMovesClearEarlierMoveConflicts:
-    """codex-pr15-p2-2: multiple pending moves of one target are legal and
-    execute in card order, so only the LAST move decides where the chunk
-    finally lands. The erase-conflict check judged each move independently:
-    x moved into l2, then moved on into l3, plus a delayed l2 replacement
-    omitting x flagged the FIRST move — even though ordered execution (both
-    moves before the modify) leaves x safely in l3. The conflict now
-    evaluates each move target's final destination across the whole pending
-    move sequence. Codex PR #15's follow-up found that precedence must also
-    apply to the whole sequence: otherwise a delayed modify can split two
-    hops, erase the target, and make the later hop fail after partial
-    mutation."""
-
-    @pytest.fixture
-    def rescued_lane(self):
-        doc = aim.new_document(title="T")
-        doc.add_chunk(
-            '<ul data-aim-container="l1"><li data-aim="x">X</li></ul>', author=ME, at=ts(0)
-        )
-        doc.add_chunk(
-            '<ul data-aim-container="l2"><li data-aim="a">A</li><li data-aim="b">B</li></ul>',
-            author=ME,
-            at=ts(1),
-        )
-        doc.add_chunk(
-            '<ul data-aim-container="l3"><li data-aim="c">C</li></ul>', author=ME, at=ts(2)
-        )
-        doc.propose_move("x", author=BOT, container="l2", after="b", at=ts(3))
-        doc.propose_move("x", author=BOT, container="l3", after="c", at=ts(4))
-        doc.propose_modify(
-            "l2", '<ul data-aim-container="l2"><li data-aim="a">A</li></ul>', author=BOT, at=ts(5)
-        )
-        return doc
-
-    def test_lane_with_a_rescuing_second_move_orders_cleanly(self, rescued_lane):
-        from aimformat.document import resolution_order
-
-        order = resolution_order(rescued_lane.proposals, rescued_lane)
-        assert [p.action for p in order] == ["move", "move", "modify"]
-
-    def test_accept_all_lands_the_chunk_in_its_final_container(self, rescued_lane):
-        from aimformat.document import resolution_order
-
-        for p in resolution_order(rescued_lane.proposals, rescued_lane):
-            rescued_lane.accept(p.id, decided_by=ME, at=ts(6))
-        assert rescued_lane.chunk("x").container == "l3"
-        assert rescued_lane.verify() == []
-
-    def test_accept_all_export_resolves_the_lane(self, rescued_lane):
-        from aimformat.export_docx import _resolve_copy
-
-        resolved = _resolve_copy(rescued_lane, "accept-all")
-        assert resolved.proposals == []
-        assert resolved.chunk("x").container == "l3"
-        assert resolved.verify() == []
-
-    def test_final_move_back_into_the_replaced_container_still_conflicts(self):
-        doc = aim.new_document(title="T")
-        doc.add_chunk(
-            '<ul data-aim-container="l1"><li data-aim="x">X</li></ul>', author=ME, at=ts(0)
-        )
-        doc.add_chunk(
-            '<ul data-aim-container="l2"><li data-aim="a">A</li><li data-aim="b">B</li></ul>',
-            author=ME,
-            at=ts(1),
-        )
-        doc.add_chunk(
-            '<ul data-aim-container="l3"><li data-aim="c">C</li></ul>', author=ME, at=ts(2)
-        )
-        doc.propose_move("x", author=BOT, container="l3", after="c", at=ts(3))
-        doc.propose_move("x", author=BOT, container="l2", after="b", at=ts(4))
-        doc.propose_modify(
-            "l2", '<ul data-aim-container="l2"><li data-aim="a">A</li></ul>', author=BOT, at=ts(5)
-        )
-        from aimformat.document import resolution_order
-
-        with pytest.raises(aim.InvalidOperation, match="would erase moved chunk 'x'"):
-            resolution_order(doc.proposals, doc)
-
-    def test_repeated_moves_are_rejected_before_erasing_modify_mutates(self):
-        doc = aim.new_document(title="T")
-        doc.add_chunk(
-            '<ul data-aim-container="l1"><li data-aim="x">X</li></ul>',
-            author=ME,
-            at=ts(0),
-        )
-        doc.add_chunk(
-            '<ul data-aim-container="l2"><li data-aim="a">A</li></ul>',
-            author=ME,
-            at=ts(1),
-        )
-        doc.propose_move("x", author=BOT, container="l2", after="a", at=ts(2))
-        doc.propose_move("x", author=BOT, container="l2", after=None, at=ts(3))
-        doc.propose_modify("l2", '<ul data-aim-container="l2"></ul>', author=BOT, at=ts(4))
-        from aimformat.document import resolution_order
-
-        before = doc.dumps()
-        with pytest.raises(aim.AimError) as exc_info:
-            for proposal in resolution_order(doc.proposals, doc):
-                doc.accept(proposal.id, decided_by=ME, at=ts(5))
-        assert doc.dumps() == before
-        assert isinstance(exc_info.value, aim.InvalidOperation)
-        assert "would erase moved chunk 'x'" in str(exc_info.value)
-
-
-class TestRepeatedMovesUsePerHopModifyPrecedence:
-    """codex-pr15-r4: repeated moves keep their card order, but they are not
-    atomic around a container modify. A transient hop that needs an anchor
-    the payload drops must run before the modify, while the later outbound
-    hop must run after a payload that retains the target. Putting the whole
-    sequence first makes the retained payload mint a fresh-id duplicate."""
-
-    @pytest.fixture
-    def retained_intermediate_lane(self):
-        doc = aim.new_document(title="T")
-        doc.add_chunk(
-            '<ul data-aim-container="l2"><li data-aim="x">TARGET</li>'
-            '<li data-aim="a">A</li><li data-aim="b">B</li></ul>',
-            author=ME,
-            at=ts(0),
-        )
-        doc.add_chunk(
-            '<ul data-aim-container="l3"><li data-aim="c">C</li></ul>',
-            author=ME,
-            at=ts(1),
-        )
-        first = doc.propose_move("x", author=BOT, container="l2", after="b", at=ts(2))
-        final = doc.propose_move("x", author=BOT, container="l3", after="c", at=ts(3))
-        modify = doc.propose_modify(
-            "l2",
-            '<ul data-aim-container="l2"><li data-aim="x">TARGET</li>'
-            '<li data-aim="a">A changed</li></ul>',
-            author=BOT,
-            at=ts(4),
-        )
-        return doc, first, final, modify
-
-    def test_modify_splits_the_repeated_move_chain_at_the_safe_hop(
-        self, retained_intermediate_lane
-    ):
-        doc, first, final, modify = retained_intermediate_lane
-        from aimformat.document import resolution_order
-
-        assert [p.id for p in resolution_order(doc.proposals, doc)] == [
-            first.id,
-            modify.id,
-            final.id,
-        ]
-
-    def test_accept_all_preserves_one_target_at_the_final_destination(
-        self, retained_intermediate_lane
-    ):
-        doc, _, _, _ = retained_intermediate_lane
-        from aimformat.document import resolution_order
-
-        for proposal in resolution_order(doc.proposals, doc):
-            doc.accept(proposal.id, decided_by=ME, at=ts(5))
-
-        assert doc.chunk("x").container == "l3"
-        assert [chunk.text for chunk in doc.chunks].count("TARGET") == 1
-        assert doc.verify() == []
-        assert not [finding for finding in aim.lint(doc) if finding.level == "error"]
-
-
-class TestInboundMovesTrailTheDelayedModify:
-    """codex-pr15-r2 (refines codex-pr15-p2-2): an OUTBOUND move rescuing a
-    member out of a modified container forces the replacement into
-    after_moves — and the erase-conflict check then flagged EVERY final
-    move landing inside the replaced subtree, including an unrelated
-    INBOUND move that never needed to precede the modify. The lane is
-    resolvable: rescue → modify → inbound move lands in the replacement.
-    Only moves that must run before the modify (rescued targets, stripped
-    landing points) can collide with it; unrelated inbound moves are now
-    scheduled after the modify instead of being refused."""
-
-    @pytest.fixture
-    def inbound_lane(self):
-        doc = aim.new_document(title="T")
-        doc.add_chunk(
-            '<ul data-aim-container="l1"><li data-aim="y">Y</li></ul>', author=ME, at=ts(0)
-        )
-        doc.add_chunk(
-            '<ul data-aim-container="l2"><li data-aim="a">A</li><li data-aim="x">X</li></ul>',
-            author=ME,
-            at=ts(1),
-        )
-        # outbound rescue: x leaves l2 before the replacement drops it
-        doc.propose_move("x", author=BOT, container="l1", after="y", at=ts(2))
-        # unrelated inbound move: y lands on an anchor the payload keeps
-        doc.propose_move("y", author=BOT, container="l2", after="a", at=ts(3))
-        doc.propose_modify(
-            "l2", '<ul data-aim-container="l2"><li data-aim="a">A</li></ul>', author=BOT, at=ts(4)
-        )
-        return doc
-
-    def test_inbound_move_is_scheduled_after_the_delayed_modify(self, inbound_lane):
-        from aimformat.document import resolution_order
-
-        order = resolution_order(inbound_lane.proposals, inbound_lane)
-        assert [(p.action, p.target) for p in order] == [
-            ("move", "x"),
-            ("modify", "l2"),
-            ("move", "y"),
-        ]
-
-    def test_accept_all_leaves_both_targets_in_their_requested_containers(self, inbound_lane):
-        from aimformat.document import resolution_order
-
-        for p in resolution_order(inbound_lane.proposals, inbound_lane):
-            inbound_lane.accept(p.id, decided_by=ME, at=ts(5))
-        assert inbound_lane.chunk("x").container == "l1"
-        assert inbound_lane.chunk("y").container == "l2"
-        assert inbound_lane.verify() == []
-
-    def test_accept_all_export_resolves_the_lane(self, inbound_lane):
-        from aimformat.export_docx import _resolve_copy
-
-        resolved = _resolve_copy(inbound_lane, "accept-all")
-        assert resolved.proposals == []
-        assert resolved.chunk("x").container == "l1"
-        assert resolved.chunk("y").container == "l2"
-        assert resolved.verify() == []
-
-    def test_inbound_move_onto_a_dropped_anchor_still_conflicts(self):
-        doc = aim.new_document(title="T")
-        doc.add_chunk(
-            '<ul data-aim-container="l1"><li data-aim="y">Y</li></ul>', author=ME, at=ts(0)
-        )
-        doc.add_chunk(
-            '<ul data-aim-container="l2"><li data-aim="a">A</li><li data-aim="b">B</li>'
-            '<li data-aim="x">X</li></ul>',
-            author=ME,
-            at=ts(1),
-        )
-        doc.propose_move("x", author=BOT, container="l1", after="y", at=ts(2))
-        # the inbound anchor b exists only pre-modify, so the move must run
-        # first — and the replacement then erases y: neither order is safe
-        doc.propose_move("y", author=BOT, container="l2", after="b", at=ts(3))
-        doc.propose_modify(
-            "l2", '<ul data-aim-container="l2"><li data-aim="a">A</li></ul>', author=BOT, at=ts(4)
-        )
-        from aimformat.document import resolution_order
-
-        with pytest.raises(aim.InvalidOperation, match="would erase moved chunk 'y'"):
-            resolution_order(doc.proposals, doc)
-
-
-class TestMovePrecedencePerContainerModify:
-    """codex-pr15-r3 (refines codex-pr15-r2): the moves forcing a delayed
-    modify were collected into one GLOBAL must-precede union, so a move that
-    forced modify A was treated as conflicting with unrelated modify B it
-    merely lands in. With x: l1→l2 and z: l2→l3 plus replacements of l1 and
-    l2 dropping x/z, the lane is resolvable as move z → modify l2 → move x
-    → modify l1 — yet resolution_order paired x with the l2 modify and
-    refused it. The forcing relationship is now kept per (move, modify)
-    pair, and scheduling walks the resulting chain."""
-
-    @pytest.fixture
-    def chained_lane(self):
-        doc = aim.new_document(title="T")
-        doc.add_chunk(
-            '<ul data-aim-container="l1"><li data-aim="x">X</li><li data-aim="k">K</li></ul>',
-            author=ME,
-            at=ts(0),
-        )
         doc.add_chunk(
             '<ul data-aim-container="l2"><li data-aim="z">Z</li><li data-aim="a">A</li></ul>',
             author=ME,
-            at=ts(1),
-        )
-        doc.add_chunk(
-            '<ul data-aim-container="l3"><li data-aim="c">C</li></ul>', author=ME, at=ts(2)
-        )
-        # x forces the l1 modify to wait; its destination anchor a survives
-        # the l2 replacement, so x never forces the l2 modify
-        doc.propose_move("x", author=BOT, container="l2", after="a", at=ts(3))
-        # z forces the l2 modify to wait
-        doc.propose_move("z", author=BOT, container="l3", after="c", at=ts(4))
-        doc.propose_modify(
-            "l1", '<ul data-aim-container="l1"><li data-aim="k">K</li></ul>', author=BOT, at=ts(5)
-        )
-        doc.propose_modify(
-            "l2", '<ul data-aim-container="l2"><li data-aim="a">A</li></ul>', author=BOT, at=ts(6)
+            at=ts(0),
         )
         return doc
 
-    def test_lane_orders_as_a_chain(self, chained_lane):
-        from aimformat.document import resolution_order
-
-        order = resolution_order(chained_lane.proposals, chained_lane)
-        assert [(p.action, p.target) for p in order] == [
-            ("move", "z"),
-            ("modify", "l2"),
-            ("move", "x"),
-            ("modify", "l1"),
-        ]
-
-    def test_accept_all_resolves_the_whole_lane(self, chained_lane):
-        from aimformat.document import resolution_order
-
-        for p in resolution_order(chained_lane.proposals, chained_lane):
-            chained_lane.accept(p.id, decided_by=ME, at=ts(7))
-        assert chained_lane.chunk("x").container == "l2"
-        assert chained_lane.chunk("z").container == "l3"
-        assert chained_lane.verify() == []
-
-    def test_accept_all_export_resolves_the_lane(self, chained_lane, tmp_path):
-        from aimformat.export_docx import _resolve_copy
-
-        resolved = _resolve_copy(chained_lane, "accept-all")
-        assert resolved.proposals == []
-        assert resolved.chunk("x").container == "l2"
-        assert resolved.chunk("z").container == "l3"
-        assert resolved.verify() == []
-
-    def test_move_forcing_the_modify_it_lands_in_still_conflicts(self, chained_lane):
-        # sanity: the per-pair check still refuses a genuinely unsatisfiable
-        # pair — x's own forced modify (l1) also owning its destination
-        doc = aim.new_document(title="T")
-        doc.add_chunk(
-            '<ul data-aim-container="l1"><li data-aim="x">X</li><li data-aim="k">K</li></ul>',
-            author=ME,
-            at=ts(0),
-        )
-        doc.propose_move("x", author=BOT, container="l1", after="k", at=ts(1))
-        doc.propose_modify(
-            "l1", '<ul data-aim-container="l1"><li data-aim="k">K</li></ul>', author=BOT, at=ts(2)
-        )
-        from aimformat.document import resolution_order
-
-        with pytest.raises(aim.InvalidOperation, match="would erase moved chunk 'x'"):
-            resolution_order(doc.proposals, doc)
-
-
-class TestMovesPrecedeCardsRelocatingTheirAnchors:
-    """codex-pr15-r6: move/modify edges covered only one modified subtree,
-    so a sibling move could relocate an `after=` node before the anchored
-    move used it. Accept-all then failed after partially resolving the lane."""
-
-    @pytest.fixture
-    def cross_target_anchor_lane(self):
-        doc = aim.new_document(title="T")
-        doc.add_chunk(
-            '<ul data-aim-container="l1"><li data-aim="a">A</li></ul>',
-            author=ME,
-            at=ts(0),
-        )
-        doc.add_chunk(
-            '<ul data-aim-container="l2"><li data-aim="b">B</li><li data-aim="c">C</li></ul>',
-            author=ME,
-            at=ts(1),
-        )
-        doc.add_chunk(
-            '<ul data-aim-container="l3"><li data-aim="d">D</li></ul>',
-            author=ME,
-            at=ts(2),
-        )
-        anchored = doc.propose_move("b", author=BOT, container="l3", after="d", at=ts(3))
+    def test_modify_dropping_z_then_move_z_fails_at_propose_time(self):
+        doc = self._base()
         modify = doc.propose_modify(
             "l2",
-            '<ul data-aim-container="l2"><li data-aim="b">B retained</li>'
-            '<li data-aim="c">C changed</li></ul>',
+            '<ul data-aim-container="l2"><li data-aim="a">A changed</li></ul>',
             author=BOT,
-            at=ts(4),
-        )
-        relocates_anchor = doc.propose_move("d", author=BOT, container="l1", after="a", at=ts(5))
-        return doc, anchored, modify, relocates_anchor
-
-    def test_anchored_move_runs_before_the_move_relocating_its_anchor(
-        self, cross_target_anchor_lane
-    ):
-        doc, anchored, modify, relocates_anchor = cross_target_anchor_lane
-        from aimformat.document import resolution_order
-
-        assert [p.id for p in resolution_order(doc.proposals, doc)] == [
-            modify.id,
-            anchored.id,
-            relocates_anchor.id,
-        ]
-
-    def test_accept_all_resolves_without_partial_failure(self, cross_target_anchor_lane):
-        doc, _, _, _ = cross_target_anchor_lane
-        from aimformat.document import resolution_order
-
-        for proposal in resolution_order(doc.proposals, doc):
-            doc.accept(proposal.id, decided_by=ME, at=ts(6))
-
-        assert doc.chunk("b").container == "l3"
-        assert doc.chunk("d").container == "l1"
-        assert doc.verify() == []
-        assert not [finding for finding in aim.lint(doc) if finding.level == "error"]
-
-    def test_mutual_move_anchors_reject_the_lane_before_mutation(self):
-        doc = aim.new_document(title="T")
-        doc.add_chunk(
-            '<ul data-aim-container="l2"><li data-aim="b">B</li></ul>',
-            author=ME,
-            at=ts(0),
-        )
-        doc.add_chunk(
-            '<ul data-aim-container="l3"><li data-aim="d">D</li></ul>',
-            author=ME,
             at=ts(1),
         )
-        doc.propose_move("b", author=BOT, container="l3", after="d", at=ts(2))
-        doc.propose_move("d", author=BOT, container="l2", after="b", at=ts(3))
         before = doc.dumps()
-        from aimformat.document import resolution_order
 
-        with pytest.raises(aim.InvalidOperation, match="cyclic acceptance constraints"):
-            resolution_order(doc.proposals, doc)
+        with pytest.raises(aim.InvalidOperation, match=modify.id):
+            doc.propose_move("z", author=BOT, container="body", at=ts(2))
+
         assert doc.dumps() == before
+        assert [proposal.id for proposal in doc.proposals] == [modify.id]
 
-
-class TestMovedAnchorContainersDoNotCreateFalseCycles:
-    """codex-pr15-r9-1: moving an anchor's container carries the anchor
-    with it. Treating that as an anchor-separating move added the reverse
-    edge of a real dependency and rejected this valid two-move lane."""
-
-    def test_container_move_precedes_move_into_that_container(self):
-        doc = aim.new_document(title="T")
-        doc.add_chunk(
-            '<aim-slide data-aim-container="s"><p data-aim="y">Y</p></aim-slide>',
-            author=ME,
-            at=ts(0),
+    def test_move_z_before_modify_dropping_z_applies_in_creation_order(self):
+        doc = self._base()
+        move = doc.propose_move("z", author=BOT, container="body", at=ts(1))
+        modify = doc.propose_modify(
+            "l2",
+            '<ul data-aim-container="l2"><li data-aim="a">A changed</li></ul>',
+            author=BOT,
+            at=ts(2),
         )
-        doc.add_chunk('<p data-aim="x">X</p>', author=ME, at=ts(1))
-        carry_anchor = doc.propose_move("s", author=BOT, container="body", after="x", at=ts(2))
-        move_into_container = doc.propose_move("x", author=BOT, container="s", after="y", at=ts(3))
         from aimformat.document import resolution_order
 
-        assert [p.id for p in resolution_order(doc.proposals, doc)] == [
-            carry_anchor.id,
-            move_into_container.id,
+        assert [proposal.id for proposal in resolution_order(doc.proposals, doc)] == [
+            move.id,
+            modify.id,
         ]
-        for proposal in resolution_order(doc.proposals, doc):
-            doc.accept(proposal.id, decided_by=ME, at=ts(4))
+        doc.accept_all(decided_by=ME, at=ts(3))
 
-        assert doc.body_ids == ["s"]
-        assert doc.chunk("x").container == "s"
+        assert doc.body_ids == ["l2", "z"]
+        assert [chunk.text for chunk in doc.chunks].count("Z") == 1
         assert doc.verify() == []
         assert aim.lint(doc) == []
 
+    def test_accept_all_dry_run_rejects_foreign_reordered_lane_atomically(self):
+        doc = self._base()
+        move = doc.propose_move("z", author=BOT, container="body", at=ts(1))
+        modify = doc.propose_modify(
+            "l2",
+            '<ul data-aim-container="l2"><li data-aim="a">A changed</li></ul>',
+            author=BOT,
+            at=ts(2),
+        )
+        section = doc._state.section("aim-proposals")
+        assert section is not None
+        section.children = list(reversed(section.children))
+        before = doc.dumps()
 
-class TestReconcileKeepsMovesWithPendingDestinationRescue:
-    """codex-pr15-r9-2: an out-of-band edit put a move destination inside
-    its target, but an earlier pending move could carry that destination
-    back outside before the target move. Reconcile must not permanently
-    reject the second card from the transient adopted layout."""
+        with pytest.raises(aim.InvalidOperation, match=rf"{move.id}.*individually"):
+            doc.accept_all(decided_by=ME, at=ts(3))
 
-    def test_pending_move_rescues_nested_destination_before_target_move(self):
+        assert doc.dumps() == before
+        assert [proposal.id for proposal in doc.proposals] == [modify.id, move.id]
+        assert doc.verify() == []
+
+
+class TestReconcileRejectsRescuableMoves:
+    """Reconcile fails closed instead of solving transient nested rescues."""
+
+    def test_nested_destination_rescue_lane_is_rejected(self):
         doc = aim.new_document(title="T")
         doc.add_chunk(
             '<ul data-aim-container="l1"><li data-aim="x">X</li></ul>',
@@ -4308,102 +3723,36 @@ class TestReconcileKeepsMovesWithPendingDestinationRescue:
 
         report = repaired.reconcile(at=ts(4))
 
-        assert report.rejected_proposals == []
-        assert [p.id for p in repaired.proposals] == [rescue.id, inbound.id]
-        from aimformat.document import resolution_order
-
-        assert [p.id for p in resolution_order(repaired.proposals, repaired)] == [
-            rescue.id,
-            inbound.id,
-        ]
-        for proposal in resolution_order(repaired.proposals, repaired):
-            repaired.accept(proposal.id, decided_by=ME, at=ts(5))
-
-        assert repaired.chunk("x").container == "l2"
+        assert report.rejected_proposals == [rescue.id, inbound.id]
+        assert repaired.proposals == []
         assert repaired.verify() == []
-        assert aim.lint(repaired) == []
-
-        reloaded = aim.loads(repaired.dumps())
-        reloaded.undo(author=ME, at=ts(6))
-        reloaded.undo(author=ME, at=ts(7))
-        assert reloaded.verify() == []
-        reloaded.redo(author=ME, at=ts(8))
-        assert reloaded.verify() == []
 
 
-class TestRetainedMoveTargetsUsePostModifyMemberShape:
-    """codex-pr15-r9-3: retaining an outbound target in a source-container
-    replacement forces modify-before-move. If that replacement changes the
-    member carrier (li to tr), destination legality must use the new shape
-    before any proposal is accepted."""
+class TestMoveEventsUseOnlySpecFields:
+    @staticmethod
+    def _allowed(event):
+        from aimformat.registry import REGISTRY
 
-    def test_incompatible_retained_carrier_rejects_lane_before_mutation(self):
-        doc = aim.new_document(title="T")
-        doc.add_chunk(
-            '<ul data-aim-container="l1"><li data-aim="a">A</li></ul>',
-            author=ME,
-            at=ts(0),
-        )
-        doc.add_chunk(
-            '<ul data-aim-container="l2"><li data-aim="b">B</li></ul>',
-            author=ME,
-            at=ts(1),
-        )
-        doc.propose_move("a", author=BOT, container="l2", after="b", at=ts(2))
-        doc.propose_modify(
-            "l1",
-            '<table data-aim-container="l1"><tbody>'
-            '<tr data-aim="a"><td>A row</td></tr></tbody></table>',
-            author=BOT,
-            at=ts(3),
-        )
-        before = doc.dumps()
-        from aimformat.document import resolution_order
+        schema = REGISTRY.event_fields[event.kind]
+        return set(schema["required"]) | set(schema["optional"])
 
-        with pytest.raises(aim.InvalidOperation, match="post-modify member shape"):
-            resolution_order(doc.proposals, doc)
-        assert doc.dumps() == before
+    def test_direct_and_resolution_move_events_have_no_vendor_metadata(self):
+        direct = aim.new_document(title="T")
+        direct.add_chunk('<p data-aim="a">A</p>', author=ME, at=ts(0))
+        direct.add_chunk('<p data-aim="b">B</p>', author=ME, at=ts(1))
+        direct.move_chunk("a", author=ME, container="body", after="b", at=ts(2))
+        direct_event = direct.history[-1]
 
+        proposed = aim.new_document(title="T")
+        proposed.add_chunk('<p data-aim="a">A</p>', author=ME, at=ts(0))
+        proposed.add_chunk('<p data-aim="b">B</p>', author=ME, at=ts(1))
+        card = proposed.propose_move("a", author=BOT, container="body", after="b", at=ts(2))
+        resolution_event = proposed.accept(card.id, decided_by=ME, at=ts(3))
 
-class TestTargetDeleteResolvesInboundReplacementConflict:
-    """The complete round-9 oracle found that an inbound move plus a
-    destination replacement is resolvable when a pending target delete
-    intentionally consumes the moved member before the replacement."""
-
-    def test_move_delete_then_destination_modify_is_accepted_atomically(self):
-        doc = aim.new_document(title="T")
-        doc.add_chunk(
-            '<ul data-aim-container="l1"><li data-aim="x">X</li></ul>',
-            author=ME,
-            at=ts(0),
-        )
-        doc.add_chunk(
-            '<ul data-aim-container="l2"><li data-aim="a">A</li></ul>',
-            author=ME,
-            at=ts(1),
-        )
-        move = doc.propose_move("x", author=BOT, container="l2", after=None, at=ts(2))
-        modify = doc.propose_modify(
-            "l2",
-            '<table data-aim-container="l2"><tbody>'
-            '<tr data-aim="a"><td>A row</td></tr></tbody></table>',
-            author=BOT,
-            at=ts(3),
-        )
-        delete = doc.propose_delete("x", author=BOT, at=ts(4))
-        from aimformat.document import resolution_order
-
-        assert [p.id for p in resolution_order(doc.proposals, doc)] == [
-            move.id,
-            delete.id,
-            modify.id,
-        ]
-        for proposal in resolution_order(doc.proposals, doc):
-            doc.accept(proposal.id, decided_by=ME, at=ts(5))
-
-        assert not doc._state.exists("x")
-        assert doc.verify() == []
-        assert aim.lint(doc) == []
+        for event in (direct_event, resolution_event):
+            assert set(event.data) <= self._allowed(event)
+            assert not any(field.startswith("x_") for field in event.data)
+            assert event.validate() == []
 
 
 class TestOrderedMarkersInListItemModifications:

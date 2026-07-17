@@ -9,7 +9,7 @@ required to add entries.)
 
 | Date | Type | Entry | Status | What |
 |---|---|---|---|---|
-| 2026-07-17 23:04 | plan | [pending-lane-creation-order](2026-07-17_2304_plan_pending-lane-creation-order.md) | active | Replace constraint ordering with creation-time projection validation, creation-order atomic replay, fail-closed reconcile, and spec-only move history |
+| 2026-07-17 23:04 | plan | [pending-lane-creation-order](2026-07-17_2304_plan_pending-lane-creation-order.md) | done | Replace constraint ordering with creation-time projection validation, creation-order atomic replay, fail-closed reconcile, and spec-only move history |
 | 2026-07-17 20:42 | plan | [pr15-r9-complete-ordering-model](2026-07-17_2042_plan_pr15-r9-complete-ordering-model.md) | done | Close the move/modify/anchor ordering bug class with three regressions and a complete permutation reference model |
 | 2026-07-17 20:18 | plan | [pr15-cross-target-move-anchor-constraints](2026-07-17_2018_plan_pr15-cross-target-move-anchor-constraints.md) | done | Add cross-target move-anchor precedence and reconcile candidate-anchor viability with property coverage |
 | 2026-07-17 19:46 | plan | [pr15-move-delete-and-linear-ordering](2026-07-17_1946_plan_pr15-move-delete-and-linear-ordering.md) | done | Allow move-then-delete resolution and replace exhaustive lane search with linear graph ordering |

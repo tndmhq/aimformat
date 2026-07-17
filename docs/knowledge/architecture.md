@@ -49,23 +49,19 @@ codes bidirectionally in sync with what `lint.py` can actually emit.
   if a test fails with C001, fix the producer, don't post-process.
 - **Ids are never reused** (deleted ids stay burned; `_taken_ids()` scans
   body + history + pending payloads).
-- **Pending-lane ordering is a state constraint problem, not a global action
-  rank.** `resolution_order(..., doc)` derives explicit proposal-precedence
-  edges from current/payload container states and topologically sorts them;
-  it never enumerates subsets or clone-replays candidate orders. Repeated moves
-  keep card order while each hop is constrained against the exact pre/post
-  container state it needs. A move anchored `after=N` precedes every move card
-  that separates `N` from its recorded destination; an ancestor move carrying
-  both the anchor and destination adds no edge. Mutual anchor dependencies
-  become a cycle. Reconciled destinations nested inside their move target may
-  survive only when a pending move explicitly carries the whole insertion
-  point back outside first. Retained source replacements propagate the moved
-  target's post-replacement member shape into destination checks, and terminal
-  deletes participate in the same constraints. Cyclic or incompatible lanes
-  refuse before the live document mutates. The independent bounded permutation
-  model in `tests/test_resolution_order_properties.py` is the semantic oracle;
-  production ordering remains an O(V+E) topological sort and never searches
-  permutations.
+- **Pending lanes are creation-order programs.** Every SDK proposal is
+  validated against a clone containing all earlier pending cards applied in
+  creation order. `resolution_order()` preserves that order; its only exception
+  is moving a chained add behind the pending add it names so normal acceptance
+  or rejection rebinding can materialize the anchor. A lane whose cards passed
+  projected validation applies cleanly in creation order. Accept-all first
+  replays the whole lane on a clone and refuses with zero live mutation if a
+  foreign-authored card, out-of-band edit, or partial manual resolution broke
+  the projection. Reconcile uses the same replay as a fail-closed fixpoint and
+  records rejections for cards that no longer apply; it never searches for a
+  rescuing order. The property oracle in
+  `tests/test_resolution_order_properties.py` is exactly this creation-order
+  clone replay.
 - **Payload equality is the verification primitive.** If you change
   canonical form in any way, every stored payload in every fixture/example
   changes meaning — regenerate fixtures and examples, and expect checkpoint

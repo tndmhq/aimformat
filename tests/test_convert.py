@@ -246,14 +246,14 @@ class TestRoundTripHardening:
         doc = aim.from_path(p)
         assert doc.title == "BOM Title"
 
-    def test_accept_all_delete_plus_dependent_add(self):
+    def test_accept_all_add_then_delete_anchor(self):
         doc = aim.from_text("Alpha.\n\nBeta.")
         bot = aim.agent("m")
         doomed = doc.chunks[1]
-        doc.propose_delete(doomed.id, author=bot, explanation="x")
         doc.propose_add(
             "<p>After beta.</p>", author=bot, container="body", after=doomed.id, explanation="y"
         )
+        doc.propose_delete(doomed.id, author=bot, explanation="x")
         html = aim.to_html(doc, pending="accept-all")
         assert "After beta." in html and "Beta." not in html
 
