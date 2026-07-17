@@ -30,9 +30,12 @@ class TestCss:
             assert slot + ":" in css
 
     def test_every_registry_class_present(self):
+        # ALL classes, not a hash-ordered sample: the frozenset's first 50
+        # gave ~21% coverage per run, so a dropped class family surfaced
+        # later as flake on an unrelated PR (AF-30); the full check is ms
         css = generate_aim_css()
-        for name in list(aim.REGISTRY.allowed_classes)[:50]:
-            assert f".{name}{{" in css
+        missing = [n for n in aim.REGISTRY.allowed_classes if f".{n}{{" not in css]
+        assert missing == []
 
     def test_chrome_present(self):
         css = generate_aim_css()
