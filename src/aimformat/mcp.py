@@ -152,7 +152,13 @@ def create_server() -> FastMCP:
             ],
         }
         if include_history:
-            out["history"] = [ev.data for ev in doc.history]
+            # elide like every other projection: raw add/modify payloads
+            # would dump full base64 data URIs into model context — the
+            # exact token blowup _elide exists to prevent
+            out["history"] = [
+                {k: _elide(v) if isinstance(v, str) else v for k, v in ev.data.items()}
+                for ev in doc.history
+            ]
         return out
 
     @server.tool()
