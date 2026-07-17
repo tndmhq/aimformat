@@ -3734,6 +3734,65 @@ class TestLaterMovesClearEarlierMoveConflicts:
         assert "would erase moved chunk 'x'" in str(exc_info.value)
 
 
+class TestRepeatedMovesUsePerHopModifyPrecedence:
+    """codex-pr15-r4: repeated moves keep their card order, but they are not
+    atomic around a container modify. A transient hop that needs an anchor
+    the payload drops must run before the modify, while the later outbound
+    hop must run after a payload that retains the target. Putting the whole
+    sequence first makes the retained payload mint a fresh-id duplicate."""
+
+    @pytest.fixture
+    def retained_intermediate_lane(self):
+        doc = aim.new_document(title="T")
+        doc.add_chunk(
+            '<ul data-aim-container="l2"><li data-aim="x">TARGET</li>'
+            '<li data-aim="a">A</li><li data-aim="b">B</li></ul>',
+            author=ME,
+            at=ts(0),
+        )
+        doc.add_chunk(
+            '<ul data-aim-container="l3"><li data-aim="c">C</li></ul>',
+            author=ME,
+            at=ts(1),
+        )
+        first = doc.propose_move("x", author=BOT, container="l2", after="b", at=ts(2))
+        final = doc.propose_move("x", author=BOT, container="l3", after="c", at=ts(3))
+        modify = doc.propose_modify(
+            "l2",
+            '<ul data-aim-container="l2"><li data-aim="x">TARGET</li>'
+            '<li data-aim="a">A changed</li></ul>',
+            author=BOT,
+            at=ts(4),
+        )
+        return doc, first, final, modify
+
+    def test_modify_splits_the_repeated_move_chain_at_the_safe_hop(
+        self, retained_intermediate_lane
+    ):
+        doc, first, final, modify = retained_intermediate_lane
+        from aimformat.document import resolution_order
+
+        assert [p.id for p in resolution_order(doc.proposals, doc)] == [
+            first.id,
+            modify.id,
+            final.id,
+        ]
+
+    def test_accept_all_preserves_one_target_at_the_final_destination(
+        self, retained_intermediate_lane
+    ):
+        doc, _, _, _ = retained_intermediate_lane
+        from aimformat.document import resolution_order
+
+        for proposal in resolution_order(doc.proposals, doc):
+            doc.accept(proposal.id, decided_by=ME, at=ts(5))
+
+        assert doc.chunk("x").container == "l3"
+        assert [chunk.text for chunk in doc.chunks].count("TARGET") == 1
+        assert doc.verify() == []
+        assert not [finding for finding in aim.lint(doc) if finding.level == "error"]
+
+
 class TestInboundMovesTrailTheDelayedModify:
     """codex-pr15-r2 (refines codex-pr15-p2-2): an OUTBOUND move rescuing a
     member out of a modified container forces the replacement into

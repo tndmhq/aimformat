@@ -24,7 +24,7 @@ from . import canonical, ids
 from .canonical import canonical_json, serialize, serialize_run
 from .css import generate_aim_css
 from .dom import Comment, Element, Fragment, Text, parse_fragment, parse_html
-from .errors import HistoryError, InvalidOperation, ParseError, TargetNotFound
+from .errors import AimError, HistoryError, InvalidOperation, ParseError, TargetNotFound
 from .events import Actor, Event
 from .note import find_note, is_canonical, render_note
 from .pagesetup import (
@@ -166,123 +166,134 @@ def resolution_order(
     """A dependency-safe order for resolving a whole pending lane.
 
     Card order in the file carries no dependency meaning (a manual reorder
-    is legal), so resolve in rounds: an add anchored on another pending add
-    waits for its anchor; within each round adds/modifies go first, then
-    moves, then deletes — an add anchored on a chunk that a sibling card
-    moves away or deletes lands while the anchor is still in place, and a
-    move whose destination anchors on a to-be-deleted chunk resolves before
-    the delete. When *doc* is given, a container modify whose payload drops
-    a member that a sibling card moves away waits for that move — the move
-    rescues the member before its container is replaced, exactly as a
-    delete would wait; the same delay applies when the payload drops a
-    move's destination anchor or destination container (resolving the
-    modify first would strip the move's landing point and fail the lane).
-    If that delayed modify also owns the move's destination and omits the
-    incoming chunk, neither order is safe: accepting the whole lane is
-    refused before any proposal mutates the document. A target moved more
-    than once is judged by its LAST pending move for the final destination,
-    but its whole move sequence shares each precedence constraint so a
-    replacement can never split the hops and erase the target between them.
-    A modify whose payload keeps the member stays ahead of the move
-    (relocating first would make the payload re-introduce a duplicate id).
-    Only a move sequence that REQUIRES a modify to wait (a rescued member, a
-    stripped landing point) can collide with THAT modify's replacement — the
-    relationship is per (move sequence, modify) pair, so a move forcing one
-    modify still schedules after an unrelated modify it merely lands in, and
-    forcing/landing chains interleave (move → modify → move → modify). Set
-    *accepting* false when ordering a reject-all operation, where these write
+    is legal), except that repeated moves of one target are an ordered chain.
+    Without *doc*, resolve in dependency rounds and prefer adds/modifies,
+    moves, then deletes. With *doc* while accepting, plan against a throwaway
+    copy of the exact document state. Each proposal contributes a precondition:
+    anchors and targets must resolve, container members must be legal, and a
+    container replacement may not remint a retained id that a preceding move
+    has carried outside its subtree. Repeated moves become individual hops in
+    the constraint search, so a modify can safely split a chain
+    (move → modify → move) when the first hop needs pre-modify state and the
+    second needs post-modify state.
+
+    The returned order has already been accepted and verified on the copy;
+    when no complete order exists, the lane is refused before the caller can
+    mutate the real document. Set *accepting* false for reject-all, where write
     conflicts do not apply. Shared by ``aim accept/reject --all`` and the
     exporters' resolve-a-copy paths.
     """
     rank = {"move": 2, "delete": 5}
-    tier: dict[str, int] = {}  # chain-aware ranks for delayed modifies + landing moves
-    conflicts: list[tuple[Proposal, Proposal]] = []
-    if doc is not None:
-        moves = [p for p in proposals if p.action == "move" and p.target]
-        # Moves of one target execute in card order. Give every hop the same
-        # precedence edges so a modify can never split the sequence.
-        move_sequences: dict[str, list[Proposal]] = {}
-        for mv in moves:
-            assert mv.target is not None
-            move_sequences.setdefault(mv.target, []).append(mv)
-        final_move = {target: sequence[-1] for target, sequence in move_sequences.items()}
-        forced_by: dict[str, set[str]] = {}  # delayed modify id -> move ids forcing it
-        landing: list[tuple[str, Proposal, Proposal]] = []  # target, final move, modify
-        for p in proposals:
-            if p.action != "modify" or not p.target or not moves:
+    if doc is not None and accepting:
+        original = list(proposals)
+        by_id = {p.id: p for p in original}
+        position = {p.id: i for i, p in enumerate(original)}
+        final_moves = {p.target: p for p in original if p.action == "move" and p.target is not None}
+        memo: set[tuple[str, frozenset[str]]] = set()
+
+        def modify_keeps_live_foreign_ids(work: AimDocument, proposal: Proposal) -> bool:
+            """Would accepting this container payload silently remint a live id?
+
+            Replacement normalization may reuse ids still inside the target
+            subtree, but deliberately remints collisions elsewhere. During a
+            pending lane that behavior turns a retained moved member into a
+            clean-verifying duplicate, so that relative order is not viable.
+            """
+            if proposal.action != "modify" or not proposal.target:
+                return False
+            node = work._state.container_node(proposal.target)
+            if node is None:
+                return False
+            inside = {
+                value
+                for element in node.iter()
+                for value in (element.chunk_id, element.container_id)
+                if value
+            }
+            outside = work._state.all_ids() - inside
+            return bool(_payload_ids(proposal.payload_html or "") & outside)
+
+        def final_moves_land(work: AimDocument) -> bool:
+            for target, move in final_moves.items():
+                if not work._state.exists(target):
+                    return False
+                try:
+                    if work._anchor_of(target).container != (move.anchor_container or "body"):
+                        return False
+                except AimError:
+                    return False
+            return not work.verify()
+
+        def ready_proposals(remaining: tuple[str, ...]) -> list[Proposal]:
+            pending = set(remaining)
+            ready: list[Proposal] = []
+            for pid in remaining:
+                proposal = by_id[pid]
+                if proposal.action == "add" and proposal.anchor_after in pending:
+                    continue
+                if proposal.action == "move" and any(
+                    other.id in pending
+                    and other.action == "move"
+                    and other.target == proposal.target
+                    and position[other.id] < position[pid]
+                    for other in original
+                ):
+                    continue
+                ready.append(proposal)
+            ready.sort(key=lambda p: (rank.get(p.action, 0), position[p.id]))
+            return ready
+
+        def solve(work: AimDocument, remaining: tuple[str, ...]) -> list[str] | None:
+            if not remaining:
+                return [] if final_moves_land(work) else None
+            key = (work.doc_hash, frozenset(remaining))
+            if key in memo:
+                return None
+            for proposal in ready_proposals(remaining):
+                if modify_keeps_live_foreign_ids(work, proposal):
+                    continue
+                candidate = AimDocument.loads(work.dumps())
+                try:
+                    candidate.accept(proposal.id, decided_by=proposal.author, at=proposal.at)
+                except AimError:
+                    continue
+                tail = solve(candidate, tuple(pid for pid in remaining if pid != proposal.id))
+                if tail is not None:
+                    return [proposal.id, *tail]
+            memo.add(key)
+            return None
+
+        solution = solve(AimDocument.loads(doc.dumps()), tuple(p.id for p in original))
+        if solution is not None:
+            return [by_id[pid] for pid in solution]
+
+        # Keep the established actionable diagnostic for the common hard
+        # conflict: the final hop lands inside a replacement that omits it.
+        for modify in original:
+            if modify.action != "modify" or not modify.target:
                 continue
-            node = doc._state.container_node(p.target)
+            node = doc._state.container_node(modify.target)
             if node is None:
                 continue
-            kept = _payload_ids(p.payload_html or "")
-            inside = {i for e in node.iter() for i in (e.chunk_id, e.container_id) if i}
-            # a move needs its target rescued AND its landing point intact:
-            # the modify waits when its payload drops the moved chunk, the
-            # move's destination anchor, or the destination container
-            forcing_targets = {
-                target
-                for target, sequence in move_sequences.items()
-                if any(
-                    affected and affected in inside and affected not in kept
-                    for mv in sequence
-                    for affected in (mv.target, mv.anchor_after, mv.anchor_container)
-                )
+            inside = {
+                value
+                for element in node.iter()
+                for value in (element.chunk_id, element.container_id)
+                if value
             }
-            if not forcing_targets:
-                continue
-            forced_by[p.id] = {mv.id for target in forcing_targets for mv in move_sequences[target]}
-            if accepting:
-                # the replacement erases a moved chunk only when its FINAL
-                # destination sits inside the replaced subtree; the sequence
-                # constraints keep every earlier hop on the same side
-                for target, mv in final_move.items():
-                    if mv.anchor_container in inside and mv.target not in kept:
-                        landing.append((target, mv, p))
-        # A landing sequence conflicts only with a delayed modify IT forced
-        # to wait (must-run-before plus would-be-erased is unsatisfiable) —
-        # judged per pair, so forcing an unrelated modify does not poison this
-        # one; every other inbound sequence trails the replacement as a unit
-        # and lands in the new payload.
-        trails: dict[str, set[str]] = {}  # move id -> delayed modify ids it lands in
-        for target, mv, p in landing:
-            if mv.id in forced_by[p.id]:
-                conflicts.append((mv, p))
-            else:
-                for hop in move_sequences[target]:
-                    trails.setdefault(hop.id, set()).add(p.id)
-        # longest-path tiers: each delayed modify runs after the moves that
-        # force it, each landing move after the modifies it lands in — a
-        # chain like move z → modify l2 → move x → modify l1 interleaves
-        # instead of collapsing into two flat tiers
-        rounds = len(forced_by) + len(trails) + 1
-        changed = bool(forced_by)
-        while changed:
-            rounds -= 1
-            if rounds < 0:
-                raise InvalidOperation(
-                    "pending moves and delayed container modifies order each "
-                    "other in a cycle — the lane cannot be resolved; reject "
-                    "one of the proposals first"
-                )
-            changed = False
-            for pid, movers in forced_by.items():
-                t = 1 + max(tier.get(m, rank["move"]) for m in movers)
-                if tier.get(pid, 0) < t:
-                    tier[pid] = t
-                    changed = True
-            for mid, mods in trails.items():
-                t = 1 + max(tier.get(q, rank["move"] + 1) for q in mods)
-                if tier.get(mid, 0) < t:
-                    tier[mid] = t
-                    changed = True
-        rank["delete"] = max(rank["delete"], max(tier.values(), default=0) + 1)
-    if conflicts:
-        move, modify = conflicts[0]
+            kept = _payload_ids(modify.payload_html or "")
+            for move in final_moves.values():
+                if move.anchor_container in inside and move.target not in kept:
+                    raise InvalidOperation(
+                        f"cannot accept move proposal {move.id!r}: delayed modify proposal "
+                        f"{modify.id!r} would erase moved chunk {move.target!r}; reject one "
+                        "of the proposals first"
+                    )
         raise InvalidOperation(
-            f"cannot accept move proposal {move.id!r}: delayed modify proposal "
-            f"{modify.id!r} would erase moved chunk {move.target!r}; reject one "
-            "of the proposals first"
+            "pending proposals have no dependency-safe acceptance order — "
+            "the lane cannot be resolved; reject one of the proposals first"
         )
+
     pending = list(proposals)
     order: list[Proposal] = []
     while pending:
@@ -293,7 +304,7 @@ def resolution_order(
                 "pending adds anchor on each other in a cycle — the file is "
                 "corrupt (aim lint reports P015)"
             )
-        ready.sort(key=lambda p: tier.get(p.id, rank.get(p.action, 0)))
+        ready.sort(key=lambda p: rank.get(p.action, 0))
         order.extend(ready)
         done = {p.id for p in ready}
         pending = [p for p in pending if p.id not in done]
