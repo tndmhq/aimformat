@@ -88,13 +88,45 @@ codes bidirectionally in sync with what `lint.py` can actually emit.
   execute, install, or fetch anything based on header content — the
   vim-modeline lesson, written into the format.
 
+## The TypeScript reader (`ts/`)
+
+`@aimformat/reader` is the official TypeScript **read** library — a
+read-only projection of a canonical document (ordered node tree, chunks
+with first-class runs, proposals, theme/page setup, `docHash`). Writes are
+Python-only by design; the TS side must never grow write paths. Structure
+mirrors the Python modules (`dom.ts`/`parser.ts`/`canonical.ts`/
+`document.ts`), and three invariants hold:
+
+1. **`ts/src/registry.data.ts` is generated** from `registry.json` (+ the
+   aim-note template) by `scripts/gen_ts_registry.py`;
+   `tests/test_ts_registry.py` fails when stale.
+2. **Parity is pinned by goldens.** `scripts/dump_projection.py` dumps the
+   Python projection of `examples/*.aim` + `tests/parity/fixtures/*.aim`
+   (edge fixtures from `scripts/gen_parity_fixtures.py`) to
+   `tests/parity/goldens/`; `tests/test_parity_goldens.py` asserts
+   regeneration is byte-stable, and the vitest suite asserts the TS
+   projection equals the goldens field-for-field (plus `docHash` parity
+   over the ok_* conformance kit). Any behavior change on either side
+   surfaces as a reviewed golden diff. On divergence, `spec.md` decides
+   which implementation is wrong.
+3. **One parser code path.** The TS parser is a strict scanner for the
+   canonical subset (no DOMParser, no Node APIs) — trade-offs documented
+   in `ts/README.md`.
+
+Fixture regeneration re-mints proposal ids (tool-assigned, like
+`gen_examples.py`): always regenerate fixtures and goldens together.
+
 ## Regeneration commands
 
 ```sh
-python3 scripts/gen_spec_appendix.py   # after registry changes
-python3 scripts/gen_fixtures.py        # after lint/canonical changes
-python3 scripts/gen_examples.py        # after SDK-visible changes
-python3 -m pytest                      # 598+ tests, a few seconds
+python3 scripts/gen_spec_appendix.py     # after registry changes
+python3 scripts/gen_fixtures.py          # after lint/canonical changes
+python3 scripts/gen_examples.py          # after SDK-visible changes
+python3 scripts/gen_ts_registry.py       # after registry changes (TS tables)
+python3 scripts/gen_parity_fixtures.py   # after SDK-visible changes…
+python3 scripts/dump_projection.py       # …then always refresh the goldens
+python3 -m pytest                        # 680+ tests, a few seconds
+cd ts && npm test                        # TS reader + parity suite
 ```
 
 ## Dependency pins (search-then-pin convention)

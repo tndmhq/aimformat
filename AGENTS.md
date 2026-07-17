@@ -35,6 +35,11 @@ technical content only (see Governance below).
 - [`src/aimformat/`](src/aimformat/) — SDK, verifier, CLI, css generator,
   ingest/export; [`registry.json`](src/aimformat/registry.json) is the
   single source of truth for the vocabulary.
+- [`ts/`](ts/) — `@aimformat/reader`, the official TypeScript **read**
+  library (writes stay Python-only); `ts/src/registry.data.ts` is generated
+  from the registry (`scripts/gen_ts_registry.py`), and
+  [`tests/parity/`](tests/parity/) pins the TS projection to Python goldens
+  (`scripts/gen_parity_fixtures.py` + `scripts/dump_projection.py`).
 - [`tests/`](tests/) — the suite; [`tests/fixtures/`](tests/fixtures/) is
   the ok/nok conformance kit (regenerate via `scripts/gen_fixtures.py`).
 - [`examples/`](examples/) — SDK-generated (`scripts/gen_examples.py`).

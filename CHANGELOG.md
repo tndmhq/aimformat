@@ -13,6 +13,15 @@ version tracks the spec version it implements (0.x minors may break).
   form and `doc_hash` change that is intentionally not assigned a new format
   version: it was adopted before any `.aim` documents were deployed. No
   migration or legacy-hash preservation is provided.
+- **`@aimformat/reader` (`ts/`)** — the official TypeScript read library:
+  parses a canonical `.aim` document into a read-only projection (ordered
+  node tree with recursive container members, chunks with first-class
+  runs, proposals, theme/page setup, `docHash`) mirroring the Python
+  SDK's read surface. Zero dependencies, no build step, one code path in
+  browsers and Node; writes stay with the Python SDK. A parity suite
+  (`tests/parity/`) pins both implementations to committed goldens —
+  field-for-field projections plus byte-exact `docHash` across the
+  examples, edge fixtures, and the conformance kit. No spec change.
 - **`AimDocument.amend_proposal(pid, markup=None, *, explanation=None,
   at=None)`** — in-place amend of a pending proposal's payload and/or
   explanation, preserving id, anchor, author, batch, and dependencies.
