@@ -340,6 +340,12 @@ class _Linter:
                         cid,
                     )
             return
+        # every member must be a legal item carrier for THIS container kind —
+        # not merely "not an item carrier of some other kind": a <p data-aim>
+        # in a <ul> is just as illegal as a <tr>, and item-aware consumers
+        # cannot see it. A table shell only relays the table's item grammar,
+        # so its children are held to the same rule.
+        legal = [t for t, cs in REGISTRY.item_carriers.items() if cont.tag in cs]
         for child in cont.elements():
             if child.tag in REGISTRY.table_shells and cont.tag == "table":
                 for node in child.children:
@@ -358,13 +364,12 @@ class _Linter:
                             f"row <{row.tag}> in container {cid!r} lacks data-aim",
                             cid,
                         )
+                    elif legal and row.tag not in legal:
+                        self.add(
+                            "S022", ERROR, f"<{row.tag}> chunk inside <{cont.tag}> container", cid
+                        )
                 continue
             if child.chunk_id:
-                # every direct member must be a legal item carrier for THIS
-                # container kind — not merely "not an item carrier of some
-                # other kind": a <p data-aim> in a <ul> is just as illegal
-                # as a <tr>, and item-aware consumers cannot see it
-                legal = [t for t, cs in REGISTRY.item_carriers.items() if cont.tag in cs]
                 if legal and child.tag not in legal:
                     self.add(
                         "S022", ERROR, f"<{child.tag}> chunk inside <{cont.tag}> container", cid

@@ -1184,6 +1184,40 @@ class TestContainerPayloadsValidateTheirMembers:
         assert doc.verify() == []
 
 
+class TestShellChildrenAreItemCarriers:
+    """codex-r2-3 (refines codex-1/AF-03): the lint carrier check skipped
+    children nested under thead/tbody/tfoot — the shell branch only verified
+    each row HAS a chunk id, so ``<tbody><p data-aim="r">x</p></tbody>``
+    linted clean and item-aware consumers could accept a table whose row is
+    invisible to them."""
+
+    ROW = '<tr data-aim="r1"><td>ok</td></tr>'
+
+    def _table_text(self, row_html):
+        doc = aim.new_document(title="T")
+        doc.add_chunk(
+            f'<table data-aim-container="tbl"><tbody>{self.ROW}</tbody></table>',
+            author=ME,
+            at=ts(0),
+        )
+        return doc.dumps().replace(self.ROW, row_html)
+
+    def test_non_carrier_chunk_inside_tbody_is_S022(self):
+        text = self._table_text('<p data-aim="r1">x</p>')
+        assert "S022" in {f.code for f in aim.lint_text(text)}
+
+    def test_wrong_kind_carrier_inside_tbody_is_S022(self):
+        text = self._table_text('<li data-aim="r1">x</li>')
+        assert "S022" in {f.code for f in aim.lint_text(text)}
+
+    def test_uncovered_shell_child_still_fires_S021_not_S022(self):
+        codes = {f.code for f in aim.lint_text(self._table_text("<tr><td>bare</td></tr>"))}
+        assert "S021" in codes and "S022" not in codes
+
+    def test_legal_rows_stay_clean(self):
+        assert not [f for f in aim.lint_text(self._table_text(self.ROW)) if f.level == "error"]
+
+
 class TestResolutionOrderProtectsAnchors:
     """AF-04: resolution_order sorted ready cards only delete-last, so a
     pending MOVE of an existing chunk that a sibling add anchors on could
