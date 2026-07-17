@@ -408,17 +408,25 @@ class DocState:
             )
 
     def _guard_payload_container_members(self, nodes: list[Element]) -> None:
-        """Validate direct members when a payload root is itself a container."""
+        """Validate direct members of every list/table container a payload
+        carries — the roots themselves and marked descendant containers at
+        any depth: a slide or grouping root must not smuggle in a nested
+        container whose members the next lint rejects (S022)."""
         for root in nodes:
-            if root.tag not in REGISTRY.containers or root.tag == "aim-slide":
-                continue
-            members: list[Element] = []
-            for child in root.elements():
-                if root.tag == "table" and child.tag in REGISTRY.table_shells:
-                    members.extend(child.elements())
-                else:
-                    members.append(child)
-            self._guard_item_members(root, members)
+            for el in root.iter():
+                if el.tag not in REGISTRY.containers or el.tag == "aim-slide":
+                    continue
+                if el is not root and el.container_id is None:
+                    # an unmarked nested list/table is chunk content, not a
+                    # container — lint holds only marked ones to S022
+                    continue
+                members: list[Element] = []
+                for child in el.elements():
+                    if el.tag == "table" and child.tag in REGISTRY.table_shells:
+                        members.extend(child.elements())
+                    else:
+                        members.append(child)
+                self._guard_item_members(el, members)
 
     def insert(self, markup: str, anchor: Anchor) -> None:
         nodes = [n for n in parse_fragment(markup) if isinstance(n, Element)]

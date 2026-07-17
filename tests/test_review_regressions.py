@@ -3033,3 +3033,58 @@ class TestAddRootIdStaysReservedInTweaks:
         )
         assert 'data-aim="child"' in (doc._state.serial("outer") or "")
         assert doc.verify() == []
+
+
+class TestNestedContainersValidateRecursively:
+    """codex-r3-2: the write-funnel membership check only looked at payload
+    ROOTS that were themselves list/table containers, so a payload rooted
+    at an aim-slide (or a grouping chunk) smuggled a nested marked
+    container with illegal members past ``add_chunk``/``propose_add`` —
+    and the very next lint rejected the document with S022. Every marked
+    descendant list/table container is validated now; an unmarked nested
+    list stays plain chunk content, exactly as lint treats it."""
+
+    BAD_SLIDE = (
+        '<aim-slide data-aim-container="s">'
+        '<ul data-aim-container="l"><p data-aim="p">x</p></ul></aim-slide>'
+    )
+
+    def test_add_chunk_rejects_a_bad_nested_list(self):
+        doc = aim.new_document(title="T")
+        with pytest.raises(InvalidOperation, match="direct member"):
+            doc.add_chunk(self.BAD_SLIDE, author=ME, at=ts(0))
+
+    def test_propose_add_rejects_it_at_creation(self):
+        doc = aim.new_document(title="T")
+        with pytest.raises(InvalidOperation, match="direct member"):
+            doc.propose_add(self.BAD_SLIDE, author=BOT, at=ts(0))
+
+    def test_nested_table_members_are_checked_too(self):
+        doc = aim.new_document(title="T")
+        with pytest.raises(InvalidOperation, match="direct member"):
+            doc.add_chunk(
+                '<aim-slide data-aim-container="s"><table data-aim-container="t">'
+                '<tbody><div data-aim="d">x</div></tbody></table></aim-slide>',
+                author=ME,
+                at=ts(0),
+            )
+
+    def test_legal_nested_containers_still_pass(self):
+        doc = aim.new_document(title="T")
+        doc.add_chunk(
+            '<aim-slide data-aim-container="s">'
+            '<ul data-aim-container="l"><li data-aim="i">x</li></ul></aim-slide>',
+            author=ME,
+            at=ts(0),
+        )
+        assert aim.lint_text(doc.dumps()) == []
+
+    def test_unmarked_nested_list_stays_chunk_content(self):
+        doc = aim.new_document(title="T")
+        doc.add_chunk(
+            '<ul data-aim-container="l">'
+            '<li data-aim="i1">item<ul><li>sub</li></ul></li></ul>',
+            author=ME,
+            at=ts(0),
+        )
+        assert aim.lint_text(doc.dumps()) == []
