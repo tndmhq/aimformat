@@ -1930,6 +1930,21 @@ class TestTrackedStructuralRowModify:
         first = ins_rows.index(["X", "Y"])
         assert ins_rows[first + 1] == ["P", "Q"]  # both rows, in payload order
 
+    def test_shape_changing_header_cells_are_bold(self, two_col_doc, tmp_path):
+        pytest.importorskip("docx")
+        import docx
+        from docx.oxml.ns import qn
+
+        two_col_doc.propose_modify(
+            "r1", '<tr data-aim="r1"><th>Heading</th></tr>', author=BOT, at=ts(1)
+        )
+        out = aim.to_docx(two_col_doc, tmp_path / "header.docx")
+        rows = docx.Document(str(out)).tables[0]._tbl.findall(qn("w:tr"))
+        inserted = next(row for row in rows if "Heading" in [t.text for t in row.iter(qn("w:t"))])
+        run = next(inserted.iter(qn("w:r")))
+        props = run.find(qn("w:rPr"))
+        assert props is not None and props.find(qn("w:b")) is not None
+
 
 class TestStructuralReplacementRecreatesSpans:
     """codex-r2-2 (refines AF-39): a shape-changing row modify created one

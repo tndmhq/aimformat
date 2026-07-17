@@ -899,7 +899,10 @@ class _Exporter:
                     para = self._new_span_cell(
                         table, tr, colspan=cs, vmerge="restart" if rs > 1 else None
                     )
-                    self.rev.ins(para, _runs_of(c), label, date)
+                    runs = _runs_of(c)
+                    if c.tag == "th":
+                        runs = [{**run, "bold": True} for run in runs]
+                    self.rev.ins(para, runs, label, date)
                     if rs > 1:
                         vmerge[ci] = (rs - 1, cs)
                     ci += cs
