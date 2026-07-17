@@ -3088,3 +3088,54 @@ class TestNestedContainersValidateRecursively:
             at=ts(0),
         )
         assert aim.lint_text(doc.dumps()) == []
+
+
+class TestRecordedShellsBindReplay:
+    """codex-r3-3: concrete table anchors record the row's shell, but
+    replay resolved a non-null ``after`` purely by id — editing a recorded
+    ``to.shell`` (thead→tbody) on a move left ``verify()`` and lint clean,
+    even though §6.4 says the shell names the section where the position
+    resolves. ``resolve_insert_point`` now validates a recorded shell
+    against the section the anchor row actually sits in, and inverting a
+    move re-resolves the recorded destination first."""
+
+    @pytest.fixture
+    def shelled_table(self):
+        doc = aim.new_document(title="T")
+        doc.add_chunk(
+            '<table data-aim-container="tbl">'
+            '<thead><tr data-aim="h"><th>K</th></tr></thead>'
+            '<tbody><tr data-aim="r1"><td>1</td></tr>'
+            '<tr data-aim="r2"><td>2</td></tr></tbody></table>',
+            author=ME,
+            at=ts(0),
+        )
+        return doc
+
+    def test_moves_and_deletes_across_shells_verify_clean(self, shelled_table):
+        shelled_table.move_chunk("r1", author=ME, container="tbl", after="h", at=ts(1))
+        shelled_table.delete_chunk("r2", author=ME, at=ts(2))
+        assert shelled_table.verify() == []
+
+    def test_tampered_move_to_shell_is_a_chain_problem(self, shelled_table):
+        shelled_table.move_chunk("r1", author=ME, container="tbl", after="h", at=ts(1))
+        text = shelled_table.dumps()
+        tampered = text.replace(
+            '"to":{"after":"h","container":"tbl","shell":"thead"}',
+            '"to":{"after":"h","container":"tbl","shell":"tbody"}',
+        )
+        assert tampered != text
+        problems = aim.loads(tampered).verify()
+        assert any("not the recorded <tbody>" in p for p in problems)
+        assert "H006" in {f.code for f in aim.lint_text(tampered)}
+
+    def test_tampered_delete_anchor_shell_is_a_chain_problem(self, shelled_table):
+        shelled_table.delete_chunk("r2", author=ME, at=ts(1))
+        text = shelled_table.dumps()
+        tampered = text.replace(
+            '"anchor":{"after":"r1","container":"tbl","shell":"tbody"}',
+            '"anchor":{"after":"r1","container":"tbl","shell":"thead"}',
+        )
+        assert tampered != text
+        problems = aim.loads(tampered).verify()
+        assert any("not the recorded <thead>" in p for p in problems)

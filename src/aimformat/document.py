@@ -388,6 +388,15 @@ class DocState:
                 f"anchor {anchor.after!r} is nested content, not a direct "
                 f"member of {anchor.container!r}"
             )
+        if anchor.shell is not None:
+            # §6.4: the shell names the section where the position resolves —
+            # a concrete anchor whose recorded shell contradicts where the
+            # anchor row actually sits must fail, not silently follow the id
+            got = parent.tag if parent.tag in REGISTRY.table_shells else None
+            if got != anchor.shell:
+                raise TargetNotFound(
+                    f"anchor {anchor.after!r} sits in <{got}>, not the recorded <{anchor.shell}>"
+                )
         return parent, parent.children.index(members[-1]) + 1
 
     def _guard_item_members(self, parent: Element, nodes: list[Element]) -> None:
@@ -2298,6 +2307,13 @@ class AimDocument:
             frm = ev.get("from")
             if frm is None:
                 raise HistoryError("move event carries no 'from' — not invertible")
+            to = ev.get("to")
+            if to is not None:
+                # at this point the state IS the post-move state, so the
+                # recorded destination must resolve — shell included (§6.4);
+                # silently edited destination metadata is a chain problem,
+                # not a clean replay
+                state.resolve_insert_point(Anchor.from_obj(to))
             state.move(target, Anchor.from_obj(frm))
 
     def state_at(self, seq: int) -> AimDocument:
