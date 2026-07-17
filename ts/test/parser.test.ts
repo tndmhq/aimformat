@@ -33,6 +33,25 @@ describe("parser", () => {
     expect(el(parseFragment("<p>&#65;&#x1F389;</p>")).text()).toBe("A🎉");
   });
 
+  it("applies HTML's numeric-reference replacement table, like html.parser", () => {
+    // pinned against Python: html._replace_charref remaps the windows-1252
+    // range, turns NUL/surrogates/out-of-range into U+FFFD, and drops
+    // control and noncharacter code points outright
+    expect(
+      el(
+        parseFragment("<p>&#128; &#0; &#xD800; &#x110000; &#1; &#13;</p>"),
+      ).text(),
+    ).toBe("€ � � �  \r");
+    expect(el(parseFragment("<p>&#x99;&#x9F;</p>")).text()).toBe("™Ÿ");
+    expect(
+      el(parseFragment("<p>a&#xFDD0;&#xFFFE;&#x10FFFF;b</p>")).text(),
+    ).toBe("ab");
+    const attr = el(
+      parseFragment('<p data-x-note="&#146;90s &#151; ok">x</p>'),
+    );
+    expect(attr.get("data-x-note")).toBe("’90s — ok");
+  });
+
   it("rejects exotic named references (canonical .aim is raw UTF-8)", () => {
     expect(() => parseFragment("<p>caf&eacute;</p>")).toThrow(AimParseError);
   });

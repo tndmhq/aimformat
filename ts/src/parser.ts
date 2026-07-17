@@ -25,6 +25,68 @@ const NAMED_REFS: Readonly<Record<string, string>> = {
   apos: "'",
 };
 
+/** HTML's numeric-reference replacement table (the windows-1252 remapping
+ * plus NUL and CR), as Python's `html._invalid_charrefs` — html.parser
+ * applies it, so byte parity requires the same decoded text here. */
+const NUMERIC_REF_OVERRIDES: ReadonlyMap<number, string> = new Map([
+  [0x00, "�"],
+  [0x0d, "\r"],
+  [0x80, "€"],
+  [0x81, "\x81"],
+  [0x82, "‚"],
+  [0x83, "ƒ"],
+  [0x84, "„"],
+  [0x85, "…"],
+  [0x86, "†"],
+  [0x87, "‡"],
+  [0x88, "ˆ"],
+  [0x89, "‰"],
+  [0x8a, "Š"],
+  [0x8b, "‹"],
+  [0x8c, "Œ"],
+  [0x8d, "\x8d"],
+  [0x8e, "Ž"],
+  [0x8f, "\x8f"],
+  [0x90, "\x90"],
+  [0x91, "‘"],
+  [0x92, "’"],
+  [0x93, "“"],
+  [0x94, "”"],
+  [0x95, "•"],
+  [0x96, "–"],
+  [0x97, "—"],
+  [0x98, "˜"],
+  [0x99, "™"],
+  [0x9a, "š"],
+  [0x9b, "›"],
+  [0x9c, "œ"],
+  [0x9d, "\x9d"],
+  [0x9e, "ž"],
+  [0x9f, "Ÿ"],
+]);
+
+/** Control and noncharacter code points a numeric reference decodes to
+ * nothing at all (Python's `html._invalid_codepoints`). */
+function isDroppedCodePoint(cp: number): boolean {
+  return (
+    (cp >= 0x01 && cp <= 0x08) ||
+    cp === 0x0b ||
+    (cp >= 0x0e && cp <= 0x1f) ||
+    (cp >= 0x7f && cp <= 0x9f) ||
+    (cp >= 0xfdd0 && cp <= 0xfdef) ||
+    (cp & 0xfffe) === 0xfffe // U+xFFFE/U+xFFFF of every plane
+  );
+}
+
+/** One numeric reference's decoded text, per `html._replace_charref`. */
+function decodeNumericRef(cp: number): string {
+  const override = NUMERIC_REF_OVERRIDES.get(cp);
+  if (override !== undefined) return override;
+  if ((cp >= 0xd800 && cp <= 0xdfff) || cp > 0x10ffff) return "�";
+  if (isDroppedCodePoint(cp)) return "";
+  return String.fromCodePoint(cp);
+}
+
 /** Decode character references the way canonical .aim spells text: the five
  * core named references plus numeric forms. Any other named reference is a
  * parse error — canonical form writes non-ASCII as raw UTF-8, so `&eacute;`
@@ -39,13 +101,7 @@ function decodeRefs(s: string): string {
         const hex = body[1] === "x" || body[1] === "X";
         const digits = body.slice(hex ? 2 : 1);
         if (!digits || (!hex && /[^0-9]/.test(digits))) return match;
-        const cp = parseInt(digits, hex ? 16 : 10);
-        if (!Number.isFinite(cp) || cp < 0 || cp > 0x10ffff) {
-          throw new AimParseError(
-            `invalid numeric character reference ${match}`,
-          );
-        }
-        return String.fromCodePoint(cp);
+        return decodeNumericRef(parseInt(digits, hex ? 16 : 10));
       }
       const named = NAMED_REFS[body];
       if (named === undefined) {
