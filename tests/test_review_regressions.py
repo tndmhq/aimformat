@@ -1004,3 +1004,62 @@ class TestMoveStaysOutOfItsOwnSubtree:
         nested_doc.move_chunk("s1", author=ME, container="body", after=None, at=ts(2))
         assert nested_doc.body_ids == ["s1", "p1"]
         assert nested_doc.verify() == []
+
+
+class TestAcceptedAddValidatesItsPayload:
+    """AF-02: the accepted-add branch of _resolve inserted the card payload
+    raw — no root marker, id validity/uniqueness, run-shape, or nested-id
+    checks — while the modify branch fully re-validates. A hand-authored
+    card could smuggle an unmarked root (unreplayable target "") or a live
+    id (duplicate body ids) past accept."""
+
+    def _with_hand_card(self, payload, pid="p-handmade"):
+        doc = aim.new_document(title="T")
+        doc.add_chunk('<p data-aim="live">real</p>', author=BOT, at=ts(0))
+        card = (
+            f'<aim-proposal id="{pid}" data-action="add" '
+            'data-anchor-container="body" data-anchor-after="live" '
+            f'data-at="{ts(5)}" data-author="human" data-author-id="eve">'
+            f"<template>{payload}</template></aim-proposal>"
+        )
+        text = doc.dumps().replace(
+            "</body>", f"<aim-proposals>\n{card}\n</aim-proposals>\n</body>"
+        )
+        return aim.loads(text)
+
+    def test_unmarked_root_fails_closed(self):
+        doc = self._with_hand_card("<p>smuggled</p>")
+        with pytest.raises(InvalidOperation):
+            doc.accept("p-handmade", decided_by=ME, at=ts(6))
+        assert doc.body_ids == ["live"]
+        assert doc.verify() == []
+
+    def test_live_id_collision_fails_closed(self):
+        doc = self._with_hand_card('<p data-aim="live">impostor</p>')
+        with pytest.raises(InvalidOperation):
+            doc.accept("p-handmade", decided_by=ME, at=ts(6))
+        assert doc.body_ids == ["live"]
+        assert doc.verify() == []
+
+    def test_nested_live_id_is_reminted_not_duplicated(self):
+        doc = self._with_hand_card(
+            '<ul data-aim-container="c9"><li data-aim="live">x</li></ul>'
+        )
+        doc.accept("p-handmade", decided_by=ME, at=ts(6))
+        all_ids = doc._state.all_ids()
+        assert doc.body_ids == ["live", "c9"]
+        assert len([i for i in all_ids if i == "live"]) == 1
+        assert not [f for f in aim.lint(doc) if f.level == "error"]
+        assert doc.verify() == []
+
+    def test_valid_hand_card_still_accepts(self):
+        doc = self._with_hand_card('<p data-aim="fresh1">fine</p>')
+        doc.accept("p-handmade", decided_by=ME, at=ts(6))
+        assert doc.body_ids == ["live", "fresh1"]
+        assert doc.verify() == []
+
+    def test_normal_add_accept_records_no_spurious_applied(self, basic_doc):
+        p = basic_doc.propose_add('<p data-aim="new1">hello</p>', author=BOT, at=ts(10))
+        ev = basic_doc.accept(p.id, decided_by=ME, at=ts(11))
+        assert ev.get("applied") is None
+        assert basic_doc.verify() == []

@@ -1949,9 +1949,27 @@ class AimDocument:
                         f"anchor proposal {anchor.after!r} is still pending — resolve it first"
                     )
                 payload = applied if applied is not None else prop.payload_html
-                if applied is not None and applied != prop.payload_html:
-                    data["applied"] = applied
-                self._state.insert(payload or "", anchor)
+                # externally-authored cards bypass creation-time
+                # normalization: re-validate the FULL payload (root marker
+                # and id, run shape, nested ids) before the write, exactly
+                # like the modify branch below — the resolution event's
+                # target must be the payload's real, unused root id or the
+                # add can never replay
+                root = data["target"]
+                if not ids.is_valid_chunk_id(root):
+                    raise InvalidOperation(
+                        "add payload root carries no valid data-aim/data-aim-container id"
+                    )
+                if root in self._taken_ids(skip_payload_of=prop.id):
+                    raise InvalidOperation(f"add payload id {root!r} is already in use")
+                _, payload = self._normalize_payload(
+                    payload or "",
+                    expect_id=root,
+                    skip_payload_of=prop.id,
+                )
+                if payload != prop.payload_html:
+                    data["applied"] = payload
+                self._state.insert(payload, anchor)
         else:
             data["target"] = prop.target
             before = self._state.serial(prop.target or "")
