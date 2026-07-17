@@ -192,6 +192,15 @@ def _apply_move_data(state: DocState, data: dict) -> None:
     state.move(data["target"], Anchor.from_obj(data["to"]))
 
 
+def _set_card_payload(card: Element, payload: str) -> None:
+    """Swap a proposal card's <template> payload in place."""
+    tmpl = next((c for c in card.elements() if c.tag == "template"), None)
+    if tmpl is None:  # defensive: modify/add cards always carry one
+        tmpl = Element("template")
+        card.children.append(tmpl)
+    tmpl.children = list(parse_fragment(payload))
+
+
 def resolution_order(
     proposals: Sequence[Proposal],
     doc: AimDocument | None = None,
@@ -2128,11 +2137,21 @@ class AimDocument:
                 )
             else:
                 raise InvalidOperation(f"a {prop.action} proposal carries no payload to amend")
-            tmpl = next((c for c in card.elements() if c.tag == "template"), None)
-            if tmpl is None:  # defensive: modify/add cards always carry one
-                tmpl = Element("template")
-                card.children.append(tmpl)
-            tmpl.children = list(parse_fragment(payload))
+            # the amended lane must keep the creation-order invariant: a
+            # payload that breaks a later pending card fails HERE, not as a
+            # whole-lane rejection at accept-all
+            trial = self._clone()
+            _set_card_payload(trial._card_el(pid), payload)
+            decider = Actor("external", id="pending-projection")
+            for proposal in resolution_order(trial.proposals):
+                try:
+                    trial.accept(proposal.id, decided_by=decider, at=proposal.at)
+                except AimError as exc:
+                    raise InvalidOperation(
+                        f"amended payload for {pid!r} breaks the pending lane at "
+                        f"proposal {proposal.id!r}: {exc}"
+                    ) from exc
+            _set_card_payload(card, payload)
         if explanation is not None:
             if explanation:
                 card.set("data-explanation", explanation)

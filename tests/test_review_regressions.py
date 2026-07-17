@@ -3848,6 +3848,60 @@ class TestProposalsTargetOnlyExistingChunks:
         assert aim.lint(doc) == []
 
 
+class TestAmendKeepsTheLaneAppliable:
+    """Amend validates like the original propose call (§5.4 docstring): an
+    amended payload that breaks a later pending card must be rejected at
+    amend time, not surface as a whole-lane rejection at accept-all."""
+
+    @staticmethod
+    def _lane():
+        doc = aim.new_document(title="T")
+        doc.add_chunk(
+            '<ul data-aim-container="l"><li data-aim="x">X</li><li data-aim="y">Y</li></ul>',
+            author=ME,
+            at=ts(0),
+        )
+        doc.add_chunk(
+            '<ul data-aim-container="l0"><li data-aim="m">M</li></ul>', author=ME, at=ts(1)
+        )
+        modify = doc.propose_modify(
+            "l",
+            '<ul data-aim-container="l"><li data-aim="x">X!</li><li data-aim="y">Y</li></ul>',
+            author=BOT,
+            at=ts(2),
+        )
+        move = doc.propose_move("m", author=BOT, container="l", after="y", at=ts(3))
+        return doc, modify, move
+
+    def test_amend_that_breaks_a_pending_move_anchor_is_rejected(self):
+        doc, modify, move = self._lane()
+        before = doc.dumps()
+
+        with pytest.raises(InvalidOperation, match=move.id):
+            doc.amend_proposal(
+                modify.id, '<ul data-aim-container="l"><li data-aim="x">X!</li></ul>', at=ts(4)
+            )
+
+        assert doc.dumps() == before
+        doc.accept_all(decided_by=ME, at=ts(5))
+        assert doc.verify() == []
+
+    def test_lane_preserving_amend_still_applies(self):
+        doc, modify, _ = self._lane()
+        doc.amend_proposal(
+            modify.id,
+            '<ul data-aim-container="l"><li data-aim="x">X!!</li><li data-aim="y">Y</li></ul>',
+            at=ts(4),
+        )
+
+        doc.accept_all(decided_by=ME, at=ts(5))
+
+        members = [chunk.id for chunk in doc.chunks if chunk.container == "l"]
+        assert members == ["x", "y", "m"]
+        assert doc.verify() == []
+        assert aim.lint(doc) == []
+
+
 class TestReconcileRejectsRescuableMoves:
     """Reconcile fails closed instead of solving transient nested rescues."""
 
