@@ -184,18 +184,17 @@ def resolution_order(
     order, so earlier hops are transient and only the final destination can
     collide with the replacement. A modify whose payload
     keeps the member stays ahead of the move (relocating first would make the
-    payload re-introduce a duplicate id). Only moves that REQUIRE the modify
+    payload re-introduce a duplicate id). Only a move that REQUIRES a modify
     to wait (a rescued member, a stripped landing point) can collide with
-    the replacement; an unrelated inbound move whose final destination sits
-    inside the replaced subtree is scheduled after the modify instead, so
-    it lands in the replacement rather than being erased by it. Set
-    *accepting* false when ordering a reject-all operation, where these
-    write conflicts do not apply. Shared by ``aim accept/reject --all`` and
-    the exporters' resolve-a-copy paths.
+    THAT modify's replacement — the relationship is per (move, modify)
+    pair, so a move forcing one modify still schedules after an unrelated
+    modify it merely lands in, and forcing/landing chains interleave
+    (move → modify → move → modify). Set *accepting* false when ordering a
+    reject-all operation, where these write conflicts do not apply. Shared
+    by ``aim accept/reject --all`` and the exporters' resolve-a-copy paths.
     """
     rank = {"move": 2, "delete": 5}
-    after_moves: set[str] = set()  # modify card ids that must trail the moves
-    trailing_moves: set[str] = set()  # move card ids that must trail a delayed modify
+    tier: dict[str, int] = {}  # chain-aware ranks for delayed modifies + landing moves
     conflicts: list[tuple[Proposal, Proposal]] = []
     if doc is not None:
         moves = [p for p in proposals if p.action == "move" and p.target]
@@ -203,7 +202,7 @@ def resolution_order(
         # target moved more than once only the LAST card decides where it
         # finally lands when the delayed modify runs
         final_move = {mv.target: mv for mv in moves}
-        must_precede: set[str] = set()  # move ids that forced some modify to wait
+        forced_by: dict[str, set[str]] = {}  # delayed modify id -> move ids forcing it
         landing: list[tuple[Proposal, Proposal]] = []  # (final move, delayed modify)
         for p in proposals:
             if p.action != "modify" or not p.target or not moves:
@@ -224,8 +223,7 @@ def resolution_order(
             }
             if not forcing:
                 continue
-            after_moves.add(p.id)
-            must_precede |= forcing
+            forced_by[p.id] = forcing
             if accepting:
                 # the replacement erases a moved chunk only when its FINAL
                 # destination sits inside the replaced subtree — an earlier
@@ -233,15 +231,43 @@ def resolution_order(
                 for mv in final_move.values():
                     if mv.anchor_container in inside and mv.target not in kept:
                         landing.append((mv, p))
-        # a move landing inside the replaced subtree conflicts only when it
-        # must ALSO run before a delayed modify (rescue or stripped anchor)
-        # — every other inbound move simply waits for the replacement and
-        # lands in the new payload
+        # a landing move conflicts only with a delayed modify IT forced to
+        # wait (must-run-before plus would-be-erased is unsatisfiable) —
+        # judged per pair, so forcing an unrelated modify does not poison
+        # this one; every other landing move simply trails the replacement
+        # and lands in the new payload
+        trails: dict[str, set[str]] = {}  # move id -> delayed modify ids it lands in
         for mv, p in landing:
-            if mv.id in must_precede:
+            if mv.id in forced_by[p.id]:
                 conflicts.append((mv, p))
             else:
-                trailing_moves.add(mv.id)
+                trails.setdefault(mv.id, set()).add(p.id)
+        # longest-path tiers: each delayed modify runs after the moves that
+        # force it, each landing move after the modifies it lands in — a
+        # chain like move z → modify l2 → move x → modify l1 interleaves
+        # instead of collapsing into two flat tiers
+        rounds = len(forced_by) + len(trails) + 1
+        changed = bool(forced_by)
+        while changed:
+            rounds -= 1
+            if rounds < 0:
+                raise InvalidOperation(
+                    "pending moves and delayed container modifies order each "
+                    "other in a cycle — the lane cannot be resolved; reject "
+                    "one of the proposals first"
+                )
+            changed = False
+            for pid, movers in forced_by.items():
+                t = 1 + max(tier.get(m, rank["move"]) for m in movers)
+                if tier.get(pid, 0) < t:
+                    tier[pid] = t
+                    changed = True
+            for mid, mods in trails.items():
+                t = 1 + max(tier.get(q, rank["move"] + 1) for q in mods)
+                if tier.get(mid, 0) < t:
+                    tier[mid] = t
+                    changed = True
+        rank["delete"] = max(rank["delete"], max(tier.values(), default=0) + 1)
     if conflicts:
         move, modify = conflicts[0]
         raise InvalidOperation(
@@ -259,11 +285,7 @@ def resolution_order(
                 "pending adds anchor on each other in a cycle — the file is "
                 "corrupt (aim lint reports P015)"
             )
-        ready.sort(
-            key=lambda p: (
-                3 if p.id in after_moves else 4 if p.id in trailing_moves else rank.get(p.action, 0)
-            )
-        )
+        ready.sort(key=lambda p: tier.get(p.id, rank.get(p.action, 0)))
         order.extend(ready)
         done = {p.id for p in ready}
         pending = [p for p in pending if p.id not in done]

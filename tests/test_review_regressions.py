@@ -3722,6 +3722,93 @@ class TestInboundMovesTrailTheDelayedModify:
             resolution_order(doc.proposals, doc)
 
 
+class TestMovePrecedencePerContainerModify:
+    """codex-pr15-r3 (refines codex-pr15-r2): the moves forcing a delayed
+    modify were collected into one GLOBAL must-precede union, so a move that
+    forced modify A was treated as conflicting with unrelated modify B it
+    merely lands in. With x: l1→l2 and z: l2→l3 plus replacements of l1 and
+    l2 dropping x/z, the lane is resolvable as move z → modify l2 → move x
+    → modify l1 — yet resolution_order paired x with the l2 modify and
+    refused it. The forcing relationship is now kept per (move, modify)
+    pair, and scheduling walks the resulting chain."""
+
+    @pytest.fixture
+    def chained_lane(self):
+        doc = aim.new_document(title="T")
+        doc.add_chunk(
+            '<ul data-aim-container="l1"><li data-aim="x">X</li><li data-aim="k">K</li></ul>',
+            author=ME,
+            at=ts(0),
+        )
+        doc.add_chunk(
+            '<ul data-aim-container="l2"><li data-aim="z">Z</li><li data-aim="a">A</li></ul>',
+            author=ME,
+            at=ts(1),
+        )
+        doc.add_chunk(
+            '<ul data-aim-container="l3"><li data-aim="c">C</li></ul>', author=ME, at=ts(2)
+        )
+        # x forces the l1 modify to wait; its destination anchor a survives
+        # the l2 replacement, so x never forces the l2 modify
+        doc.propose_move("x", author=BOT, container="l2", after="a", at=ts(3))
+        # z forces the l2 modify to wait
+        doc.propose_move("z", author=BOT, container="l3", after="c", at=ts(4))
+        doc.propose_modify(
+            "l1", '<ul data-aim-container="l1"><li data-aim="k">K</li></ul>', author=BOT, at=ts(5)
+        )
+        doc.propose_modify(
+            "l2", '<ul data-aim-container="l2"><li data-aim="a">A</li></ul>', author=BOT, at=ts(6)
+        )
+        return doc
+
+    def test_lane_orders_as_a_chain(self, chained_lane):
+        from aimformat.document import resolution_order
+
+        order = resolution_order(chained_lane.proposals, chained_lane)
+        assert [(p.action, p.target) for p in order] == [
+            ("move", "z"),
+            ("modify", "l2"),
+            ("move", "x"),
+            ("modify", "l1"),
+        ]
+
+    def test_accept_all_resolves_the_whole_lane(self, chained_lane):
+        from aimformat.document import resolution_order
+
+        for p in resolution_order(chained_lane.proposals, chained_lane):
+            chained_lane.accept(p.id, decided_by=ME, at=ts(7))
+        assert chained_lane.chunk("x").container == "l2"
+        assert chained_lane.chunk("z").container == "l3"
+        assert chained_lane.verify() == []
+
+    def test_accept_all_export_resolves_the_lane(self, chained_lane, tmp_path):
+        from aimformat.export_docx import _resolve_copy
+
+        resolved = _resolve_copy(chained_lane, "accept-all")
+        assert resolved.proposals == []
+        assert resolved.chunk("x").container == "l2"
+        assert resolved.chunk("z").container == "l3"
+        assert resolved.verify() == []
+
+    def test_move_forcing_the_modify_it_lands_in_still_conflicts(self, chained_lane):
+        # sanity: the per-pair check still refuses a genuinely unsatisfiable
+        # pair — x's own forced modify (l1) also owning its destination
+        doc = aim.new_document(title="T")
+        doc.add_chunk(
+            '<ul data-aim-container="l1"><li data-aim="x">X</li><li data-aim="k">K</li></ul>',
+            author=ME,
+            at=ts(0),
+        )
+        doc.propose_move("x", author=BOT, container="l1", after="k", at=ts(1))
+        doc.propose_modify(
+            "l1", '<ul data-aim-container="l1"><li data-aim="k">K</li></ul>', author=BOT, at=ts(2)
+        )
+        from aimformat.document import resolution_order
+
+        with pytest.raises(aim.InvalidOperation, match="would erase moved chunk 'x'"):
+            resolution_order(doc.proposals, doc)
+
+
 class TestOrderedMarkersInListItemModifications:
     """codex-r3-5 (completes the round-1 ordered-marker fix): additions
     got the live ordinal, but a modify proposal's replacement went through
