@@ -269,6 +269,29 @@ def unicode_whitespace_doc() -> aim.AimDocument:
     return doc
 
 
+def unicode_attrs_doc() -> aim.AimDocument:
+    """Non-ASCII ``data-x-*`` attribute names: canonical attribute order is
+    *code-point* order (Python ``sorted``), which diverges from UTF-16
+    code-unit order exactly when a BMP char above U+D7FF (here U+F8FF,
+    private use) meets an astral char (here U+1F600, a surrogate pair) —
+    a UTF-16 comparator puts the astral name first and changes the hash."""
+    doc = aim.new_document(title="Unicode attribute names — code-point order")
+    with doc.batch():
+        doc.add_chunk(
+            '<p data-aim="p1" data-x-\U0001f600="astral" data-x-="bmp-pua" '
+            'data-x-zeta="ascii">Attribute ordering.</p>',
+            author=BOT,
+            at=t(0),
+        )
+        doc.add_chunk(
+            '<p data-aim="p2" data-x-="bmp-pua" data-x-\U0001f600="astral">'
+            "Authored in the other order.</p>",
+            author=BOT,
+            at=t(1),
+        )
+    return doc
+
+
 def flattened_doc() -> aim.AimDocument:
     """A flattened file: no history trailer (H001 warning tier)."""
     doc = aim.new_document(title="Flattened")
@@ -301,6 +324,7 @@ FIXTURES = {
     "theme-doc-meta": theme_doc_meta_doc,
     "assets": assets_doc,
     "unicode-whitespace": unicode_whitespace_doc,
+    "unicode-attrs": unicode_attrs_doc,
     "flattened": flattened_doc,
     "empty-registry": empty_registry_doc,
 }

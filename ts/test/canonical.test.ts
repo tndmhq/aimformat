@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { Element } from "../src/dom.ts";
 import {
+  compareCodePoints,
   normalizeStyle,
   serialize,
   sortClassTokens,
@@ -30,6 +31,31 @@ describe("canonical serialization", () => {
 
   it("keeps unknown style properties visible at the end", () => {
     expect(normalizeStyle("color:red; left:5px")).toBe("left:5px; color:red");
+  });
+
+  it("compares by code point, not UTF-16 code unit", () => {
+    // U+F8FF (BMP private use) < U+1F600 (astral) by code point, but the
+    // astral char's high surrogate 0xD83D sorts first by code unit
+    expect(compareCodePoints("", "\u{1f600}")).toBeLessThan(0);
+    expect(compareCodePoints("a", "ab")).toBeLessThan(0);
+    expect(compareCodePoints("ab", "a")).toBeGreaterThan(0);
+    expect(compareCodePoints("\u{1f600}", "\u{1f600}")).toBe(0);
+  });
+
+  it("sorts astral-vs-BMP attribute names in code-point order, like Python", () => {
+    // pinned against the Python SDK: sorted() orders str by code point
+    const p = first(
+      '<p data-aim="p1" data-x-\u{1f600}="emoji" data-x-="pua">x</p>',
+    );
+    expect(serialize(p)).toBe(
+      '<p data-aim="p1" data-x-="pua" data-x-\u{1f600}="emoji">x</p>',
+    );
+  });
+
+  it("sorts astral-vs-BMP class tokens in code-point order, like Python", () => {
+    expect(sortClassTokens("z-\u{1f600} z- plain")).toBe(
+      "plain z- z-\u{1f600}",
+    );
   });
 
   it("orders attributes: markers first, alphabetical middle, src/href last", () => {

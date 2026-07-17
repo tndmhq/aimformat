@@ -26,10 +26,27 @@ export function escapeAttr(s: string): string {
   return s.replaceAll("&", "&amp;").replaceAll('"', "&quot;");
 }
 
+/**
+ * Compare strings by Unicode code point, matching Python's `str` ordering.
+ * JS `<` compares UTF-16 code units, which ranks astral characters (encoded
+ * as surrogate pairs, 0xD800–0xDFFF) below BMP characters above U+D7FF —
+ * the opposite of their code-point order.
+ */
+export function compareCodePoints(a: string, b: string): number {
+  let i = 0;
+  while (i < a.length && i < b.length) {
+    const ca = a.codePointAt(i)!;
+    const cb = b.codePointAt(i)!;
+    if (ca !== cb) return ca - cb;
+    i += ca > 0xffff ? 2 : 1;
+  }
+  return a.length - i === 0 ? (b.length - i === 0 ? 0 : -1) : 1;
+}
+
 /** Class tokens sorted and de-duplicated (a set, canonically spelled). */
 export function sortClassTokens(value: string): string {
   return [...new Set(value.split(/\s+/).filter((t) => t.length > 0))]
-    .sort()
+    .sort(compareCodePoints)
     .join(" ");
 }
 
@@ -80,9 +97,7 @@ export function canonicalAttrs(el: Element, inSvg: boolean): string {
     }
   }
   ordered.push(
-    ...[...remaining.entries()].sort(([a], [b]) =>
-      a < b ? -1 : a > b ? 1 : 0,
-    ),
+    ...[...remaining.entries()].sort(([a], [b]) => compareCodePoints(a, b)),
   );
   ordered.push(...tail);
 
