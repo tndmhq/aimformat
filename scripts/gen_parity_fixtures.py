@@ -10,6 +10,10 @@ packed assets, unicode/whitespace edges, and a flattened file.
 
 Run from the repo root: python3 scripts/gen_parity_fixtures.py
 Then refresh the goldens: python3 scripts/dump_projection.py
+
+Chunk ids are pinned in the payloads, but proposal ids are tool-assigned
+(random, like ``gen_examples.py``), so regenerating rewrites them —
+always regenerate fixtures and goldens together and review the diff.
 """
 
 from __future__ import annotations
@@ -88,7 +92,7 @@ def nested_slides_doc() -> aim.AimDocument:
             author=BOT,
             at=t(0),
         )
-        doc.add_chunk("<aim-page-break></aim-page-break>", author=BOT, at=t(1))
+        doc.add_chunk('<aim-page-break data-aim="pgb1"></aim-page-break>', author=BOT, at=t(1))
         doc.add_chunk(
             '<aim-slide data-aim-container="s2" style="width:960px; height:540px">'
             '<h2 data-aim="t2" style="left:48px; top:32px; width:600px">Numbers</h2>'
@@ -231,9 +235,7 @@ def unicode_whitespace_doc() -> aim.AimDocument:
     """Unicode (astral, CJK, NBSP), escapes, significant whitespace."""
     doc = aim.new_document(title="Unicode & whitespace — café, 文書, 🎉")
     with doc.batch():
-        doc.add_chunk(
-            '<h1 data-aim="ttl">Καφές &amp; crème brûlée — 🎉</h1>', author=BOT, at=t(0)
-        )
+        doc.add_chunk('<h1 data-aim="ttl">Καφές &amp; crème brûlée — 🎉</h1>', author=BOT, at=t(0))
         doc.add_chunk(
             '<p data-aim="esc">1 &lt; 2 &amp; 3 &gt; 2, non-breaking space, 中文文書.</p>',
             author=BOT,
@@ -251,8 +253,10 @@ def unicode_whitespace_doc() -> aim.AimDocument:
             at=t(3),
         )
         doc.add_chunk(
-            '<blockquote data-aim="q1"><p>Links: <a href="https://example.com/a?b=1&amp;c=2">query</a>, '
-            '<a href="mailto:luca@example.com">mail</a>, <a href="#aim:ttl">fragment</a>.</p></blockquote>',
+            '<blockquote data-aim="q1"><p>Links: '
+            '<a href="https://example.com/a?b=1&amp;c=2">query</a>, '
+            '<a href="mailto:luca@example.com">mail</a>, '
+            '<a href="#aim:ttl">fragment</a>.</p></blockquote>',
             author=BOT,
             at=t(4),
         )
