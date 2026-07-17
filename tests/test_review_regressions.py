@@ -3368,3 +3368,42 @@ class TestOrderedMarkersInListItemModifications:
         assert "~>1. A" in md
         assert "2. B~~}" in md
         assert "3. c" in md  # the trailing item's own ordinal is untouched
+
+
+class TestCyclicNestedListIngestion:
+    """AF-53: nested-list refs need the same cycle guard as body and inline
+    refs. A list reachable through a list item could point back to an
+    ancestor and recurse until Python raised ``RecursionError``."""
+
+    def test_cycle_degrades_without_losing_reachable_items(self):
+        data = {
+            "name": "cyclic-list",
+            "body": {"children": [{"$ref": "#/groups/0"}]},
+            "groups": [
+                {
+                    "label": "list",
+                    "children": [{"$ref": "#/texts/0"}],
+                },
+                {
+                    "label": "list",
+                    "children": [{"$ref": "#/texts/1"}],
+                },
+            ],
+            "texts": [
+                {
+                    "label": "list_item",
+                    "text": "outer",
+                    "children": [{"$ref": "#/groups/1"}],
+                },
+                {
+                    "label": "list_item",
+                    "text": "inner",
+                    "children": [{"$ref": "#/groups/0"}],
+                },
+            ],
+        }
+
+        doc = aim.from_docling(data)
+
+        assert [chunk.text for chunk in doc.chunks] == ["outerinner"]
+        assert aim.lint(doc) == []

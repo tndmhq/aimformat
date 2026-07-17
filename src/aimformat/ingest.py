@@ -225,14 +225,14 @@ def _list_tag(res: _Resolver, group: dict) -> str:
     return "ol" if items and all(c.get("enumerated") for c in items) else "ul"
 
 
-def _li_markup(res: _Resolver, item: dict) -> str:
+def _li_markup(res: _Resolver, item: dict, _stack: set[int] | None = None) -> str:
     """One list item; nested lists and tables become its inline content."""
     inner = _fmt_markup(item)
     for child in res.children(item):
         label = child.get("label")
         if label in ("list", "ordered_list"):
             tag = _list_tag(res, child)
-            nested = _list_items_markup(res, child)
+            nested = _list_items_markup(res, child, _stack)
             inner += f"<{tag}>{nested}</{tag}>"
         elif label == "table":
             nested_table = _table_markup(child)
@@ -247,23 +247,32 @@ def _li_markup(res: _Resolver, item: dict) -> str:
     return f"<li>{inner}</li>"
 
 
-def _list_items_markup(res: _Resolver, group: dict) -> str:
+def _list_items_markup(res: _Resolver, group: dict, _stack: set[int] | None = None) -> str:
     """A list group's items — including sub-groups docling parents directly
     on the group (not on an item), which become a nested list inside the
     preceding item (or a wrapper item when they lead)."""
-    parts: list[str] = []
-    for child in res.children(group):
-        label = child.get("label")
-        if label == "list_item":
-            parts.append(_li_markup(res, child))
-        elif label in ("list", "ordered_list"):
-            tag = _list_tag(res, child)
-            nested = f"<{tag}>{_list_items_markup(res, child)}</{tag}>"
-            if parts:
-                parts[-1] = parts[-1][: -len("</li>")] + nested + "</li>"
-            else:
-                parts.append(f"<li>{nested}</li>")
-    return "".join(parts)
+    if _stack is None:
+        _stack = set()
+    identity = id(group)
+    if identity in _stack:
+        return ""
+    _stack.add(identity)
+    try:
+        parts: list[str] = []
+        for child in res.children(group):
+            label = child.get("label")
+            if label == "list_item":
+                parts.append(_li_markup(res, child, _stack))
+            elif label in ("list", "ordered_list"):
+                tag = _list_tag(res, child)
+                nested = f"<{tag}>{_list_items_markup(res, child, _stack)}</{tag}>"
+                if parts:
+                    parts[-1] = parts[-1][: -len("</li>")] + nested + "</li>"
+                else:
+                    parts.append(f"<li>{nested}</li>")
+        return "".join(parts)
+    finally:
+        _stack.remove(identity)
 
 
 def _table_markup(table: dict) -> str | None:
