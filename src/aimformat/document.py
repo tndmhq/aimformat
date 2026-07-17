@@ -406,14 +406,40 @@ class DocState:
             parent.children.remove(m)
         parent.children[idx:idx] = parse_fragment(markup)
 
+    def _target_elements(self, target: str) -> list[tuple[Element, Element]]:
+        """(parent, element) pairs for a target, in remove()'s lookup order."""
+        i = self.top_index(target)
+        if i is not None:
+            return [(self.body, self.constructs()[i])]
+        cont = self.container_node(target)
+        if cont is not None and cont is not self.body:
+            return [(self._parent_of(cont), cont)]
+        parent, members = self.find_chunk(target)
+        if not members or parent is None:
+            raise TargetNotFound(f"cannot move {target!r}: not found")
+        return [(parent, m) for m in members]
+
     def move(self, target: str, to: Anchor) -> None:
         if to.after == target:
             raise InvalidOperation(f"cannot move {target!r} after itself")
-        # all lookups before the first mutation: a bad destination must not
-        # leave the chunk removed with no event to show for it
-        self.resolve_insert_point(to)
-        markup = self.remove(target)
+        originals = self._target_elements(target)
+        # a destination equal to or inside the moved subtree vanishes with
+        # the removal — reject while the tree is still untouched
+        moved_ids: set[str] = set()
+        for _, el in originals:
+            for node in el.iter():
+                moved_ids.update(filter(None, (node.chunk_id, node.container_id)))
+        if to.container in moved_ids or (to.after is not None and to.after in moved_ids):
+            raise InvalidOperation(f"cannot move {target!r} into itself or its own subtree")
+        markup = self.serial(target)
+        if markup is None:
+            raise TargetNotFound(f"cannot move {target!r}: not found")
+        # insert first, then remove the originals by identity: any anchor
+        # failure raises before the first mutation, so the chunk is never
+        # left removed with no event to show for it
         self.insert(markup, to)
+        for parent, el in originals:
+            parent.children.remove(el)
 
     def _parent_of(self, el: Element) -> Element:
         for top in [self.body] + self.constructs():

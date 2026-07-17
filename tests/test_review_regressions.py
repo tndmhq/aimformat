@@ -944,3 +944,63 @@ def _mini(construct: str) -> str:
     doc = aim.new_document(title="mini")
     text = doc.dumps()
     return text.replace("<body>", "<body>\n" + construct)
+
+
+# ===========================================================================
+# Wave 6: findings from the 2026-07 deep review (consolidated ids AF-xx)
+# ===========================================================================
+
+
+class TestMoveStaysOutOfItsOwnSubtree:
+    """AF-01: a move whose destination is the moved construct itself or any
+    of its descendants used to remove the subtree, then fail the re-insert —
+    mutation with no event, silent data loss, verify() broken."""
+
+    @pytest.fixture
+    def nested_doc(self):
+        doc = aim.new_document(title="T")
+        doc.add_chunk('<p data-aim="p1">before</p>', author=BOT, at=ts(0))
+        doc.add_chunk(
+            '<aim-slide data-aim-container="s1">'
+            '<ul data-aim-container="l2"><li data-aim="i1">x</li></ul>'
+            "</aim-slide>",
+            author=BOT,
+            at=ts(1),
+        )
+        return doc
+
+    def test_move_container_into_itself_fails_closed(self, nested_doc):
+        before = nested_doc.dumps()
+        with pytest.raises(InvalidOperation):
+            nested_doc.move_chunk("s1", author=ME, container="s1", at=ts(2))
+        assert nested_doc.dumps() == before
+        assert nested_doc.verify() == []
+
+    def test_move_container_into_own_descendant_fails_closed(self, nested_doc):
+        before = nested_doc.dumps()
+        with pytest.raises(InvalidOperation):
+            nested_doc.move_chunk("s1", author=ME, container="l2", at=ts(2))
+        assert nested_doc.dumps() == before
+        assert nested_doc.verify() == []
+
+    def test_accepting_a_self_move_proposal_fails_closed(self, nested_doc):
+        p = nested_doc.propose_move("s1", author=BOT, container="l2", at=ts(2))
+        before = nested_doc.dumps()
+        with pytest.raises(InvalidOperation):
+            nested_doc.accept(p.id, decided_by=ME, at=ts(3))
+        # fail closed: nothing mutated, the card is still pending
+        assert nested_doc.dumps() == before
+        assert [q.id for q in nested_doc.proposals] == [p.id]
+        assert nested_doc.verify() == []
+
+    def test_low_level_move_rejects_descendant_after_anchor(self, nested_doc):
+        from aimformat.document import Anchor
+
+        with pytest.raises(InvalidOperation):
+            nested_doc._state.move("s1", Anchor("l2", "i1"))
+        assert nested_doc.verify() == []
+
+    def test_legit_move_still_works(self, nested_doc):
+        nested_doc.move_chunk("s1", author=ME, container="body", after=None, at=ts(2))
+        assert nested_doc.body_ids == ["s1", "p1"]
+        assert nested_doc.verify() == []
