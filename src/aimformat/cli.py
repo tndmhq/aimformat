@@ -220,7 +220,7 @@ def _cmd_resolve(args: argparse.Namespace, decision: str) -> int:
         # first, then moves, then deletes, so nothing pulls an anchor out
         # from under a card that still needs it (and a container modify
         # waits for a move that rescues a member its payload drops)
-        pids = [p.id for p in resolution_order(doc.proposals, doc)]
+        pids = [p.id for p in resolution_order(doc.proposals, doc, accepting=decision == "accept")]
     else:
         pids = args.pids
     if not pids:

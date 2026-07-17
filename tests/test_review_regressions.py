@@ -3237,9 +3237,10 @@ class TestMovesStayAheadOfAnchorDroppingModifies:
     the payload. A modify that instead drops the move's DESTINATION anchor
     ordered first, stripped the landing point, and ``accept --all`` failed
     on the move with TargetNotFound after partially resolving the lane. A
-    container modify now also waits for moves whose destination anchor (or
-    destination container) its payload removes; one keeping the anchor
-    stays ahead of the move, as before."""
+    container modify now also identifies moves whose destination anchor (or
+    destination container) its payload removes. If the delayed replacement
+    would then erase the incoming chunk, accept-all refuses the incompatible
+    lane; one keeping the anchor stays ahead of the move, as before."""
 
     @pytest.fixture
     def anchor_drop_lane(self):
@@ -3258,21 +3259,38 @@ class TestMovesStayAheadOfAnchorDroppingModifies:
         )
         return doc
 
-    def test_move_orders_before_the_anchor_dropping_modify(self, anchor_drop_lane):
+    def test_anchor_dropping_modify_conflicts_with_the_incoming_move(self, anchor_drop_lane):
         from aimformat.document import resolution_order
 
-        actions = [p.action for p in resolution_order(anchor_drop_lane.proposals, anchor_drop_lane)]
-        assert actions == ["move", "modify"]
+        with pytest.raises(aim.InvalidOperation, match="would erase moved chunk 'x'"):
+            resolution_order(anchor_drop_lane.proposals, anchor_drop_lane)
 
-    def test_accept_all_resolves_the_whole_lane(self, anchor_drop_lane):
+    def test_conflict_is_detected_before_accept_all_mutates(self, anchor_drop_lane):
         from aimformat.document import resolution_order
 
-        for p in resolution_order(anchor_drop_lane.proposals, anchor_drop_lane):
-            anchor_drop_lane.accept(p.id, decided_by=ME, at=ts(4))
-        assert anchor_drop_lane.proposals == []
-        assert anchor_drop_lane.verify() == []
+        before = anchor_drop_lane.dumps()
+        with pytest.raises(aim.InvalidOperation, match="reject one of the proposals"):
+            for p in resolution_order(anchor_drop_lane.proposals, anchor_drop_lane):
+                anchor_drop_lane.accept(p.id, decided_by=ME, at=ts(4))
+        assert anchor_drop_lane.dumps() == before
 
-    def test_dropped_destination_container_also_delays(self):
+    def test_accept_all_refuses_a_move_the_delayed_modify_would_erase(self, anchor_drop_lane):
+        from aimformat.export_docx import _resolve_copy
+
+        before = anchor_drop_lane.dumps()
+        with pytest.raises(aim.InvalidOperation, match="would erase moved chunk"):
+            _resolve_copy(anchor_drop_lane, "accept-all")
+        assert anchor_drop_lane.dumps() == before
+
+    def test_reject_all_can_clear_the_incompatible_lane(self, anchor_drop_lane):
+        from aimformat.export_docx import _resolve_copy
+
+        resolved = _resolve_copy(anchor_drop_lane, "reject-all")
+        assert resolved.proposals == []
+        assert resolved.body_ids == ["l1", "l2"]
+        assert resolved.verify() == []
+
+    def test_dropped_destination_container_is_also_a_conflict(self):
         doc = aim.new_document(title="T")
         doc.add_chunk(
             '<ul data-aim-container="l1"><li data-aim="x">X</li></ul>', author=ME, at=ts(0)
@@ -3289,7 +3307,8 @@ class TestMovesStayAheadOfAnchorDroppingModifies:
         )
         from aimformat.document import resolution_order
 
-        assert [p.action for p in resolution_order(doc.proposals, doc)] == ["move", "modify"]
+        with pytest.raises(aim.InvalidOperation, match="would erase moved chunk 'x'"):
+            resolution_order(doc.proposals, doc)
 
     def test_modify_keeping_the_anchor_stays_ahead(self):
         doc = aim.new_document(title="T")

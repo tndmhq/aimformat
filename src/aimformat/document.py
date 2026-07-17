@@ -158,7 +158,10 @@ def _payload_ids(payload_html: str) -> set[str]:
 
 
 def resolution_order(
-    proposals: Sequence[Proposal], doc: AimDocument | None = None
+    proposals: Sequence[Proposal],
+    doc: AimDocument | None = None,
+    *,
+    accepting: bool = True,
 ) -> list[Proposal]:
     """A dependency-safe order for resolving a whole pending lane.
 
@@ -174,13 +177,18 @@ def resolution_order(
     delete would wait; the same delay applies when the payload drops a
     move's destination anchor or destination container (resolving the
     modify first would strip the move's landing point and fail the lane).
-    A modify whose payload keeps the member stays ahead of the move
-    (relocating first would make the payload re-introduce a duplicate id).
+    If that delayed modify also owns the move's destination and omits the
+    incoming chunk, neither order is safe: accepting the whole lane is
+    refused before any proposal mutates the document. A modify whose payload
+    keeps the member stays ahead of the move (relocating first would make the
+    payload re-introduce a duplicate id). Set *accepting* false when ordering
+    a reject-all operation, where these write conflicts do not apply.
     Shared by ``aim accept/reject --all`` and the exporters'
     resolve-a-copy paths.
     """
     rank = {"move": 2, "delete": 4}
     after_moves: set[str] = set()  # modify card ids that must trail the moves
+    conflicts: list[tuple[Proposal, Proposal]] = []
     if doc is not None:
         moves = [p for p in proposals if p.action == "move" and p.target]
         for p in proposals:
@@ -194,13 +202,24 @@ def resolution_order(
             # a move needs its target rescued AND its landing point intact:
             # the modify waits when its payload drops the moved chunk, the
             # move's destination anchor, or the destination container
-            if any(
-                affected in inside and affected not in kept
-                for mv in moves
-                for affected in (mv.target, mv.anchor_after, mv.anchor_container)
-                if affected
-            ):
+            for mv in moves:
+                delayed = any(
+                    affected in inside and affected not in kept
+                    for affected in (mv.target, mv.anchor_after, mv.anchor_container)
+                    if affected
+                )
+                if not delayed:
+                    continue
                 after_moves.add(p.id)
+                if accepting and mv.anchor_container in inside and mv.target not in kept:
+                    conflicts.append((mv, p))
+    if conflicts:
+        move, modify = conflicts[0]
+        raise InvalidOperation(
+            f"cannot accept move proposal {move.id!r}: delayed modify proposal "
+            f"{modify.id!r} would erase moved chunk {move.target!r}; reject one "
+            "of the proposals first"
+        )
     pending = list(proposals)
     order: list[Proposal] = []
     while pending:
