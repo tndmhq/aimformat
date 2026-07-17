@@ -9,6 +9,7 @@ required to add entries.)
 
 | Date | Type | Entry | Status | What |
 |---|---|---|---|---|
+| 2026-07-17 23:56 | review | [postmerge-sweep-adversarial](2026-07-17_2356_review_postmerge-sweep-adversarial.md) | done | Adversarial review of the creation-order acceptance redesign: 5 real bugs fixed red-first (projection no-op guards, supersede exclusion, projection-only targets, projection-only add anchors, amend lane poisoning); dry-run atomicity, reconcile fail-closed, and spec-only move events verified clean. |
 | 2026-07-17 23:04 | plan | [pending-lane-creation-order](2026-07-17_2304_plan_pending-lane-creation-order.md) | done | Replace constraint ordering with creation-time projection validation, creation-order atomic replay, fail-closed reconcile, and spec-only move history |
 | 2026-07-17 20:42 | plan | [pr15-r9-complete-ordering-model](2026-07-17_2042_plan_pr15-r9-complete-ordering-model.md) | done | Close the move/modify/anchor ordering bug class with three regressions and a complete permutation reference model |
 | 2026-07-17 20:18 | plan | [pr15-cross-target-move-anchor-constraints](2026-07-17_2018_plan_pr15-cross-target-move-anchor-constraints.md) | done | Add cross-target move-anchor precedence and reconcile candidate-anchor viability with property coverage |
