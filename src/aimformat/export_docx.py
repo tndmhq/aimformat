@@ -246,6 +246,15 @@ def _block_children(el: Element) -> list[Element]:
     return [el]
 
 
+def _row_shape(tr: Element) -> list[tuple[int, int]]:
+    """A table row's structural signature: per-cell (colspan, rowspan)."""
+    return [
+        (int(c.get("colspan") or 1), int(c.get("rowspan") or 1))
+        for c in tr.elements()
+        if c.tag in ("td", "th")
+    ]
+
+
 _PX_VALUE_RE = re.compile(r"^(\d+(?:\.\d+)?)px$")
 
 
@@ -614,6 +623,32 @@ class _Exporter:
         rows = el.find_all(lambda e: e.tag == "tr")
         if not rows:
             return
+        # pending row-modifies: cell-level del+ins can express a replacement
+        # only when the grid shape is unchanged (same row count, same per-cell
+        # spans); a structural change becomes row-delete + inserted rows —
+        # fusing surplus cells into the last old cell produced a grid no
+        # accept/reject sequence in Word could turn into the AIM state
+        cellwise_rows: dict[int, list[Element]] = {}  # ri -> payload row cells
+        structural_ins: dict[int, list[Element]] = {}  # last-member ri -> payload rows
+        if not force:
+            member_rows: dict[str, list[int]] = {}
+            for ri, row in enumerate(rows):
+                if row.chunk_id and row.chunk_id in self.pending_mod:
+                    member_rows.setdefault(row.chunk_id, []).append(ri)
+            for rid, indices in member_rows.items():
+                payload_rows = [
+                    p for p in self._payload_elements(self.pending_mod[rid]) if p.tag == "tr"
+                ]
+                if len(payload_rows) == len(indices) and all(
+                    _row_shape(payload_rows[k]) == _row_shape(rows[i])
+                    for k, i in enumerate(indices)
+                ):
+                    for k, i in enumerate(indices):
+                        cellwise_rows[i] = [
+                            c for c in payload_rows[k].elements() if c.tag in ("td", "th")
+                        ]
+                else:
+                    structural_ins[indices[-1]] = payload_rows
         # true grid width: simulate the emit loop's cursor (spans shift later
         # cells right; a rowspan reaching below the last row is clamped), so
         # every (ri, ci) the loop touches exists in the table
@@ -634,10 +669,12 @@ class _Exporter:
                             spanned.add((ri + dr, ci + dc))
                 ci += cs
             ncols = max(ncols, ci)
+        for payload_rows in structural_ins.values():  # replacement rows may be wider
+            for p_row in payload_rows:
+                ncols = max(ncols, len([c for c in p_row.elements() if c.tag in ("td", "th")]))
         table = self.out.add_table(rows=len(rows), cols=ncols)
         table.style = "Table Grid" if self._has_style("Table Grid") else None
         occupied: set[tuple[int, int]] = set()
-        done_mods: set[str] = set()  # payload once per run chunk; later rows dele-only
         container_id = el.container_id
         for ri, row in enumerate(rows):
             rid = row.chunk_id or ""
@@ -645,11 +682,7 @@ class _Exporter:
             prop_del = self.pending_del.get(rid) if not force else None
             if force == "del":
                 prop_del = prop  # container-level: everything deleted
-            new_cells = None
-            if prop_mod is not None and rid not in done_mods:
-                done_mods.add(rid)
-                payload = self._payload_elements(prop_mod)
-                new_cells = [c for p in payload for c in p.elements() if c.tag in ("td", "th")]
+            new_cells = cellwise_rows.get(ri)  # structural members stay dele-only
             cells = [c for c in row.elements() if c.tag in ("td", "th")]
             ci = 0
             for orig_idx, cell_el in enumerate(cells):
@@ -673,28 +706,39 @@ class _Exporter:
                     self.rev.dele(para, runs, _actor_label(prop_del.author), prop_del.at)
                 elif prop_mod is not None:
                     self.rev.dele(para, runs, _actor_label(prop_mod.author), prop_mod.at)
-                    if new_cells and orig_idx < len(new_cells):
-                        take = (
-                            new_cells[orig_idx:]
-                            if orig_idx == len(cells) - 1
-                            else [new_cells[orig_idx]]
+                    if new_cells is not None:  # cellwise: shapes match 1:1
+                        self.rev.ins(
+                            para,
+                            _runs_of(new_cells[orig_idx]),
+                            _actor_label(prop_mod.author),
+                            prop_mod.at,
                         )
-                        for nc in take:  # surplus new cells join the last one
-                            self.rev.ins(
-                                para, _runs_of(nc), _actor_label(prop_mod.author), prop_mod.at
-                            )
                 else:
                     _apply_runs(para, runs)
                 ci += colspan
         # row-adds only after the content loop: inserting rows mid-loop would
         # shift the (ri, ci) coordinates the loop and the merges rely on
+        orig_trs = [r._tr for r in table.rows]  # 1:1 with the AIM rows
         if container_id and not force:
-            orig_trs = [r._tr for r in table.rows]  # 1:1 with the AIM rows
             self._emit_row_adds(table, None, container_id, None, ncols, first=True)
             for ri, row in enumerate(rows):
                 rid = row.chunk_id
                 if rid:
                     self._emit_row_adds(table, orig_trs[ri], container_id, rid, ncols)
+        # structural replacements insert right after their (deleted) old rows —
+        # closest to the anchor, ahead of any row-adds anchored on the chunk
+        for ri, payload_rows in structural_ins.items():
+            prop_mod = self.pending_mod[rows[ri].chunk_id or ""]
+            label, date = _actor_label(prop_mod.author), prop_mod.at
+            cur = orig_trs[ri]
+            for p_row in payload_rows:
+                new_row = table.add_row()  # appended; repositioned below
+                p_cells = [c for c in p_row.elements() if c.tag in ("td", "th")]
+                for idx in range(min(len(p_cells), ncols)):
+                    para = new_row.cells[idx].paragraphs[0]
+                    self.rev.ins(para, _runs_of(p_cells[idx]), label, date)
+                cur.addnext(new_row._tr)
+                cur = new_row._tr
 
     def _emit_row_adds(
         self,

@@ -1529,3 +1529,88 @@ class TestCriticMarkupKeepsHeaderAnchoredRowAdds:
         sep = next(i for i, ln in enumerate(lines) if ln.startswith("| ---"))
         added = next(i for i, ln in enumerate(lines) if "{++" in ln)
         assert added == sep + 1
+
+
+class TestTrackedStructuralRowModify:
+    """AF-39: a row modify that changes the grid shape was forced into the
+    old row's cells — surplus replacement cells fused into the last cell
+    (``A|B`` → ``X|Y|Z`` exported as ``X | YZ``), a grid no Word
+    accept/reject sequence could turn into the AIM state. Shape-changing
+    modifies now emit a tracked row-delete plus inserted replacement rows."""
+
+    @pytest.fixture
+    def two_col_doc(self):
+        doc = aim.new_document(title="T")
+        doc.add_chunk(
+            '<table data-aim-container="tbl">'
+            '<thead><tr data-aim="h"><th>K</th><th>V</th></tr></thead>'
+            '<tbody><tr data-aim="r1"><td>A</td><td>B</td></tr></tbody></table>',
+            author=ME,
+            at=ts(0),
+        )
+        return doc
+
+    @staticmethod
+    def _ins_cells_per_row(path):
+        import docx
+        from docx.oxml.ns import qn
+
+        d = docx.Document(str(path))
+        out = []
+        for tbl in d.tables:
+            for tr in tbl._tbl.findall(qn("w:tr")):
+                out.append(
+                    [
+                        "".join(
+                            t.text or ""
+                            for w in tc.iter(qn("w:ins"))
+                            for t in w.iter(qn("w:t"))
+                        )
+                        for tc in tr.findall(qn("w:tc"))
+                    ]
+                )
+        return out
+
+    def test_wider_replacement_row_keeps_cell_boundaries(self, two_col_doc, tmp_path):
+        pytest.importorskip("docx")
+        import docx
+        from docx.oxml.ns import qn
+
+        two_col_doc.propose_modify(
+            "r1",
+            '<tr data-aim="r1"><td>X</td><td>Y</td><td>Z</td></tr>',
+            author=BOT,
+            at=ts(1),
+        )
+        out = aim.to_docx(two_col_doc, tmp_path / "s.docx")
+        ins_rows = self._ins_cells_per_row(out)
+        assert ["X", "Y", "Z"] in ins_rows  # one inserted row, one cell each
+        assert not any("YZ" in c for row in ins_rows for c in row)  # no fusion
+        deleted = [
+            t.text for t in docx.Document(str(out)).element.body.iter(qn("w:delText"))
+        ]
+        assert "A" in deleted and "B" in deleted
+
+    def test_same_shape_modify_stays_cellwise(self, two_col_doc, tmp_path):
+        pytest.importorskip("docx")
+        two_col_doc.propose_modify(
+            "r1", '<tr data-aim="r1"><td>X</td><td>Y</td></tr>', author=BOT, at=ts(1)
+        )
+        out = aim.to_docx(two_col_doc, tmp_path / "c.docx")
+        ins_rows = self._ins_cells_per_row(out)
+        # replacement lands inside the original row's cells, not a new row
+        assert len(ins_rows) == 2 and ["X", "Y"] in ins_rows
+
+    def test_multi_row_replacement_inserts_every_row(self, two_col_doc, tmp_path):
+        pytest.importorskip("docx")
+        two_col_doc.propose_modify(
+            "r1",
+            '<tr data-aim="r1"><td>X</td><td>Y</td></tr>'
+            '<tr data-aim="r1"><td>P</td><td>Q</td></tr>',
+            author=BOT,
+            at=ts(1),
+        )
+        out = aim.to_docx(two_col_doc, tmp_path / "m.docx")
+        ins_rows = self._ins_cells_per_row(out)
+        first = ins_rows.index(["X", "Y"])
+        assert ins_rows[first + 1] == ["P", "Q"]  # both rows, in payload order
