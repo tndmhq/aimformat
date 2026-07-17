@@ -113,10 +113,9 @@ def _is_registry_svg(el: Element) -> bool:
 def serialize(node: Nodeish, *, in_svg: bool = False) -> str:
     """Inline canonical serialization of one node (no trailing newline).
 
-    A normal form, not an echo: HTML void elements never carry a slash
-    however they were written, foreign (SVG-context) elements with no
-    content always self-close, and every other element always has an
-    explicit end tag (spec §11.1)."""
+    A normal form, not an echo: HTML void elements never carry a slash,
+    non-void HTML elements always have an explicit end tag, and foreign
+    (SVG-context) elements with no content always self-close (spec §11.1)."""
     if isinstance(node, Text):
         return escape_text(node.data)
     if isinstance(node, Comment):
@@ -143,6 +142,8 @@ def _lines(node: Nodeish, *, in_svg: bool = False) -> list[str]:
         s = serialize(node)
         return [s] if s.strip() else []
     svg_here = in_svg or node.tag == "svg"
+    if svg_here and not node.children and node.raw is None:
+        return [serialize(node, in_svg=in_svg)]
     if node.tag in LINE_CONTAINERS or _is_registry_svg(node):
         out = [f"<{node.tag}{canonical_attrs(node, in_svg=svg_here)}>"]
         for c in node.children:

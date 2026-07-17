@@ -701,11 +701,12 @@ Byte-deterministic serialization is load-bearing: chain verification and
   line (it is hashed content). In the asset registry, each symbol sits on
   its own line — one data-URI per line, so one changed image is one
   changed diff line.
-- HTML void elements always serialize without `/`. Empty elements in foreign
-  (SVG) context always self-close with `/>`. Every other element, including
-  empty custom elements, always serializes with explicit open and close tags
-  and never self-closes. An authored self-closing spelling for a non-void,
-  non-foreign element is a conformance error (C002).
+- HTML void elements always serialize without `/`. HTML non-void elements,
+  including empty custom elements, always serialize with explicit open and
+  close tags and never self-close; an authored self-closing spelling for one
+  is a conformance error (C002). Empty elements in foreign (SVG) context always
+  self-close with `/>`; non-empty foreign elements use explicit open and close
+  tags.
 
 ### 11.2 JSON serialization
 

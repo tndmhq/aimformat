@@ -9,6 +9,7 @@ required to add entries.)
 
 | Date | Type | Entry | Status | What |
 |---|---|---|---|---|
+| 2026-07-17 12:26 | plan | [af-06-empty-registry-svg](2026-07-17_1226_plan_af-06-empty-registry-svg.md) | done | Clarify canonical self-closing rules and regress empty asset-registry SVG serialization |
 | 2026-07-17 12:09 | plan | [af-06-c002-review-fixes](2026-07-17_1209_plan_af-06-c002-review-fixes.md) | done | Address both C002 PR review findings with additive canonical linting, source-backed gating, and focused regressions |
 | 2026-07-17 11:48 | plan | [af-06-canonical-self-closing](2026-07-17_1148_plan_af-06-canonical-self-closing.md) | done | Normalize authored self-closing non-void HTML elements, reject them in lint, and regenerate canonical hashes and conformance artifacts |
 | 2026-07-17 09:07 | plan | [codex-pr12-followups](2026-07-17_0907_plan_codex-pr12-followups.md) | done | Address the five Codex follow-up findings on PR #12 with one verified regression fix and commit per finding |

@@ -1480,6 +1480,16 @@ class TestCanonicalSelfClosingNormalization:
     def test_C002_ignores_void_and_svg_context(self, markup):
         assert "C002" not in {f.code for f in aim.lint_text(_mini(markup))}
 
+    def test_empty_registry_svg_round_trips_self_closed_without_C002(self):
+        source = _mini(
+            '<aim-assets>\n<svg aria-hidden="true" height="0" width="0"/>\n</aim-assets>'
+        )
+
+        canonical = aim.loads(source).dumps()
+        assert canonical == source
+        assert aim.loads(canonical).dumps() == canonical
+        assert "C002" not in {f.code for f in aim.lint_text(canonical)}
+
 
 class TestReconcileHandlesWrappingContainers:
     """AF-07: a hand edit that wraps existing units into a NEW container is
