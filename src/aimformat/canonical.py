@@ -73,7 +73,12 @@ def canonical_attrs(el: Element, *, in_svg: bool) -> str:
     def fix(name: str) -> str:
         return adjust.get(name, name) if in_svg else name
 
-    remaining = {k: v for k, v in el.attrs}
+    remaining: dict[str, str | None] = {}
+    for k, v in el.attrs:
+        # HTML semantics: the FIRST duplicate wins, matching Element.get —
+        # last-wins here would rename a chunk under `aim normalize` and
+        # break the events targeting the id the reader resolved
+        remaining.setdefault(k, v)
     ordered: list[tuple[str, str | None]] = []
     for k in REGISTRY.attr_first:
         if k in remaining:

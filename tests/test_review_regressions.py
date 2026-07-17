@@ -2320,3 +2320,28 @@ class TestTemplatelessAddFailsAsAimError:
             templateless.amend_proposal(
                 templateless.proposals[0].id, '<p data-aim="a1">amended</p>', at=ts(6)
             )
+
+
+class TestDuplicateAttributesResolveFirstWins:
+    """AF-19: the reader resolves duplicate attributes first-wins (HTML
+    semantics) but the canonical serializer built its map last-wins — on
+    '<p data-aim="a" data-aim="b">' the document answered to 'a' while
+    dumps()/normalize emitted 'b', renaming the chunk and breaking every
+    event that targeted 'a'."""
+
+    def test_serializer_matches_the_reader(self):
+        from aimformat.canonical import serialize
+        from aimformat.dom import parse_fragment
+
+        el = parse_fragment('<p data-aim="a" data-aim="b">x</p>')[0]
+        assert el.chunk_id == "a"  # the reader's resolution
+        out = serialize(el)
+        assert 'data-aim="a"' in out and 'data-aim="b"' not in out
+
+    def test_normalize_keeps_the_resolved_id(self, basic_doc):
+        text = basic_doc.dumps().replace(
+            '<p data-aim="intro">', '<p data-aim="intro" data-aim="other">'
+        )
+        doc = aim.AimDocument.loads(text)
+        assert 'data-aim="intro"' in doc.dumps()
+        assert 'data-aim="other"' not in doc.dumps()
