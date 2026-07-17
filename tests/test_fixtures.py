@@ -37,3 +37,16 @@ def test_nok_fixture_trips_its_rule(path):
     level = REGISTRY.raw["lint_rules"][want][0]  # "error" | "warning"
     codes = {f.code for f in lint_path(path) if f.level == level}
     assert want in codes, f"expected {level}-level {want}, got {codes or 'no findings'}"
+
+
+@pytest.mark.parametrize("path", NOK, ids=lambda p: p.name)
+def test_nok_fixture_trips_exactly_its_rule(path):
+    """The generator's exactness contract, enforced in CI: a nok file
+    trips its own code and introduces no OTHER error — a lint change that
+    makes a fixture co-fire a second code must fail here, not wait for
+    the next manual gen_fixtures.py run (one rule per file, per
+    CONTRIBUTING)."""
+    want = path.name.split("_")[1]
+    want_errors = {want} if REGISTRY.raw["lint_rules"][want][0] == "error" else set()
+    errors = {f.code for f in lint_path(path) if f.level == "error"}
+    assert errors == want_errors, f"{path.name}: expected errors {want_errors}, got {errors}"
