@@ -129,8 +129,8 @@ First release published to PyPI: `pip install aimformat`.
   and `aim export`; non-stdlib dependencies remain behind optional extras.
 - **Canonical normalization**: `aim normalize FILE [-o OUT] [--check]`
   rewrites a loadable document in the spec §11 canonical form, or checks it
-  without writing. The operation is lossless and idempotent; vocabulary errors
-  remain for the linter instead of being coerced.
+  without writing. The operation is idempotent. Lint the authored file first:
+  normalization can discard invalid declarations and their diagnostic evidence.
 - **MCP server**: `pip install 'aimformat[mcp]'` (pinned `mcp==1.28.1`)
   then `aim mcp` — local stdio, six workflow tools: `aim_read` (projected
   view), `aim_edit`, `aim_propose`, `aim_resolve`, `aim_lint`,
