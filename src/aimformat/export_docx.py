@@ -38,7 +38,7 @@ import re
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from .document import AimDocument, Proposal, resolution_order
+from .document import AimDocument, Proposal
 from .dom import Element, Text, parse_fragment
 from .errors import InvalidOperation
 from .events import external
@@ -985,13 +985,10 @@ class _Exporter:
 def _resolve_copy(doc: AimDocument, decision: str) -> AimDocument:
     clone = AimDocument.loads(doc.dumps())
     decider = external("docx-export")
-    # dependency-safe order (chained adds after their anchor, deletes last
-    # per round) — shared with `aim accept/reject --all`
-    for p in resolution_order(clone.proposals, clone, accepting=decision == "accept-all"):
-        if decision == "accept-all":
-            clone.accept(p.id, decided_by=decider)
-        else:
-            clone.reject(p.id, decided_by=decider)
+    if decision == "accept-all":
+        clone.accept_all(decided_by=decider)
+    else:
+        clone.reject_all(decided_by=decider)
     return clone
 
 

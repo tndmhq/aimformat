@@ -2098,6 +2098,67 @@ class AimDocument:
         return self.proposal(pid)
 
     # -- resolution ---------------------------------------------------------------------------
+    def accept_all(
+        self,
+        *,
+        decided_by: Actor,
+        explanation: str | None = None,
+        at: str | None = None,
+    ) -> list[Event]:
+        """Atomically accept the pending lane in creation order.
+
+        Invariant: a lane whose every card passed projected validation at
+        creation applies cleanly in creation order. The clone replay is the
+        universal gate for foreign-authored cards, out-of-band edits, and
+        partial manual resolutions that broke that projection. A failing dry
+        run never mutates this document.
+        """
+        pids = [proposal.id for proposal in resolution_order(self.proposals)]
+        dry_run = self._clone()
+        for pid in pids:
+            try:
+                dry_run.accept(
+                    pid,
+                    decided_by=decided_by,
+                    explanation=explanation,
+                    at=at,
+                )
+            except Exception as exc:  # foreign cards may fail outside AimError
+                raise InvalidOperation(
+                    f"cannot accept all: proposal {pid!r} failed: {exc}; "
+                    "the document is unchanged. Accept remaining proposals "
+                    "individually to repair the lane"
+                ) from exc
+
+        return [
+            self.accept(
+                pid,
+                decided_by=decided_by,
+                explanation=explanation,
+                at=at,
+            )
+            for pid in pids
+        ]
+
+    def reject_all(
+        self,
+        *,
+        decided_by: Actor,
+        explanation: str | None = None,
+        at: str | None = None,
+    ) -> list[Event]:
+        """Reject the pending lane, preserving chained-add rebinding."""
+        pids = [proposal.id for proposal in resolution_order(self.proposals)]
+        return [
+            self.reject(
+                pid,
+                decided_by=decided_by,
+                explanation=explanation,
+                at=at,
+            )
+            for pid in pids
+        ]
+
     def accept(
         self,
         pid: str,
