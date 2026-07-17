@@ -110,7 +110,9 @@ def _inline_text(children: list[Any] | None) -> str:
     """Plain text represented by an inline token list."""
     out: list[str] = []
     for tok in children or []:
-        if tok.type in ("text", "code_inline", "html_inline", "image"):
+        if tok.type == "image":
+            out.append(_inline_text(tok.children) if tok.children else tok.content)
+        elif tok.type in ("text", "code_inline", "html_inline"):
             out.append(tok.content)
         elif tok.type in ("softbreak", "hardbreak"):
             out.append(" ")

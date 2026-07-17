@@ -3605,6 +3605,12 @@ class TestMarkdownFormattedHeadingTitle:
         assert doc.title == "Bold day with code"
         assert aim.lint(doc) == []
 
+    def test_title_uses_parsed_formatted_image_alt_text(self):
+        doc = aim.from_markdown("# ![**Bold**](https://example.com/x.png)")
+
+        assert doc.title == "Bold"
+        assert aim.lint(doc) == []
+
 
 class TestRejectedMoveAuditDestination:
     """AF-11: rejecting a move removed its proposal card, the only record
