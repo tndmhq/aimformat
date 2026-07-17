@@ -3474,3 +3474,22 @@ class TestMarkdownFormattedHeadingTitle:
 
         assert doc.title == "Bold day with code"
         assert aim.lint(doc) == []
+
+
+class TestRejectedMoveAuditDestination:
+    """AF-11: rejecting a move removed its proposal card, the only record
+    of the proposed destination, without copying that destination into the
+    resolution event."""
+
+    def test_rejected_move_keeps_proposed_destination(self, basic_doc):
+        before = basic_doc.body_ids
+        proposal = basic_doc.propose_move(
+            "intro", container="body", after=None, author=BOT, at=ts(8)
+        )
+
+        event = basic_doc.reject(proposal.id, decided_by=ME, at=ts(9))
+
+        assert event.get("to") == {"container": "body", "after": None}
+        assert basic_doc.body_ids == before
+        assert event.validate() == []
+        assert basic_doc.verify() == []
