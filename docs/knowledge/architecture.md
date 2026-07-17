@@ -49,6 +49,13 @@ codes bidirectionally in sync with what `lint.py` can actually emit.
   if a test fails with C001, fix the producer, don't post-process.
 - **Ids are never reused** (deleted ids stay burned; `_taken_ids()` scans
   body + history + pending payloads).
+- **Pending-lane ordering is a state constraint problem, not a global action
+  rank.** `resolution_order(..., doc)` preflights acceptance on throwaway
+  states; repeated moves keep card order but each hop is scheduled against the
+  exact pre/post container state it needs. A returned lane must already have a
+  complete clean resolution, and an impossible lane is refused before the live
+  document mutates. Reconcile applies the same principle to viability: a move's
+  adopted destination kind may be superseded by a pending destination modify.
 - **Payload equality is the verification primitive.** If you change
   canonical form in any way, every stored payload in every fixture/example
   changes meaning — regenerate fixtures and examples, and expect checkpoint
