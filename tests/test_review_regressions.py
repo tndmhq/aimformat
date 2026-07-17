@@ -1943,6 +1943,26 @@ class TestCriticMarkupWidensForProposedRows:
         assert "| --- | --- | --- |" in lines
         assert "| H1 | H2 |  |" in lines
 
+    def test_nested_table_in_a_proposed_row_does_not_inflate_the_width(self, two_col_doc):
+        """codex-pr15-p2-3: ``root.iter()`` counted every descendant
+        ``<tr>``, so an unmarked table nested inside a proposed row's cell
+        inflated the OUTER table to the nested row's width (a 2-cell row
+        with a 4-cell nested table exported as 4 outer columns). Only the
+        payload's outer ``<tr>`` roots count."""
+        two_col_doc.propose_add(
+            '<tr data-aim="nr"><td>C'
+            "<table><tr><td>1</td><td>2</td><td>3</td><td>4</td></tr></table>"
+            "</td><td>D</td></tr>",
+            author=BOT,
+            container="tbl",
+            after="r1",
+            at=ts(1),
+        )
+        lines = aim.to_markdown(two_col_doc, pending="criticmarkup").splitlines()
+        assert "| --- | --- |" in lines
+        assert "| H1 | H2 |" in lines
+        assert "| A | B |" in lines  # no phantom empty cells
+
 
 class TestTrackedStructuralRowModify:
     """AF-39: a row modify that changes the grid shape was forced into the

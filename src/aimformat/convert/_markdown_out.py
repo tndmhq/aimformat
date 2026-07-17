@@ -129,7 +129,9 @@ def _proposal_row_width(proposal: Proposal) -> int:
     if not proposal.payload_html:
         return 0
     fragment = parse_html(proposal.payload_html)
-    rows = [node for root in fragment.elements() for node in root.iter() if node.tag == "tr"]
+    # outer payload rows only: a table nested inside a cell has its own
+    # grid and must not widen the table this proposal lands in
+    rows = [root for root in fragment.elements() if root.tag == "tr"]
     return max(
         (sum(cell.tag in ("td", "th") for cell in row.elements()) for row in rows),
         default=0,
