@@ -1332,7 +1332,10 @@ class TestMovesStayAheadOfAncestorReplacements:
         )
         doc.propose_move("x", author=BOT, container="body", at=ts(1))
         doc.propose_modify(
-            "lst", '<ul data-aim-container="lst"><li data-aim="x">keep!</li></ul>', author=BOT, at=ts(2)
+            "lst",
+            '<ul data-aim-container="lst"><li data-aim="x">keep!</li></ul>',
+            author=BOT,
+            at=ts(2),
         )
         from aimformat.document import resolution_order
 

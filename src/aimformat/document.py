@@ -187,13 +187,9 @@ def resolution_order(
             if node is None:
                 continue
             kept = _payload_ids(p.payload_html or "")
-            for mv in moves:
-                t = mv.target
-                if t in kept:
-                    continue
-                if node.find(lambda e, t=t: e.chunk_id == t or e.container_id == t) is not None:
-                    after_moves.add(p.id)
-                    break
+            inside = {i for e in node.iter() for i in (e.chunk_id, e.container_id) if i}
+            if any(mv.target in inside and mv.target not in kept for mv in moves):
+                after_moves.add(p.id)
     pending = list(proposals)
     order: list[Proposal] = []
     while pending:
