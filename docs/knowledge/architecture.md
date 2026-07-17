@@ -112,6 +112,15 @@ mirrors the Python modules (`dom.ts`/`parser.ts`/`canonical.ts`/
 3. **One parser code path.** The TS parser is a strict scanner for the
    canonical subset (no DOMParser, no Node APIs) — trade-offs documented
    in `ts/README.md`.
+4. **Port Python semantics, not JS defaults** (each of these shipped as a
+   real divergence, caught in the 2026-07-17 Codex review): string
+   ordering is *code point* (Python `sorted`), never JS's UTF-16
+   code-unit `sort()` — they differ when BMP chars above U+D7FF meet
+   astral chars (`compareCodePoints` in `canonical.ts`; pinned by the
+   `unicode-attrs` parity fixture); JSON field fallback is `dict.get` —
+   default only when *missing*, never on explicit `null` (so no `??`);
+   numeric character references go through HTML's replacement table
+   (`html._replace_charref`), not raw `fromCodePoint`.
 
 Fixture regeneration re-mints proposal ids (tool-assigned, like
 `gen_examples.py`): always regenerate fixtures and goldens together.
