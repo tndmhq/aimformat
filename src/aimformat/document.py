@@ -2624,8 +2624,8 @@ class AimDocument:
         ``origin: "reconcile"`` (*author* defaults to ``{type: external}``),
         declaring the current body truth going forward. Unmarked or
         conflicting ids are fixed up first (ids are tooling's job), and
-        pending proposals whose target vanished are rejected. Also the
-        adoption path for hand-written files with no history at all.
+        pending proposals that no longer apply in creation order are rejected.
+        Also the adoption path for hand-written files with no history at all.
 
         With ``dry_run=True`` nothing is mutated — the returned
         :class:`ReconcileReport` describes what *would* be done. Raises

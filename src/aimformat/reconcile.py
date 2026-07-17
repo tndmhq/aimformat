@@ -43,13 +43,12 @@ from .document import (
     AimDocument,
     Anchor,
     DocState,
-    Proposal,
-    _anchor_resolves_in_container,
     _apply_move_data,
     _now_iso,
+    resolution_order,
 )
 from .dom import Element, parse_fragment, parse_html
-from .errors import AimError, HistoryError
+from .errors import AimError, HistoryError, InvalidOperation
 from .events import Actor, Event, external
 from .registry import REGISTRY
 
@@ -547,186 +546,47 @@ def _drive(S: AimDocument, work: AimDocument, author: Actor, at: str | None) -> 
 def _reject_dangling(
     S: AimDocument, author: Actor, at: str | None, report: ReconcileReport
 ) -> None:
-    """Pending proposals whose target or anchor no longer resolves can never
-    be accepted; reject them so the reconciled document lints clean.
+    """Reject pending cards that fail against the reconciled projection.
 
-    Card order carries no dependency meaning (a manual reorder is legal) and
-    rejecting an add rebinds any chained card's anchor in place — possibly a
-    card this pass already validated. Iterate to a fixpoint: after any pass
-    that rejected something, validate every survivor again."""
+    Reconcile is deliberately fail-closed. Replay survivors in creation order
+    on a clone of the adopted body; the first target, anchor, self-subtree, or
+    destination-member failure rejects that card on the real reconcile state.
+    Rejection can rebind chained adds, so restart until every survivor replays
+    cleanly.
+    """
+    while S.proposals:
+        projection = S._clone()
+        try:
+            order = resolution_order(projection.proposals)
+        except InvalidOperation as exc:
+            # A foreign-authored chained-add cycle has no valid first card.
+            # Rejecting the first card breaks the cycle and lets the fixpoint
+            # revalidate every survivor after normal rejection rebinding.
+            proposal = S.proposals[0]
+            reason = str(exc)
+        else:
+            proposal = None
+            reason = ""
+            for candidate in order:
+                try:
+                    projection.accept(candidate.id, decided_by=author, at=at)
+                except Exception as exc:  # foreign cards can fail outside AimError
+                    proposal = S.proposal(candidate.id)
+                    reason = str(exc) or type(exc).__name__
+                    break
 
-    def pending_destination_accepts(anchor: Anchor, targets: list[tuple[Element, Element]]) -> bool:
-        """Can a pending replacement make these move members legal?
-
-        Reconcile validates against the adopted out-of-band body, but lane
-        ordering may put a pending destination modify before the move. Judge
-        that post-modify container as an alternative viable state instead of
-        permanently rejecting the move from the current container kind alone.
-        """
-        members = [element for _, element in targets]
-        for proposal in S.proposals:
-            if proposal.action != "modify" or proposal.target != anchor.container:
-                continue
-            roots = [
-                node
-                for node in parse_fragment(proposal.payload_html or "")
-                if isinstance(node, Element)
-            ]
-            container = next(
-                (node for node in roots if node.container_id == anchor.container),
-                None,
-            )
-            if container is None or not _anchor_resolves_in_container(container, anchor):
-                continue
-            try:
-                S._state._guard_item_members(container, members)
-            except AimError:
-                continue
-            return True
-        return False
-
-    def pending_move_rescues(proposal: Proposal, moved_ids: set[str]) -> bool:
-        """Can an earlier pending move carry a trapped destination outside?
-
-        The rescue must move every recorded insertion-point dependency that
-        currently sits in the proposal's target subtree, without carrying the
-        target itself, and land that subtree in an external container. Each
-        candidate is independently revalidated by the fixpoint loop; if it is
-        later rejected, this proposal is reconsidered and rejected too.
-        """
-        dependencies = {
-            dependency
-            for dependency in (proposal.anchor_container or "body", proposal.anchor_after)
-            if dependency is not None and dependency in moved_ids
-        }
-        if not dependencies:
-            return False
-        for candidate in S.proposals:
-            if candidate.id == proposal.id:
-                break
-            if candidate.action != "move" or candidate.target is None:
-                continue
-            try:
-                targets = S._state._target_elements(candidate.target)
-            except AimError:
-                continue
-            candidate_ids = {
-                value
-                for _, element in targets
-                for descendant in element.iter()
-                for value in (descendant.chunk_id, descendant.container_id)
-                if value
-            }
-            anchor = Anchor(
-                candidate.anchor_container or "body",
-                candidate.anchor_after,
-                candidate.anchor_shell,
-            )
-            if (
-                not dependencies.issubset(candidate_ids)
-                or proposal.target in candidate_ids
-                or anchor.container in moved_ids
-                or anchor.container in candidate_ids
-                or (anchor.after is not None and anchor.after in candidate_ids)
-            ):
-                continue
-            try:
-                S._state.resolve_insert_point(anchor)
-                container = S._state.container_node(anchor.container)
-                if container is not None:
-                    S._state._guard_item_members(container, [element for _, element in targets])
-            except AimError:
-                continue
-            return True
-        return False
-
-    rejected_one = True
-    while rejected_one:
-        rejected_one = False
-        pending_adds = {p.id for p in S.proposals if p.action == "add"}
-        for snapshot in list(S.proposals):
-            # Rejecting an earlier add can rebind this card's anchor in-place.
-            # Re-read the live card rather than validating the stale snapshot.
-            p = S.proposal(snapshot.id)
-            dangling = False
-            if (
-                p.action in ("modify", "delete", "move")
-                and p.target
-                and p.target not in ("aim:theme", "aim:doc")
-            ):
-                dangling = not S._state.exists(p.target)
-            if not dangling and p.action in ("add", "move"):
-                # A wrapping reconciliation can keep an anchor id alive while
-                # moving it below a new container. Global existence is therefore
-                # insufficient: re-run the same container-scoped validation used
-                # by proposal creation and acceptance against the reconciled tree.
-                if p.action == "add" and p.anchor_after in pending_adds:
-                    cont = p.anchor_container
-                    dangling = bool(
-                        cont and cont != "body" and S._state.container_node(cont) is None
-                    )
-                else:
-                    try:
-                        S._state.resolve_insert_point(
-                            Anchor(
-                                p.anchor_container or "body",
-                                p.anchor_after,
-                                shell=p.anchor_shell,
-                            )
-                        )
-                        if p.action == "move" and p.target:
-                            # a resolving anchor is not enough for a move: an
-                            # out-of-band edit can flip the destination
-                            # container's kind. The current kind is not the
-                            # only viable state, though: a pending modify of
-                            # that destination may restore compatibility and
-                            # is safely ordered before the move.
-                            targets = S._state._target_elements(p.target)
-                            cont = S._state.container_node(p.anchor_container or "body")
-                            if cont is not None:
-                                try:
-                                    S._state._guard_item_members(
-                                        cont, [element for _, element in targets]
-                                    )
-                                except AimError:
-                                    if not pending_destination_accepts(
-                                        Anchor(
-                                            p.anchor_container or "body",
-                                            p.anchor_after,
-                                            shell=p.anchor_shell,
-                                        ),
-                                        targets,
-                                    ):
-                                        raise
-                            # an edit can also nest the destination INSIDE
-                            # the moved subtree (c2 wrapped into c1): anchor
-                            # and members check out, but accept explodes on
-                            # the self-subtree guard. Re-run the same cycle
-                            # check DocState.move applies.
-                            moved_ids = {
-                                i
-                                for _, el in targets
-                                for node in el.iter()
-                                for i in (node.chunk_id, node.container_id)
-                                if i
-                            }
-                            trapped = (p.anchor_container or "body") in moved_ids or (
-                                p.anchor_after is not None and p.anchor_after in moved_ids
-                            )
-                            if trapped and not pending_move_rescues(p, moved_ids):
-                                dangling = True
-                    except AimError:
-                        dangling = True
-            if dangling:
-                S.reject(
-                    p.id,
-                    decided_by=author,
-                    at=at,
-                    explanation="reconcile: the proposal's target or anchor no "
-                    "longer resolves after an out-of-band edit",
-                )
-                report.rejected_proposals.append(p.id)
-                rejected_one = True
+        if proposal is None:
+            return
+        S.reject(
+            proposal.id,
+            decided_by=author,
+            at=at,
+            explanation=(
+                "reconcile: the proposal no longer applies in creation order "
+                f"after an out-of-band edit: {reason}"
+            ),
+        )
+        report.rejected_proposals.append(proposal.id)
 
 
 # ===========================================================================
