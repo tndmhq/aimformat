@@ -2017,3 +2017,60 @@ class TestDirectModifyOfReservedTargets:
             basic_doc.modify_chunk(
                 "aim:theme", "<p>not a theme block</p>", author=ME, at=ts(5)
             )
+
+
+def _tiny_png(width, height):
+    """A minimal opaque RGBA PNG of the given size, stdlib-only."""
+    import struct
+    import zlib
+
+    def chunk(tag, data):
+        body = tag + data
+        return struct.pack(">I", len(data)) + body + struct.pack(">I", zlib.crc32(body))
+
+    ihdr = struct.pack(">IIBBBBB", width, height, 8, 6, 0, 0, 0)
+    raw = b"".join(b"\x00" + b"\x00\x00\x00\xff" * width for _ in range(height))
+    return (
+        b"\x89PNG\r\n\x1a\n"
+        + chunk(b"IHDR", ihdr)
+        + chunk(b"IDAT", zlib.compress(raw))
+        + chunk(b"IEND", b"")
+    )
+
+
+class TestPackAssetsKeepsImageFidelity:
+    """AF-09: pack_assets froze a hardcoded 100×100 viewBox/image size into
+    every symbol (letterboxing any non-square image) and rebuilt the inline
+    ``<svg>`` from scratch, dropping the img's class/title and the other
+    registry-global attributes — both losses recorded forever by the modify
+    event."""
+
+    def _doc_with_png(self, width, height, extra_attrs=""):
+        import base64 as b64
+
+        uri = "data:image/png;base64," + b64.b64encode(_tiny_png(width, height)).decode()
+        doc = aim.new_document(title="T")
+        doc.add_chunk(
+            f'<figure data-aim="fig"><img alt="dot"{extra_attrs} src="{uri}"></figure>',
+            author=ME,
+            at=ts(0),
+        )
+        return doc
+
+    def test_intrinsic_dimensions_reach_the_symbol(self):
+        doc = self._doc_with_png(3, 2)
+        doc.pack_assets(author=aim.external("packer"), at=ts(1))
+        text = doc.dumps()
+        assert 'viewBox="0 0 3 2"' in text
+        assert 'viewBox="0 0 100 100"' not in text
+
+    def test_global_attributes_survive_packing(self):
+        doc = self._doc_with_png(3, 2, extra_attrs=' class="border" title="A dot"')
+        doc.pack_assets(author=aim.external("packer"), at=ts(1))
+        html = doc.chunk("fig").html
+        assert 'class="border"' in html and 'title="A dot"' in html
+        assert not [f for f in aim.lint_text(doc.dumps()) if f.level == "error"]
+        assert doc.verify() == []
+
+    def test_unparseable_blob_falls_back_to_square(self):
+        assert aim.AimDocument._image_dimensions(b"not an image") is None

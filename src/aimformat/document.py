@@ -2425,10 +2425,15 @@ class AimDocument:
                 self._decode_asset_datauri(img.get("src") or "")
             before = serialize_run(members)
             for img in imgs:
+                blob = self._decode_asset_datauri(img.get("src") or "")
                 asset_id = self._register_asset_datauri(img.get("src") or "", img.get("alt") or "")
                 svg = Element("svg", [("role", "img"), ("aria-label", img.get("alt") or "")])
-                if img.get("style"):
-                    svg.set("style", img.get("style"))
+                w, h = self._image_dimensions(blob) or (100, 100)
+                svg.set("width", str(w))  # unstyled display size = the img's
+                svg.set("height", str(h))  # intrinsic size, not the svg default
+                for attr in ("class", "style", "dir", "lang", "title"):
+                    if img.get(attr):  # packing is a storage-form change:
+                        svg.set(attr, img.get(attr))  # presentation survives
                 use = Element("use", [("href", f"#{asset_id}")], self_closing=True)
                 svg.children.append(use)
                 for m in members:
@@ -2449,6 +2454,35 @@ class AimDocument:
             self._append_event(data)
             packed += len(imgs)
         return packed
+
+    @staticmethod
+    def _image_dimensions(blob: bytes) -> tuple[int, int] | None:
+        """Intrinsic (width, height) of a PNG/GIF/JPEG blob, stdlib-only."""
+        if blob.startswith(b"\x89PNG\r\n\x1a\n") and len(blob) >= 24 and blob[12:16] == b"IHDR":
+            w = int.from_bytes(blob[16:20], "big")
+            h = int.from_bytes(blob[20:24], "big")
+            return (w, h) if w and h else None
+        if blob[:6] in (b"GIF87a", b"GIF89a") and len(blob) >= 10:
+            w = int.from_bytes(blob[6:8], "little")
+            h = int.from_bytes(blob[8:10], "little")
+            return (w, h) if w and h else None
+        if blob[:2] == b"\xff\xd8":  # JPEG: walk the markers to the first SOF
+            i = 2
+            while i + 9 < len(blob):
+                if blob[i] != 0xFF:
+                    i += 1
+                    continue
+                marker = blob[i + 1]
+                if marker in (0xFF, 0x01) or 0xD0 <= marker <= 0xD9:
+                    i += 2
+                    continue
+                length = int.from_bytes(blob[i + 2 : i + 4], "big")
+                if 0xC0 <= marker <= 0xCF and marker not in (0xC4, 0xC8, 0xCC):
+                    h = int.from_bytes(blob[i + 5 : i + 7], "big")
+                    w = int.from_bytes(blob[i + 7 : i + 9], "big")
+                    return (w, h) if w and h else None
+                i += 2 + length
+        return None
 
     @staticmethod
     def _decode_asset_datauri(data_uri: str) -> bytes:
@@ -2487,9 +2521,14 @@ class AimDocument:
         svg = self._assets_section().elements()[0]
         if any(s.get("id") == asset_id for s in svg.elements()):
             return asset_id
-        symbol = Element("symbol", [("id", asset_id), ("viewBox", "0 0 100 100")])
+        # the symbol's grid is the image's intrinsic geometry: a hardcoded
+        # square viewBox letterboxed every non-square image
+        w, h = self._image_dimensions(blob) or (100, 100)
+        symbol = Element("symbol", [("id", asset_id), ("viewBox", f"0 0 {w} {h}")])
         image = Element(
-            "image", [("height", "100"), ("width", "100"), ("href", data_uri)], self_closing=True
+            "image",
+            [("height", str(h)), ("width", str(w)), ("href", data_uri)],
+            self_closing=True,
         )
         symbol.children.append(image)
         svg.children.append(symbol)
