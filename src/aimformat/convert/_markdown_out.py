@@ -308,13 +308,19 @@ class _Renderer:
                 group.append(items[i])
             i += 1
             body: list[str] = []
+            start = list_number[0] if list_number is not None else None
             for li in group:
                 marker = f"{list_number[0]}. " if list_number is not None else "- "
                 if list_number is not None:
                     list_number[0] += 1
                 body.extend(self._li_lines(li, marker, indent))
             if self.critic and cid:
-                body = self._critic_wrap_lines(cid, body)
+                # the replacement renders from the group's own first ordinal
+                # (a throwaway counter), so accepting the span keeps the
+                # ordered marker instead of demoting the item to a bullet
+                body = self._critic_wrap_lines(
+                    cid, body, [start] if start is not None else None
+                )
                 body.extend(self._critic_adds((container_id, cid), list_number))
             lines.extend(body)
         return "\n".join(lines)
@@ -394,14 +400,16 @@ class _Renderer:
     def _note(self, prop: Proposal) -> str:
         return f"{{>>{_neutralize_critic(prop.explanation)}<<}}" if prop.explanation else ""
 
-    def _critic_wrap_lines(self, cid: str, lines: list[str]) -> list[str]:
+    def _critic_wrap_lines(
+        self, cid: str, lines: list[str], list_number: list[int] | None = None
+    ) -> list[str]:
         prop = self.mods.get(cid)
         if not prop:
             return lines
         old = _neutralize_critic("\n".join(lines))
         if prop.action == "delete":
             return [f"{{--{old}--}}{self._note(prop)}"]
-        new = self._payload_md(prop)
+        new = self._payload_md(prop, list_number)
         return [f"{{~~{old}~>{new}~~}}{self._note(prop)}"]
 
     def _critic_adds(

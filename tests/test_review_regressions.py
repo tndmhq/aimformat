@@ -3226,3 +3226,55 @@ class TestMovesStayAheadOfAnchorDroppingModifies:
         written = doc._state.serial("l2") or ""
         assert 'data-aim="x"' in written  # the move landed after the modify
         assert doc.verify() == []
+
+
+class TestOrderedMarkersInListItemModifications:
+    """codex-r3-5 (completes the round-1 ordered-marker fix): additions
+    got the live ordinal, but a modify proposal's replacement went through
+    ``_critic_wrap_lines`` with no list_number, so a pending modification
+    in an ``<ol>`` exported as ``{~~2. old~>- new~~}`` — accepting the
+    CriticMarkup demoted the item to an unordered bullet. The replacement
+    now renders from its group's own first ordinal."""
+
+    @pytest.fixture
+    def steps_doc(self):
+        doc = aim.new_document(title="T")
+        doc.add_chunk(
+            '<ol data-aim-container="steps">'
+            '<li data-aim="one">first</li><li data-aim="two">second</li></ol>',
+            author=ME,
+            at=ts(0),
+        )
+        return doc
+
+    def test_ol_item_modification_keeps_its_ordinal(self, steps_doc):
+        steps_doc.propose_modify("two", '<li data-aim="two">SECOND</li>', author=BOT, at=ts(1))
+        critic = aim.to_markdown(steps_doc, pending="criticmarkup")
+        accepted = aim.to_markdown(steps_doc, pending="accept-all")
+        assert "{~~2. second~>2. SECOND~~}" in critic
+        assert "2. SECOND" in accepted
+
+    def test_ul_item_modification_keeps_the_bullet(self):
+        doc = aim.new_document(title="T")
+        doc.add_chunk(
+            '<ul data-aim-container="l"><li data-aim="i1">one</li></ul>', author=ME, at=ts(0)
+        )
+        doc.propose_modify("i1", '<li data-aim="i1">ONE</li>', author=BOT, at=ts(1))
+        md = aim.to_markdown(doc, pending="criticmarkup")
+        assert "{~~- one~>- ONE~~}" in md
+
+    def test_run_modification_numbers_from_the_groups_first_ordinal(self):
+        doc = aim.new_document(title="T")
+        doc.add_chunk(
+            '<ol data-aim-container="l"><li data-aim="r">a</li>'
+            '<li data-aim="r">b</li><li data-aim="z">c</li></ol>',
+            author=ME,
+            at=ts(0),
+        )
+        doc.propose_modify(
+            "r", '<li data-aim="r">A</li><li data-aim="r">B</li>', author=BOT, at=ts(1)
+        )
+        md = aim.to_markdown(doc, pending="criticmarkup")
+        assert "~>1. A" in md
+        assert "2. B~~}" in md
+        assert "3. c" in md  # the trailing item's own ordinal is untouched
