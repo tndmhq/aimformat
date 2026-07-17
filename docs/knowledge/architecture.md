@@ -55,12 +55,17 @@ codes bidirectionally in sync with what `lint.py` can actually emit.
   it never enumerates subsets or clone-replays candidate orders. Repeated moves
   keep card order while each hop is constrained against the exact pre/post
   container state it needs. A move anchored `after=N` precedes every move card
-  that relocates `N`, including through a moved ancestor; mutual anchor
-  dependencies become a cycle. Cyclic constraints refuse an impossible lane
-  before the live document mutates. Reconcile applies the same principle to
-  viability: a move's adopted destination kind may be superseded by a pending
-  destination modify only when that candidate payload accepts the members and
-  still resolves the move's scoped `after=`/table-shell anchor.
+  that separates `N` from its recorded destination; an ancestor move carrying
+  both the anchor and destination adds no edge. Mutual anchor dependencies
+  become a cycle. Reconciled destinations nested inside their move target may
+  survive only when a pending move explicitly carries the whole insertion
+  point back outside first. Retained source replacements propagate the moved
+  target's post-replacement member shape into destination checks, and terminal
+  deletes participate in the same constraints. Cyclic or incompatible lanes
+  refuse before the live document mutates. The independent bounded permutation
+  model in `tests/test_resolution_order_properties.py` is the semantic oracle;
+  production ordering remains an O(V+E) topological sort and never searches
+  permutations.
 - **Payload equality is the verification primitive.** If you change
   canonical form in any way, every stored payload in every fixture/example
   changes meaning — regenerate fixtures and examples, and expect checkpoint
