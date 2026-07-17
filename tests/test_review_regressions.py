@@ -1234,3 +1234,60 @@ class TestPruneFlattenKeepBurnedIds:
         doc.prune(before="cut")
         doc.accept(p.id, decided_by=ME, at=ts(6))
         assert "pnew" in doc.body_ids
+
+
+class TestReconcileHandlesWrappingContainers:
+    """AF-07: a hand edit that wraps existing units into a NEW container is
+    one of the most natural out-of-band edits, but _drive counted a
+    container's interior as covered only when the container existed on both
+    sides — the A-only wrapper was added whole while the units' E-side
+    copies survived as duplicates, and reconcile raised 'did not converge'
+    (failing closed on a legitimate repair of a headline feature, §6.8)."""
+
+    def _base_text(self):
+        doc = aim.new_document(title="T")
+        doc.add_chunk('<h1 data-aim="h1">Title</h1>', author=BOT, at=ts(0))
+        doc.add_chunk('<p data-aim="c1">alpha</p>', author=BOT, at=ts(1))
+        doc.add_chunk('<p data-aim="c2">beta</p>', author=BOT, at=ts(2))
+        return doc.dumps()
+
+    def _reconciled(self, old, new):
+        text = self._base_text()
+        assert old in text
+        doc = aim.loads(text.replace(old, new))
+        report = doc.reconcile(at=ts(3))
+        assert report.residual == []
+        assert doc.verify() == []
+        assert not [f for f in aim.lint(doc) if f.level == "error"]
+        return doc, report
+
+    def test_slide_wrapping_existing_chunks_reconciles(self):
+        doc, report = self._reconciled(
+            '<p data-aim="c1">alpha</p>\n<p data-aim="c2">beta</p>',
+            '<aim-slide><p data-aim="c1">alpha</p><p data-aim="c2">beta</p></aim-slide>',
+        )
+        assert [e.get("action") for e in report.events] == ["delete", "delete", "add"]
+        assert doc._state.find_chunk("c1")[1]  # the unit lives inside the wrapper
+
+    def test_list_wrapping_converted_items_reconciles(self):
+        doc, _ = self._reconciled(
+            '<p data-aim="c1">alpha</p>\n<p data-aim="c2">beta</p>',
+            '<ul data-aim-container="wrap">'
+            '<li data-aim="c1">alpha</li><li data-aim="c2">beta</li></ul>',
+        )
+        assert doc.body_ids == ["h1", "wrap"]
+
+    def test_wrapper_swallowing_a_whole_container_reconciles(self):
+        doc = aim.new_document(title="T")
+        doc.add_chunk('<ul data-aim-container="l1"><li data-aim="i1">x</li></ul>', author=BOT, at=ts(0))
+        text = doc.dumps()
+        wrapped = text.replace(
+            '<ul data-aim-container="l1"><li data-aim="i1">x</li></ul>',
+            '<aim-slide data-aim-container="ws">'
+            '<ul data-aim-container="l1"><li data-aim="i1">x</li></ul></aim-slide>',
+        )
+        d = aim.loads(wrapped)
+        report = d.reconcile(at=ts(3))
+        assert report.residual == []
+        assert d.verify() == []
+        assert d.body_ids == ["ws"]
