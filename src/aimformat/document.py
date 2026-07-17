@@ -144,16 +144,63 @@ class Proposal:
     anchor_shell: str | None = None  # thead/tbody/tfoot for table rows
 
 
-def resolution_order(proposals: Sequence[Proposal]) -> list[Proposal]:
+def _payload_ids(payload_html: str) -> set[str]:
+    """Every chunk/container id a proposal payload carries."""
+    out: set[str] = set()
+    for node in parse_fragment(payload_html):
+        if isinstance(node, Element):
+            for el in node.iter():
+                if el.chunk_id:
+                    out.add(el.chunk_id)
+                if el.container_id:
+                    out.add(el.container_id)
+    return out
+
+
+def resolution_order(
+    proposals: Sequence[Proposal], doc: AimDocument | None = None
+) -> list[Proposal]:
     """A dependency-safe order for resolving a whole pending lane.
 
     Card order in the file carries no dependency meaning (a manual reorder
     is legal), so resolve in rounds: an add anchored on another pending add
-    waits for its anchor; within each round deletes go last, so an add
-    anchored on a chunk that a sibling card deletes lands while the anchor
-    still exists. Shared by ``aim accept/reject --all`` and the exporters'
+    waits for its anchor; within each round adds/modifies go first, then
+    moves, then deletes — an add anchored on a chunk that a sibling card
+    moves away or deletes lands while the anchor is still in place, and a
+    move whose destination anchors on a to-be-deleted chunk resolves before
+    the delete. When *doc* is given, a container modify whose payload drops
+    a member that a sibling card moves away waits for that move — the move
+    rescues the member before its container is replaced, exactly as a
+    delete would wait; the same delay applies when the payload drops a
+    move's destination anchor or destination container (resolving the
+    modify first would strip the move's landing point and fail the lane).
+    A modify whose payload keeps the member stays ahead of the move
+    (relocating first would make the payload re-introduce a duplicate id).
+    Shared by ``aim accept/reject --all`` and the exporters'
     resolve-a-copy paths.
     """
+    rank = {"move": 2, "delete": 4}
+    after_moves: set[str] = set()  # modify card ids that must trail the moves
+    if doc is not None:
+        moves = [p for p in proposals if p.action == "move" and p.target]
+        for p in proposals:
+            if p.action != "modify" or not p.target or not moves:
+                continue
+            node = doc._state.container_node(p.target)
+            if node is None:
+                continue
+            kept = _payload_ids(p.payload_html or "")
+            inside = {i for e in node.iter() for i in (e.chunk_id, e.container_id) if i}
+            # a move needs its target rescued AND its landing point intact:
+            # the modify waits when its payload drops the moved chunk, the
+            # move's destination anchor, or the destination container
+            if any(
+                affected in inside and affected not in kept
+                for mv in moves
+                for affected in (mv.target, mv.anchor_after, mv.anchor_container)
+                if affected
+            ):
+                after_moves.add(p.id)
     pending = list(proposals)
     order: list[Proposal] = []
     while pending:
@@ -164,7 +211,7 @@ def resolution_order(proposals: Sequence[Proposal]) -> list[Proposal]:
                 "pending adds anchor on each other in a cycle — the file is "
                 "corrupt (aim lint reports P015)"
             )
-        ready.sort(key=lambda p: p.action == "delete")
+        ready.sort(key=lambda p: 3 if p.id in after_moves else rank.get(p.action, 0))
         order.extend(ready)
         done = {p.id for p in ready}
         pending = [p for p in pending if p.id not in done]
@@ -352,13 +399,61 @@ class DocState:
                 f"anchor {anchor.after!r} is nested content, not a direct "
                 f"member of {anchor.container!r}"
             )
+        if anchor.shell is not None:
+            # §6.4: the shell names the section where the position resolves —
+            # a concrete anchor whose recorded shell contradicts where the
+            # anchor row actually sits must fail, not silently follow the id
+            got = parent.tag if parent.tag in REGISTRY.table_shells else None
+            if got != anchor.shell:
+                raise TargetNotFound(
+                    f"anchor {anchor.after!r} sits in <{got}>, not the recorded <{anchor.shell}>"
+                )
         return parent, parent.children.index(members[-1]) + 1
+
+    def _guard_item_members(self, parent: Element, nodes: list[Element]) -> None:
+        """List/table containers hold only their item carriers (S022): any
+        other member is invisible to item-aware consumers — an editor hides
+        it, then the next container-level write destroys it."""
+        cont = parent
+        if cont.tag in REGISTRY.table_shells:
+            cont = self._parent_of(cont)
+        legal = [t for t, cs in REGISTRY.item_carriers.items() if cont.tag in cs]
+        if not legal:
+            return
+        bad = next((n for n in nodes if n.tag not in legal), None)
+        if bad is not None:
+            raise InvalidOperation(
+                f"<{bad.tag}> cannot be a direct member of <{cont.tag}> "
+                f"container {cont.container_id!r} (expects <{'>/<'.join(legal)}>)"
+            )
+
+    def _guard_payload_container_members(self, nodes: list[Element]) -> None:
+        """Validate direct members of every list/table container a payload
+        carries — the roots themselves and marked descendant containers at
+        any depth: a slide or grouping root must not smuggle in a nested
+        container whose members the next lint rejects (S022)."""
+        for root in nodes:
+            for el in root.iter():
+                if el.tag not in REGISTRY.containers or el.tag == "aim-slide":
+                    continue
+                if el is not root and el.container_id is None:
+                    # an unmarked nested list/table is chunk content, not a
+                    # container — lint holds only marked ones to S022
+                    continue
+                members: list[Element] = []
+                for child in el.elements():
+                    if el.tag == "table" and child.tag in REGISTRY.table_shells:
+                        members.extend(child.elements())
+                    else:
+                        members.append(child)
+                self._guard_item_members(el, members)
 
     def insert(self, markup: str, anchor: Anchor) -> None:
         nodes = [n for n in parse_fragment(markup) if isinstance(n, Element)]
         if not nodes:
             raise InvalidOperation("empty insert payload")
         parent, idx = self.resolve_insert_point(anchor)
+        self._guard_item_members(parent, nodes)
         parent.children[idx:idx] = nodes
 
     def remove(self, target: str) -> str:
@@ -395,25 +490,55 @@ class DocState:
         cont = self.container_node(target)
         if cont is not None and cont is not self.body:
             parent = self._parent_of(cont)
+            nodes = parse_fragment(markup)
+            self._guard_item_members(parent, [n for n in nodes if isinstance(n, Element)])
             idx = parent.children.index(cont)
-            parent.children[idx : idx + 1] = parse_fragment(markup)
+            parent.children[idx : idx + 1] = nodes
             return
         parent, members = self.find_chunk(target)
         if not members:
             raise TargetNotFound(f"cannot replace {target!r}: not found")
+        nodes = parse_fragment(markup)
+        self._guard_item_members(parent, [n for n in nodes if isinstance(n, Element)])
         idx = parent.children.index(members[0])
         for m in members:
             parent.children.remove(m)
-        parent.children[idx:idx] = parse_fragment(markup)
+        parent.children[idx:idx] = nodes
+
+    def _target_elements(self, target: str) -> list[tuple[Element, Element]]:
+        """(parent, element) pairs for a target, in remove()'s lookup order."""
+        i = self.top_index(target)
+        if i is not None:
+            return [(self.body, self.constructs()[i])]
+        cont = self.container_node(target)
+        if cont is not None and cont is not self.body:
+            return [(self._parent_of(cont), cont)]
+        parent, members = self.find_chunk(target)
+        if not members or parent is None:
+            raise TargetNotFound(f"cannot move {target!r}: not found")
+        return [(parent, m) for m in members]
 
     def move(self, target: str, to: Anchor) -> None:
         if to.after == target:
             raise InvalidOperation(f"cannot move {target!r} after itself")
-        # all lookups before the first mutation: a bad destination must not
-        # leave the chunk removed with no event to show for it
-        self.resolve_insert_point(to)
-        markup = self.remove(target)
+        originals = self._target_elements(target)
+        # a destination equal to or inside the moved subtree vanishes with
+        # the removal — reject while the tree is still untouched
+        moved_ids: set[str] = set()
+        for _, el in originals:
+            for node in el.iter():
+                moved_ids.update(filter(None, (node.chunk_id, node.container_id)))
+        if to.container in moved_ids or (to.after is not None and to.after in moved_ids):
+            raise InvalidOperation(f"cannot move {target!r} into itself or its own subtree")
+        markup = self.serial(target)
+        if markup is None:
+            raise TargetNotFound(f"cannot move {target!r}: not found")
+        # insert first, then remove the originals by identity: any anchor
+        # failure raises before the first mutation, so the chunk is never
+        # left removed with no event to show for it
         self.insert(markup, to)
+        for parent, el in originals:
+            parent.children.remove(el)
 
     def _parent_of(self, el: Element) -> Element:
         for top in [self.body] + self.constructs():
@@ -512,6 +637,9 @@ class AimDocument:
         self._fragment = fragment
         self._state = DocState(html)
         self._batch: str | None = None
+        # burned ids whose burn record left the retained log (prune/flatten)
+        # — kept for this instance's lifetime so they are never re-honored
+        self._burned: set[str] = set()
 
     # -- constructors ---------------------------------------------------------
     @classmethod
@@ -761,24 +889,30 @@ class AimDocument:
     # -- payload plumbing ------------------------------------------------------------
     _PAYLOAD_ID_RE = re.compile(r'data-aim(?:-container)?="([^"]+)"')
 
-    def _recorded_ids(self, *, skip_payload_of: str | None = None) -> set[str]:
-        """Ids mentioned by history or the pending lane (live or burned).
-
-        ``skip_payload_of`` leaves one pending card's payload ids out: at
-        resolution time they are the write's own reservations (minted when
-        the card was created), not competing claims."""
+    def _history_burned_ids(self) -> set[str]:
+        """Every id the retained log burns: event targets, proposal ids,
+        and ids that only ever existed inside recorded payloads (items of a
+        deleted container, replaced-away members)."""
         taken: set[str] = set()
         for ev in self.history:  # ids are never reused, deleted ones stay burned
             for key in ("target", "proposal"):
                 v = ev.get(key)
                 if isinstance(v, str):
                     taken.add(v)
-            # ids that only ever existed inside a payload (items of a deleted
-            # container, replaced-away members) are burned too
             for key in ("before", "after", "proposed", "applied"):
                 v = ev.get(key)
                 if isinstance(v, str):
                     taken.update(self._PAYLOAD_ID_RE.findall(v))
+        return taken
+
+    def _recorded_ids(self, *, skip_payload_of: str | None = None) -> set[str]:
+        """Ids mentioned by history or the pending lane (live or burned),
+        plus ids whose burn record was pruned/flattened away this session.
+
+        ``skip_payload_of`` leaves one pending card's payload ids out: at
+        resolution time they are the write's own reservations (minted when
+        the card was created), not competing claims."""
+        taken = self._history_burned_ids() | self._burned
         for p in self.proposals:
             taken.add(p.id)
             if p.payload_html and p.id != skip_payload_of:
@@ -825,6 +959,7 @@ class AimDocument:
         nodes = [n for n in parse_fragment(markup) if isinstance(n, Element)]
         if not nodes:
             raise InvalidOperation("payload contains no element")
+        self._state._guard_payload_container_members(nodes)
         marker_ids = {n.chunk_id or n.container_id for n in nodes}
         if len(marker_ids) != 1:
             if not all(n.chunk_id is None and n.container_id is None for n in nodes):
@@ -896,7 +1031,10 @@ class AimDocument:
                     n.set(marker, new)
                 payload_id = new
             else:
-                if first.get(wrong) is not None:
+                # ANY member carrying the wrong marker taints the run — the
+                # first member alone would let a dual-marked second member
+                # write a document the linter rejects (S025/S019/V003/H006)
+                if any(n.get(wrong) is not None for n in nodes):
                     for n in nodes:
                         n.remove_attr(wrong)
                         n.set(marker, payload_id)
@@ -908,6 +1046,13 @@ class AimDocument:
             # that carry no marker at all are covered with fresh ids too —
             # a container payload must never introduce unaddressable rows.
             taken -= owned
+            # the roots' own id stays reserved: for a pending add,
+            # ``skip_payload_of`` dropped it from *taken* along with the
+            # card's nested ids, and a descendant reusing it must be
+            # reminted, never honored — the write would land an S019
+            # duplicate that verify() cannot see
+            if payload_id:
+                taken.add(payload_id)
             remap: dict[str, str] = {}
             for n in nodes:
                 if n.container_id is not None:
@@ -962,8 +1107,15 @@ class AimDocument:
         return out
 
     def _resolve_end_anchor(
-        self, container: str, after: AnchorAfter, *, exclude: str | None = None
+        self,
+        container: str,
+        after: AnchorAfter,
+        *,
+        exclude: str | None = None,
+        shell: str | None = None,
     ) -> Anchor:
+        if shell is not None and shell not in REGISTRY.table_shells:
+            raise InvalidOperation(f"unknown table shell {shell!r}")
         if isinstance(after, _Last):
             if container == "body":
                 pool = self._state.constructs()
@@ -982,13 +1134,43 @@ class AimDocument:
             if exclude is not None and after == exclude:
                 raise InvalidOperation(f"cannot anchor {exclude!r} after itself")
             anchor = Anchor(container, after)
-        if anchor.after is None and container != "body":
+        table = None
+        if container != "body":
             cont = self._state.container_node(container)
             if cont is not None and cont.tag == "table":
-                shells = [s.tag for s in cont.elements() if s.tag in REGISTRY.table_shells]
-                shell = "tbody" if "tbody" in shells else (shells[0] if shells else None)
-                # data rows default into the body section, not the header
-                anchor = Anchor(container, None, shell=shell)
+                table = cont
+        if table is None:
+            if shell is not None:
+                raise InvalidOperation("shell anchors apply only to table containers")
+            return anchor
+        if anchor.after is None:
+            if shell is not None:  # a caller-chosen first-of-shell position
+                if not any(s.tag == shell for s in table.elements()):
+                    raise TargetNotFound(f"shell <{shell}> not found in {container!r}")
+                return Anchor(container, None, shell=shell)
+            shells = [s.tag for s in table.elements() if s.tag in REGISTRY.table_shells]
+            # data rows default into the body section, not the header
+            default = "tbody" if "tbody" in shells else (shells[0] if shells else None)
+            return Anchor(container, None, shell=default)
+        # every table anchor carries its shell: distinct first positions in
+        # thead/tbody/tfoot must not collapse into one "same position"
+        row = next(
+            (
+                el
+                for el in table.iter()
+                if el is not table
+                and (el.chunk_id == anchor.after or el.container_id == anchor.after)
+            ),
+            None,
+        )
+        if row is not None:
+            parent = self._state._parent_of(row)
+            row_shell = parent.tag if parent.tag in REGISTRY.table_shells else None
+            if shell is not None and row_shell != shell:
+                raise InvalidOperation(
+                    f"anchor {anchor.after!r} sits in <{row_shell}>, not <{shell}>"
+                )
+            return Anchor(container, anchor.after, shell=row_shell)
         return anchor
 
     # -- direct edits -------------------------------------------------------------------
@@ -1041,7 +1223,14 @@ class AimDocument:
         before = self._state.serial(cid)
         if before is None:
             raise TargetNotFound(f"no chunk {cid!r}")
-        _, payload = self._normalize_payload(markup, expect_id=cid)
+        if cid == "aim:theme":
+            # reserved heads have their own grammar: the generic funnel
+            # would stamp data-aim onto the <style>/<script> block
+            payload = self._validated_theme_markup(markup)
+        elif cid == "aim:doc":
+            payload = self._validated_doc_markup(markup)
+        else:
+            _, payload = self._normalize_payload(markup, expect_id=cid)
         if payload == before:
             raise InvalidOperation("modify with identical content")
         self._state.replace(cid, payload)
@@ -1112,15 +1301,18 @@ class AimDocument:
         author: Actor,
         container: str = "body",
         after: AnchorAfter = LAST,
+        shell: str | None = None,
         explanation: str | None = None,
         at: str | None = None,
     ) -> None:
+        """Move a chunk (direct edit). ``shell`` picks the row section
+        (thead/tbody/tfoot) for a first-position move in a table container."""
         _no_delete_move(cid, "move")
         if not self._state.exists(cid):
             raise TargetNotFound(f"no chunk {cid!r}")
         src = self._anchor_of(cid)
-        dst = self._resolve_end_anchor(container, after, exclude=cid)
-        if (src.container, src.after) == (dst.container, dst.after):
+        dst = self._resolve_end_anchor(container, after, exclude=cid, shell=shell)
+        if src == dst:  # full anchors: first-of-thead ≠ first-of-tbody
             raise InvalidOperation(f"move of {cid!r} is a no-op (already at that position)")
         self._state.move(cid, dst)
         data = {
@@ -1635,6 +1827,13 @@ class AimDocument:
         at: str | None = None,
     ) -> Proposal:
         _, payload = self._normalize_payload(markup)
+        # container-membership check at creation time, so the card is not
+        # doomed to fail at accept (same contract as the direct add)
+        cont_el = self._state.container_node(container)
+        if cont_el is not None:
+            self._state._guard_item_members(
+                cont_el, [n for n in parse_fragment(payload) if isinstance(n, Element)]
+            )
         if isinstance(after, str) and ids.is_valid_proposal_id(after):
             pending = {p.id: p for p in self.proposals if p.action == "add"}
             if after not in pending:
@@ -1700,6 +1899,7 @@ class AimDocument:
         author: Actor,
         container: str,
         after: AnchorAfter = LAST,
+        shell: str | None = None,
         explanation: str | None = None,
         at: str | None = None,
     ) -> Proposal:
@@ -1707,13 +1907,18 @@ class AimDocument:
         if not self._state.exists(target):
             raise TargetNotFound(f"no chunk {target!r}")
         src = self._anchor_of(target)
-        anchor = self._resolve_end_anchor(container, after, exclude=target)
+        anchor = self._resolve_end_anchor(container, after, exclude=target, shell=shell)
         # mirror the direct move: reject no-ops (AIM-08) and validate the
         # destination container-scoped so the proposal can actually be
         # accepted (AIM-03)
-        if (src.container, src.after) == (anchor.container, anchor.after):
+        if src == anchor:  # full anchors: first-of-thead ≠ first-of-tbody
             raise InvalidOperation(f"move of {target!r} is a no-op (already at that position)")
         self._state.resolve_insert_point(anchor)
+        cont_el = self._state.container_node(anchor.container)
+        if cont_el is not None:
+            self._state._guard_item_members(
+                cont_el, [el for _, el in self._state._target_elements(target)]
+            )
         return self._new_card(
             action="move",
             author=author,
@@ -1766,7 +1971,9 @@ class AimDocument:
                         raise TargetNotFound(f"no chunk {target!r}")
                     _, payload = self._normalize_payload(markup, expect_id=target)
             elif prop.action == "add":
-                _, payload = self._payload_like(prop.payload_html or "", markup)
+                _, payload = self._payload_like(
+                    prop.payload_html or "", markup, skip_payload_of=pid
+                )
             else:
                 raise InvalidOperation(f"a {prop.action} proposal carries no payload to amend")
             tmpl = next((c for c in card.elements() if c.tag == "template"), None)
@@ -1808,7 +2015,9 @@ class AimDocument:
                     _, applied_payload = (
                         self._normalize_payload(applied, expect_id=expect, assign=False)
                         if expect
-                        else self._payload_like(prop.payload_html or "", applied)
+                        else self._payload_like(
+                            prop.payload_html or "", applied, skip_payload_of=prop.id
+                        )
                     )
             else:
                 applied_payload = prop.payload_html
@@ -1821,13 +2030,23 @@ class AimDocument:
             at=at,
         )
 
-    def _payload_like(self, original: str, replacement: str) -> tuple[str, str]:
+    def _payload_like(
+        self, original: str, replacement: str, *, skip_payload_of: str | None = None
+    ) -> tuple[str, str]:
         """Canonicalize an add-tweak/amend payload, keeping the proposed
         chunk id and marker kind. The replacement must also keep the
         proposed root's KIND (§4.3): flipping container↔chunk would mint a
         card whose marker contradicts its tag (V003) or accept an
-        ``aim-slide`` marked as a chunk (S031) — review finding."""
+        ``aim-slide`` marked as a chunk (S031) — review finding.
+        ``skip_payload_of`` names the card being rewritten so the nested
+        ids it reserved for itself stay honored instead of being reminted
+        as collisions with the card's own record."""
         orig_nodes = [n for n in parse_fragment(original) if isinstance(n, Element)]
+        if not orig_nodes:  # a template-less card (P006): a real error the
+            # MCP boundary can catch, not a bare IndexError escaping it
+            raise InvalidOperation(
+                "the pending add carries no payload template to tweak/amend against"
+            )
         keep = orig_nodes[0].chunk_id or orig_nodes[0].container_id
         marker = "data-aim-container" if orig_nodes[0].container_id is not None else "data-aim"
         new_nodes = [n for n in parse_fragment(replacement) if isinstance(n, Element)]
@@ -1837,7 +2056,12 @@ class AimDocument:
                 new_nodes[0],
                 kind="container" if marker == "data-aim-container" else "chunk",
             )
-        return self._normalize_payload(replacement, expect_id=keep, expect_marker=marker)
+        return self._normalize_payload(
+            replacement,
+            expect_id=keep,
+            expect_marker=marker,
+            skip_payload_of=skip_payload_of,
+        )
 
     def _validated_theme_markup(self, markup: str) -> str:
         """Validate + canonicalize a whole-theme-block payload."""
@@ -1856,12 +2080,18 @@ class AimDocument:
         return serialize(el)
 
     def _validated_doc_markup(self, markup: str) -> str:
-        """Validate + canonicalize a whole-settings-block payload."""
+        """Validate + canonicalize a whole-settings-block payload.
+
+        Registered page fields go through the shared PageSetup grammar,
+        while unknown nested fields remain intact for forward compatibility.
+        """
         el = doc_settings_element(markup)
         settings = parse_doc_settings(el.raw)
         if "page" in settings:
             page_setup_from_obj(settings["page"])
-        return serialize(el)
+        return (
+            f'<script type="{REGISTRY.script_types["doc"]}">\n{canonical_json(settings)}\n</script>'
+        )
 
     def reject(
         self,
@@ -1923,9 +2153,27 @@ class AimDocument:
                         f"anchor proposal {anchor.after!r} is still pending — resolve it first"
                     )
                 payload = applied if applied is not None else prop.payload_html
-                if applied is not None and applied != prop.payload_html:
-                    data["applied"] = applied
-                self._state.insert(payload or "", anchor)
+                # externally-authored cards bypass creation-time
+                # normalization: re-validate the FULL payload (root marker
+                # and id, run shape, nested ids) before the write, exactly
+                # like the modify branch below — the resolution event's
+                # target must be the payload's real, unused root id or the
+                # add can never replay
+                root = data["target"]
+                if not ids.is_valid_chunk_id(root):
+                    raise InvalidOperation(
+                        "add payload root carries no valid data-aim/data-aim-container id"
+                    )
+                if root in self._taken_ids(skip_payload_of=prop.id):
+                    raise InvalidOperation(f"add payload id {root!r} is already in use")
+                _, payload = self._normalize_payload(
+                    payload or "",
+                    expect_id=root,
+                    skip_payload_of=prop.id,
+                )
+                if payload != prop.payload_html:
+                    data["applied"] = payload
+                self._state.insert(payload, anchor)
         else:
             data["target"] = prop.target
             before = self._state.serial(prop.target or "")
@@ -2070,6 +2318,13 @@ class AimDocument:
             frm = ev.get("from")
             if frm is None:
                 raise HistoryError("move event carries no 'from' — not invertible")
+            to = ev.get("to")
+            if to is not None:
+                # at this point the state IS the post-move state, so the
+                # recorded destination must resolve — shell included (§6.4);
+                # silently edited destination metadata is a chain problem,
+                # not a clean replay
+                state.resolve_insert_point(Anchor.from_obj(to))
             state.move(target, Anchor.from_obj(frm))
 
     def state_at(self, seq: int) -> AimDocument:
@@ -2113,14 +2368,29 @@ class AimDocument:
 
     # -- lifecycle operations --------------------------------------------------------------------
     def flatten(self, *, drop_embeddings: bool = True) -> None:
-        """Drop the history (and by default the embeddings) — a clean file."""
+        """Drop the history (and by default the embeddings) — a clean file.
+
+        Ids the dropped log had burned stay burned on this instance (§4.4:
+        an id is never reused within a document lifetime), so an id seen
+        before the flatten is never re-honored by a later write. The saved
+        file carries no burn ledger — reloading it starts a fresh lifetime.
+        """
+        self._burned |= self._history_burned_ids()
         for kind in ("history",) + (("embeddings",) if drop_embeddings else ()):
             s = self._state.script(kind)
             if s is not None:
                 self._state.body.children.remove(s)
+        # §9.3: gc is the final pass — a "clean file" must not ship the
+        # dead blobs its dropped history kept alive
+        self.gc_assets()
 
     def prune(self, *, before: int | str) -> int:
-        """Truncate history before a seq or checkpoint label; returns dropped count."""
+        """Truncate history before a seq or checkpoint label; returns dropped count.
+
+        Ids burned by the dropped prefix stay burned on this instance (§4.4)
+        so they are never re-honored; the saved file's ledger shrinks to
+        what the retained log records."""
+        self._burned |= self._history_burned_ids()
         events = self.history
         if isinstance(before, str):
             match = next(
@@ -2141,6 +2411,7 @@ class AimDocument:
         el = self._state.script("history")
         if el is not None:
             el.raw = "\n" + "\n".join(e.to_json() for e in kept) + "\n" if kept else "\n"
+        self.gc_assets()  # §9.3: gc is the final pass of prune
         return dropped
 
     def reconcile(
@@ -2290,7 +2561,9 @@ class AimDocument:
         packing is a content edit like any other. Returns assets packed.
         """
         with self.batch():  # one packing run = one editing intention
-            return self._pack_assets_inner(author, at)
+            packed = self._pack_assets_inner(author, at)
+            self.gc_assets()  # §9.3: gc is the final pass of pack
+            return packed
 
     def _pack_assets_inner(self, author: Actor, at: str | None) -> int:
         packed = 0
@@ -2311,10 +2584,24 @@ class AimDocument:
                 self._decode_asset_datauri(img.get("src") or "")
             before = serialize_run(members)
             for img in imgs:
+                blob = self._decode_asset_datauri(img.get("src") or "")
                 asset_id = self._register_asset_datauri(img.get("src") or "", img.get("alt") or "")
                 svg = Element("svg", [("role", "img"), ("aria-label", img.get("alt") or "")])
-                if img.get("style"):
-                    svg.set("style", img.get("style"))
+                w, h = self._image_dimensions(blob) or (100, 100)
+                svg.set("viewBox", f"0 0 {w} {h}")  # the intrinsic aspect ratio
+                styled = self._styled_props(img.get("style") or "")
+                one_axis = ("width" in styled) != ("height" in styled)
+                # unstyled display size = the img's intrinsic size, not the
+                # svg default; with exactly ONE styled axis the other must
+                # stay auto (the viewBox ratio scales it, as it did on the
+                # img) — pinning it to the intrinsic value would distort
+                if not one_axis or "width" in styled:
+                    svg.set("width", str(w))
+                if not one_axis or "height" in styled:
+                    svg.set("height", str(h))
+                for attr in ("class", "style", "dir", "lang", "title"):
+                    if img.get(attr):  # packing is a storage-form change:
+                        svg.set(attr, img.get(attr))  # presentation survives
                 use = Element("use", [("href", f"#{asset_id}")], self_closing=True)
                 svg.children.append(use)
                 for m in members:
@@ -2330,11 +2617,45 @@ class AimDocument:
                 "after": after,
                 "author": author.to_obj(),
                 "batch": self._batch_id(),
-                "explanation": "aim pack --inline: hoist embedded images into the asset registry",
+                "explanation": "aim pack: hoist embedded images into the asset registry",
             }
             self._append_event(data)
             packed += len(imgs)
         return packed
+
+    @staticmethod
+    def _styled_props(style: str) -> set[str]:
+        """Property names declared in an inline style attribute."""
+        return {p.split(":", 1)[0].strip() for p in style.split(";") if ":" in p}
+
+    @staticmethod
+    def _image_dimensions(blob: bytes) -> tuple[int, int] | None:
+        """Intrinsic (width, height) of a PNG/GIF/JPEG blob, stdlib-only."""
+        if blob.startswith(b"\x89PNG\r\n\x1a\n") and len(blob) >= 24 and blob[12:16] == b"IHDR":
+            w = int.from_bytes(blob[16:20], "big")
+            h = int.from_bytes(blob[20:24], "big")
+            return (w, h) if w and h else None
+        if blob[:6] in (b"GIF87a", b"GIF89a") and len(blob) >= 10:
+            w = int.from_bytes(blob[6:8], "little")
+            h = int.from_bytes(blob[8:10], "little")
+            return (w, h) if w and h else None
+        if blob[:2] == b"\xff\xd8":  # JPEG: walk the markers to the first SOF
+            i = 2
+            while i + 9 < len(blob):
+                if blob[i] != 0xFF:
+                    i += 1
+                    continue
+                marker = blob[i + 1]
+                if marker in (0xFF, 0x01) or 0xD0 <= marker <= 0xD9:
+                    i += 2
+                    continue
+                length = int.from_bytes(blob[i + 2 : i + 4], "big")
+                if 0xC0 <= marker <= 0xCF and marker not in (0xC4, 0xC8, 0xCC):
+                    h = int.from_bytes(blob[i + 5 : i + 7], "big")
+                    w = int.from_bytes(blob[i + 7 : i + 9], "big")
+                    return (w, h) if w and h else None
+                i += 2 + length
+        return None
 
     @staticmethod
     def _decode_asset_datauri(data_uri: str) -> bytes:
@@ -2373,9 +2694,14 @@ class AimDocument:
         svg = self._assets_section().elements()[0]
         if any(s.get("id") == asset_id for s in svg.elements()):
             return asset_id
-        symbol = Element("symbol", [("id", asset_id), ("viewBox", "0 0 100 100")])
+        # the symbol's grid is the image's intrinsic geometry: a hardcoded
+        # square viewBox letterboxed every non-square image
+        w, h = self._image_dimensions(blob) or (100, 100)
+        symbol = Element("symbol", [("id", asset_id), ("viewBox", f"0 0 {w} {h}")])
         image = Element(
-            "image", [("height", "100"), ("width", "100"), ("href", data_uri)], self_closing=True
+            "image",
+            [("height", str(h)), ("width", str(w)), ("href", data_uri)],
+            self_closing=True,
         )
         symbol.children.append(image)
         svg.children.append(symbol)

@@ -10,10 +10,12 @@ in the DOCX XML and is worth carrying over:
   tolerance (v0.2 registers named sizes only — odd custom sizes are skipped);
 - explicit page breaks (``<w:br w:type="page"/>`` runs and
   ``w:pageBreakBefore`` paragraph properties) → ``<aim-page-break>`` chunks,
-  anchored by matching the last body text before the break — by text *and*
-  occurrence, so repeated sentences resolve to the right copy — against the
-  ingested chunks' text (best-effort: an unmatched hint is skipped, never
-  guessed).
+  anchored by matching body text — by text *and* occurrence, so repeated
+  sentences resolve to the right copy — against the ingested chunks' text.
+  A break between paragraphs anchors on the paragraph before it; a break
+  *inside* a paragraph anchors on that paragraph's completed text (docling
+  does not split it). Best-effort: an unmatched hint is skipped, never
+  guessed.
 
 Everything here is a no-op without python-docx (the ``docx`` extra): the
 ingest itself never fails over pagination.
@@ -99,14 +101,16 @@ def _read_break_anchors(docx_doc) -> list[tuple[str, int]]:
         if para.paragraph_format.page_break_before and last[0]:
             anchors.append(last)
         prefix = ""
+        mid_breaks = 0
         for run in para.runs:
             for node in run._r:
                 if node.tag == br_tag and node.get(type_attr) == "page":
-                    text = _norm(prefix)
-                    if text:
-                        # the break splits THIS paragraph: when it completes
-                        # it will be the next occurrence of that text
-                        anchors.append((text, seen.get(text, 0) + 1))
+                    if _norm(prefix):
+                        # a break inside this paragraph: docling keeps the
+                        # paragraph whole, so anchor on its completed full
+                        # text — the prefix alone would match whatever OTHER
+                        # paragraph happens to read exactly the same
+                        mid_breaks += 1
                     elif last[0]:
                         anchors.append(last)
                 elif node.tag == t_tag:
@@ -115,6 +119,7 @@ def _read_break_anchors(docx_doc) -> list[tuple[str, int]]:
         if text:
             seen[text] = seen.get(text, 0) + 1
             last = (text, seen[text])
+            anchors.extend([last] * mid_breaks)
     return anchors
 
 
@@ -143,6 +148,7 @@ def _insert_breaks(doc: AimDocument, anchors: list[tuple[str, int]], *, author: 
             texts[own] = 1
         candidates.append((cid, texts))
     inserted, start = 0, 0
+    prev_break_id, prev_i = None, -1
     for anchor, occurrence in anchors:
         count, hit = 0, None
         for i, (cid, texts) in enumerate(candidates):
@@ -150,15 +156,22 @@ def _insert_breaks(doc: AimDocument, anchors: list[tuple[str, int]], *, author: 
             if count >= occurrence:
                 hit = (i, cid)
                 break
-        if hit is None or hit[0] < start:
+        if hit is None:
             continue
         i, cid = hit
-        doc.add_chunk(
+        if i < start:
+            if prev_break_id is None or i != prev_i:
+                continue  # would move backwards: skip, never guess
+            # a repeated hint on the same anchor is a consecutive break
+            # (an intentional blank page): chain it after the previous one
+            cid = prev_break_id
+        chunk = doc.add_chunk(
             "<aim-page-break></aim-page-break>",
             author=author,
             after=cid,
             explanation="Explicit page break in the source document",
         )
+        prev_break_id, prev_i = chunk.id, i
         inserted, start = inserted + 1, i + 1
     return inserted
 

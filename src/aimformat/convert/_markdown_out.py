@@ -37,6 +37,26 @@ from ..errors import InvalidOperation
 __all__ = ["to_markdown"]
 
 _SKIP_TAGS = {"aim-proposals", "aim-assets", "script", "style", "template"}
+_BLOCK_TAGS = {
+    "aim-slide",
+    "ul",
+    "ol",
+    "table",
+    "div",
+    "section",
+    "p",
+    "blockquote",
+    "pre",
+    "hr",
+    "figure",
+    "aim-page-break",
+    "h1",
+    "h2",
+    "h3",
+    "h4",
+    "h5",
+    "h6",
+} | _SKIP_TAGS
 _MD_ESCAPE = re.compile(r"([\\`*_\[\]~&<])")
 _LINE_START = re.compile(
     r"^(\s{0,3})"
@@ -173,19 +193,14 @@ class _Renderer:
         if tag == "table":
             return [self._table(el)]
         if tag in ("div", "section"):
-            out = []
-            for child in el.elements():
-                out.extend(self.block(child))
-            return out
+            return self._grouped(el)
         if tag.startswith("h") and len(tag) == 2 and tag[1].isdigit():
             return [("#" * int(tag[1])) + " " + _inline(el)]
         if tag == "p":
             text = _protect_line_starts(_inline(el))
             return [text] if text else []
         if tag == "blockquote":
-            inner: list[str] = []
-            for child in el.elements():
-                inner.extend(self.block(child))
+            inner = self._grouped(el)
             lines: list[str] = []
             for i, blk in enumerate(inner):
                 if i:
@@ -213,6 +228,30 @@ class _Renderer:
         # unknown block: text content, never dropped silently
         text = _protect_line_starts(_inline(el))
         return [text] if text else []
+
+    def _grouped(self, el: Element) -> list[str]:
+        """Children of a grouping block (div/section/blockquote) in order;
+        runs of direct inline content (text the element carries itself)
+        render as paragraphs of their own instead of being dropped."""
+        out: list[str] = []
+        run: list = []
+
+        def flush() -> None:
+            if not run:
+                return
+            text = _inline_nodes(run).strip()
+            if text:
+                out.append(_protect_line_starts(text))
+            run.clear()
+
+        for child in el.children:
+            if isinstance(child, Element) and child.tag in _BLOCK_TAGS:
+                flush()
+                out.extend(self.block(child))
+            else:
+                run.append(child)
+        flush()
+        return out
 
     # ------------------------------------------------------------------
     def _li_lines(self, li: Element, marker: str, indent: str) -> list[str]:
@@ -257,9 +296,9 @@ class _Renderer:
         container_id = el.container_id
         items = [li for li in el.elements() if li.tag == "li"]
         lines: list[str] = []
-        n = 0
+        list_number = [1] if ordered else None
         if self.critic and container_id:
-            lines.extend(self._critic_adds((container_id, None)))
+            lines.extend(self._critic_adds((container_id, None), list_number))
         i = 0
         while i < len(items):
             cid = items[i].chunk_id
@@ -269,13 +308,18 @@ class _Renderer:
                 group.append(items[i])
             i += 1
             body: list[str] = []
+            start = list_number[0] if list_number is not None else None
             for li in group:
-                n += 1
-                marker = f"{n}. " if ordered else "- "
+                marker = f"{list_number[0]}. " if list_number is not None else "- "
+                if list_number is not None:
+                    list_number[0] += 1
                 body.extend(self._li_lines(li, marker, indent))
             if self.critic and cid:
-                body = self._critic_wrap_lines(cid, body)
-                body.extend(self._critic_adds((container_id, cid)))
+                # the replacement renders from the group's own first ordinal
+                # (a throwaway counter), so accepting the span keeps the
+                # ordered marker instead of demoting the item to a bullet
+                body = self._critic_wrap_lines(cid, body, [start] if start is not None else None)
+                body.extend(self._critic_adds((container_id, cid), list_number))
             lines.extend(body)
         return "\n".join(lines)
 
@@ -311,14 +355,16 @@ class _Renderer:
         lines: list[str] = []
         if self.critic and container_id:
             lines.extend(self._critic_adds((container_id, None)))
-        for cid, cells in head:
+        head_adds: list[str] = []  # drained after the separator: accepting a
+        for cid, cells in head:  # header-anchored add makes it the first body row
             row = fmt(cells)
             if self.critic and cid:
-                wrapped = self._critic_wrap_lines(cid, [row])
-                lines.extend(wrapped)
+                lines.extend(self._critic_wrap_lines(cid, [row]))
+                head_adds.extend(self._critic_adds((container_id, cid)))
             else:
                 lines.append(row)
         lines.append("|" + " --- |" * width)
+        lines.extend(head_adds)
         for cid, cells in body:
             row = fmt(cells)
             if self.critic and cid:
@@ -329,14 +375,22 @@ class _Renderer:
         return "\n".join(lines)
 
     # -- pending lane (CriticMarkup) -----------------------------------
-    def _payload_md(self, proposal: Proposal) -> str:
+    def _payload_md(self, proposal: Proposal, list_number: list[int] | None = None) -> str:
         if not proposal.payload_html:
             return ""
         frag = parse_html(proposal.payload_html)
         blocks: list[str] = []
         for node in frag.elements():
-            if node.tag in ("li", "tr"):
-                blocks.append(_inline(node))
+            if node.tag == "tr":  # keep cell boundaries: accepting the
+                cells = [  # suggestion must not fuse the row into one word
+                    _inline(td, in_table=True) for td in node.elements() if td.tag in ("td", "th")
+                ]
+                blocks.append("| " + " | ".join(cells) + " |")
+            elif node.tag == "li":
+                marker = f"{list_number[0]}. " if list_number is not None else "- "
+                if list_number is not None:
+                    list_number[0] += 1
+                blocks.append(marker + _inline(node))
             else:
                 blocks.extend(self.block(node))
         return _neutralize_critic("\n\n".join(b for b in blocks if b))
@@ -344,21 +398,28 @@ class _Renderer:
     def _note(self, prop: Proposal) -> str:
         return f"{{>>{_neutralize_critic(prop.explanation)}<<}}" if prop.explanation else ""
 
-    def _critic_wrap_lines(self, cid: str, lines: list[str]) -> list[str]:
+    def _critic_wrap_lines(
+        self, cid: str, lines: list[str], list_number: list[int] | None = None
+    ) -> list[str]:
         prop = self.mods.get(cid)
         if not prop:
             return lines
         old = _neutralize_critic("\n".join(lines))
         if prop.action == "delete":
             return [f"{{--{old}--}}{self._note(prop)}"]
-        new = self._payload_md(prop)
+        new = self._payload_md(prop, list_number)
         return [f"{{~~{old}~>{new}~~}}{self._note(prop)}"]
 
-    def _critic_adds(self, key: tuple[str | None, str | None]) -> list[str]:
+    def _critic_adds(
+        self, key: tuple[str | None, str | None], list_number: list[int] | None = None
+    ) -> list[str]:
         out: list[str] = []
-        for prop in self.adds.get(key, []):
-            out.append(f"{{++{self._payload_md(prop)}++}}{self._note(prop)}")
-            out.extend(self._critic_adds((prop.anchor_container, prop.id)))
+        # reversed: resolution inserts every same-anchor add at
+        # index(anchor)+1, so accept-all leaves the LAST-proposed sibling
+        # closest to the anchor — render what accepting produces
+        for prop in reversed(self.adds.get(key, [])):
+            out.append(f"{{++{self._payload_md(prop, list_number)}++}}{self._note(prop)}")
+            out.extend(self._critic_adds((prop.anchor_container, prop.id), list_number))
         return out
 
     def chunk_blocks(self, el: Element, cid: str | None) -> list[str]:
@@ -398,9 +459,13 @@ def to_markdown(doc: AimDocument, *, pending: str = "drop") -> str:
             if p.action == "add":
                 key = (p.anchor_container, p.anchor_after)
                 adds_by_anchor.setdefault(key, []).append(p)
-            elif p.action in ("modify", "delete") and p.target and p.target != "aim:theme":
+            elif (
+                p.action in ("modify", "delete")
+                and p.target
+                and p.target not in ("aim:theme", "aim:doc")
+            ):
                 mods[p.target] = p
-            else:  # theme changes / moves have no textual place in Markdown
+            else:  # theme/page-setup changes / moves have no textual place in Markdown
                 what = p.target or p.action
                 notes.append(
                     f"{{>>pending {p.action} on {what}: {p.explanation or 'no explanation'}<<}}"

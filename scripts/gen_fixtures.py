@@ -214,9 +214,13 @@ def main() -> None:
             '<p data-aim="p1">One paragraph &amp; some text.</p>\n'
             '<aim-page-break data-aim="pbx">stray</aim-page-break>',
         ),
+        # nested in a section chunk, NOT a list container: a ul member
+        # would co-fire S022 (illegal item carrier) and break exactness
         "nok_D006_page_break_nested.aim": flat.replace(
-            '<li data-aim="i1">First</li>',
-            '<li data-aim="i1">First</li><aim-page-break data-aim="pbn"></aim-page-break>',
+            '<p data-aim="p1">One paragraph &amp; some text.</p>',
+            '<section data-aim="s1"><h2>Heading</h2>'
+            "<aim-page-break></aim-page-break></section>\n"
+            '<p data-aim="p1">One paragraph &amp; some text.</p>',
         ),
         "nok_H006_history_chain_broken.aim": life.replace(
             "Better text.</p>", "Sneakily different.</p>", 1

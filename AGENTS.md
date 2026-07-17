@@ -66,6 +66,9 @@ technical content only (see Governance below).
    version** (`pip install <name>==<version>` / `npm install <name>@<version>`,
    pinned in the requirements/lock file). Never install unpinned and never
    trust a version number from memory — training-data versions are stale.
+   When touching an existing pin, re-check its **yanked** status too (the
+   PyPI JSON's `releases[v][0].yanked`): pip still installs an exact-pinned
+   yanked version, silently building on a release its authors pulled.
 
 2. **Plan before implementing.** For any non-trivial task, write the plan as a
    `…_plan_…` entry in `docs/log/` (scaffold with

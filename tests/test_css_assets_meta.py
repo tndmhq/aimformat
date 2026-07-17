@@ -30,9 +30,12 @@ class TestCss:
             assert slot + ":" in css
 
     def test_every_registry_class_present(self):
+        # ALL classes, not a hash-ordered sample: the frozenset's first 50
+        # gave ~21% coverage per run, so a dropped class family surfaced
+        # later as flake on an unrelated PR (AF-30); the full check is ms
         css = generate_aim_css()
-        for name in list(aim.REGISTRY.allowed_classes)[:50]:
-            assert f".{name}{{" in css
+        missing = [n for n in aim.REGISTRY.allowed_classes if f".{n}{{" not in css]
+        assert missing == []
 
     def test_chrome_present(self):
         css = generate_aim_css()
@@ -94,9 +97,9 @@ class TestAssets:
         doc.delete_chunk("fig", author=ME, at=ts(2))
         # the delete event's before-payload still references the asset
         assert doc.gc_assets() == 0
-        doc.flatten()  # drop history -> the asset is now dead
-        assert doc.gc_assets() == 1
+        doc.flatten()  # drop history -> the asset is dead; flatten gc's it (§9.3)
         assert "<aim-assets>" not in doc.dumps()
+        assert doc.gc_assets() == 0  # nothing left to collect
 
     def test_packed_doc_lints_clean(self):
         doc = self.make_doc()

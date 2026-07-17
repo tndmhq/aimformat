@@ -27,9 +27,41 @@ def test_spec_snippet_lints_clean(idx):
     assert not errors, "\n".join(str(e) for e in errors)
 
 
-def test_spec_snippets_verify_their_history(idx=1):
+@pytest.mark.parametrize(
+    "idx", range(len(SNIPPETS)), ids=[f"snippet{i}" for i in range(len(SNIPPETS))]
+)
+def test_spec_snippets_verify_their_history(idx):
     doc = aim.loads(SNIPPETS[idx])
     assert doc.verify() == []
+
+
+def test_some_spec_snippet_has_a_nonempty_history():
+    """An editorial reorder must not quietly retarget the verify coverage
+    onto history-less snippets where verify()==[] is vacuous (AF-31)."""
+    assert any(aim.loads(s).history for s in SNIPPETS)
+
+
+def test_skill_format_reference_tracks_the_spec_version():
+    """The Agent Skill's condensed format reference must carry the current
+    version markers — it drifted to v0.1 while shipping v0.2-era content,
+    so agents authoring from the skeleton emitted stale markup (AF-57)."""
+    ref = (ROOT / "skills" / "aimformat" / "references" / "format.md").read_text("utf-8")
+    v = aim.SPEC_VERSION
+    assert f"(v{v})" in ref
+    assert f'data-aim-version="{v}"' in ref
+    assert f'data-aim-css="{v}"' in ref
+    assert "aim-doc+json" in ref and "aim-page-break" in ref
+
+
+def test_spec_prints_the_canonical_note():
+    """§2.5's printed note must BE the canonical note for the current spec
+    version — the printed v0.1 text failed `aim note --check` when copied,
+    and the html fence sits outside the executable-aim-snippet net (AF-55)."""
+    from aimformat.note import render_note
+
+    m = re.search(r"```html\n<!--(.*?)-->\n```", SPEC.read_text("utf-8"), re.S)
+    assert m, "spec §2.5 canonical-note block not found"
+    assert m.group(1) == render_note()
 
 
 def test_generated_appendix_is_fresh(tmp_path):

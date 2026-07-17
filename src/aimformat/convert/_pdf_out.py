@@ -154,11 +154,17 @@ def to_pdf(
     with sync_playwright() as pw:
         try:
             browser = pw.chromium.launch()
-        except Exception as exc:  # browser binary missing
-            raise RuntimeError(
-                "Chromium is not installed for Playwright — run: "
-                "python -m playwright install chromium"
-            ) from exc
+        except Exception as exc:
+            # translate ONLY the missing-binary case: swallowing every
+            # launch failure into "not installed" let real to_pdf
+            # regressions skip green in the test suite
+            msg = str(exc)
+            if "Executable doesn't exist" in msg or "playwright install" in msg:
+                raise RuntimeError(
+                    "Chromium is not installed for Playwright — run: "
+                    "python -m playwright install chromium"
+                ) from exc
+            raise
         try:
             page = browser.new_page()
             page.set_content(html, wait_until="load")

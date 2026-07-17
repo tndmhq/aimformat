@@ -9,6 +9,7 @@ required to add entries.)
 
 | Date | Type | Entry | Status | What |
 |---|---|---|---|---|
+| 2026-07-17 09:07 | plan | [codex-pr12-followups](2026-07-17_0907_plan_codex-pr12-followups.md) | done | Address the five Codex follow-up findings on PR #12 with one verified regression fix and commit per finding |
 | 2026-07-16 13:34 | review | [pptx-codex-final-round](2026-07-16_1334_review_pptx-codex-final-round.md) | done | Recovered + triaged the post-merge Codex round on PR #5 (fixed-layout pages): 5 findings — 4 still present, all fixed with red-first regression tests (accept validates every payload root, empty slides keep their DOCX page, slide roots forced onto the container marker, default canvases sized in print CSS); plus three lint-parity follow-ups from the fix PR's own review. |
 | 2026-07-16 12:59 | report | [review-round2-exporter-mcp-fixes](2026-07-16_1259_report_review-round2-exporter-mcp-fixes.md) | done | Fix the six round-2 review findings: DOCX tracked-changes emitters (A-11..A-15), Markdown slide adds (A-16), MCP root scoping (A-01) |
 | 2026-07-10 16:46 | decision | [amend-proposal](2026-07-10_1646_decision_amend-proposal.md) | done | amend_proposal SDK method: in-place amend of a pending proposal's payload/explanation (spec §5.4 already sanctions it) — lets agent loops iterate on pending suggestions without id churn or supersede noise |

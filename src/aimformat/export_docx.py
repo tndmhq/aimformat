@@ -54,6 +54,23 @@ _MONO = "Consolas"
 _BOLD_TAGS = {"strong", "b"}
 _ITALIC_TAGS = {"em", "i"}
 _HEADINGS = {"h1", "h2", "h3", "h4", "h5", "h6"}
+_INLINE_TAGS = {
+    "strong",
+    "b",
+    "em",
+    "i",
+    "u",
+    "s",
+    "mark",
+    "code",
+    "sub",
+    "sup",
+    "a",
+    "img",
+    "br",
+    "span",
+    "svg",
+}
 
 
 def _require_docx():
@@ -102,6 +119,14 @@ def _runs_of(el: Element, fmt: dict | None = None) -> list[dict]:
                 href = child.get("href") or ""
                 if href and not href.startswith("#"):
                     runs.append({"text": f" ({href})", **fmt})
+            elif child.tag == "img":
+                # inline image: honest placeholder (figure-fallback style),
+                # URL kept unless it's an embedded data blob
+                label = f"[image: {child.get('alt') or 'image'}]"
+                src = child.get("src") or ""
+                if src and not src.startswith("data:"):
+                    label += f" ({src})"
+                runs.append({"text": label, **fmt, "italic": True})
             else:
                 runs += _runs_of(child, fmt)
     return runs
@@ -183,6 +208,24 @@ class _Revisions:
             wrap.append(self._make_run(paragraph, spec, deleted=True))
         paragraph._p.append(wrap)
 
+    def row_ins(self, tr, author: str, date: str) -> None:
+        self._row_change(tr, "w:ins", author, date)
+
+    def row_dele(self, tr, author: str, date: str) -> None:
+        self._row_change(tr, "w:del", author, date)
+
+    def _row_change(self, tr, tag: str, author: str, date: str) -> None:
+        from docx.oxml import OxmlElement
+        from docx.oxml.ns import qn
+
+        props = tr.find(qn("w:trPr"))
+        if props is None:
+            props = OxmlElement("w:trPr")
+            tr.insert(0, props)
+        change = OxmlElement(tag)
+        self._attrs(change, author, date)
+        props.append(change)
+
     @staticmethod
     def _make_run(paragraph, spec: dict, *, deleted: bool):
         # build a real run for formatting, then detach and retag its text
@@ -225,17 +268,65 @@ def _style_for(tag: str) -> str | None:
 
 
 def _block_children(el: Element) -> list[Element]:
-    """The block-level pieces of one chunk (a section's children; a slide's
-    children recursively, so a pending whole-slide add linearizes per block
-    like an accepted slide; the element itself otherwise)."""
-    if el.tag == "section":
-        return el.elements()
+    """The block-level pieces of one chunk (a grouping block's children,
+    recursively; a slide's children recursively, so a pending whole-slide
+    add linearizes per block like an accepted slide; the element itself
+    otherwise). Each block child of div/section/blockquote becomes its own
+    paragraph — treating them as inline fused 'Quote one.Quote two.' into
+    one paragraph — and direct inline content wraps in a synthetic block
+    so it is never dropped."""
+    if el.tag in ("section", "div"):
+        return _unpack_group(el, "p")
+    if el.tag == "blockquote":
+        return _unpack_group(el, "blockquote")
     if el.tag == "aim-slide":
         out: list[Element] = []
         for child in el.elements():
             out.extend(_block_children(child))
         return out
     return [el]
+
+
+def _unpack_group(el: Element, wrap_tag: str) -> list[Element]:
+    """One block per block child of a grouping element; runs of direct
+    inline content wrap in a synthetic *wrap_tag* element. Paragraphs
+    inside a blockquote re-wrap as *wrap_tag* so they keep the Quote
+    style."""
+    out: list[Element] = []
+    run: list = []
+
+    def flush() -> None:
+        if run:
+            if any(isinstance(n, Element) or (isinstance(n, Text) and n.data.strip()) for n in run):
+                out.append(_wrapped(wrap_tag, run))
+            run.clear()
+
+    for child in el.children:
+        if isinstance(child, Element) and child.tag not in _INLINE_TAGS:
+            flush()
+            if child.tag == "p" and wrap_tag != "p":
+                out.append(_wrapped(wrap_tag, child.children))
+            else:
+                out.extend(_block_children(child))
+        else:
+            run.append(child)
+    flush()
+    return out
+
+
+def _wrapped(tag: str, children: list) -> Element:
+    wrap = Element(tag)
+    wrap.children = list(children)
+    return wrap
+
+
+def _row_shape(tr: Element) -> list[tuple[int, int]]:
+    """A table row's structural signature: per-cell (colspan, rowspan)."""
+    return [
+        (int(c.get("colspan") or 1), int(c.get("rowspan") or 1))
+        for c in tr.elements()
+        if c.tag in ("td", "th")
+    ]
 
 
 _PX_VALUE_RE = re.compile(r"^(\d+(?:\.\d+)?)px$")
@@ -316,7 +407,9 @@ class _Exporter:
         return self.adds_by_anchor.pop((container, after), [])
 
     def _emit_anchored_adds(self, container: str, anchor: str | None) -> None:
-        for prop in self._pop_adds(container, anchor):
+        # reversed: resolution inserts every same-anchor add at index(anchor)+1,
+        # so accept-all leaves the LAST-proposed sibling closest to the anchor
+        for prop in reversed(self._pop_adds(container, anchor)):
             self._emit_add_paragraphs(prop)
             self._emit_anchored_adds(container, prop.id)  # chained adds anchor on this one
 
@@ -388,10 +481,12 @@ class _Exporter:
                 self.emit_list(el)
         elif el.container_id and el.tag == "table":
             if prop is not None:
-                self.emit_table(el, force="del")
+                self.emit_table(el, force="del", prop=prop)
                 if prop.action == "modify":
-                    for new_el in self._payload_elements(prop):
-                        self.emit_table(new_el, force="ins", prop=prop)
+                    # dispatch each payload root by its own tag: a legal
+                    # table→list replacement has no <tr> and emit_table
+                    # would drop it silently
+                    self._emit_add_paragraphs(prop)
             else:
                 self.emit_table(el)
         elif prop is not None:
@@ -595,7 +690,8 @@ class _Exporter:
                 self._emit_list_adds(container_id, cid, style)
 
     def _emit_list_adds(self, container: str, after: str | None, style: str | None) -> None:
-        for prop in self._pop_adds(container, after):
+        # reversed for the same reason as _emit_anchored_adds
+        for prop in reversed(self._pop_adds(container, after)):
             self._emit_add_paragraphs(prop, style=style)
             self._emit_list_adds(container, prop.id, style)
 
@@ -606,9 +702,38 @@ class _Exporter:
         rows = el.find_all(lambda e: e.tag == "tr")
         if not rows:
             return
-        # true grid width: simulate the emit loop's cursor (spans shift later
-        # cells right; a rowspan reaching below the last row is clamped), so
-        # every (ri, ci) the loop touches exists in the table
+        # pending row-modifies: cell-level del+ins can express a replacement
+        # only when the grid shape is unchanged (same row count, same per-cell
+        # spans); a structural change becomes row-delete + inserted rows —
+        # fusing surplus cells into the last old cell produced a grid no
+        # accept/reject sequence in Word could turn into the AIM state
+        cellwise_rows: dict[int, list[Element]] = {}  # ri -> payload row cells
+        structural_ins: dict[int, list[Element]] = {}  # last-member ri -> payload rows
+        structural_del: set[int] = set()
+        if not force:
+            member_rows: dict[str, list[int]] = {}
+            for ri, row in enumerate(rows):
+                if row.chunk_id and row.chunk_id in self.pending_mod:
+                    member_rows.setdefault(row.chunk_id, []).append(ri)
+            for rid, indices in member_rows.items():
+                payload_rows = [
+                    p for p in self._payload_elements(self.pending_mod[rid]) if p.tag == "tr"
+                ]
+                if len(payload_rows) == len(indices) and all(
+                    _row_shape(payload_rows[k]) == _row_shape(rows[i])
+                    for k, i in enumerate(indices)
+                ):
+                    for k, i in enumerate(indices):
+                        cellwise_rows[i] = [
+                            c for c in payload_rows[k].elements() if c.tag in ("td", "th")
+                        ]
+                else:
+                    structural_ins[indices[-1]] = payload_rows
+                    structural_del.update(indices)
+        # true width of the live table: simulate the emit loop's cursor (spans
+        # shift later cells right; a rowspan reaching below the last row is
+        # clamped). Pending structural replacements build their own row shape
+        # below and must not widen the original rows outside tracked revisions.
         ncols = 0
         spanned: set[tuple[int, int]] = set()
         for ri, row in enumerate(rows):
@@ -629,7 +754,6 @@ class _Exporter:
         table = self.out.add_table(rows=len(rows), cols=ncols)
         table.style = "Table Grid" if self._has_style("Table Grid") else None
         occupied: set[tuple[int, int]] = set()
-        done_mods: set[str] = set()  # payload once per run chunk; later rows dele-only
         container_id = el.container_id
         for ri, row in enumerate(rows):
             rid = row.chunk_id or ""
@@ -637,11 +761,7 @@ class _Exporter:
             prop_del = self.pending_del.get(rid) if not force else None
             if force == "del":
                 prop_del = prop  # container-level: everything deleted
-            new_cells = None
-            if prop_mod is not None and rid not in done_mods:
-                done_mods.add(rid)
-                payload = self._payload_elements(prop_mod)
-                new_cells = [c for p in payload for c in p.elements() if c.tag in ("td", "th")]
+            new_cells = cellwise_rows.get(ri)  # structural members stay dele-only
             cells = [c for c in row.elements() if c.tag in ("td", "th")]
             ci = 0
             for orig_idx, cell_el in enumerate(cells):
@@ -665,28 +785,109 @@ class _Exporter:
                     self.rev.dele(para, runs, _actor_label(prop_del.author), prop_del.at)
                 elif prop_mod is not None:
                     self.rev.dele(para, runs, _actor_label(prop_mod.author), prop_mod.at)
-                    if new_cells and orig_idx < len(new_cells):
-                        take = (
-                            new_cells[orig_idx:]
-                            if orig_idx == len(cells) - 1
-                            else [new_cells[orig_idx]]
+                    if new_cells is not None:  # cellwise: shapes match 1:1
+                        self.rev.ins(
+                            para,
+                            _runs_of(new_cells[orig_idx]),
+                            _actor_label(prop_mod.author),
+                            prop_mod.at,
                         )
-                        for nc in take:  # surplus new cells join the last one
-                            self.rev.ins(
-                                para, _runs_of(nc), _actor_label(prop_mod.author), prop_mod.at
-                            )
                 else:
                     _apply_runs(para, runs)
                 ci += colspan
         # row-adds only after the content loop: inserting rows mid-loop would
         # shift the (ri, ci) coordinates the loop and the merges rely on
+        orig_trs = [r._tr for r in table.rows]  # 1:1 with the AIM rows
+        if force and prop is not None:
+            # container-level tracked change: the table STRUCTURE itself is
+            # pending, not just its text — without trPr markers, accepting
+            # the revisions in Word leaves an empty grid behind (del) and
+            # rejecting an added table strands one (ins)
+            mark = self.rev.row_dele if force == "del" else self.rev.row_ins
+            for tr in orig_trs:
+                mark(tr, _actor_label(prop.author), prop.at)
+        for ri in sorted(structural_del):
+            prop_mod = self.pending_mod[rows[ri].chunk_id or ""]
+            self.rev.row_dele(orig_trs[ri], _actor_label(prop_mod.author), prop_mod.at)
         if container_id and not force:
-            orig_trs = [r._tr for r in table.rows]  # 1:1 with the AIM rows
             self._emit_row_adds(table, None, container_id, None, ncols, first=True)
             for ri, row in enumerate(rows):
                 rid = row.chunk_id
-                if rid:
+                # anchor on the LAST member of a run chunk: draining on the
+                # first member would insert the added row mid-run
+                last_of_run = not (ri + 1 < len(rows) and rows[ri + 1].chunk_id == rid)
+                if rid and last_of_run:
                     self._emit_row_adds(table, orig_trs[ri], container_id, rid, ncols)
+        # structural replacements insert right after their (deleted) old rows —
+        # closest to the anchor, ahead of any row-adds anchored on the chunk
+        for ri, payload_rows in structural_ins.items():
+            prop_mod = self.pending_mod[rows[ri].chunk_id or ""]
+            label, date = _actor_label(prop_mod.author), prop_mod.at
+            cur = orig_trs[ri]
+            # grid col -> (continuation rows still owed, colspan) for rowspans
+            # opened by an earlier payload row of THIS replacement
+            vmerge: dict[int, tuple[int, int]] = {}
+            for pi, p_row in enumerate(payload_rows):
+                new_row = table.add_row()  # appended; repositioned below
+                tr = new_row._tr
+                for tc in list(tr.tc_lst):  # rebuilt cell by cell: the payload
+                    tr.remove(tc)  # rows carry their own span structure
+                ci = 0
+                for c in p_row.elements():
+                    if c.tag not in ("td", "th"):
+                        continue
+                    ci = self._continue_vmerges(table, tr, ci, vmerge)
+                    cs = int(c.get("colspan") or 1)
+                    rs = min(int(c.get("rowspan") or 1), len(payload_rows) - pi)
+                    para = self._new_span_cell(
+                        table, tr, colspan=cs, vmerge="restart" if rs > 1 else None
+                    )
+                    self.rev.ins(para, _runs_of(c), label, date)
+                    if rs > 1:
+                        vmerge[ci] = (rs - 1, cs)
+                    ci += cs
+                self._continue_vmerges(table, tr, ci, vmerge, trailing=True)
+                self.rev.row_ins(tr, label, date)
+                cur.addnext(tr)
+                cur = tr
+
+    def _new_span_cell(self, table, tr, *, colspan: int, vmerge: str | None):
+        """Append one cell to a rebuilt payload row, carrying its span
+        structure (w:gridSpan / w:vMerge); returns the cell's paragraph."""
+        from docx.oxml import OxmlElement
+        from docx.oxml.ns import qn
+        from docx.table import _Cell
+
+        tc = tr.add_tc()
+        if colspan > 1:
+            span = OxmlElement("w:gridSpan")
+            span.set(qn("w:val"), str(colspan))
+            tc.get_or_add_tcPr().append(span)
+        if vmerge is not None:
+            merge = OxmlElement("w:vMerge")
+            if vmerge == "restart":
+                merge.set(qn("w:val"), "restart")
+            tc.get_or_add_tcPr().append(merge)
+        return _Cell(tc, table).paragraphs[0]
+
+    def _continue_vmerges(
+        self, table, tr, ci: int, vmerge: dict[int, tuple[int, int]], *, trailing: bool = False
+    ) -> int:
+        """Emit the vertical-merge continuation cells owed at grid position
+        *ci* (and, when *trailing*, any owed further right); returns the
+        advanced position. Content lives in the restart cell — a
+        continuation is an empty spanned cell."""
+        while True:
+            if ci in vmerge:
+                left, cs = vmerge.pop(ci)
+                self._new_span_cell(table, tr, colspan=cs, vmerge="continue")
+                if left > 1:
+                    vmerge[ci] = (left - 1, cs)
+                ci += cs
+            elif trailing and vmerge and min(vmerge) > ci:
+                ci = min(vmerge)
+            else:
+                return ci
 
     def _emit_row_adds(
         self,
@@ -726,7 +927,7 @@ def _resolve_copy(doc: AimDocument, decision: str) -> AimDocument:
     decider = external("docx-export")
     # dependency-safe order (chained adds after their anchor, deletes last
     # per round) — shared with `aim accept/reject --all`
-    for p in resolution_order(clone.proposals):
+    for p in resolution_order(clone.proposals, clone):
         if decision == "accept-all":
             clone.accept(p.id, decided_by=decider)
         else:

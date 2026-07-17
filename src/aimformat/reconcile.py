@@ -108,6 +108,14 @@ def _check_log(events: list[Event]) -> None:
             raise HistoryError(
                 f"cannot reconcile: unknown event kind {ev.kind!r} at seq {ev.data.get('seq')}"
             )
+        # full schema validation: a baseline the linter itself rejects
+        # (H003) must never count as intact — "repairing" on top of it
+        # plans a lint-clean-looking write over corrupt provenance
+        problems = ev.validate()
+        if problems:
+            raise HistoryError(
+                f"cannot reconcile: invalid event at seq {ev.data.get('seq')}: {problems[0]}"
+            )
 
 
 def _apply_event(state: DocState, ev: Event) -> None:
@@ -440,6 +448,12 @@ def _drive(S: AimDocument, work: AimDocument, author: Actor, at: str | None) -> 
 
     gone = {uid for uid in E if uid not in A}
     both = [uid for uid in E if uid in A]
+    # containers that exist only in A — a hand edit wrapped existing units
+    # into a new container. The order walk adds the wrapper whole, which
+    # materializes its interior: units inside count as covered on the A
+    # side, so their E-side copies are doomed before the add (otherwise
+    # they survive as duplicates and the doc_hash check cannot converge)
+    added = {uid for uid, u in A.items() if uid not in E and u.is_container}
 
     def chain(units: dict[str, _Unit], uid: str) -> set[str]:
         out: set[str] = set()
@@ -463,16 +477,19 @@ def _drive(S: AimDocument, work: AimDocument, author: Actor, at: str | None) -> 
             if e_el is not None and a_el is not None and _skeleton(e_el) == _skeleton(a_el):
                 continue  # item-level events suffice
         whole.add(uid)
-    # a whole-modified/deleted ancestor governs everything inside it
+    # a whole-modified/deleted (or A-only added) ancestor governs
+    # everything inside it
     whole = {
-        uid for uid in whole if not (chain(E, uid) & (whole | gone)) and not (chain(A, uid) & whole)
+        uid
+        for uid in whole
+        if not (chain(E, uid) & (whole | gone)) and not (chain(A, uid) & (whole | added))
     }
 
     def covered_e(uid: str) -> bool:
         return bool(chain(E, uid) & (whole | gone))
 
     def covered_a(uid: str) -> bool:
-        return bool(chain(A, uid) & whole)
+        return bool(chain(A, uid) & (whole | added))
 
     # deletes — including units whose A-side landed inside a whole-modified
     # container (the modify materializes them there; their old spot empties)

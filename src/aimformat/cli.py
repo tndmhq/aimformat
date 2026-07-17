@@ -9,6 +9,9 @@
     aim accept FILE PID...  accept pending proposals (or --all)
     aim reject FILE PID...  reject pending proposals (or --all)
     aim flatten FILE        drop history (+embeddings) -> clean file
+    aim pack FILE           hoist embedded data images into the asset registry
+    aim prune FILE BEFORE   truncate history before a seq/checkpoint label
+    aim gc FILE             collect dead asset symbols
     aim normalize FILE      rewrite in canonical form (lossless, idempotent)
     aim reconcile FILE      detect out-of-band edits; append reconcile events
     aim css                 print the generated aim.css for this spec version
@@ -213,8 +216,11 @@ def _cmd_resolve(args: argparse.Namespace, decision: str) -> int:
     decided_by = parse_actor(args.author)
     if args.all:
         # dependency-safe order shared with the exporters: chained adds
-        # resolve after the add they anchor on, deletes go last per round
-        pids = [p.id for p in resolution_order(doc.proposals)]
+        # resolve after the add they anchor on; per round adds/modifies go
+        # first, then moves, then deletes, so nothing pulls an anchor out
+        # from under a card that still needs it (and a container modify
+        # waits for a move that rescues a member its payload drops)
+        pids = [p.id for p in resolution_order(doc.proposals, doc)]
     else:
         pids = args.pids
     if not pids:
@@ -325,6 +331,42 @@ def _cmd_flatten(args: argparse.Namespace) -> int:
     out = Path(args.output or args.file)
     doc.save(out)
     print(f"wrote {out}")
+    return 0
+
+
+def _cmd_pack(args: argparse.Namespace) -> int:
+    from .events import parse_actor
+
+    doc = AimDocument.load(args.file)
+    packed = doc.pack_assets(author=parse_actor(args.author))
+    out = Path(args.output or args.file)
+    doc.save(out)
+    print(f"packed {packed} image{'s' if packed != 1 else ''}, wrote {out}")
+    return 0
+
+
+def _cmd_prune(args: argparse.Namespace) -> int:
+    doc = AimDocument.load(args.file)
+    # "seq number or checkpoint label": an exact label match wins, so a
+    # checkpoint someone named "1" stays selectable; only an argument that
+    # matches no label reads as a sequence number
+    labels = {e.get("label") for e in doc.history if e.kind == "checkpoint"}
+    before: int | str = (
+        args.before if args.before in labels or not args.before.isdigit() else int(args.before)
+    )
+    dropped = doc.prune(before=before)
+    out = Path(args.output or args.file)
+    doc.save(out)
+    print(f"dropped {dropped} event{'s' if dropped != 1 else ''}, wrote {out}")
+    return 0
+
+
+def _cmd_gc(args: argparse.Namespace) -> int:
+    doc = AimDocument.load(args.file)
+    collected = doc.gc_assets()
+    out = Path(args.output or args.file)
+    doc.save(out)
+    print(f"collected {collected} dead asset{'s' if collected != 1 else ''}, wrote {out}")
     return 0
 
 
@@ -599,6 +641,43 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("-o", "--output")
     p.add_argument("--keep-embeddings", action="store_true")
     p.set_defaults(func=_cmd_flatten)
+
+    p = sub.add_parser(
+        "pack",
+        help="hoist embedded data images into the asset registry (spec §9); "
+        "dead assets are collected as the final pass; modifies the file "
+        "in place unless -o is given",
+    )
+    p.add_argument("file")
+    p.add_argument("-o", "--output")
+    p.add_argument(
+        "--author", default="external:aim-cli", help="human:ID | agent:MODEL | external:ID"
+    )
+    p.set_defaults(func=_cmd_pack)
+
+    p = sub.add_parser(
+        "prune",
+        help="truncate history before a seq number or checkpoint label; "
+        "dead assets are collected as the final pass; modifies the file "
+        "in place unless -o is given",
+    )
+    p.add_argument("file")
+    p.add_argument(
+        "before",
+        help="seq number or checkpoint label to keep from; an exact label match wins",
+    )
+    p.add_argument("-o", "--output")
+    p.set_defaults(func=_cmd_prune)
+
+    p = sub.add_parser(
+        "gc",
+        help="collect asset symbols referenced by no body content, retained "
+        "history payload, or pending card; modifies the file in place "
+        "unless -o is given",
+    )
+    p.add_argument("file")
+    p.add_argument("-o", "--output")
+    p.set_defaults(func=_cmd_gc)
 
     p = sub.add_parser(
         "normalize",

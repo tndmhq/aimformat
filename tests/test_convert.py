@@ -500,7 +500,9 @@ class TestToPdf:
         try:
             aim.to_pdf(doc, out)
         except RuntimeError as exc:
-            pytest.skip(str(exc))  # chromium not installed
+            if "Chromium is not installed" not in str(exc):
+                raise  # a real to_pdf regression must fail, not skip
+            pytest.skip(str(exc))
         assert out.stat().st_size > 1000
         assert out.read_bytes()[:5] == b"%PDF-"
 
@@ -572,7 +574,9 @@ class TestPdfSlidePages:
         try:
             aim.to_pdf(_mixed_deck(), out)
         except RuntimeError as exc:
-            pytest.skip(str(exc))  # chromium not installed
+            if "Chromium is not installed" not in str(exc):
+                raise  # a real to_pdf regression must fail, not skip
+            pytest.skip(str(exc))
         boxes = re.findall(rb"/MediaBox \[([\d. ]+)\]", out.read_bytes())
         sizes = set()
         for raw in boxes:

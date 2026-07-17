@@ -340,6 +340,12 @@ class _Linter:
                         cid,
                     )
             return
+        # every member must be a legal item carrier for THIS container kind —
+        # not merely "not an item carrier of some other kind": a <p data-aim>
+        # in a <ul> is just as illegal as a <tr>, and item-aware consumers
+        # cannot see it. A table shell only relays the table's item grammar,
+        # so its children are held to the same rule.
+        legal = [t for t, cs in REGISTRY.item_carriers.items() if cont.tag in cs]
         for child in cont.elements():
             if child.tag in REGISTRY.table_shells and cont.tag == "table":
                 for node in child.children:
@@ -358,10 +364,13 @@ class _Linter:
                             f"row <{row.tag}> in container {cid!r} lacks data-aim",
                             cid,
                         )
+                    elif legal and row.tag not in legal:
+                        self.add(
+                            "S022", ERROR, f"<{row.tag}> chunk inside <{cont.tag}> container", cid
+                        )
                 continue
             if child.chunk_id:
-                expected = REGISTRY.item_carriers.get(child.tag)
-                if expected is not None and cont.tag not in expected:
+                if legal and child.tag not in legal:
                     self.add(
                         "S022", ERROR, f"<{child.tag}> chunk inside <{cont.tag}> container", cid
                     )
@@ -565,32 +574,36 @@ class _Linter:
                         f"executable or unknown <script> (type={stype!r}) is forbidden",
                     )
             if el.tag == "style":
-                if not el.has("data-aim-css") and not el.has("data-aim-theme"):
+                if el.has("data-aim-css"):
+                    # aim.css is machine-managed and excluded from doc_hash
+                    # (spec §10), so its content is trusted at the raw tier —
+                    # verify it byte-equals the generated stylesheet rather
+                    # than letting an arbitrary (e.g. @import) replacement
+                    # pass lint-clean (review AIM-02). EVERY data-aim-css
+                    # block is held to this, whatever version it claims and
+                    # wherever it sits: gating on the current spec version
+                    # let a stale-version spelling smuggle arbitrary CSS
+                    # past lint, and only the first head block was checked
+                    # (AF-21). An inert placeholder (empty or comments-only,
+                    # as the spec's illustrative snippets use) carries no
+                    # declarations and can do no harm.
+                    raw = el.raw or ""
+                    inert = not re.sub(r"/\*.*?\*/", "", raw, flags=re.S).strip()
+                    if not inert and raw.strip("\n") != generate_aim_css().strip("\n"):
+                        self.add(
+                            "X006",
+                            ERROR,
+                            "embedded aim.css does not match the generated "
+                            "stylesheet for this spec version (it is "
+                            "machine-managed; regenerate via dumps())",
+                        )
+                elif not el.has("data-aim-theme"):
                     self.add(
                         "X005",
                         ERROR,
                         "free <style> blocks are forbidden (only the "
                         "embedded aim.css and the theme block)",
                     )
-        # aim.css is machine-managed and excluded from doc_hash (spec §10), so
-        # its content is trusted at the raw tier — verify it byte-equals the
-        # generated stylesheet for this spec version rather than letting an
-        # arbitrary (e.g. @import) replacement pass lint-clean (review AIM-02)
-        css = self.state.css_el()
-        if css is not None and css.get("data-aim-css") == REGISTRY.spec_version:
-            raw = css.raw or ""
-            # an inert placeholder (empty or comments-only, as the spec's
-            # illustrative snippets use) carries no declarations and can do no
-            # harm; any real CSS must be exactly the generated stylesheet
-            inert = not re.sub(r"/\*.*?\*/", "", raw, flags=re.S).strip()
-            if not inert and raw.strip("\n") != generate_aim_css().strip("\n"):
-                self.add(
-                    "X006",
-                    ERROR,
-                    "embedded aim.css does not match the generated "
-                    "stylesheet for this spec version (it is "
-                    "machine-managed; regenerate via dumps())",
-                )
 
     # -- theme -------------------------------------------------------------------------------------
     def check_theme_block(self, raw: str, where: str) -> None:

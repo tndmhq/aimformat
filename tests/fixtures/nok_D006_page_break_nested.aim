@@ -304,7 +304,8 @@ aim-assets{display:none}
 </head>
 <body>
 <h1 data-aim="h1" class="font-bold text-3xl">Fixture</h1>
+<section data-aim="s1"><h2>Heading</h2><aim-page-break></aim-page-break></section>
 <p data-aim="p1">One paragraph &amp; some text.</p>
-<ul data-aim-container="l1"><li data-aim="i1">First</li><aim-page-break data-aim="pbn"></aim-page-break><li data-aim="i2">Run…</li><li data-aim="i2">…run</li></ul>
+<ul data-aim-container="l1"><li data-aim="i1">First</li><li data-aim="i2">Run…</li><li data-aim="i2">…run</li></ul>
 </body>
 </html>

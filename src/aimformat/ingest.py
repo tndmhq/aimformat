@@ -273,6 +273,7 @@ def _table_markup(table: dict) -> str | None:
         return None
     head_rows: list[str] = []
     body_rows: list[str] = []
+    last_section = body_rows
     for ri, row in enumerate(grid):
         # a cell belongs to the row where it STARTS; the grid repeats
         # spanning cells in every row/column they cover
@@ -287,7 +288,11 @@ def _table_markup(table: dict) -> str | None:
             seen_cols.add(col)
             own.append(cell)
         if not own:
-            continue  # row consists entirely of continuations
+            # the row is entirely covered by earlier rowspans: emit it empty
+            # — dropping it while the covering cells keep their span count
+            # would shift the span onto the NEXT real row
+            last_section.append("<tr></tr>")
+            continue
         header = all(c.get("column_header") for c in own)
         cells = []
         for cell in own:
@@ -299,7 +304,8 @@ def _table_markup(table: dict) -> str | None:
                 attrs += f' rowspan="{cell["row_span"]}"'
             cells.append(f"<{tag}{attrs}>{escape_text(cell.get('text', ''))}</{tag}>")
         row_html = "<tr>" + "".join(cells) + "</tr>"
-        (head_rows if header else body_rows).append(row_html)
+        last_section = head_rows if header else body_rows
+        last_section.append(row_html)
     if not head_rows and not body_rows:
         return None
     html = "<table>"
