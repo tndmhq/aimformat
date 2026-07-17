@@ -148,6 +148,7 @@ def _insert_breaks(doc: AimDocument, anchors: list[tuple[str, int]], *, author: 
             texts[own] = 1
         candidates.append((cid, texts))
     inserted, start = 0, 0
+    prev_break_id, prev_i = None, -1
     for anchor, occurrence in anchors:
         count, hit = 0, None
         for i, (cid, texts) in enumerate(candidates):
@@ -155,15 +156,22 @@ def _insert_breaks(doc: AimDocument, anchors: list[tuple[str, int]], *, author: 
             if count >= occurrence:
                 hit = (i, cid)
                 break
-        if hit is None or hit[0] < start:
+        if hit is None:
             continue
         i, cid = hit
-        doc.add_chunk(
+        if i < start:
+            if prev_break_id is None or i != prev_i:
+                continue  # would move backwards: skip, never guess
+            # a repeated hint on the same anchor is a consecutive break
+            # (an intentional blank page): chain it after the previous one
+            cid = prev_break_id
+        chunk = doc.add_chunk(
             "<aim-page-break></aim-page-break>",
             author=author,
             after=cid,
             explanation="Explicit page break in the source document",
         )
+        prev_break_id, prev_i = chunk.id, i
         inserted, start = inserted + 1, i + 1
     return inserted
 

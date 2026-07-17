@@ -1868,3 +1868,31 @@ class TestIngestKeepsRowspanCoveredRows:
         assert len(rows) == 3  # A/B row, covered row, C/D row
         assert rows[1].text == ""  # the covered row survives, empty
         assert "C" in rows[2].text and "D" in rows[2].text
+
+
+class TestConsecutiveDocxBreaksAllSurvive:
+    """AF-46: after the first insertion ``start = i+1``, so the second of
+    two consecutive page breaks resolved to the same anchor and failed the
+    ``hit[0] < start`` guard — two Ctrl+Enter breaks imported as one,
+    deleting the intentional blank page."""
+
+    def test_double_break_imports_as_two_chunks(self, tmp_path):
+        docx = pytest.importorskip("docx")
+        from docx.enum.text import WD_BREAK
+
+        from aimformat.convert._docx_pages import apply_docx_pagination
+
+        d = docx.Document()
+        d.add_paragraph("Alpha")
+        d.add_paragraph().add_run().add_break(WD_BREAK.PAGE)
+        d.add_paragraph().add_run().add_break(WD_BREAK.PAGE)
+        d.add_paragraph("Beta")
+        path = tmp_path / "double.docx"
+        d.save(str(path))
+
+        doc = aim.new_document(title="T")
+        doc.add_chunk('<p data-aim="p1">Alpha</p>', author=ME, at=ts(0))
+        doc.add_chunk('<p data-aim="p2">Beta</p>', author=ME, at=ts(1))
+        apply_docx_pagination(doc, path, author=ME)
+        texts = [c.text for c in doc.chunks]
+        assert texts == ["Alpha", "", "", "Beta"]  # both breaks, in order
