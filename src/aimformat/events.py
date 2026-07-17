@@ -8,6 +8,7 @@ dict — not a closed dataclass — is the truth.
 
 from __future__ import annotations
 
+import datetime as _dt
 import json
 import re
 from dataclasses import dataclass
@@ -18,6 +19,18 @@ from .errors import AimError, HistoryError
 from .registry import REGISTRY
 
 _ISO_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?Z$")
+
+
+def _valid_utc(t: str) -> bool:
+    """True for a real ISO-8601 UTC instant — the digit-shape regex alone
+    accepts impossible dates like 2026-99-99T99:99:99Z."""
+    if not isinstance(t, str) or not _ISO_RE.match(t):
+        return False
+    try:
+        _dt.datetime.strptime(t[:19], "%Y-%m-%dT%H:%M:%S")
+    except ValueError:
+        return False
+    return True
 
 
 @dataclass(frozen=True)
@@ -170,10 +183,11 @@ class Event:
                 problems.append(
                     f"{kind} event has unknown field {field!r} (vendor extensions must use x_*)"
                 )
-        if not isinstance(self.data.get("seq"), int):
-            problems.append("seq must be an integer")
+        seq = self.data.get("seq")
+        if type(seq) is not int or seq < 1:  # bool ⊂ int: "seq": true must fail
+            problems.append("seq must be a positive integer")
         t = self.data.get("t")
-        if t is not None and not _ISO_RE.match(t):
+        if t is not None and not _valid_utc(t):
             problems.append(f"t is not ISO-8601 UTC (…Z): {t!r}")
         act = self.data.get("action")
         if act is not None and act not in REGISTRY.raw["events"]["actions"]:

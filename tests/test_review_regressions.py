@@ -2166,3 +2166,43 @@ class TestReconcileRejectsSchemaInvalidHistory:
         doc = aim.AimDocument.loads(text)
         report = doc.reconcile(at=ts(60))
         assert report.changed and report.residual == []
+
+
+class TestEventValidationIsTypeStrict:
+    """AF-14: ``isinstance(seq, int)`` let ``"seq": true`` through (bool ⊂
+    int in Python) and the digit-shape-only timestamp regex accepted
+    impossible instants like 2026-99-99T99:99:99Z — all the way through
+    validate(), verify(), and lint_text. An independent implementation
+    doing real validation rejects the same bytes."""
+
+    @staticmethod
+    def _event(**overrides):
+        from aimformat.events import Event
+
+        data = {
+            "seq": 1,
+            "kind": "direct_edit",
+            "t": ts(0),
+            "target": "x",
+            "action": "modify",
+            "before": "<p data-aim=\"x\">a</p>",
+            "after": "<p data-aim=\"x\">b</p>",
+            "author": {"type": "human", "id": "luca"},
+            "batch": "b-1",
+        }
+        data.update(overrides)
+        return Event(data)
+
+    def test_boolean_seq_is_rejected(self):
+        assert any("seq" in p for p in self._event(seq=True).validate())
+
+    def test_zero_and_negative_seq_are_rejected(self):
+        assert self._event(seq=0).validate()
+        assert self._event(seq=-3).validate()
+
+    def test_impossible_timestamp_is_rejected(self):
+        assert any("t is not" in p for p in self._event(t="2026-99-99T99:99:99Z").validate())
+
+    def test_real_utc_instant_still_passes(self):
+        assert self._event().validate() == []
+        assert self._event(t="2024-02-29T23:59:59Z").validate() == []  # leap day
