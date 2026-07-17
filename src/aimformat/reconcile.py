@@ -108,6 +108,14 @@ def _check_log(events: list[Event]) -> None:
             raise HistoryError(
                 f"cannot reconcile: unknown event kind {ev.kind!r} at seq {ev.data.get('seq')}"
             )
+        # full schema validation: a baseline the linter itself rejects
+        # (H003) must never count as intact — "repairing" on top of it
+        # plans a lint-clean-looking write over corrupt provenance
+        problems = ev.validate()
+        if problems:
+            raise HistoryError(
+                f"cannot reconcile: invalid event at seq {ev.data.get('seq')}: {problems[0]}"
+            )
 
 
 def _apply_event(state: DocState, ev: Event) -> None:

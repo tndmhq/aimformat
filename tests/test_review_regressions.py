@@ -2142,3 +2142,27 @@ class TestShellIdentityOnEveryTableAnchor:
         serial = table_doc._state.serial("tbl")
         assert serial.index('data-aim="r1"') < serial.index("</thead>")
         assert table_doc.verify() == []
+
+
+class TestReconcileRejectsSchemaInvalidHistory:
+    """AF-13: ``_check_log`` validated seq shape and known kinds but never
+    ``Event.validate()`` — a history the linter itself flags (H003, e.g. a
+    deleted ``author``) counted as an intact baseline and reconcile happily
+    'repaired' on top of corrupt provenance."""
+
+    def test_missing_author_fails_closed(self, basic_doc):
+        text = basic_doc.dumps()
+        corrupted = re.sub(r'"author":\{[^}]*\},', "", text, count=1)
+        assert "H003" in {f.code for f in aim.lint_text(corrupted)}  # linter agrees
+        corrupted = corrupted.replace("Intro paragraph.</p>", "Intro paragraph, edited.</p>")
+        doc = aim.AimDocument.loads(corrupted)
+        with pytest.raises(aim.HistoryError):
+            doc.reconcile(at=ts(60))
+
+    def test_intact_history_still_reconciles(self, basic_doc):
+        text = basic_doc.dumps().replace(
+            "Intro paragraph.</p>", "Intro paragraph, edited.</p>"
+        )
+        doc = aim.AimDocument.loads(text)
+        report = doc.reconcile(at=ts(60))
+        assert report.changed and report.residual == []
