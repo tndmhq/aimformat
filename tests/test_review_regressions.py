@@ -1687,3 +1687,22 @@ class TestTrackedTableToListModify:
         deleted = [t.text for t in d.element.body.iter(qn("w:delText"))]
         for text in ("K", "1", "2"):
             assert text in deleted
+
+
+class TestCriticMarkupSurfacesPageSetupProposals:
+    """AF-42: the criticmarkup triage excluded only ``aim:theme``, so a
+    pending ``aim:doc`` (page-setup) modify landed in ``mods["aim:doc"]``
+    — a key no body element ever matches — and appeared nowhere in the
+    output; theme changes got the note branch."""
+
+    def test_pending_page_setup_gets_a_note(self, basic_doc):
+        basic_doc.propose_page_setup(
+            {"size": "A5"}, author=BOT, at=ts(5), explanation="Booklet."
+        )
+        md = aim.to_markdown(basic_doc, pending="criticmarkup")
+        assert "aim:doc" in md and "Booklet." in md
+
+    def test_theme_note_still_renders(self, basic_doc):
+        basic_doc.propose_theme({"--aim-brand-1": "#000000"}, author=BOT, at=ts(5))
+        md = aim.to_markdown(basic_doc, pending="criticmarkup")
+        assert "aim:theme" in md

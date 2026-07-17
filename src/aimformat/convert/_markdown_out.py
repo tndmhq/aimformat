@@ -439,9 +439,13 @@ def to_markdown(doc: AimDocument, *, pending: str = "drop") -> str:
             if p.action == "add":
                 key = (p.anchor_container, p.anchor_after)
                 adds_by_anchor.setdefault(key, []).append(p)
-            elif p.action in ("modify", "delete") and p.target and p.target != "aim:theme":
+            elif (
+                p.action in ("modify", "delete")
+                and p.target
+                and p.target not in ("aim:theme", "aim:doc")
+            ):
                 mods[p.target] = p
-            else:  # theme changes / moves have no textual place in Markdown
+            else:  # theme/page-setup changes / moves have no textual place in Markdown
                 what = p.target or p.action
                 notes.append(
                     f"{{>>pending {p.action} on {what}: {p.explanation or 'no explanation'}<<}}"
