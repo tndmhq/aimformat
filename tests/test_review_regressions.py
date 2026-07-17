@@ -2290,3 +2290,33 @@ class TestAssetGcIsWiredIn:
         assert "data:image" not in packed.chunk("fig").html
         assert main(["gc", str(path)]) == 0  # nothing dead: a no-op
         assert "<aim-assets>" in aim.AimDocument.load(path).dumps()
+
+
+class TestTemplatelessAddFailsAsAimError:
+    """AF-18: ``_payload_like`` indexed ``orig_nodes[0]`` unguarded, so
+    accept-with-tweaks (or amend) on a hand-authored template-less add
+    card (P006) raised a bare IndexError — not an AimError, so it escaped
+    the MCP boundary's ``except AimError``."""
+
+    @pytest.fixture
+    def templateless(self, basic_doc):
+        basic_doc.propose_add('<p data-aim="a1">new</p>', author=BOT, at=ts(5))
+        text = re.sub(r"<template>.*?</template>", "", basic_doc.dumps(), flags=re.S)
+        doc = aim.AimDocument.loads(text)
+        assert "P006" in {f.code for f in aim.lint_text(text)}
+        return doc
+
+    def test_accept_with_tweaks_raises_invalid_operation(self, templateless):
+        with pytest.raises(InvalidOperation):
+            templateless.accept(
+                templateless.proposals[0].id,
+                decided_by=ME,
+                applied='<p data-aim="a1">tweak</p>',
+                at=ts(6),
+            )
+
+    def test_amend_raises_invalid_operation(self, templateless):
+        with pytest.raises(InvalidOperation):
+            templateless.amend_proposal(
+                templateless.proposals[0].id, '<p data-aim="a1">amended</p>', at=ts(6)
+            )

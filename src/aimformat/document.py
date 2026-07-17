@@ -1957,6 +1957,11 @@ class AimDocument:
         ids it reserved for itself stay honored instead of being reminted
         as collisions with the card's own record."""
         orig_nodes = [n for n in parse_fragment(original) if isinstance(n, Element)]
+        if not orig_nodes:  # a template-less card (P006): a real error the
+            # MCP boundary can catch, not a bare IndexError escaping it
+            raise InvalidOperation(
+                "the pending add carries no payload template to tweak/amend against"
+            )
         keep = orig_nodes[0].chunk_id or orig_nodes[0].container_id
         marker = "data-aim-container" if orig_nodes[0].container_id is not None else "data-aim"
         new_nodes = [n for n in parse_fragment(replacement) if isinstance(n, Element)]
