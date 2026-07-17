@@ -17,7 +17,7 @@ A stdlib chunk walker over the canonical document tree. Fidelity notes:
   body — Markdown has single-row headers).
 - Classes, inline geometry, and the theme are presentation: dropped.
 - Slides render as thematic breaks followed by their chunks in reading
-  order.
+  order. Hard page breaks render as thematic breaks.
 - ``pending="drop"`` (default) exports the accepted document only;
   ``pending="criticmarkup"`` also renders the pending lane as CriticMarkup
   (``{~~old~>new~~}``, ``{++added++}``, ``{--deleted--}``, explanations as
@@ -188,6 +188,8 @@ class _Renderer:
                 if self.critic and sid:
                     out.extend(self._critic_adds((sid, child.chunk_id or child.container_id)))
             return out
+        if tag == "aim-page-break":
+            return ["---"]
         if tag in ("ul", "ol"):
             return [self._list(el)]
         if tag == "table":

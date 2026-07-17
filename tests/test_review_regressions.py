@@ -3437,3 +3437,16 @@ class TestPendingSlideBreakRevision:
         rejected = aim.to_docx(doc, tmp_path / "rejected.docx", pending="reject-all")
         rejected_body = docx.Document(str(rejected)).element.body
         assert not [br for br in rejected_body.iter(qn("w:br")) if br.get(qn("w:type")) == "page"]
+
+
+class TestMarkdownPageBreakExport:
+    """AF-50: an empty ``aim-page-break`` fell through the generic block
+    renderer and disappeared from Markdown output."""
+
+    def test_page_break_renders_as_thematic_break(self):
+        doc = aim.new_document(title="Pages")
+        doc.add_chunk("<p>Before.</p>", author=ME, at=ts(0))
+        doc.add_chunk("<aim-page-break></aim-page-break>", author=ME, at=ts(1))
+        doc.add_chunk("<p>After.</p>", author=ME, at=ts(2))
+
+        assert aim.to_markdown(doc) == "Before.\n\n---\n\nAfter.\n"
