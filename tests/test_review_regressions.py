@@ -3775,6 +3775,44 @@ class TestNoOpGuardsJudgeTheCurrentDocument:
             doc.propose_move("z", author=BOT, container="l2", after="a", at=ts(3))
 
 
+class TestSupersedeSurvivesProjection:
+    """Re-proposing on a target with a pending modify/delete supersedes the
+    old card (§5.4): the projection must exclude the cards the new proposal
+    replaces, or the superseded delete makes the new card look illegal."""
+
+    @staticmethod
+    def _base():
+        doc = aim.new_document(title="T")
+        doc.add_chunk('<p data-aim="c1">Hello</p>', author=ME, at=ts(0))
+        return doc
+
+    def test_modify_supersedes_pending_delete(self):
+        doc = self._base()
+        delete = doc.propose_delete("c1", author=BOT, at=ts(1))
+
+        modify = doc.propose_modify("c1", '<p data-aim="c1">Hello v2</p>', author=BOT, at=ts(2))
+
+        assert [proposal.id for proposal in doc.proposals] == [modify.id]
+        resolution = doc.history[-1]
+        assert resolution.get("proposal") == delete.id
+        assert resolution.get("decision") == "superseded"
+        assert resolution.get("superseded_by") == modify.id
+        doc.accept_all(decided_by=ME, at=ts(3))
+        assert doc._state.serial("c1") == '<p data-aim="c1">Hello v2</p>'
+        assert doc.verify() == []
+
+    def test_delete_supersedes_pending_delete(self):
+        doc = self._base()
+        doc.propose_delete("c1", author=BOT, at=ts(1))
+
+        second = doc.propose_delete("c1", author=BOT, at=ts(2))
+
+        assert [proposal.id for proposal in doc.proposals] == [second.id]
+        doc.accept_all(decided_by=ME, at=ts(3))
+        assert not doc._state.exists("c1")
+        assert doc.verify() == []
+
+
 class TestReconcileRejectsRescuableMoves:
     """Reconcile fails closed instead of solving transient nested rescues."""
 

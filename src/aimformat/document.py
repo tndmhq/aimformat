@@ -668,7 +668,13 @@ class AimDocument:
         clone._burned = set(self._burned)
         return clone
 
-    def _projected_operation(self, label: str, operation: Callable[[AimDocument], _T]) -> _T:
+    def _projected_operation(
+        self,
+        label: str,
+        operation: Callable[[AimDocument], _T],
+        *,
+        exclude: Sequence[str] = (),
+    ) -> _T:
         """Run *operation* against current state plus the pending lane.
 
         Proposals created by the SDK must be legal in the state in which they
@@ -676,8 +682,18 @@ class AimDocument:
         creation order. Validation happens only on clones. If a previously
         valid operation becomes invalid after one card, name that conflicting
         proposal so an agent can repair its sequencing immediately.
+
+        *exclude* names cards the caller is about to supersede (§5.4): they
+        will never be applied, so the projection drops them up front —
+        otherwise a pending delete would make its own replacement look
+        illegal.
         """
         projection = self._clone()
+        for pid in exclude:
+            card = projection._card_el(pid)
+            sec = projection._state.section("aim-proposals")
+            assert sec is not None
+            sec.children.remove(card)
         order = _creation_order(projection.proposals)
         decider = Actor("external", id="pending-projection")
 
@@ -1843,11 +1859,14 @@ class AimDocument:
     def _supersede_if_pending(
         self, target: str, new_pid: str, author: Actor, at: str | None
     ) -> None:
-        for p in self.proposals:
-            if p.target == target and p.action in ("modify", "delete"):
-                self._resolve(
-                    p, decision="superseded", decided_by=author, superseded_by=new_pid, at=at
-                )
+        for p in self._superseded_by_new(target):
+            self._resolve(p, decision="superseded", decided_by=author, superseded_by=new_pid, at=at)
+
+    def _superseded_by_new(self, target: str) -> list[Proposal]:
+        """The pending cards a new modify/delete proposal on *target* replaces."""
+        return [
+            p for p in self.proposals if p.target == target and p.action in ("modify", "delete")
+        ]
 
     def propose_modify(
         self,
@@ -1869,7 +1888,11 @@ class AimDocument:
             return payload
 
         self._noop_guard(lambda current: current.modify_chunk(target, markup, author=author, at=at))
-        payload = self._projected_operation(f"new modify of {target!r}", validate)
+        payload = self._projected_operation(
+            f"new modify of {target!r}",
+            validate,
+            exclude=[p.id for p in self._superseded_by_new(target)],
+        )
         pid = self._new_proposal_id()
         with self.batch():  # the supersede + the new card are one intention
             self._supersede_if_pending(target, pid, author, at)
@@ -1982,6 +2005,7 @@ class AimDocument:
         self._projected_operation(
             f"new delete of {target!r}",
             lambda projected: projected.delete_chunk(target, author=author, at=at),
+            exclude=[p.id for p in self._superseded_by_new(target)],
         )
         pid = self._new_proposal_id()
         with self.batch():
