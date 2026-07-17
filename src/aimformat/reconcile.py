@@ -39,7 +39,15 @@ from dataclasses import dataclass, field
 
 from . import ids
 from .canonical import document_text, serialize
-from .document import AimDocument, Anchor, DocState, _anchor_resolves_in_container, _now_iso
+from .document import (
+    AimDocument,
+    Anchor,
+    DocState,
+    Proposal,
+    _anchor_resolves_in_container,
+    _apply_move_data,
+    _now_iso,
+)
 from .dom import Element, parse_fragment, parse_html
 from .errors import AimError, HistoryError
 from .events import Actor, Event, external
@@ -142,7 +150,7 @@ def _apply_event(state: DocState, ev: Event) -> None:
         to = ev.get("to")
         if to is None:
             raise HistoryError("move event carries no destination")
-        state.move(target, Anchor.from_obj(to))
+        _apply_move_data(state, ev.data)
     else:
         raise HistoryError(f"unknown action {action!r}")
 
@@ -577,6 +585,61 @@ def _reject_dangling(
             return True
         return False
 
+    def pending_move_rescues(proposal: Proposal, moved_ids: set[str]) -> bool:
+        """Can an earlier pending move carry a trapped destination outside?
+
+        The rescue must move every recorded insertion-point dependency that
+        currently sits in the proposal's target subtree, without carrying the
+        target itself, and land that subtree in an external container. Each
+        candidate is independently revalidated by the fixpoint loop; if it is
+        later rejected, this proposal is reconsidered and rejected too.
+        """
+        dependencies = {
+            dependency
+            for dependency in (proposal.anchor_container or "body", proposal.anchor_after)
+            if dependency is not None and dependency in moved_ids
+        }
+        if not dependencies:
+            return False
+        for candidate in S.proposals:
+            if candidate.id == proposal.id:
+                break
+            if candidate.action != "move" or candidate.target is None:
+                continue
+            try:
+                targets = S._state._target_elements(candidate.target)
+            except AimError:
+                continue
+            candidate_ids = {
+                value
+                for _, element in targets
+                for descendant in element.iter()
+                for value in (descendant.chunk_id, descendant.container_id)
+                if value
+            }
+            anchor = Anchor(
+                candidate.anchor_container or "body",
+                candidate.anchor_after,
+                candidate.anchor_shell,
+            )
+            if (
+                not dependencies.issubset(candidate_ids)
+                or proposal.target in candidate_ids
+                or anchor.container in moved_ids
+                or anchor.container in candidate_ids
+                or (anchor.after is not None and anchor.after in candidate_ids)
+            ):
+                continue
+            try:
+                S._state.resolve_insert_point(anchor)
+                container = S._state.container_node(anchor.container)
+                if container is not None:
+                    S._state._guard_item_members(container, [element for _, element in targets])
+            except AimError:
+                continue
+            return True
+        return False
+
     rejected_one = True
     while rejected_one:
         rejected_one = False
@@ -647,9 +710,10 @@ def _reject_dangling(
                                 for i in (node.chunk_id, node.container_id)
                                 if i
                             }
-                            if (p.anchor_container or "body") in moved_ids or (
+                            trapped = (p.anchor_container or "body") in moved_ids or (
                                 p.anchor_after is not None and p.anchor_after in moved_ids
-                            ):
+                            )
+                            if trapped and not pending_move_rescues(p, moved_ids):
                                 dangling = True
                     except AimError:
                         dangling = True

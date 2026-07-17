@@ -4248,6 +4248,164 @@ class TestMovesPrecedeCardsRelocatingTheirAnchors:
         assert doc.dumps() == before
 
 
+class TestMovedAnchorContainersDoNotCreateFalseCycles:
+    """codex-pr15-r9-1: moving an anchor's container carries the anchor
+    with it. Treating that as an anchor-separating move added the reverse
+    edge of a real dependency and rejected this valid two-move lane."""
+
+    def test_container_move_precedes_move_into_that_container(self):
+        doc = aim.new_document(title="T")
+        doc.add_chunk(
+            '<aim-slide data-aim-container="s"><p data-aim="y">Y</p></aim-slide>',
+            author=ME,
+            at=ts(0),
+        )
+        doc.add_chunk('<p data-aim="x">X</p>', author=ME, at=ts(1))
+        carry_anchor = doc.propose_move("s", author=BOT, container="body", after="x", at=ts(2))
+        move_into_container = doc.propose_move("x", author=BOT, container="s", after="y", at=ts(3))
+        from aimformat.document import resolution_order
+
+        assert [p.id for p in resolution_order(doc.proposals, doc)] == [
+            carry_anchor.id,
+            move_into_container.id,
+        ]
+        for proposal in resolution_order(doc.proposals, doc):
+            doc.accept(proposal.id, decided_by=ME, at=ts(4))
+
+        assert doc.body_ids == ["s"]
+        assert doc.chunk("x").container == "s"
+        assert doc.verify() == []
+        assert aim.lint(doc) == []
+
+
+class TestReconcileKeepsMovesWithPendingDestinationRescue:
+    """codex-pr15-r9-2: an out-of-band edit put a move destination inside
+    its target, but an earlier pending move could carry that destination
+    back outside before the target move. Reconcile must not permanently
+    reject the second card from the transient adopted layout."""
+
+    def test_pending_move_rescues_nested_destination_before_target_move(self):
+        doc = aim.new_document(title="T")
+        doc.add_chunk(
+            '<ul data-aim-container="l1"><li data-aim="x">X</li></ul>',
+            author=ME,
+            at=ts(0),
+        )
+        l2 = '<ul data-aim-container="l2"><li data-aim="y">Y</li></ul>'
+        doc.add_chunk(l2, author=ME, at=ts(1))
+        rescue = doc.propose_move("l2", author=BOT, container="body", after=None, at=ts(2))
+        inbound = doc.propose_move("x", author=BOT, container="l2", after="y", at=ts(3))
+        edited = (
+            doc.dumps()
+            .replace(l2, "", 1)
+            .replace(
+                '<li data-aim="x">X</li>',
+                f'<li data-aim="x">X{l2}</li>',
+                1,
+            )
+        )
+        repaired = aim.loads(edited)
+
+        report = repaired.reconcile(at=ts(4))
+
+        assert report.rejected_proposals == []
+        assert [p.id for p in repaired.proposals] == [rescue.id, inbound.id]
+        from aimformat.document import resolution_order
+
+        assert [p.id for p in resolution_order(repaired.proposals, repaired)] == [
+            rescue.id,
+            inbound.id,
+        ]
+        for proposal in resolution_order(repaired.proposals, repaired):
+            repaired.accept(proposal.id, decided_by=ME, at=ts(5))
+
+        assert repaired.chunk("x").container == "l2"
+        assert repaired.verify() == []
+        assert aim.lint(repaired) == []
+
+        reloaded = aim.loads(repaired.dumps())
+        reloaded.undo(author=ME, at=ts(6))
+        reloaded.undo(author=ME, at=ts(7))
+        assert reloaded.verify() == []
+        reloaded.redo(author=ME, at=ts(8))
+        assert reloaded.verify() == []
+
+
+class TestRetainedMoveTargetsUsePostModifyMemberShape:
+    """codex-pr15-r9-3: retaining an outbound target in a source-container
+    replacement forces modify-before-move. If that replacement changes the
+    member carrier (li to tr), destination legality must use the new shape
+    before any proposal is accepted."""
+
+    def test_incompatible_retained_carrier_rejects_lane_before_mutation(self):
+        doc = aim.new_document(title="T")
+        doc.add_chunk(
+            '<ul data-aim-container="l1"><li data-aim="a">A</li></ul>',
+            author=ME,
+            at=ts(0),
+        )
+        doc.add_chunk(
+            '<ul data-aim-container="l2"><li data-aim="b">B</li></ul>',
+            author=ME,
+            at=ts(1),
+        )
+        doc.propose_move("a", author=BOT, container="l2", after="b", at=ts(2))
+        doc.propose_modify(
+            "l1",
+            '<table data-aim-container="l1"><tbody>'
+            '<tr data-aim="a"><td>A row</td></tr></tbody></table>',
+            author=BOT,
+            at=ts(3),
+        )
+        before = doc.dumps()
+        from aimformat.document import resolution_order
+
+        with pytest.raises(aim.InvalidOperation, match="post-modify member shape"):
+            resolution_order(doc.proposals, doc)
+        assert doc.dumps() == before
+
+
+class TestTargetDeleteResolvesInboundReplacementConflict:
+    """The complete round-9 oracle found that an inbound move plus a
+    destination replacement is resolvable when a pending target delete
+    intentionally consumes the moved member before the replacement."""
+
+    def test_move_delete_then_destination_modify_is_accepted_atomically(self):
+        doc = aim.new_document(title="T")
+        doc.add_chunk(
+            '<ul data-aim-container="l1"><li data-aim="x">X</li></ul>',
+            author=ME,
+            at=ts(0),
+        )
+        doc.add_chunk(
+            '<ul data-aim-container="l2"><li data-aim="a">A</li></ul>',
+            author=ME,
+            at=ts(1),
+        )
+        move = doc.propose_move("x", author=BOT, container="l2", after=None, at=ts(2))
+        modify = doc.propose_modify(
+            "l2",
+            '<table data-aim-container="l2"><tbody>'
+            '<tr data-aim="a"><td>A row</td></tr></tbody></table>',
+            author=BOT,
+            at=ts(3),
+        )
+        delete = doc.propose_delete("x", author=BOT, at=ts(4))
+        from aimformat.document import resolution_order
+
+        assert [p.id for p in resolution_order(doc.proposals, doc)] == [
+            move.id,
+            delete.id,
+            modify.id,
+        ]
+        for proposal in resolution_order(doc.proposals, doc):
+            doc.accept(proposal.id, decided_by=ME, at=ts(5))
+
+        assert not doc._state.exists("x")
+        assert doc.verify() == []
+        assert aim.lint(doc) == []
+
+
 class TestOrderedMarkersInListItemModifications:
     """codex-r3-5 (completes the round-1 ordered-marker fix): additions
     got the live ordinal, but a modify proposal's replacement went through

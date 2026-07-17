@@ -198,6 +198,28 @@ def _payload_ids(payload_html: str) -> set[str]:
     return out
 
 
+def _apply_move_data(state: DocState, data: dict) -> None:
+    """Apply a move, including the inverse of a nested-source extraction.
+
+    Anchors represent positions between container members, not positions
+    inside a chunk's private markup. When a reconciled document has a pending
+    move that extracts a nested target, the accepted event carries reserved
+    ``x_*`` parent payloads so its inverse can restore that exact markup.
+    """
+    parent = data.get("x_destination_parent")
+    if parent is None:
+        state.move(data["target"], Anchor.from_obj(data["to"]))
+        return
+    before = data.get("x_destination_before")
+    after = data.get("x_destination_after")
+    if before is None or after is None:
+        raise HistoryError("nested move destination carries incomplete replay metadata")
+    if state.serial(parent) != before:
+        raise HistoryError(f"nested move parent {parent!r} does not match its recorded source")
+    state.remove(data["target"])
+    state.replace(parent, after)
+
+
 def resolution_order(
     proposals: Sequence[Proposal],
     doc: AimDocument | None = None,
@@ -269,21 +291,78 @@ def resolution_order(
             target_details[target] = (elements, moved_ids)
 
         # A destination `after=` node is mutable state too. If another move
-        # relocates that node (directly or as part of a moved subtree), the
-        # anchored move must consume it first while it is still in the
-        # recorded destination container. Mutual anchors form a real cycle
-        # and are rejected by the same pre-mutation topological-sort path.
+        # separates that node from the recorded destination container, the
+        # anchored move must consume it first. Moving an ancestor that contains
+        # BOTH the anchor and its destination carries the insertion point
+        # intact and needs no edge; adding one there can create a false cycle.
+        # Genuine mutual anchor dependencies still form a cycle and take the
+        # same pre-mutation refusal path.
         for anchored_sequence in move_sequences.values():
             for anchored_move in anchored_sequence:
                 anchor_after = anchored_move.anchor_after
                 if anchor_after is None:
                     continue
+                anchor_container = anchored_move.anchor_container or "body"
                 for relocating_target, relocating_sequence in move_sequences.items():
                     _, relocating_ids = target_details[relocating_target]
-                    if anchor_after not in relocating_ids:
+                    if anchor_after not in relocating_ids or anchor_container in relocating_ids:
                         continue
                     for relocating_move in relocating_sequence:
                         precedes(anchored_move.id, relocating_move.id)
+
+        # Reconcile can adopt a transient self-subtree layout while retaining
+        # an earlier move that carries the recorded destination back outside.
+        # Model that rescue explicitly: every trapped destination/anchor must
+        # travel together in the rescue subtree, while the moved target itself
+        # must stay behind. Without such a move the lane is irrecoverable and
+        # must be refused before acceptance mutates the document.
+        for target, sequence in move_sequences.items():
+            _, moved_ids = target_details[target]
+            for move in sequence:
+                dependencies = {
+                    dependency
+                    for dependency in (move.anchor_container or "body", move.anchor_after)
+                    if dependency is not None and dependency in moved_ids
+                }
+                if not dependencies:
+                    continue
+                rescuers: list[Proposal] = []
+                for relocating_target, relocating_sequence in move_sequences.items():
+                    relocating_elements, relocating_ids = target_details[relocating_target]
+                    if not dependencies.issubset(relocating_ids) or target in relocating_ids:
+                        continue
+                    for rescue in relocating_sequence:
+                        rescue_anchor = Anchor(
+                            rescue.anchor_container or "body",
+                            rescue.anchor_after,
+                            rescue.anchor_shell,
+                        )
+                        if (
+                            rescue_anchor.container in moved_ids
+                            or rescue_anchor.container in relocating_ids
+                            or (
+                                rescue_anchor.after is not None
+                                and rescue_anchor.after in relocating_ids
+                            )
+                        ):
+                            continue
+                        try:
+                            doc._state.resolve_insert_point(rescue_anchor)
+                            rescue_container = doc._state.container_node(rescue_anchor.container)
+                            if rescue_container is not None:
+                                doc._state._guard_item_members(
+                                    rescue_container, relocating_elements
+                                )
+                        except (InvalidOperation, TargetNotFound):
+                            continue
+                        rescuers.append(rescue)
+                if not rescuers:
+                    raise InvalidOperation(
+                        f"cannot accept move proposal {move.id!r}: destination "
+                        "is inside the moved target and no pending move rescues it"
+                    )
+                for rescue in rescuers:
+                    precedes(rescue.id, move.id)
 
         def current_destination_accepts(move: Proposal, elements: list[Element]) -> bool:
             anchor = Anchor(move.anchor_container or "body", move.anchor_after, move.anchor_shell)
@@ -309,8 +388,8 @@ def resolution_order(
                 return False
             return True
 
-        erasing_destinations: list[tuple[Proposal, Proposal]] = []
         modifies = [p for p in original if p.action == "modify" and p.target]
+        modify_states: dict[str, tuple[set[str], set[str], list[Element], dict[str, Element]]] = {}
         for modify in modifies:
             assert modify.target is not None
             current = doc._state.container_node(modify.target)
@@ -340,11 +419,51 @@ def resolution_order(
                 for element in root.iter()
                 if element.container_id is not None
             }
+            modify_states[modify.id] = (inside, kept, payload_roots, proposed_containers)
+
+        def payload_target_elements(target: str, roots: list[Element]) -> list[Element]:
+            chunks = [
+                element for root in roots for element in root.iter() if element.chunk_id == target
+            ]
+            if chunks:
+                return chunks
+            container = next(
+                (
+                    element
+                    for root in roots
+                    for element in root.iter()
+                    if element.container_id == target
+                ),
+                None,
+            )
+            return [container] if container is not None else []
+
+        # First derive source/anchor constraints and the member shape each hop
+        # will actually move. A retained outbound target receives its source
+        # replacement before that hop, so all later destinations must validate
+        # the replacement elements rather than the stale live elements.
+        move_member_shapes: dict[str, list[Element]] = {}
+        for target, sequence in move_sequences.items():
+            elements, _ = target_details[target]
+            for move in sequence:
+                move_member_shapes[move.id] = elements
+        post_modified_moves: set[str] = set()
+        erasing_destinations: list[tuple[Proposal, Proposal]] = []
+        deleting_destinations: list[tuple[Proposal, Proposal, list[Proposal]]] = []
+        target_deletes: dict[str, list[Proposal]] = {}
+        for proposal in original:
+            if proposal.action == "delete" and proposal.target is not None:
+                target_deletes.setdefault(proposal.target, []).append(proposal)
+        for modify in modifies:
+            state = modify_states.get(modify.id)
+            if state is None:
+                continue
+            inside, kept, payload_roots, _ = state
 
             for target, sequence in move_sequences.items():
-                elements, moved_ids = target_details[target]
+                _, moved_ids = target_details[target]
                 source_inside = target in inside
-                for move in sequence:
+                for index, move in enumerate(sequence):
                     destination = move.anchor_container or "body"
                     destination_inside = destination in inside
 
@@ -363,31 +482,84 @@ def resolution_order(
                     # duplicate copy after the move carries the live ids out.
                     if source_inside and not destination_inside and moved_ids & kept:
                         precedes(modify.id, move.id)
-
-                    # Reconcile may leave the current destination kind
-                    # incompatible because this pending replacement makes the
-                    # move legal. The reverse kind change must trail the hop.
-                    if destination_inside:
-                        accepts_before = current_destination_accepts(move, elements)
-                        accepts_after = proposed_destination_accepts(
-                            move, elements, proposed_containers
-                        )
-                        if accepts_after and not accepts_before:
-                            precedes(modify.id, move.id)
-                        elif accepts_before and not accepts_after:
-                            precedes(move.id, modify.id)
-                        elif not accepts_before and not accepts_after:
-                            precedes(move.id, modify.id)
-                            precedes(modify.id, move.id)
+                        replacement = payload_target_elements(target, payload_roots)
+                        if target in kept and replacement:
+                            for later_move in sequence[index:]:
+                                move_member_shapes[later_move.id] = replacement
+                                post_modified_moves.add(later_move.id)
 
                     source_inside = destination_inside
 
                 final_move = sequence[-1]
                 if final_move.anchor_container in inside and target not in kept:
+                    deletes = target_deletes.get(target, [])
+                    if deletes:
+                        # The target is intentionally absent at terminal state.
+                        # Effective member-shape analysis below decides whether
+                        # this replacement must prepare the landing point first
+                        # or trail the delete that consumes the inbound target.
+                        deleting_destinations.append((final_move, modify, deletes))
+                        continue
                     # An otherwise unrelated inbound sequence trails the
                     # replacement so its final target is not erased.
                     precedes(modify.id, final_move.id)
                     erasing_destinations.append((final_move, modify))
+
+        # Then derive destination-kind constraints using those effective member
+        # shapes. This is a separate pass so a destination replacement sees a
+        # carrier change supplied by any source replacement, regardless of card
+        # order in the lane.
+        for modify in modifies:
+            state = modify_states.get(modify.id)
+            if state is None:
+                continue
+            inside, _, _, proposed_containers = state
+            for sequence in move_sequences.values():
+                for move in sequence:
+                    if (move.anchor_container or "body") not in inside:
+                        continue
+                    elements = move_member_shapes[move.id]
+                    accepts_before = current_destination_accepts(move, elements)
+                    accepts_after = proposed_destination_accepts(
+                        move, elements, proposed_containers
+                    )
+                    if accepts_after and not accepts_before:
+                        precedes(modify.id, move.id)
+                    elif accepts_before and not accepts_after:
+                        precedes(move.id, modify.id)
+                    elif not accepts_before and not accepts_after:
+                        precedes(move.id, modify.id)
+                        precedes(modify.id, move.id)
+
+        for move, modify, deletes in deleting_destinations:
+            state = modify_states[modify.id]
+            _, _, _, proposed_containers = state
+            elements = move_member_shapes[move.id]
+            accepts_after = proposed_destination_accepts(move, elements, proposed_containers)
+            for delete in deletes:
+                precedes(move.id, delete.id)
+                if accepts_after:
+                    precedes(modify.id, move.id)
+                else:
+                    precedes(delete.id, modify.id)
+
+        for sequence in move_sequences.values():
+            for move in sequence:
+                if move.id not in post_modified_moves:
+                    continue
+                elements = move_member_shapes[move.id]
+                if current_destination_accepts(move, elements):
+                    continue
+                candidate_accepts = any(
+                    (move.anchor_container or "body") in inside
+                    and proposed_destination_accepts(move, elements, proposed_containers)
+                    for inside, _, _, proposed_containers in modify_states.values()
+                )
+                if not candidate_accepts:
+                    raise InvalidOperation(
+                        f"cannot accept move proposal {move.id!r}: post-modify "
+                        "member shape is incompatible with its destination"
+                    )
 
         # Three fixed action priorities preserve the established preference
         # without a comparison heap: adds/modifies, moves, then deletes.
@@ -1708,6 +1880,29 @@ class AimDocument:
             walk = self._state._parent_of(walk)
         return Anchor(container, prev_id, shell=shell)
 
+    def _nested_move_parent(self, target: str) -> str | None:
+        """Addressable parent payload needed to invert a nested extraction.
+
+        Direct body/container/table-shell members have a normal ``Anchor``.
+        Anything deeper is private chunk/container markup, so the smallest
+        enclosing addressable payload must be retained for exact replay.
+        """
+        pairs = self._state._target_elements(target)
+        parent = pairs[0][0]
+        if (
+            parent is self._state.body
+            or parent.container_id is not None
+            or parent.tag in REGISTRY.table_shells
+        ):
+            return None
+        walk: Element | None = parent
+        while walk is not None and walk is not self._state.body:
+            parent_id = walk.chunk_id or walk.container_id
+            if parent_id is not None and parent_id != target:
+                return parent_id
+            walk = self._state._parent_of(walk)
+        return None
+
     # -- checkpoints / undo ----------------------------------------------------------------
     def checkpoint(self, label: str, *, at: str | None = None) -> str:
         h = self.doc_hash
@@ -1831,7 +2026,31 @@ class AimDocument:
                 "anchor": ev.get("anchor"),
             }
         if action == "move":
-            return {"target": target, "action": "move", "from": ev.get("to"), "to": ev.get("from")}
+            inverse = {
+                "target": target,
+                "action": "move",
+                "from": ev.get("to"),
+                "to": ev.get("from"),
+            }
+            source_parent = ev.get("x_source_parent")
+            destination_parent = ev.get("x_destination_parent")
+            if source_parent is not None:
+                inverse.update(
+                    {
+                        "x_destination_parent": source_parent,
+                        "x_destination_before": ev.get("x_source_after"),
+                        "x_destination_after": ev.get("x_source_before"),
+                    }
+                )
+            elif destination_parent is not None:
+                inverse.update(
+                    {
+                        "x_source_parent": destination_parent,
+                        "x_source_before": ev.get("x_destination_after"),
+                        "x_source_after": ev.get("x_destination_before"),
+                    }
+                )
+            return inverse
         raise HistoryError(f"cannot invert action {action!r}")
 
     def _apply_data(self, data: dict) -> None:
@@ -1856,7 +2075,7 @@ class AimDocument:
         elif action == "delete":
             self._state.remove(target)
         elif action == "move":
-            self._state.move(target, Anchor.from_obj(data["to"]))
+            _apply_move_data(self._state, data)
 
     # -- proposals (the pending lane) --------------------------------------------------------
     @property
@@ -2444,10 +2663,27 @@ class AimDocument:
                 data["to"] = dst.to_obj()
                 if decision == "accepted":
                     _no_delete_move(prop.target or "", "move proposal")
+                    nested_parent = self._nested_move_parent(prop.target or "")
+                    nested_before = (
+                        self._state.serial(nested_parent) if nested_parent is not None else None
+                    )
                     src = self._anchor_of(prop.target or "")
                     data["anchor"] = dst.to_obj()
                     data["from"] = src.to_obj()
                     self._state.move(prop.target or "", dst)
+                    if nested_parent is not None:
+                        nested_after = self._state.serial(nested_parent)
+                        if nested_before is None or nested_after is None:
+                            raise HistoryError(
+                                "nested move parent vanished while recording replay metadata"
+                            )
+                        data.update(
+                            {
+                                "x_source_parent": nested_parent,
+                                "x_source_before": nested_before,
+                                "x_source_after": nested_after,
+                            }
+                        )
 
         # drop the card; rebind chained adds that anchored on this proposal
         sec = self._state.section("aim-proposals")
@@ -2546,6 +2782,20 @@ class AimDocument:
             frm = ev.get("from")
             if frm is None:
                 raise HistoryError("move event carries no 'from' — not invertible")
+            source_parent = ev.get("x_source_parent")
+            destination_parent = ev.get("x_destination_parent")
+            if source_parent is not None:
+                current_parent = state.serial(source_parent)
+                if current_parent != ev.get("x_source_after"):
+                    problems.append(
+                        f"seq {ev.seq}: nested move parent payload mismatch on {source_parent!r}"
+                    )
+                state.remove(target)
+                state.replace(source_parent, ev.get("x_source_before") or "")
+                return
+            if destination_parent is not None:
+                state.move(target, Anchor.from_obj(frm))
+                return
             to = ev.get("to")
             if to is not None:
                 # at this point the state IS the post-move state, so the
