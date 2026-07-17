@@ -3848,6 +3848,74 @@ class TestProposalsTargetOnlyExistingChunks:
         assert aim.lint(doc) == []
 
 
+class TestAddAnchorsLintCleanAgainstTheCurrentBody:
+    """An add card's recorded anchor must satisfy P011/P016 against the
+    CURRENT body: an existing chunk at a valid insertion point, or a
+    pending-proposal-id chain. The projection resolves positions through
+    pending adds, so a projected-only chunk id must be written as the
+    sanctioned chain (AIM-03, with rejection rebinding) — or refused."""
+
+    @staticmethod
+    def _base():
+        doc = aim.new_document(title="T")
+        doc.add_chunk('<p data-aim="c1">One</p>', author=ME, at=ts(0))
+        return doc
+
+    def test_explicit_anchor_on_pending_add_root_records_the_chain(self):
+        doc = self._base()
+        a1 = doc.propose_add('<p data-aim="n1">N1</p>', author=BOT, after="c1", at=ts(1))
+
+        a2 = doc.propose_add('<p data-aim="n2">N2</p>', author=BOT, after="n1", at=ts(2))
+
+        assert a2.anchor_after == a1.id
+        assert aim.lint(doc) == []
+        doc.accept_all(decided_by=ME, at=ts(3))
+        assert doc.body_ids == ["c1", "n1", "n2"]
+        assert doc.verify() == []
+
+    def test_last_position_behind_pending_tail_add_records_the_chain(self):
+        doc = self._base()
+        a1 = doc.propose_add('<p data-aim="n1">N1</p>', author=BOT, at=ts(1))
+
+        a2 = doc.propose_add('<p data-aim="n2">N2</p>', author=BOT, at=ts(2))
+
+        assert a2.anchor_after == a1.id
+        assert aim.lint(doc) == []
+        # the chain rebinds on rejection like any chained add
+        doc.reject(a1.id, decided_by=ME, at=ts(3))
+        doc.accept_all(decided_by=ME, at=ts(4))
+        assert doc.body_ids == ["c1", "n2"]
+        assert doc.verify() == []
+
+    def test_add_into_a_pending_container_with_members_is_refused(self):
+        doc = self._base()
+        doc.propose_add(
+            '<ul data-aim-container="lc"><li data-aim="i1">I1</li></ul>', author=BOT, at=ts(1)
+        )
+        before = doc.dumps()
+
+        with pytest.raises(InvalidOperation):
+            doc.propose_add('<li data-aim="i2">I2</li>', author=BOT, container="lc", at=ts(2))
+
+        assert doc.dumps() == before
+        assert aim.lint(doc) == []
+
+    def test_anchor_behind_a_pending_move_in_is_refused(self):
+        doc = self._base()
+        doc.add_chunk(
+            '<ul data-aim-container="l2"><li data-aim="z">Z</li></ul>', author=ME, at=ts(1)
+        )
+        doc.add_chunk(
+            '<ul data-aim-container="l3"><li data-aim="b">B</li></ul>', author=ME, at=ts(2)
+        )
+        doc.propose_move("z", author=BOT, container="l3", at=ts(3))
+
+        with pytest.raises(InvalidOperation):
+            doc.propose_add('<li data-aim="i2">I2</li>', author=BOT, container="l3", at=ts(4))
+
+        assert aim.lint(doc) == []
+
+
 class TestAmendKeepsTheLaneAppliable:
     """Amend validates like the original propose call (§5.4 docstring): an
     amended payload that breaks a later pending card must be rejected at

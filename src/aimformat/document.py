@@ -1998,7 +1998,7 @@ class AimDocument:
         if isinstance(after, str) and ids.is_valid_proposal_id(after):
             anchor = Anchor(container, after, projected_anchor.shell)
         else:
-            anchor = projected_anchor
+            anchor = self._card_add_anchor(container, projected_anchor)
         return self._new_card(
             action="add",
             author=author,
@@ -2009,6 +2009,37 @@ class AimDocument:
             depends_on=depends_on,
             at=at,
         )
+
+    def _card_add_anchor(self, container: str, projected: Anchor) -> Anchor:
+        """The anchor recorded on an add card must lint clean against the
+        CURRENT body (P011/P016): an existing chunk at a valid insertion
+        point, or a pending-add chain. When the projection resolved the
+        position to a pending add's root, record the chain on its proposal
+        id instead (AIM-03 — so rejection rebinding keeps working); any
+        other projected-only position is refused."""
+        if projected.after is None:
+            return projected
+        owner = next(
+            (
+                p
+                for p in self.proposals
+                if p.action == "add"
+                and (p.anchor_container or "body") == container
+                and self._payload_root_id(p.payload_html or "") == projected.after
+            ),
+            None,
+        )
+        if owner is not None:
+            return Anchor(container, owner.id, projected.shell)
+        try:
+            self._state.resolve_insert_point(projected)
+        except AimError as exc:
+            raise InvalidOperation(
+                f"add would anchor on {projected.after!r}, which is not a valid "
+                f"position in {container!r} until the pending lane resolves — "
+                "anchor on a pending add's proposal id or on a current chunk"
+            ) from exc
+        return projected
 
     def propose_delete(
         self,
