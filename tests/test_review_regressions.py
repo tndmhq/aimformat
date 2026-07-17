@@ -1336,3 +1336,52 @@ class TestEveryAimCssBlockIsVerified:
 
     def test_pristine_document_still_lints_clean(self, basic_doc):
         assert aim.lint_text(self._text(basic_doc)) == []
+
+
+class TestTrackedTableContainerRevisions:
+    """AF-35: ``emit_construct`` called ``emit_table(el, force="del")``
+    without ``prop=``, so a pending-deleted (or container-modified) table
+    exported as plain untracked content — Word showed the doomed table as
+    ordinary accepted text, and the modify case kept BOTH grids on
+    accept-all."""
+
+    @staticmethod
+    def _del_texts(path):
+        import docx
+        from docx.oxml.ns import qn
+
+        d = docx.Document(str(path))
+        return [t.text for t in d.element.body.iter(qn("w:delText"))]
+
+    @staticmethod
+    def _ins_texts(path):
+        import docx
+        from docx.oxml.ns import qn
+
+        d = docx.Document(str(path))
+        return [
+            t.text for w in d.element.body.iter(qn("w:ins")) for t in w.iter(qn("w:t"))
+        ]
+
+    def test_pending_delete_of_table_container_is_tracked(self, table_doc, tmp_path):
+        pytest.importorskip("docx")
+        table_doc.propose_delete("tbl", author=BOT, at=ts(1))
+        out = aim.to_docx(table_doc, tmp_path / "d.docx")
+        deleted = self._del_texts(out)
+        for text in ("K", "1", "2"):
+            assert text in deleted
+
+    def test_container_modify_tracks_old_grid_as_deleted(self, table_doc, tmp_path):
+        pytest.importorskip("docx")
+        table_doc.propose_modify(
+            "tbl",
+            '<table data-aim-container="tbl"><tbody>'
+            '<tr data-aim="n1"><td>only</td></tr></tbody></table>',
+            author=BOT,
+            at=ts(1),
+        )
+        out = aim.to_docx(table_doc, tmp_path / "m.docx")
+        deleted, inserted = self._del_texts(out), self._ins_texts(out)
+        for text in ("K", "1", "2"):
+            assert text in deleted
+        assert "only" in inserted

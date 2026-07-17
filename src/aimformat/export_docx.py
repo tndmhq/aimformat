@@ -388,7 +388,7 @@ class _Exporter:
                 self.emit_list(el)
         elif el.container_id and el.tag == "table":
             if prop is not None:
-                self.emit_table(el, force="del")
+                self.emit_table(el, force="del", prop=prop)
                 if prop.action == "modify":
                     for new_el in self._payload_elements(prop):
                         self.emit_table(new_el, force="ins", prop=prop)
