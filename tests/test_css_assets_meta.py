@@ -94,9 +94,9 @@ class TestAssets:
         doc.delete_chunk("fig", author=ME, at=ts(2))
         # the delete event's before-payload still references the asset
         assert doc.gc_assets() == 0
-        doc.flatten()  # drop history -> the asset is now dead
-        assert doc.gc_assets() == 1
+        doc.flatten()  # drop history -> the asset is dead; flatten gc's it (§9.3)
         assert "<aim-assets>" not in doc.dumps()
+        assert doc.gc_assets() == 0  # nothing left to collect
 
     def test_packed_doc_lints_clean(self):
         doc = self.make_doc()

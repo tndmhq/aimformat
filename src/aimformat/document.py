@@ -2282,6 +2282,9 @@ class AimDocument:
             s = self._state.script(kind)
             if s is not None:
                 self._state.body.children.remove(s)
+        # §9.3: gc is the final pass — a "clean file" must not ship the
+        # dead blobs its dropped history kept alive
+        self.gc_assets()
 
     def prune(self, *, before: int | str) -> int:
         """Truncate history before a seq or checkpoint label; returns dropped count.
@@ -2310,6 +2313,7 @@ class AimDocument:
         el = self._state.script("history")
         if el is not None:
             el.raw = "\n" + "\n".join(e.to_json() for e in kept) + "\n" if kept else "\n"
+        self.gc_assets()  # §9.3: gc is the final pass of prune
         return dropped
 
     def reconcile(
@@ -2459,7 +2463,9 @@ class AimDocument:
         packing is a content edit like any other. Returns assets packed.
         """
         with self.batch():  # one packing run = one editing intention
-            return self._pack_assets_inner(author, at)
+            packed = self._pack_assets_inner(author, at)
+            self.gc_assets()  # §9.3: gc is the final pass of pack
+            return packed
 
     def _pack_assets_inner(self, author: Actor, at: str | None) -> int:
         packed = 0
@@ -2504,7 +2510,7 @@ class AimDocument:
                 "after": after,
                 "author": author.to_obj(),
                 "batch": self._batch_id(),
-                "explanation": "aim pack --inline: hoist embedded images into the asset registry",
+                "explanation": "aim pack: hoist embedded images into the asset registry",
             }
             self._append_event(data)
             packed += len(imgs)

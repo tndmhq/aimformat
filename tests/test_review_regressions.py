@@ -2235,3 +2235,58 @@ class TestChunkModifyRequiresBefore:
     def test_lint_reports_the_gap(self, basic_doc):
         text = self._doc_with_strippable_modify(basic_doc)
         assert "H003" in {f.code for f in aim.lint_text(text)}
+
+
+class TestAssetGcIsWiredIn:
+    """AF-17: ``gc_assets`` was specced (§9.3) as the final pass of
+    pack/flatten/prune but called only from a test, and the CLI had no
+    pack/prune/gc verbs at all — a flattened 'clean file' shipped every
+    dead multi-hundred-KB data-URI forever."""
+
+    def _packed_then_deleted(self):
+        import base64 as b64
+
+        uri = "data:image/png;base64," + b64.b64encode(_tiny_png(2, 2)).decode()
+        doc = aim.new_document(title="T")
+        doc.add_chunk('<p data-aim="keep">Kept text.</p>', author=ME, at=ts(0))
+        doc.add_chunk(
+            f'<figure data-aim="fig"><img alt="dot" src="{uri}"></figure>',
+            author=ME,
+            at=ts(1),
+        )
+        doc.pack_assets(author=aim.external("packer"), at=ts(2))
+        doc.delete_chunk("fig", author=ME, at=ts(3))
+        return doc
+
+    def test_flatten_collects_dead_assets(self):
+        doc = self._packed_then_deleted()
+        doc.flatten()
+        assert "<aim-assets>" not in doc.dumps()
+
+    def test_prune_collects_dead_assets(self):
+        doc = self._packed_then_deleted()
+        doc.modify_chunk("keep", '<p data-aim="keep">Kept, edited.</p>', author=ME, at=ts(4))
+        last = doc.history[-1].seq
+        doc.prune(before=last)  # cut above the delete that referenced it
+        assert "<aim-assets>" not in doc.dumps()
+
+    def test_cli_pack_and_gc_verbs_exist(self, tmp_path, capsys):
+        import base64 as b64
+
+        from aimformat.cli import main
+
+        uri = "data:image/png;base64," + b64.b64encode(_tiny_png(2, 2)).decode()
+        doc = aim.new_document(title="T")
+        doc.add_chunk(
+            f'<figure data-aim="fig"><img alt="dot" src="{uri}"></figure>',
+            author=ME,
+            at=ts(0),
+        )
+        path = tmp_path / "doc.aim"
+        doc.save(path)
+        assert main(["pack", str(path)]) == 0
+        packed = aim.AimDocument.load(path)
+        assert "<aim-assets>" in packed.dumps()
+        assert "data:image" not in packed.chunk("fig").html
+        assert main(["gc", str(path)]) == 0  # nothing dead: a no-op
+        assert "<aim-assets>" in aim.AimDocument.load(path).dumps()
