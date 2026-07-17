@@ -587,12 +587,26 @@ def _reject_dangling(
                             # the moved element an illegal member that only
                             # explodes at accept. Re-run the same member
                             # guard propose_move applies at creation time.
+                            targets = S._state._target_elements(p.target)
                             cont = S._state.container_node(p.anchor_container or "body")
                             if cont is not None:
-                                S._state._guard_item_members(
-                                    cont,
-                                    [el for _, el in S._state._target_elements(p.target)],
-                                )
+                                S._state._guard_item_members(cont, [el for _, el in targets])
+                            # an edit can also nest the destination INSIDE
+                            # the moved subtree (c2 wrapped into c1): anchor
+                            # and members check out, but accept explodes on
+                            # the self-subtree guard. Re-run the same cycle
+                            # check DocState.move applies.
+                            moved_ids = {
+                                i
+                                for _, el in targets
+                                for node in el.iter()
+                                for i in (node.chunk_id, node.container_id)
+                                if i
+                            }
+                            if (p.anchor_container or "body") in moved_ids or (
+                                p.anchor_after is not None and p.anchor_after in moved_ids
+                            ):
+                                dangling = True
                     except AimError:
                         dangling = True
             if dangling:

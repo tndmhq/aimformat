@@ -1738,6 +1738,73 @@ class TestReconcileValidatesMoveMembership:
         assert repaired.verify() == []
 
 
+class TestReconcileRejectsMovesIntoOwnSubtree:
+    """codex-pr15-r3 (refines codex-pr15-p2-4): the move-viability check at
+    reconcile validated anchor resolution and member legality but not the
+    cycle guard. An out-of-band edit nesting the destination container
+    INSIDE the moved subtree (c2 wrapped into c1) left the pending move in
+    a clean-verifying document — a time bomb that only exploded at accept
+    with \"cannot move c1 into itself or its own subtree\". Reconcile now
+    re-runs the same self-subtree guard DocState.move applies."""
+
+    def _reconciled_nesting(self, after):
+        doc = aim.new_document(title="T")
+        doc.add_chunk(
+            '<aim-slide data-aim-container="c1"><p data-aim="p1">P</p></aim-slide>',
+            author=ME,
+            at=ts(0),
+        )
+        doc.add_chunk(
+            '<aim-slide data-aim-container="c2"><p data-aim="p2">Q</p></aim-slide>',
+            author=ME,
+            at=ts(1),
+        )
+        proposal = doc.propose_move("c1", author=BOT, container="c2", after=after, at=ts(2))
+        c2 = '<aim-slide data-aim-container="c2"><p data-aim="p2">Q</p></aim-slide>'
+        edited = (
+            doc.dumps()
+            .replace(c2, "", 1)
+            .replace('<p data-aim="p1">P</p>', '<p data-aim="p1">P</p>' + c2)
+        )
+        repaired = aim.loads(edited)
+        report = repaired.reconcile(at=ts(3))
+        return repaired, report, proposal
+
+    @pytest.mark.parametrize("after", [None, "p2"])
+    def test_move_into_the_now_nested_destination_is_rejected(self, after):
+        repaired, report, proposal = self._reconciled_nesting(after)
+        assert report.rejected_proposals == [proposal.id]
+        assert repaired.proposals == []
+        assert repaired.verify() == []
+        # the out-of-band slide nesting itself still lints (S026) — that is
+        # the edit's own structural problem; the point here is that no
+        # retained proposal is left to explode at a later accept
+        assert [f.code for f in aim.lint(repaired) if f.level == "error"] == ["S026"]
+
+    def test_move_whose_destination_stays_outside_is_kept(self):
+        doc = aim.new_document(title="T")
+        doc.add_chunk(
+            '<aim-slide data-aim-container="c1"><p data-aim="p1">P</p></aim-slide>',
+            author=ME,
+            at=ts(0),
+        )
+        doc.add_chunk(
+            '<aim-slide data-aim-container="c2"><p data-aim="p2">Q</p></aim-slide>',
+            author=ME,
+            at=ts(1),
+        )
+        proposal = doc.propose_move("c1", author=BOT, container="c2", after="p2", at=ts(2))
+        edited = doc.dumps().replace('<p data-aim="p2">Q</p>', '<p data-aim="p2">Q!</p>')
+        repaired = aim.loads(edited)
+        report = repaired.reconcile(at=ts(3))
+        assert report.rejected_proposals == []
+        assert [p.id for p in repaired.proposals] == [proposal.id]
+        repaired.accept(proposal.id, decided_by=ME, at=ts(4))
+        assert repaired.body_ids == ["c2"]
+        assert "c1" in repaired.containers
+        assert repaired.verify() == []
+
+
 class TestEveryAimCssBlockIsVerified:
     """AF-21: the X006 byte-match ran only when data-aim-css equalled the
     CURRENT spec version, and only on the first head block — a
