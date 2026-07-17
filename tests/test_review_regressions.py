@@ -2202,6 +2202,53 @@ class TestPackAssetsKeepsImageFidelity:
         assert aim.AimDocument._image_dimensions(b"not an image") is None
 
 
+class TestPackKeepsOneAxisStyledAspect:
+    """codex-r2-1 (refines AF-09): the packed wrapper svg copied a one-axis
+    style (only ``width:`` or only ``height:``) while still pinning BOTH
+    presentation attributes to the intrinsic size — the styled axis followed
+    the style but the free axis stayed fixed, so a 4×2 image styled
+    ``width:100px`` rendered as a distorted 100×2. The wrapper now carries
+    the intrinsic ratio as a viewBox and leaves the unstyled axis auto."""
+
+    def _packed_svg(self, extra_attrs=""):
+        import base64 as b64
+
+        uri = "data:image/png;base64," + b64.b64encode(_tiny_png(4, 2)).decode()
+        doc = aim.new_document(title="T")
+        doc.add_chunk(
+            f'<figure data-aim="fig"><img alt="dot"{extra_attrs} src="{uri}"></figure>',
+            author=ME,
+            at=ts(0),
+        )
+        doc.pack_assets(author=aim.external("packer"), at=ts(1))
+        svg = re.search(r"<svg[^>]*>", doc.chunk("fig").html)
+        assert svg is not None
+        return doc, svg.group(0)
+
+    def test_width_only_style_leaves_height_auto(self):
+        doc, svg = self._packed_svg(' style="width:100px"')
+        assert 'viewBox="0 0 4 2"' in svg
+        assert "height=" not in svg
+        assert 'width="4"' in svg  # intrinsic fallback; the style overrides it
+        assert not [f for f in aim.lint_text(doc.dumps()) if f.level == "error"]
+        assert doc.verify() == []
+
+    def test_height_only_style_leaves_width_auto(self):
+        doc, svg = self._packed_svg(' style="height:50px"')
+        assert 'viewBox="0 0 4 2"' in svg
+        assert "width=" not in svg
+        assert 'height="2"' in svg
+
+    def test_unstyled_image_still_pins_intrinsic_size(self):
+        _, svg = self._packed_svg()
+        assert 'width="4"' in svg and 'height="2"' in svg
+        assert 'viewBox="0 0 4 2"' in svg
+
+    def test_both_axes_styled_keep_the_intrinsic_attrs(self):
+        _, svg = self._packed_svg(' style="width:60px; height:30px"')
+        assert 'width="4"' in svg and 'height="2"' in svg  # fully author-sized anyway
+
+
 class TestTweaksKeepTheCardsOwnNestedIds:
     """AF-10: ``_taken_ids()`` includes the card's own payload ids, so a
     text-only amend (or accept-with-tweaks) of a pending add reminted an

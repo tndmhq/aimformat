@@ -2513,8 +2513,17 @@ class AimDocument:
                 asset_id = self._register_asset_datauri(img.get("src") or "", img.get("alt") or "")
                 svg = Element("svg", [("role", "img"), ("aria-label", img.get("alt") or "")])
                 w, h = self._image_dimensions(blob) or (100, 100)
-                svg.set("width", str(w))  # unstyled display size = the img's
-                svg.set("height", str(h))  # intrinsic size, not the svg default
+                svg.set("viewBox", f"0 0 {w} {h}")  # the intrinsic aspect ratio
+                styled = self._styled_props(img.get("style") or "")
+                one_axis = ("width" in styled) != ("height" in styled)
+                # unstyled display size = the img's intrinsic size, not the
+                # svg default; with exactly ONE styled axis the other must
+                # stay auto (the viewBox ratio scales it, as it did on the
+                # img) — pinning it to the intrinsic value would distort
+                if not one_axis or "width" in styled:
+                    svg.set("width", str(w))
+                if not one_axis or "height" in styled:
+                    svg.set("height", str(h))
                 for attr in ("class", "style", "dir", "lang", "title"):
                     if img.get(attr):  # packing is a storage-form change:
                         svg.set(attr, img.get(attr))  # presentation survives
@@ -2538,6 +2547,11 @@ class AimDocument:
             self._append_event(data)
             packed += len(imgs)
         return packed
+
+    @staticmethod
+    def _styled_props(style: str) -> set[str]:
+        """Property names declared in an inline style attribute."""
+        return {p.split(":", 1)[0].strip() for p in style.split(";") if ":" in p}
 
     @staticmethod
     def _image_dimensions(blob: bytes) -> tuple[int, int] | None:
