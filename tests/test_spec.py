@@ -41,6 +41,18 @@ def test_some_spec_snippet_has_a_nonempty_history():
     assert any(aim.loads(s).history for s in SNIPPETS)
 
 
+def test_skill_format_reference_tracks_the_spec_version():
+    """The Agent Skill's condensed format reference must carry the current
+    version markers — it drifted to v0.1 while shipping v0.2-era content,
+    so agents authoring from the skeleton emitted stale markup (AF-57)."""
+    ref = (ROOT / "skills" / "aimformat" / "references" / "format.md").read_text("utf-8")
+    v = aim.SPEC_VERSION
+    assert f"(v{v})" in ref
+    assert f'data-aim-version="{v}"' in ref
+    assert f'data-aim-css="{v}"' in ref
+    assert "aim-doc+json" in ref and "aim-page-break" in ref
+
+
 def test_spec_prints_the_canonical_note():
     """§2.5's printed note must BE the canonical note for the current spec
     version — the printed v0.1 text failed `aim note --check` when copied,
