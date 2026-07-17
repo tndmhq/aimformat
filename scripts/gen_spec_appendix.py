@@ -70,7 +70,8 @@ def build() -> str:
     pal = "; ".join(f"`{fam}` ({', '.join(shades)})" for fam, shades in c["palette"].items())
     a(
         f"- **Palette** for `text-` / `bg-` / `border-`: {pal}; plus "
-        f"`white` and theme-backed `brand-1…{c['brand_slot_count']}`"
+        f"theme-backed `brand-1…{c['brand_slot_count']}`. White is available "
+        "only as `text-white` and `bg-white`."
     )
     a(f"- **Spacing** `{'`, `'.join(c['spacing_props'])}` × scale {code(c['spacing_scale'])}")
     a(f"- **Singles**: {code(sorted(c['singles']))}")

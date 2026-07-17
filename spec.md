@@ -887,7 +887,7 @@ stylesheet. Do not edit it by hand.*
 - **Weights** `font-*`: `normal` `medium` `semibold` `bold`
 - **Leading** `leading-*`: `tight` `snug` `normal` `relaxed`
 - **Alignment** `text-*`: `left` `center` `right`
-- **Palette** for `text-` / `bg-` / `border-`: `gray` (50, 100, 200, 300, 400, 500, 600, 700, 800, 900); `red` (50, 600); `green` (50, 600); `amber` (50, 600); plus `white` and theme-backed `brand-1…4`
+- **Palette** for `text-` / `bg-` / `border-`: `gray` (50, 100, 200, 300, 400, 500, 600, 700, 800, 900); `red` (50, 600); `green` (50, 600); `amber` (50, 600); plus theme-backed `brand-1…4`. White is available only as `text-white` and `bg-white`.
 - **Spacing** `m`, `mt`, `mb`, `ml`, `mr`, `mx`, `my`, `p`, `pt`, `pb`, `pl`, `pr`, `px`, `py` × scale `0` `1` `2` `3` `4` `6` `8` `10` `12` `16`
 - **Singles**: `bg-white` `border` `border-b` `border-t` `font-body` `font-heading` `font-mono` `italic` `line-through` `list-decimal` `list-disc` `list-none` `rounded` `rounded-full` `rounded-lg` `rounded-md` `shadow` `text-white` `tracking-tight` `tracking-wide` `underline` `uppercase`
 
