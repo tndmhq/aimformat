@@ -875,7 +875,7 @@ stylesheet. Do not edit it by hand.*
 
 - **Block chunk carriers** (top level and inside slides): `h1` `h2` `h3` `h4` `h5` `h6` `p` `section` `blockquote` `figure` `pre` `div` `hr` `aim-page-break` `ul` `ol` `table`
 - **Item chunk carriers**: `li` inside `ul` `ol`; `tr` inside `table`
-- **Containers** (`data-aim-container`): `ul` `ol` `table` `aim-slide` plus `aim-slide`
+- **Containers** (`data-aim-container`): `ul` `ol` `table` `aim-slide`
 - **Table shells** (scaffolding between container and row chunks): `thead` `tbody` `tfoot`
 - **Allowed inside chunk subtrees**: `h1` `h2` `h3` `h4` `h5` `h6` `p` `section` `blockquote` `figure` `figcaption` `pre` `div` `hr` `aim-page-break` `ul` `ol` `li` `table` `thead` `tbody` `tfoot` `tr` `td` `th` `img` `svg` `use` `code` `a` `strong` `em` `b` `i` `u` `s` `sub` `sup` `mark` `br` `span`
 - **Asset registry content**: `svg` `symbol` `image` `rect` `circle` `ellipse` `path` `g`

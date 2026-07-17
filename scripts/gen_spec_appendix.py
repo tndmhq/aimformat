@@ -50,10 +50,7 @@ def build() -> str:
         "- **Item chunk carriers**: "
         + "; ".join(f"`{k}` inside {code(v)}" for k, v in raw["elements"]["item_carriers"].items())
     )
-    a(
-        f"- **Containers** (`data-aim-container`): "
-        f"{code(raw['elements']['containers'])} plus `aim-slide`"
-    )
+    a(f"- **Containers** (`data-aim-container`): {code(raw['elements']['containers'])}")
     a(
         f"- **Table shells** (scaffolding between container and row chunks): "
         f"{code(raw['elements']['table_shells'])}"
