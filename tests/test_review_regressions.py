@@ -1742,3 +1742,52 @@ class TestCriticMarkupPayloadStructure:
         )
         md = aim.to_markdown(rich_doc, pending="criticmarkup")
         assert "{++- Brand new item++}" in md
+
+
+class TestMidParagraphBreakAnchorsOnItsOwnParagraph:
+    """AF-44: a mid-paragraph page break was anchored on ``(prefix,
+    seen+1)`` — assuming docling splits the paragraph at the break. It
+    doesn't: the paragraph ingests whole, so the anchor matched whatever
+    OTHER paragraph read exactly like the prefix and the break landed
+    there. The break now anchors on the containing paragraph's completed
+    text."""
+
+    @pytest.fixture
+    def broken_docx(self, tmp_path):
+        docx = pytest.importorskip("docx")
+        from docx.enum.text import WD_BREAK
+
+        d = docx.Document()
+        d.add_paragraph("Shared prefix")
+        mid = d.add_paragraph()
+        mid.add_run("Shared prefix")
+        mid.add_run().add_break(WD_BREAK.PAGE)
+        mid.add_run(" tail")
+        d.add_paragraph("Shared prefix")
+        path = tmp_path / "mid.docx"
+        d.save(str(path))
+        return path
+
+    def _ingested(self):
+        # the chunk shapes docling produces: paragraphs ingest whole
+        doc = aim.new_document(title="T")
+        doc.add_chunk('<p data-aim="p1">Shared prefix</p>', author=ME, at=ts(0))
+        doc.add_chunk('<p data-aim="p2">Shared prefix tail</p>', author=ME, at=ts(1))
+        doc.add_chunk('<p data-aim="p3">Shared prefix</p>', author=ME, at=ts(2))
+        return doc
+
+    def test_anchor_is_the_full_paragraph_text(self, broken_docx):
+        from aimformat.convert._docx_pages import _read_break_anchors
+
+        import docx
+
+        anchors = _read_break_anchors(docx.Document(str(broken_docx)))
+        assert anchors == [("Shared prefix tail", 1)]
+
+    def test_break_lands_after_the_containing_paragraph(self, broken_docx):
+        from aimformat.convert._docx_pages import apply_docx_pagination
+
+        doc = self._ingested()
+        apply_docx_pagination(doc, broken_docx, author=ME)
+        texts = [c.text for c in doc.chunks]
+        assert texts == ["Shared prefix", "Shared prefix tail", "", "Shared prefix"]
