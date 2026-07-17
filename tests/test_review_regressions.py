@@ -3475,6 +3475,58 @@ class TestPendingSlideBreakRevision:
         ]
         assert len(rejected_breaks) == 1
 
+    @pytest.mark.parametrize(
+        ("accept_first", "accept_second", "expected_breaks"),
+        [(False, False, 0), (True, False, 2), (False, True, 2), (True, True, 3)],
+    )
+    def test_consecutive_pending_slides_keep_independent_boundaries(
+        self, tmp_path, accept_first, accept_second, expected_breaks
+    ):
+        docx = pytest.importorskip("docx")
+        from docx.oxml.ns import qn
+
+        doc = aim.new_document(title="Deck")
+        doc.add_chunk('<p data-aim="before">Before.</p>', author=ME, at=ts(0))
+        doc.add_chunk('<p data-aim="after">After.</p>', author=ME, at=ts(1))
+        first = doc.propose_add(
+            '<aim-slide style="width:420px; height:595px"><p>First.</p></aim-slide>',
+            author=BOT,
+            after="before",
+            at=ts(2),
+        )
+        doc.propose_add(
+            '<aim-slide style="width:420px; height:595px"><p>Second.</p></aim-slide>',
+            author=BOT,
+            after=first.id,
+            at=ts(3),
+        )
+
+        tracked = aim.to_docx(doc, tmp_path / "consecutive.docx", pending="tracked")
+        body = docx.Document(str(tracked)).element.body
+        decisions = {ts(2): accept_first, ts(3): accept_second}
+
+        def resolve_revisions(parent):
+            for child in list(parent):
+                if child.tag in (qn("w:ins"), qn("w:del")):
+                    accepted = decisions[child.get(qn("w:date"))]
+                    keep = accepted if child.tag == qn("w:ins") else not accepted
+                    if not keep:
+                        parent.remove(child)
+                        continue
+                    resolve_revisions(child)
+                    at = parent.index(child)
+                    for nested in list(child):
+                        child.remove(nested)
+                        parent.insert(at, nested)
+                        at += 1
+                    parent.remove(child)
+                else:
+                    resolve_revisions(child)
+
+        resolve_revisions(body)
+        breaks = [br for br in body.iter(qn("w:br")) if br.get(qn("w:type")) == "page"]
+        assert len(breaks) == expected_breaks
+
 
 class TestMarkdownPageBreakExport:
     """AF-50: an empty ``aim-page-break`` fell through the generic block

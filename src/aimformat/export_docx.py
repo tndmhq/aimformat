@@ -208,6 +208,30 @@ class _Revisions:
             wrap.append(self._make_run(paragraph, spec, deleted=True))
         paragraph._p.append(wrap)
 
+    def replace_ins(
+        self,
+        paragraph,
+        runs: list[dict],
+        prior_author: str,
+        prior_date: str,
+        author: str,
+        date: str,
+    ) -> None:
+        """Replace an earlier insertion with a later insertion of the same
+        content. Rejecting the replacement restores the earlier revision;
+        accepting it removes that copy and keeps the later one."""
+        from docx.oxml import OxmlElement
+
+        prior = OxmlElement("w:ins")
+        self._attrs(prior, prior_author, prior_date)
+        for spec in runs:
+            prior.append(self._make_run(paragraph, spec, deleted=False))
+        removed = OxmlElement("w:del")
+        self._attrs(removed, author, date)
+        removed.append(prior)
+        paragraph._p.append(removed)
+        self.ins(paragraph, runs, author, date)
+
     def row_ins(self, tr, author: str, date: str) -> None:
         self._row_change(tr, "w:ins", author, date)
 
@@ -425,8 +449,11 @@ class _Exporter:
         if prior_break or (slide_payload and self._has_content()):
             self._break_before_next = False
             if not self._ends_with_page_break():
-                owner = prop if slide_payload else prior_break
-                self._page_break(owner if isinstance(owner, Proposal) else None)
+                if slide_payload and isinstance(prior_break, Proposal):
+                    self._shared_pending_slide_break(prior_break, prop)
+                else:
+                    owner = prop if slide_payload else prior_break
+                    self._page_break(owner if isinstance(owner, Proposal) else None)
         for el in els:
             for block in _block_children(el):
                 if block.tag in ("ul", "ol"):
@@ -624,6 +651,23 @@ class _Exporter:
             para.add_run().add_break(WD_BREAK.PAGE)
         else:
             self.rev.ins(para, [{"page_break": True}], _actor_label(prop.author), prop.at)
+
+    def _shared_pending_slide_break(self, prior: Proposal, current: Proposal) -> None:
+        """Emit one boundary owned by either consecutive pending slide.
+
+        The current slide replaces the prior slide's inserted break. Word can
+        independently accept or reject both slides without losing the boundary
+        or rendering two breaks when both are accepted.
+        """
+        para = self.out.add_paragraph()
+        self.rev.replace_ins(
+            para,
+            [{"page_break": True}],
+            _actor_label(prior.author),
+            prior.at,
+            _actor_label(current.author),
+            current.at,
+        )
 
     def emit_figure(self, el: Element) -> None:
         img = el.find(lambda e: e.tag == "img")
