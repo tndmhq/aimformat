@@ -114,8 +114,9 @@ def serialize(node: Nodeish, *, in_svg: bool = False) -> str:
     """Inline canonical serialization of one node (no trailing newline).
 
     A normal form, not an echo: HTML void elements never carry a slash
-    however they were written, and foreign (SVG-context) elements with no
-    content always self-close (spec §11.1)."""
+    however they were written, foreign (SVG-context) elements with no
+    content always self-close, and every other element always has an
+    explicit end tag (spec §11.1)."""
     if isinstance(node, Text):
         return escape_text(node.data)
     if isinstance(node, Comment):
@@ -125,8 +126,6 @@ def serialize(node: Nodeish, *, in_svg: bool = False) -> str:
     if node.tag in REGISTRY.void_elements and not svg_here:
         return open_tag + ">"
     if svg_here and not node.children and node.raw is None:
-        return open_tag + "/>"
-    if node.self_closing:
         return open_tag + "/>"
     if node.raw is not None:
         return f"{open_tag}>{node.raw}</{node.tag}>"

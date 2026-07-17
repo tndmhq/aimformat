@@ -63,6 +63,9 @@ class TestAttributeOrder:
     def test_void_element_no_slash(self):
         assert serialize(el("<hr>")) == "<hr>"
 
+    def test_non_void_self_closing_spelling_gets_explicit_end_tag(self):
+        assert serialize(el("<span/>")) == "<span></span>"
+
 
 class TestJson:
     def test_sorted_keys_compact(self):
