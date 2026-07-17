@@ -1315,6 +1315,40 @@ class TestPruneFlattenKeepBurnedIds:
         assert "pnew" in doc.body_ids
 
 
+class TestPruneCliResolvesNumericCheckpointLabels:
+    """codex-r2-4: ``aim prune`` documents BEFORE as a seq number or
+    checkpoint label, but an unconditional digit conversion made numeric
+    labels unselectable — with a checkpoint labeled "1" at a later seq,
+    ``aim prune f.aim 1`` kept from seq 1 and silently retained the history
+    the user asked to drop. An exact label match now wins."""
+
+    def _saved(self, tmp_path):
+        doc = aim.new_document(title="T")
+        doc.add_chunk('<p data-aim="a">one</p>', author=ME, at=ts(0))
+        doc.add_chunk('<p data-aim="b">two</p>', author=ME, at=ts(1))
+        doc.checkpoint("1", at=ts(2))  # numeric label, seq 3
+        doc.modify_chunk("b", '<p data-aim="b">two!</p>', author=ME, at=ts(3))
+        path = tmp_path / "doc.aim"
+        doc.save(path)
+        return path
+
+    def test_numeric_label_selects_the_checkpoint(self, tmp_path):
+        from aimformat.cli import main
+
+        path = self._saved(tmp_path)
+        assert main(["prune", str(path), "1"]) == 0
+        kept = aim.load(path).history
+        assert kept[0].kind == "checkpoint" and kept[0].get("label") == "1"
+        assert kept[0].seq == 3  # cut at the checkpoint, not at seq 1
+
+    def test_plain_seq_still_works_when_no_label_matches(self, tmp_path):
+        from aimformat.cli import main
+
+        path = self._saved(tmp_path)
+        assert main(["prune", str(path), "2"]) == 0  # no checkpoint labeled "2"
+        assert [e.seq for e in aim.load(path).history][0] == 2
+
+
 class TestReconcileHandlesWrappingContainers:
     """AF-07: a hand edit that wraps existing units into a NEW container is
     one of the most natural out-of-band edits, but _drive counted a

@@ -346,7 +346,13 @@ def _cmd_pack(args: argparse.Namespace) -> int:
 
 def _cmd_prune(args: argparse.Namespace) -> int:
     doc = AimDocument.load(args.file)
-    before: int | str = int(args.before) if args.before.isdigit() else args.before
+    # "seq number or checkpoint label": an exact label match wins, so a
+    # checkpoint someone named "1" stays selectable; only an argument that
+    # matches no label reads as a sequence number
+    labels = {e.get("label") for e in doc.history if e.kind == "checkpoint"}
+    before: int | str = (
+        args.before if args.before in labels or not args.before.isdigit() else int(args.before)
+    )
     dropped = doc.prune(before=before)
     out = Path(args.output or args.file)
     doc.save(out)
@@ -655,7 +661,10 @@ def build_parser() -> argparse.ArgumentParser:
         "in place unless -o is given",
     )
     p.add_argument("file")
-    p.add_argument("before", help="seq number or checkpoint label to keep from")
+    p.add_argument(
+        "before",
+        help="seq number or checkpoint label to keep from; an exact label match wins",
+    )
     p.add_argument("-o", "--output")
     p.set_defaults(func=_cmd_prune)
 
