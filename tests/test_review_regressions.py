@@ -1978,3 +1978,42 @@ class TestRowAddsAnchorAfterTheWholeRunChunk:
             for tr in tbl._tbl.findall(qn("w:tr"))
         ]
         assert row_texts == ["one", "two", "new"]
+
+
+class TestDirectModifyOfReservedTargets:
+    """AF-08: ``modify_chunk`` on ``aim:theme``/``aim:doc`` fell through
+    ``_normalize_payload``'s generic funnel, which stamped
+    ``data-aim="aim:theme"`` onto the head <style>/<script> — persisted,
+    hashed, lint-clean; the propose/set_theme/accept paths all routed
+    around it."""
+
+    def test_theme_modify_keeps_the_reserved_grammar(self, basic_doc):
+        basic_doc.modify_chunk(
+            "aim:theme",
+            "<style data-aim-theme>:root{--aim-brand-1: #123456}</style>",
+            author=ME,
+            at=ts(5),
+        )
+        text = basic_doc.dumps()
+        assert 'data-aim="aim:theme"' not in text
+        assert basic_doc.theme.get("--aim-brand-1") == "#123456"
+        assert basic_doc.verify() == []
+        assert not [f for f in aim.lint_text(text) if f.level == "error"]
+
+    def test_doc_modify_keeps_the_reserved_grammar(self, basic_doc):
+        basic_doc.set_page_setup({"size": "A5"}, author=ME, at=ts(5))
+        basic_doc.modify_chunk(
+            "aim:doc",
+            '<script type="application/aim-doc+json">{"page": {"size": "Letter"}}</script>',
+            author=ME,
+            at=ts(6),
+        )
+        assert 'data-aim="aim:doc"' not in basic_doc.dumps()
+        assert basic_doc.page_setup.size == "Letter"
+        assert basic_doc.verify() == []
+
+    def test_non_theme_payload_is_rejected(self, basic_doc):
+        with pytest.raises(InvalidOperation):
+            basic_doc.modify_chunk(
+                "aim:theme", "<p>not a theme block</p>", author=ME, at=ts(5)
+            )

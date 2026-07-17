@@ -1101,7 +1101,14 @@ class AimDocument:
         before = self._state.serial(cid)
         if before is None:
             raise TargetNotFound(f"no chunk {cid!r}")
-        _, payload = self._normalize_payload(markup, expect_id=cid)
+        if cid == "aim:theme":
+            # reserved heads have their own grammar: the generic funnel
+            # would stamp data-aim onto the <style>/<script> block
+            payload = self._validated_theme_markup(markup)
+        elif cid == "aim:doc":
+            payload = self._validated_doc_markup(markup)
+        else:
+            _, payload = self._normalize_payload(markup, expect_id=cid)
         if payload == before:
             raise InvalidOperation("modify with identical content")
         self._state.replace(cid, payload)
@@ -1928,12 +1935,17 @@ class AimDocument:
         return serialize(el)
 
     def _validated_doc_markup(self, markup: str) -> str:
-        """Validate + canonicalize a whole-settings-block payload."""
+        """Validate + canonicalize a whole-settings-block payload to the
+        exact form ``set_page_setup`` writes (resolved page, canonical
+        JSON) — a raw-authored spelling would replay as a verify
+        mismatch."""
         el = doc_settings_element(markup)
         settings = parse_doc_settings(el.raw)
         if "page" in settings:
-            page_setup_from_obj(settings["page"])
-        return serialize(el)
+            settings["page"] = page_setup_from_obj(settings["page"]).to_obj()
+        return (
+            f'<script type="{REGISTRY.script_types["doc"]}">\n{canonical_json(settings)}\n</script>'
+        )
 
     def reject(
         self,
