@@ -3450,3 +3450,16 @@ class TestMarkdownPageBreakExport:
         doc.add_chunk("<p>After.</p>", author=ME, at=ts(2))
 
         assert aim.to_markdown(doc) == "Before.\n\n---\n\nAfter.\n"
+
+
+class TestMarkdownUppercaseSchemes:
+    """AF-51: Markdown import used lowercase prefix checks instead of the
+    registry's case-insensitive URL policy."""
+
+    def test_registry_allowed_uppercase_schemes_survive(self):
+        doc = aim.from_markdown("[site](HTTP://example.com) ![pixel](DATA:image/png;base64,AAAA)")
+
+        html = doc.chunks[0].html
+        assert 'href="HTTP://example.com"' in html
+        assert 'src="DATA:image/png;base64,AAAA"' in html
+        assert aim.lint(doc) == []

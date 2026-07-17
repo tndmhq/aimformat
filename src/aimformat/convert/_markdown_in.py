@@ -30,11 +30,9 @@ from ..canonical import escape_attr, escape_text
 from ..document import AimDocument, new_document
 from ..events import Actor, external
 from ..ingest import _containerize
+from ..registry import REGISTRY
 
 __all__ = ["from_markdown"]
-
-_LINK_SCHEMES = ("http://", "https://", "mailto:", "#")
-_IMG_SCHEMES = ("http://", "https://", "data:image/")
 
 
 def _md():
@@ -48,11 +46,11 @@ def _md():
 
 
 def _href_ok(href: str) -> bool:
-    return href.startswith(_LINK_SCHEMES)
+    return REGISTRY.url_allowed("a.href", href)
 
 
 def _src_ok(src: str) -> bool:
-    return src.startswith(_IMG_SCHEMES)
+    return REGISTRY.url_allowed("img.src", src)
 
 
 def _inline(children: list[Any] | None) -> str:
