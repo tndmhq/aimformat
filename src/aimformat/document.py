@@ -926,7 +926,7 @@ class AimDocument:
         """A replacement keeps the target's kind (§4.3): an ``aim-slide``
         root can only ever be a container, and a container target can only
         take a container-capable root — otherwise the write demotes one into
-        the other and the document fails S030/S031 on the very next lint."""
+        the other and the document fails V003/S031 on the very next lint."""
         kind = kind or self._state.kind_of(target)
         if kind == "chunk" and first.tag == "aim-slide":
             raise InvalidOperation(

@@ -94,7 +94,7 @@ Fixed-layout pages: slides become correct pages end to end.
   Replacements now keep the target's kind: an `aim-slide` payload can
   never replace a chunk (and a container never becomes a flat block) —
   `modify_chunk`, `propose_modify`, and the accept path all reject what
-  would fail S030/S031 on the next lint, including proposals authored
+  would fail V003/S031 on the next lint, including proposals authored
   by external tools.
 
 ## 0.2.0 — 2026-07-10
