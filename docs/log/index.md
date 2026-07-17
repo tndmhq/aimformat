@@ -10,6 +10,7 @@ required to add entries.)
 | Date | Type | Entry | Status | What |
 |---|---|---|---|---|
 | 2026-07-17 16:59 | plan | [pr14-blank-pending-slide-boundary](2026-07-17_1659_plan_pr14-blank-pending-slide-boundary.md) | done | Preserve a blank pending slide canvas when a following pending slide is rejected in DOCX tracked changes |
+| 2026-07-17 16:43 | plan | [revalidate-rebound-chained-add-anchors](2026-07-17_1643_plan_revalidate-rebound-chained-add-anchors.md) | done | Revalidate chained-add anchors rebound by reconcile rejection so no cross-container P016 survives |
 | 2026-07-17 16:23 | plan | [pr14-codex-empty-list-followup](2026-07-17_1623_plan_pr14-codex-empty-list-followup.md) | done | Preserve legitimate empty Docling list items while still dropping cyclic contentless nested-list edges |
 | 2026-07-17 14:47 | plan | [postmerge-pr12-pr13-review-fixes](2026-07-17_1447_plan_postmerge-pr12-pr13-review-fixes.md) | done | Fix the five post-merge Codex findings on PRs #12 and #13 with one regression-backed commit per finding |
 | 2026-07-17 14:19 | plan | [pr14-codex-round3-minors](2026-07-17_1419_plan_pr14-codex-round3-minors.md) | done | Address Codex PR #14 round-3 minors for cyclic empty list wrappers, formatted image alt titles, and optional markdown test skips |

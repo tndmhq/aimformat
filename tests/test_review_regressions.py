@@ -1622,6 +1622,32 @@ class TestReconcileHandlesWrappingContainers:
         assert repaired.verify() == []
         assert not [finding for finding in aim.lint(repaired) if finding.level == "error"]
 
+    def test_rebound_chained_add_anchor_is_revalidated(self):
+        doc = aim.new_document(title="T")
+        doc.add_chunk('<p data-aim="c1">alpha</p>', author=BOT, at=ts(0))
+        first = doc.propose_add(
+            '<p data-aim="a">A</p>', author=BOT, container="body", after="c1", at=ts(1)
+        )
+        second = doc.propose_add(
+            '<p data-aim="b">B</p>',
+            author=BOT,
+            container="body",
+            after=first.id,
+            at=ts(2),
+        )
+
+        wrapped = doc.dumps().replace(
+            '<p data-aim="c1">alpha</p>',
+            '<aim-slide data-aim-container="wrap"><p data-aim="c1">alpha</p></aim-slide>',
+        )
+        repaired = aim.loads(wrapped)
+        report = repaired.reconcile(at=ts(3))
+
+        assert report.rejected_proposals == [first.id, second.id]
+        assert repaired.proposals == []
+        assert repaired.verify() == []
+        assert "P016" not in {finding.code for finding in aim.lint(repaired)}
+
 
 class TestEveryAimCssBlockIsVerified:
     """AF-21: the X006 byte-match ran only when data-aim-css equalled the

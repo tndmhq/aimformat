@@ -542,7 +542,10 @@ def _reject_dangling(
     """Pending proposals whose target or anchor no longer resolves can never
     be accepted; reject them so the reconciled document lints clean."""
     pending_adds = {p.id for p in S.proposals if p.action == "add"}
-    for p in list(S.proposals):
+    for snapshot in list(S.proposals):
+        # Rejecting an earlier add can rebind this card's anchor in-place.
+        # Re-read the live card rather than validating the stale snapshot.
+        p = S.proposal(snapshot.id)
         dangling = False
         if (
             p.action in ("modify", "delete", "move")
