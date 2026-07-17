@@ -1,0 +1,317 @@
+#!/usr/bin/env python3
+"""Regenerate the cross-implementation parity fixtures.
+
+Edge-focused .aim documents under ``tests/parity/fixtures/``, built through
+the SDK so they are canonical and lint-clean by construction (like
+``gen_examples.py``). The shipped ``examples/*.aim`` cover the happy paths;
+these target the constructs a second implementation is most likely to get
+wrong: runs, nested containers, every proposal action, theme/doc blocks,
+packed assets, unicode/whitespace edges, and a flattened file.
+
+Run from the repo root: python3 scripts/gen_parity_fixtures.py
+Then refresh the goldens: python3 scripts/dump_projection.py
+"""
+
+from __future__ import annotations
+
+import pathlib
+import sys
+
+sys.path.insert(0, str(pathlib.Path(__file__).parent.parent / "src"))
+
+import aimformat as aim  # noqa: E402
+
+OUT = pathlib.Path(__file__).parent.parent / "tests" / "parity" / "fixtures"
+BOT = aim.agent("model-x")
+ME = aim.human("ada")
+
+# 1×1 transparent PNG, base64 (decodes cleanly; content-addresses stably)
+PNG_1PX = (
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJ"
+    "AAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=="
+)
+
+
+def t(i: int) -> str:
+    return f"2026-07-17T10:{i // 60:02d}:{i % 60:02d}Z"
+
+
+def runs_doc() -> aim.AimDocument:
+    """Runs: sibling li/tr sharing one id; a multi-block section; pre."""
+    doc = aim.new_document(title="Runs — lists, tables, multi-block chunks")
+    with doc.batch():
+        doc.add_chunk('<h2 data-aim="hd">Items</h2>', author=BOT, at=t(0))
+        doc.add_chunk(
+            '<ul data-aim-container="lst">'
+            '<li data-aim="i1">First</li>'
+            '<li data-aim="i2">Second, spilling over…</li>'
+            '<li data-aim="i2">…into a second bullet</li>'
+            '<li data-aim="i3">Third</li></ul>',
+            author=BOT,
+            at=t(1),
+        )
+        doc.add_chunk(
+            '<table data-aim-container="tbl"><thead>'
+            '<tr data-aim="h0"><th>Key</th><th>Value</th></tr></thead><tbody>'
+            '<tr data-aim="b1"><td>alpha</td><td>1</td></tr>'
+            '<tr data-aim="b1"><td>alpha (cont.)</td><td>2</td></tr>'
+            '<tr data-aim="b2"><td>beta</td><td>3</td></tr>'
+            "</tbody></table>",
+            author=BOT,
+            at=t(2),
+        )
+        doc.add_chunk(
+            '<section data-aim="sec"><h3>Grouped</h3>'
+            "<p>A multi-block chunk under one grouping element.</p></section>",
+            author=BOT,
+            at=t(3),
+        )
+        doc.add_chunk(
+            '<pre data-aim="code"><code>def f():\n    return 42\n</code></pre>',
+            author=BOT,
+            at=t(4),
+        )
+    return doc
+
+
+def nested_slides_doc() -> aim.AimDocument:
+    """Nested containers: slide → list → items, slide → table → rows."""
+    doc = aim.new_document(title="Nested containers in slides")
+    with doc.batch():
+        doc.add_chunk(
+            '<aim-slide data-aim-container="s1" style="width:960px; height:540px">'
+            '<h2 data-aim="t1" class="font-bold text-5xl" '
+            'style="left:48px; top:32px; width:600px; z-index:2">Agenda</h2>'
+            '<ul data-aim-container="lst1" style="left:48px; top:150px; width:520px">'
+            '<li data-aim="a1">Kickoff</li><li data-aim="a2">Numbers</li></ul>'
+            "</aim-slide>",
+            author=BOT,
+            at=t(0),
+        )
+        doc.add_chunk("<aim-page-break></aim-page-break>", author=BOT, at=t(1))
+        doc.add_chunk(
+            '<aim-slide data-aim-container="s2" style="width:960px; height:540px">'
+            '<h2 data-aim="t2" style="left:48px; top:32px; width:600px">Numbers</h2>'
+            '<table data-aim-container="tb2" style="left:48px; top:140px; width:640px">'
+            '<tbody><tr data-aim="n1"><td>Q1</td><td>12</td></tr>'
+            '<tr data-aim="n2"><td>Q2</td><td>17</td></tr></tbody></table>'
+            '<p data-aim="fn" class="text-gray-600 text-sm" '
+            'style="left:48px; top:480px; width:640px; z-index:1">Unaudited.</p>'
+            "</aim-slide>",
+            author=BOT,
+            at=t(2),
+        )
+    return doc
+
+
+def proposals_doc() -> aim.AimDocument:
+    """Every proposal action, chained adds, shells, and dependencies."""
+    doc = aim.new_document(title="Pending lane — every action")
+    with doc.batch():
+        doc.add_chunk('<h1 data-aim="c1">Title</h1>', author=BOT, at=t(0))
+        doc.add_chunk('<p data-aim="c2">Second.</p>', author=BOT, at=t(1))
+        doc.add_chunk('<p data-aim="c3">Third.</p>', author=BOT, at=t(2))
+        doc.add_chunk('<p data-aim="c4">Fourth.</p>', author=BOT, at=t(3))
+        doc.add_chunk(
+            '<table data-aim-container="tb"><tbody>'
+            '<tr data-aim="r1"><td>one</td></tr>'
+            '<tr data-aim="r2"><td>two</td></tr></tbody></table>',
+            author=BOT,
+            at=t(4),
+        )
+    p_mod = doc.propose_modify(
+        "c2",
+        '<p data-aim="c2">Second, sharpened.</p>',
+        author=BOT,
+        explanation="Lead with the point.",
+        at=t(10),
+    )
+    doc.propose_delete("c3", author=BOT, explanation="Redundant with c2.", at=t(11))
+    doc.propose_move("c4", author=ME, container="body", after=None, at=t(12))
+    add1 = doc.propose_add(
+        '<p data-aim="add1">Inserted after the title.</p>',
+        author=BOT,
+        container="body",
+        after="c1",
+        explanation="Bridge paragraph.",
+        at=t(13),
+    )
+    doc.propose_add(
+        '<p data-aim="add2">Chained onto the pending add.</p>',
+        author=BOT,
+        container="body",
+        after=add1.id,
+        at=t(14),
+    )
+    doc.propose_add(
+        '<tr data-aim="add3"><td>three</td></tr>',
+        author=ME,
+        container="tb",
+        after=None,
+        explanation="Row at the top of the body section.",
+        at=t(15),
+    )
+    doc.propose_theme(
+        {"--aim-brand-1": "#0f766e"},
+        author=BOT,
+        explanation="Teal primary.",
+        depends_on=p_mod.id,
+        at=t(16),
+    )
+    doc.propose_page_setup(
+        {
+            "size": "A5",
+            "orientation": "landscape",
+            "margins": {"top": "10mm", "right": "12mm", "bottom": "10mm", "left": "12mm"},
+        },
+        author=ME,
+        explanation="Booklet trim.",
+        at=t(17),
+    )
+    return doc
+
+
+def theme_doc_meta_doc() -> aim.AimDocument:
+    """Theme block, aim:doc settings, meta cache, embeddings, checkpoint."""
+    doc = aim.new_document(
+        title="Head state — theme, settings, caches",
+        theme={"--aim-brand-1": "#1a73e8", "--aim-font-heading": "Georgia, serif"},
+    )
+    with doc.batch():
+        doc.add_chunk('<h1 data-aim="ttl">Head state</h1>', author=BOT, at=t(0))
+        doc.add_chunk(
+            '<p data-aim="body1">One paragraph to summarize and embed.</p>',
+            author=BOT,
+            at=t(1),
+        )
+    doc.set_page_setup(
+        {
+            "size": "Letter",
+            "orientation": "portrait",
+            "margins": {"top": "25.4mm", "right": "19mm", "bottom": "25.4mm", "left": "19mm"},
+        },
+        author=ME,
+        at=t(2),
+    )
+    doc.checkpoint("draft", at=t(3))
+    doc.set_summary("A one-paragraph document about head state.", model="model-x")
+    doc.generate_toc()
+    doc.set_embedding("body1", model="embed-model", vec=[0.25, -0.5, 0.125])
+    return doc
+
+
+def assets_doc() -> aim.AimDocument:
+    """Packed assets: data-URI images hoisted into the registry."""
+    doc = aim.new_document(title="Assets — packed registry")
+    with doc.batch():
+        doc.add_chunk(
+            '<figure data-aim="fig1">'
+            f'<img alt="A dot — été 🎨" src="data:image/png;base64,{PNG_1PX}">'
+            "<figcaption>Packed into the registry.</figcaption></figure>",
+            author=BOT,
+            at=t(0),
+        )
+        doc.add_chunk(
+            '<p data-aim="p1">Same blob again: '
+            f'<img alt="dot twice" src="data:image/png;base64,{PNG_1PX}"> deduplicated.</p>',
+            author=BOT,
+            at=t(1),
+        )
+        doc.add_chunk(
+            '<figure data-aim="fig2"><img alt="External, authoring form" '
+            'src="https://example.com/chart.png"></figure>',
+            author=BOT,
+            at=t(2),
+        )
+    doc.pack_assets(author=ME, at=t(3))
+    return doc
+
+
+def unicode_whitespace_doc() -> aim.AimDocument:
+    """Unicode (astral, CJK, NBSP), escapes, significant whitespace."""
+    doc = aim.new_document(title="Unicode & whitespace — café, 文書, 🎉")
+    with doc.batch():
+        doc.add_chunk(
+            '<h1 data-aim="ttl">Καφές &amp; crème brûlée — 🎉</h1>', author=BOT, at=t(0)
+        )
+        doc.add_chunk(
+            '<p data-aim="esc">1 &lt; 2 &amp; 3 &gt; 2, non-breaking space, 中文文書.</p>',
+            author=BOT,
+            at=t(1),
+        )
+        doc.add_chunk(
+            '<p data-aim="inline">  Leading spaces, <strong>bold&amp;co</strong>, '
+            "<em>emphasis</em>, trailing spaces.  </p>",
+            author=BOT,
+            at=t(2),
+        )
+        doc.add_chunk(
+            '<pre data-aim="pre1"><code>line one\n\tindented\n  spaced\n</code></pre>',
+            author=BOT,
+            at=t(3),
+        )
+        doc.add_chunk(
+            '<blockquote data-aim="q1"><p>Links: <a href="https://example.com/a?b=1&amp;c=2">query</a>, '
+            '<a href="mailto:luca@example.com">mail</a>, <a href="#aim:ttl">fragment</a>.</p></blockquote>',
+            author=BOT,
+            at=t(4),
+        )
+        doc.add_chunk(
+            '<figure data-aim="alt1"><img alt="say &quot;hi&quot; — 1 &lt; 2" '
+            'src="https://example.com/x.png"></figure>',
+            author=BOT,
+            at=t(5),
+        )
+    return doc
+
+
+def flattened_doc() -> aim.AimDocument:
+    """A flattened file: no history trailer (H001 warning tier)."""
+    doc = aim.new_document(title="Flattened")
+    with doc.batch():
+        doc.add_chunk('<h1 data-aim="ttl">Flattened</h1>', author=BOT, at=t(0))
+        doc.add_chunk('<p data-aim="p1">History was dropped.</p>', author=BOT, at=t(1))
+    p = doc.propose_modify(
+        "p1", '<p data-aim="p1">History has been dropped.</p>', author=BOT, at=t(2)
+    )
+    doc.accept(p.id, decided_by=ME, at=t(3))
+    doc.flatten()
+    return doc
+
+
+def empty_registry_doc() -> aim.AimDocument:
+    """An asset registry present but empty — the degenerate packed form."""
+    doc = aim.new_document(title="Empty asset registry")
+    with doc.batch():
+        doc.add_chunk('<p data-aim="p1">No assets are packed.</p>', author=BOT, at=t(0))
+    # the public write path garbage-collects an empty registry away, so the
+    # degenerate shape is materialized directly for reader coverage
+    doc._assets_section()
+    return doc
+
+
+FIXTURES = {
+    "runs": runs_doc,
+    "nested-slides": nested_slides_doc,
+    "proposals": proposals_doc,
+    "theme-doc-meta": theme_doc_meta_doc,
+    "assets": assets_doc,
+    "unicode-whitespace": unicode_whitespace_doc,
+    "flattened": flattened_doc,
+    "empty-registry": empty_registry_doc,
+}
+
+
+def main() -> None:
+    OUT.mkdir(parents=True, exist_ok=True)
+    for name, build in FIXTURES.items():
+        doc = build()
+        errors = [f for f in aim.lint(doc) if f.level == "error"]
+        if errors:
+            raise SystemExit(f"{name}: generated fixture fails lint: {errors}")
+        doc.save(OUT / f"{name}.aim")
+        print(f"wrote tests/parity/fixtures/{name}.aim")
+
+
+if __name__ == "__main__":
+    main()
