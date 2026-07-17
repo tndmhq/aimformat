@@ -149,11 +149,14 @@ def resolution_order(proposals: Sequence[Proposal]) -> list[Proposal]:
 
     Card order in the file carries no dependency meaning (a manual reorder
     is legal), so resolve in rounds: an add anchored on another pending add
-    waits for its anchor; within each round deletes go last, so an add
-    anchored on a chunk that a sibling card deletes lands while the anchor
-    still exists. Shared by ``aim accept/reject --all`` and the exporters'
+    waits for its anchor; within each round adds/modifies go first, then
+    moves, then deletes — an add anchored on a chunk that a sibling card
+    moves away or deletes lands while the anchor is still in place, and a
+    move whose destination anchors on a to-be-deleted chunk resolves before
+    the delete. Shared by ``aim accept/reject --all`` and the exporters'
     resolve-a-copy paths.
     """
+    rank = {"move": 1, "delete": 2}
     pending = list(proposals)
     order: list[Proposal] = []
     while pending:
@@ -164,7 +167,7 @@ def resolution_order(proposals: Sequence[Proposal]) -> list[Proposal]:
                 "pending adds anchor on each other in a cycle — the file is "
                 "corrupt (aim lint reports P015)"
             )
-        ready.sort(key=lambda p: p.action == "delete")
+        ready.sort(key=lambda p: rank.get(p.action, 0))
         order.extend(ready)
         done = {p.id for p in ready}
         pending = [p for p in pending if p.id not in done]

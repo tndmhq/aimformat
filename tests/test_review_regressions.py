@@ -1141,3 +1141,56 @@ class TestContainersHoldOnlyItemCarriers:
         rich_doc.move_chunk("li9", author=ME, container="list", after=None, at=ts(22))
         assert rich_doc.verify() == []
         assert not [f for f in aim.lint(rich_doc) if f.level == "error"]
+
+
+class TestResolutionOrderProtectsAnchors:
+    """AF-04: resolution_order sorted ready cards only delete-last, so a
+    pending MOVE of an existing chunk that a sibling add anchors on could
+    resolve first — the add then failed TargetNotFound, aborting
+    `accept --all` and `to_docx(pending="accept-all")` on card order alone."""
+
+    @pytest.fixture
+    def doc_with_lane(self):
+        doc = aim.new_document(title="T")
+        doc.add_chunk('<p data-aim="x1">anchor chunk</p>', author=BOT, at=ts(0))
+        doc.add_chunk(
+            '<aim-slide data-aim-container="s1"><p data-aim="sp">slide p</p></aim-slide>',
+            author=BOT,
+            at=ts(1),
+        )
+        # move card BEFORE the add that anchors on its target
+        doc.propose_move("x1", author=BOT, container="s1", at=ts(2))
+        doc.propose_add('<p data-aim="n1">new</p>', author=BOT, container="body", after="x1", at=ts(3))
+        return doc
+
+    def test_add_orders_before_the_move_of_its_anchor(self, doc_with_lane):
+        from aimformat.document import resolution_order
+
+        actions = [p.action for p in resolution_order(doc_with_lane.proposals)]
+        assert actions == ["add", "move"]
+
+    def test_accept_all_resolves_the_whole_lane(self, doc_with_lane):
+        from aimformat.document import resolution_order
+
+        for p in resolution_order(doc_with_lane.proposals):
+            doc_with_lane.accept(p.id, decided_by=ME, at=ts(4))
+        assert doc_with_lane.proposals == []
+        assert doc_with_lane.body_ids == ["n1", "s1"]
+        assert doc_with_lane.verify() == []
+
+    def test_docx_accept_all_export_succeeds(self, doc_with_lane, tmp_path):
+        pytest.importorskip("docx")
+        out = aim.to_docx(doc_with_lane, tmp_path / "t.docx", pending="accept-all")
+        assert out.exists()
+
+    def test_delete_still_goes_after_the_anchored_add(self):
+        doc = aim.new_document(title="T")
+        doc.add_chunk('<p data-aim="x1">anchor</p>', author=BOT, at=ts(0))
+        doc.propose_delete("x1", author=BOT, at=ts(1))
+        doc.propose_add('<p data-aim="n1">new</p>', author=BOT, container="body", after="x1", at=ts(2))
+        from aimformat.document import resolution_order
+
+        for p in resolution_order(doc.proposals):
+            doc.accept(p.id, decided_by=ME, at=ts(3))
+        assert doc.body_ids == ["n1"]
+        assert doc.verify() == []
