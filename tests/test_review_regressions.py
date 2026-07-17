@@ -3425,6 +3425,30 @@ class TestCyclicNestedListIngestion:
         assert doc.chunks == []
         assert aim.lint(doc) == []
 
+    def test_contentless_cycle_through_empty_item_drops_nested_list(self):
+        data = {
+            "name": "empty-item-cyclic-list",
+            "body": {"children": [{"$ref": "#/groups/0"}]},
+            "groups": [
+                {
+                    "label": "list",
+                    "children": [{"$ref": "#/texts/0"}],
+                }
+            ],
+            "texts": [
+                {
+                    "label": "list_item",
+                    "text": "",
+                    "children": [{"$ref": "#/groups/0"}],
+                }
+            ],
+        }
+
+        doc = aim.from_docling(data)
+
+        assert doc.chunks == []
+        assert aim.lint(doc) == []
+
 
 class TestPendingSlideBreakRevision:
     """AF-49: page breaks introduced by a pending slide are part of that

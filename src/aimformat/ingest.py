@@ -233,7 +233,8 @@ def _li_markup(res: _Resolver, item: dict, _stack: set[int] | None = None) -> st
         if label in ("list", "ordered_list"):
             tag = _list_tag(res, child)
             nested = _list_items_markup(res, child, _stack)
-            inner += f"<{tag}>{nested}</{tag}>"
+            if nested:
+                inner += f"<{tag}>{nested}</{tag}>"
         elif label == "table":
             nested_table = _table_markup(child)
             if nested_table:
@@ -244,7 +245,7 @@ def _li_markup(res: _Resolver, item: dict, _stack: set[int] | None = None) -> st
             inner += _inline_group_markup(res, child)
         elif label in ("text", "paragraph") and child.get("text"):
             inner += f"<p>{_fmt_markup(child)}</p>"
-    return f"<li>{inner}</li>"
+    return f"<li>{inner}</li>" if inner else ""
 
 
 def _list_items_markup(res: _Resolver, group: dict, _stack: set[int] | None = None) -> str:
@@ -262,7 +263,9 @@ def _list_items_markup(res: _Resolver, group: dict, _stack: set[int] | None = No
         for child in res.children(group):
             label = child.get("label")
             if label == "list_item":
-                parts.append(_li_markup(res, child, _stack))
+                item = _li_markup(res, child, _stack)
+                if item:
+                    parts.append(item)
             elif label in ("list", "ordered_list"):
                 tag = _list_tag(res, child)
                 nested_items = _list_items_markup(res, child, _stack)
@@ -440,7 +443,9 @@ def from_docling(
                 if items:
                     blocks.append(f"<{tag}>{items}</{tag}>")
             elif label == "list_item":  # stray item outside a group
-                blocks.append(f"<ul>{_li_markup(res, child)}</ul>")
+                item = _li_markup(res, child)
+                if item:
+                    blocks.append(f"<ul>{item}</ul>")
             elif label == "table":
                 markup = _table_markup(child)
                 if markup:
