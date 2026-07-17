@@ -54,6 +54,23 @@ _MONO = "Consolas"
 _BOLD_TAGS = {"strong", "b"}
 _ITALIC_TAGS = {"em", "i"}
 _HEADINGS = {"h1", "h2", "h3", "h4", "h5", "h6"}
+_INLINE_TAGS = {
+    "strong",
+    "b",
+    "em",
+    "i",
+    "u",
+    "s",
+    "mark",
+    "code",
+    "sub",
+    "sup",
+    "a",
+    "img",
+    "br",
+    "span",
+    "svg",
+}
 
 
 def _require_docx():
@@ -233,17 +250,59 @@ def _style_for(tag: str) -> str | None:
 
 
 def _block_children(el: Element) -> list[Element]:
-    """The block-level pieces of one chunk (a section's children; a slide's
-    children recursively, so a pending whole-slide add linearizes per block
-    like an accepted slide; the element itself otherwise)."""
-    if el.tag == "section":
-        return el.elements()
+    """The block-level pieces of one chunk (a grouping block's children,
+    recursively; a slide's children recursively, so a pending whole-slide
+    add linearizes per block like an accepted slide; the element itself
+    otherwise). Each block child of div/section/blockquote becomes its own
+    paragraph — treating them as inline fused 'Quote one.Quote two.' into
+    one paragraph — and direct inline content wraps in a synthetic block
+    so it is never dropped."""
+    if el.tag in ("section", "div"):
+        return _unpack_group(el, "p")
+    if el.tag == "blockquote":
+        return _unpack_group(el, "blockquote")
     if el.tag == "aim-slide":
         out: list[Element] = []
         for child in el.elements():
             out.extend(_block_children(child))
         return out
     return [el]
+
+
+def _unpack_group(el: Element, wrap_tag: str) -> list[Element]:
+    """One block per block child of a grouping element; runs of direct
+    inline content wrap in a synthetic *wrap_tag* element. Paragraphs
+    inside a blockquote re-wrap as *wrap_tag* so they keep the Quote
+    style."""
+    out: list[Element] = []
+    run: list = []
+
+    def flush() -> None:
+        if run:
+            if any(
+                isinstance(n, Element) or (isinstance(n, Text) and n.data.strip())
+                for n in run
+            ):
+                out.append(_wrapped(wrap_tag, run))
+            run.clear()
+
+    for child in el.children:
+        if isinstance(child, Element) and child.tag not in _INLINE_TAGS:
+            flush()
+            if child.tag == "p" and wrap_tag != "p":
+                out.append(_wrapped(wrap_tag, child.children))
+            else:
+                out.extend(_block_children(child))
+        else:
+            run.append(child)
+    flush()
+    return out
+
+
+def _wrapped(tag: str, children: list) -> Element:
+    wrap = Element(tag)
+    wrap.children = list(children)
+    return wrap
 
 
 def _row_shape(tr: Element) -> list[tuple[int, int]]:

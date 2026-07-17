@@ -1614,3 +1614,47 @@ class TestTrackedStructuralRowModify:
         ins_rows = self._ins_cells_per_row(out)
         first = ins_rows.index(["X", "Y"])
         assert ins_rows[first + 1] == ["P", "Q"]  # both rows, in payload order
+
+
+class TestDocxSplitsGroupingBlocks:
+    """AF-40: ``_block_children`` unpacked only section/slides, so a
+    div/blockquote fell through whole to one ``add_paragraph`` whose
+    ``_runs_of`` treated the nested ``<p>``s as inline marks —
+    '<blockquote><p>Quote one.</p><p>Quote two.</p></blockquote>' exported
+    as the single paragraph 'Quote one.Quote two.'."""
+
+    def _paras(self, path):
+        import docx
+
+        return [(p.style.name, p.text) for p in docx.Document(str(path)).paragraphs]
+
+    def test_blockquote_paragraphs_stay_separate(self, tmp_path):
+        pytest.importorskip("docx")
+        doc = aim.new_document(title="T")
+        doc.add_chunk(
+            '<blockquote data-aim="q"><p>Quote one.</p><p>Quote two.</p></blockquote>',
+            author=ME,
+            at=ts(0),
+        )
+        paras = self._paras(aim.to_docx(doc, tmp_path / "q.docx"))
+        assert ("Quote", "Quote one.") in paras
+        assert ("Quote", "Quote two.") in paras
+        assert not any("Quote one.Quote two." in text for _, text in paras)
+
+    def test_div_paragraphs_stay_separate(self, tmp_path):
+        pytest.importorskip("docx")
+        doc = aim.new_document(title="T")
+        doc.add_chunk(
+            '<div data-aim="d"><p>First.</p><p>Second.</p></div>', author=ME, at=ts(0)
+        )
+        texts = [text for _, text in self._paras(aim.to_docx(doc, tmp_path / "d.docx"))]
+        assert "First." in texts and "Second." in texts
+
+    def test_div_direct_text_is_kept(self, tmp_path):
+        pytest.importorskip("docx")
+        doc = aim.new_document(title="T")
+        doc.add_chunk(
+            '<div data-aim="d">Lead-in text<p>Body para.</p></div>', author=ME, at=ts(0)
+        )
+        texts = [text for _, text in self._paras(aim.to_docx(doc, tmp_path / "m.docx"))]
+        assert "Lead-in text" in texts and "Body para." in texts
