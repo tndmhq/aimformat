@@ -1485,6 +1485,16 @@ class TestCanonicalSelfClosingNormalization:
         errors = {f.code for f in aim.lint_text(broken) if f.level == "error"}
         assert errors == {"C002"}
 
+    def test_C002_suppression_preserves_block_container_layout(self):
+        canonical = aim.new_document(title="T").dumps()
+        broken = canonical.replace(
+            '<script type="application/aim-history+jsonl">',
+            '<aim-assets/>\n<script type="application/aim-history+jsonl">',
+        )
+
+        errors = {f.code for f in aim.lint_text(broken) if f.level == "error"}
+        assert errors == {"C002"}
+
     @pytest.mark.parametrize(
         "markup",
         [

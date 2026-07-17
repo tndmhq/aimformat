@@ -25,7 +25,7 @@ from html.parser import HTMLParser
 from pathlib import Path
 
 from . import ids
-from .canonical import document_text
+from .canonical import LINE_CONTAINERS, document_text
 from .css import generate_aim_css
 from .document import AimDocument, Anchor
 from .dom import Comment, Element, Text, parse_fragment
@@ -64,7 +64,8 @@ class _SelfClosingSourceNormalizer(HTMLParser):
         line, column = self.getpos()
         start = self.line_offsets[line - 1] + column
         opening = raw[:-2].rstrip() + ">"
-        self.replacements.append((start, start + len(raw), opening + f"</{tag}>"))
+        separator = "\n" if tag in LINE_CONTAINERS else ""
+        self.replacements.append((start, start + len(raw), opening + separator + f"</{tag}>"))
 
     def handle_endtag(self, tag: str) -> None:
         for i in range(len(self.stack) - 1, -1, -1):
