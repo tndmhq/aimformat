@@ -392,7 +392,9 @@ class _Exporter:
         return self.adds_by_anchor.pop((container, after), [])
 
     def _emit_anchored_adds(self, container: str, anchor: str | None) -> None:
-        for prop in self._pop_adds(container, anchor):
+        # reversed: resolution inserts every same-anchor add at index(anchor)+1,
+        # so accept-all leaves the LAST-proposed sibling closest to the anchor
+        for prop in reversed(self._pop_adds(container, anchor)):
             self._emit_add_paragraphs(prop)
             self._emit_anchored_adds(container, prop.id)  # chained adds anchor on this one
 
@@ -673,7 +675,8 @@ class _Exporter:
                 self._emit_list_adds(container_id, cid, style)
 
     def _emit_list_adds(self, container: str, after: str | None, style: str | None) -> None:
-        for prop in self._pop_adds(container, after):
+        # reversed for the same reason as _emit_anchored_adds
+        for prop in reversed(self._pop_adds(container, after)):
             self._emit_add_paragraphs(prop, style=style)
             self._emit_list_adds(container, prop.id, style)
 

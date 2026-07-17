@@ -404,7 +404,10 @@ class _Renderer:
 
     def _critic_adds(self, key: tuple[str | None, str | None]) -> list[str]:
         out: list[str] = []
-        for prop in self.adds.get(key, []):
+        # reversed: resolution inserts every same-anchor add at
+        # index(anchor)+1, so accept-all leaves the LAST-proposed sibling
+        # closest to the anchor — render what accepting produces
+        for prop in reversed(self.adds.get(key, [])):
             out.append(f"{{++{self._payload_md(prop)}++}}{self._note(prop)}")
             out.extend(self._critic_adds((prop.anchor_container, prop.id)))
         return out

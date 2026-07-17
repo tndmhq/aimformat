@@ -1896,3 +1896,52 @@ class TestConsecutiveDocxBreaksAllSurvive:
         apply_docx_pagination(doc, path, author=ME)
         texts = [c.text for c in doc.chunks]
         assert texts == ["Alpha", "", "", "Beta"]  # both breaks, in order
+
+
+class TestSiblingAddOrderMatchesAcceptAll:
+    """AF-47: resolution inserts every same-anchor add at index(anchor)+1,
+    so accept-all leaves the LAST-proposed sibling closest to the anchor —
+    but the tracked-DOCX paragraph lane and criticmarkup rendered proposal
+    order. The two views of the same pending lane disagreed."""
+
+    @pytest.fixture
+    def two_adds(self):
+        doc = aim.new_document(title="T")
+        doc.add_chunk('<p data-aim="p1">Anchor</p>', author=ME, at=ts(0))
+        doc.propose_add(
+            '<p data-aim="a1">First card</p>', author=BOT, after="p1", at=ts(1)
+        )
+        doc.propose_add(
+            '<p data-aim="a2">Second card</p>', author=BOT, after="p1", at=ts(2)
+        )
+        return doc
+
+    def test_accept_all_ground_truth(self, two_adds):
+        md = aim.to_markdown(two_adds, pending="accept-all")
+        assert md.index("Second card") < md.index("First card")
+
+    def test_criticmarkup_matches_accept_all(self, two_adds):
+        md = aim.to_markdown(two_adds, pending="criticmarkup")
+        assert md.index("Second card") < md.index("First card")
+
+    def test_tracked_docx_matches_accept_all(self, two_adds, tmp_path):
+        docx = pytest.importorskip("docx")
+        from docx.oxml.ns import qn
+
+        out = aim.to_docx(two_adds, tmp_path / "o.docx")
+        texts = [  # p.text does not see runs inside w:ins revisions
+            "".join(t.text or "" for t in p._p.iter(qn("w:t")))
+            for p in docx.Document(str(out)).paragraphs
+        ]
+        assert texts.index("Second card") < texts.index("First card")
+
+    def test_chained_add_still_follows_its_parent(self, two_adds):
+        first = next(p for p in two_adds.proposals if "First card" in (p.payload_html or ""))
+        two_adds.propose_add(
+            '<p data-aim="c1">Chained on first</p>', author=BOT, after=first.id, at=ts(3)
+        )
+        accept = aim.to_markdown(two_adds, pending="accept-all")
+        critic = aim.to_markdown(two_adds, pending="criticmarkup")
+        for md in (accept, critic):
+            assert md.index("First card") < md.index("Chained on first")
+            assert md.index("Second card") < md.index("First card")
