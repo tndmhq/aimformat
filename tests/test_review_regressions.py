@@ -1791,3 +1791,80 @@ class TestMidParagraphBreakAnchorsOnItsOwnParagraph:
         apply_docx_pagination(doc, broken_docx, author=ME)
         texts = [c.text for c in doc.chunks]
         assert texts == ["Shared prefix", "Shared prefix tail", "", "Shared prefix"]
+
+
+class TestIngestKeepsRowspanCoveredRows:
+    """AF-45: ``_table_markup`` dropped any physical grid row consisting
+    entirely of rowspan continuations while the covering cells kept their
+    span counts — the ``rowspan=2`` then swallowed the NEXT real row:
+    lint-clean geometry corruption nothing downstream detects."""
+
+    @staticmethod
+    def _grid_cell(text, r, c, rs=1, cs=1):
+        return {
+            "text": text,
+            "start_row_offset_idx": r,
+            "start_col_offset_idx": c,
+            "row_span": rs,
+            "col_span": cs,
+        }
+
+    def test_fully_covered_row_emits_an_empty_tr(self):
+        from aimformat.ingest import _table_markup
+
+        a = self._grid_cell("A", 0, 0, rs=2)
+        b = self._grid_cell("B", 0, 1, rs=2)
+        grid = [[a, b], [a, b], [self._grid_cell("C", 2, 0), self._grid_cell("D", 2, 1)]]
+        html = _table_markup({"data": {"grid": grid}})
+        assert html.count("<tr") == 3
+        assert "<tr></tr>" in html
+        assert html.index("<tr></tr>") < html.index("<tr><td>C")
+
+    def test_from_docling_geometry_survives(self):
+        docling_core = pytest.importorskip("docling_core")  # noqa: F841
+        from docling_core.types.doc import DoclingDocument, TableCell, TableData
+
+        d = DoclingDocument(name="spans")
+        td = TableData(
+            num_rows=3,
+            num_cols=2,
+            table_cells=[
+                TableCell(
+                    text="A",
+                    start_row_offset_idx=0,
+                    end_row_offset_idx=2,
+                    start_col_offset_idx=0,
+                    end_col_offset_idx=1,
+                    row_span=2,
+                ),
+                TableCell(
+                    text="B",
+                    start_row_offset_idx=0,
+                    end_row_offset_idx=2,
+                    start_col_offset_idx=1,
+                    end_col_offset_idx=2,
+                    row_span=2,
+                ),
+                TableCell(
+                    text="C",
+                    start_row_offset_idx=2,
+                    end_row_offset_idx=3,
+                    start_col_offset_idx=0,
+                    end_col_offset_idx=1,
+                ),
+                TableCell(
+                    text="D",
+                    start_row_offset_idx=2,
+                    end_row_offset_idx=3,
+                    start_col_offset_idx=1,
+                    end_col_offset_idx=2,
+                ),
+            ],
+        )
+        d.add_table(data=td)
+        doc = aim.from_docling(d)
+        assert not [f for f in aim.lint(doc) if f.level == "error"]
+        rows = [c for c in doc.chunks if c.tag == "tr"]
+        assert len(rows) == 3  # A/B row, covered row, C/D row
+        assert rows[1].text == ""  # the covered row survives, empty
+        assert "C" in rows[2].text and "D" in rows[2].text
