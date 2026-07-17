@@ -1808,6 +1808,34 @@ class TestCriticMarkupKeepsHeaderAnchoredRowAdds:
         assert added == sep + 1
 
 
+class TestCriticMarkupWidensForProposedRows:
+    @pytest.fixture
+    def two_col_doc(self):
+        doc = aim.new_document(title="T")
+        doc.add_chunk(
+            '<table data-aim-container="tbl"><thead>'
+            '<tr data-aim="h"><th>H1</th><th>H2</th></tr></thead><tbody>'
+            '<tr data-aim="r1"><td>A</td><td>B</td></tr></tbody></table>',
+            author=ME,
+            at=ts(0),
+        )
+        return doc
+
+    @pytest.mark.parametrize("action", ["add", "modify"])
+    def test_wider_pending_row_widens_the_table_delimiter(self, two_col_doc, action):
+        payload = '<tr data-aim="wide"><td>X</td><td>Y</td><td>Z</td></tr>'
+        if action == "add":
+            two_col_doc.propose_add(payload, author=BOT, container="tbl", after="r1", at=ts(1))
+        else:
+            two_col_doc.propose_modify(
+                "r1", payload.replace('data-aim="wide"', 'data-aim="r1"'), author=BOT, at=ts(1)
+            )
+
+        lines = aim.to_markdown(two_col_doc, pending="criticmarkup").splitlines()
+        assert "| --- | --- | --- |" in lines
+        assert "| H1 | H2 |  |" in lines
+
+
 class TestTrackedStructuralRowModify:
     """AF-39: a row modify that changes the grid shape was forced into the
     old row's cells — surplus replacement cells fused into the last cell
