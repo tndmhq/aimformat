@@ -3139,3 +3139,90 @@ class TestRecordedShellsBindReplay:
         assert tampered != text
         problems = aim.loads(tampered).verify()
         assert any("not the recorded <thead>" in p for p in problems)
+
+
+class TestMovesStayAheadOfAnchorDroppingModifies:
+    """codex-r3-4 (refines codex-r2-5 / AF-04): the round-2 ordering only
+    delayed a container modify when a sibling move's TARGET was dropped by
+    the payload. A modify that instead drops the move's DESTINATION anchor
+    ordered first, stripped the landing point, and ``accept --all`` failed
+    on the move with TargetNotFound after partially resolving the lane. A
+    container modify now also waits for moves whose destination anchor (or
+    destination container) its payload removes; one keeping the anchor
+    stays ahead of the move, as before."""
+
+    @pytest.fixture
+    def anchor_drop_lane(self):
+        doc = aim.new_document(title="T")
+        doc.add_chunk(
+            '<ul data-aim-container="l1"><li data-aim="x">X</li></ul>', author=ME, at=ts(0)
+        )
+        doc.add_chunk(
+            '<ul data-aim-container="l2"><li data-aim="a">A</li><li data-aim="b">B</li></ul>',
+            author=ME,
+            at=ts(1),
+        )
+        doc.propose_move("x", author=BOT, container="l2", after="b", at=ts(2))
+        doc.propose_modify(
+            "l2", '<ul data-aim-container="l2"><li data-aim="a">A</li></ul>', author=BOT, at=ts(3)
+        )
+        return doc
+
+    def test_move_orders_before_the_anchor_dropping_modify(self, anchor_drop_lane):
+        from aimformat.document import resolution_order
+
+        actions = [p.action for p in resolution_order(anchor_drop_lane.proposals, anchor_drop_lane)]
+        assert actions == ["move", "modify"]
+
+    def test_accept_all_resolves_the_whole_lane(self, anchor_drop_lane):
+        from aimformat.document import resolution_order
+
+        for p in resolution_order(anchor_drop_lane.proposals, anchor_drop_lane):
+            anchor_drop_lane.accept(p.id, decided_by=ME, at=ts(4))
+        assert anchor_drop_lane.proposals == []
+        assert anchor_drop_lane.verify() == []
+
+    def test_dropped_destination_container_also_delays(self):
+        doc = aim.new_document(title="T")
+        doc.add_chunk(
+            '<ul data-aim-container="l1"><li data-aim="x">X</li></ul>', author=ME, at=ts(0)
+        )
+        doc.add_chunk(
+            '<ul data-aim-container="l2"><li data-aim="a">A'
+            '<ul data-aim-container="l3"><li data-aim="c">C</li></ul></li></ul>',
+            author=ME,
+            at=ts(1),
+        )
+        doc.propose_move("x", author=BOT, container="l3", at=ts(2))
+        doc.propose_modify(
+            "l2", '<ul data-aim-container="l2"><li data-aim="a">A</li></ul>', author=BOT, at=ts(3)
+        )
+        from aimformat.document import resolution_order
+
+        assert [p.action for p in resolution_order(doc.proposals, doc)] == ["move", "modify"]
+
+    def test_modify_keeping_the_anchor_stays_ahead(self):
+        doc = aim.new_document(title="T")
+        doc.add_chunk(
+            '<ul data-aim-container="l1"><li data-aim="x">X</li></ul>', author=ME, at=ts(0)
+        )
+        doc.add_chunk(
+            '<ul data-aim-container="l2"><li data-aim="a">A</li><li data-aim="b">B</li></ul>',
+            author=ME,
+            at=ts(1),
+        )
+        doc.propose_move("x", author=BOT, container="l2", after="b", at=ts(2))
+        doc.propose_modify(
+            "l2",
+            '<ul data-aim-container="l2"><li data-aim="a">A!</li><li data-aim="b">B</li></ul>',
+            author=BOT,
+            at=ts(3),
+        )
+        from aimformat.document import resolution_order
+
+        assert [p.action for p in resolution_order(doc.proposals, doc)] == ["modify", "move"]
+        for p in resolution_order(doc.proposals, doc):
+            doc.accept(p.id, decided_by=ME, at=ts(4))
+        written = doc._state.serial("l2") or ""
+        assert 'data-aim="x"' in written  # the move landed after the modify
+        assert doc.verify() == []

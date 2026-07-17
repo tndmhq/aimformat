@@ -171,9 +171,12 @@ def resolution_order(
     the delete. When *doc* is given, a container modify whose payload drops
     a member that a sibling card moves away waits for that move — the move
     rescues the member before its container is replaced, exactly as a
-    delete would wait; a modify whose payload keeps the member stays ahead
-    of the move (relocating first would make the payload re-introduce a
-    duplicate id). Shared by ``aim accept/reject --all`` and the exporters'
+    delete would wait; the same delay applies when the payload drops a
+    move's destination anchor or destination container (resolving the
+    modify first would strip the move's landing point and fail the lane).
+    A modify whose payload keeps the member stays ahead of the move
+    (relocating first would make the payload re-introduce a duplicate id).
+    Shared by ``aim accept/reject --all`` and the exporters'
     resolve-a-copy paths.
     """
     rank = {"move": 2, "delete": 4}
@@ -188,7 +191,15 @@ def resolution_order(
                 continue
             kept = _payload_ids(p.payload_html or "")
             inside = {i for e in node.iter() for i in (e.chunk_id, e.container_id) if i}
-            if any(mv.target in inside and mv.target not in kept for mv in moves):
+            # a move needs its target rescued AND its landing point intact:
+            # the modify waits when its payload drops the moved chunk, the
+            # move's destination anchor, or the destination container
+            if any(
+                affected in inside and affected not in kept
+                for mv in moves
+                for affected in (mv.target, mv.anchor_after, mv.anchor_container)
+                if affected
+            ):
                 after_moves.add(p.id)
     pending = list(proposals)
     order: list[Proposal] = []
