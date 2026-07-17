@@ -428,7 +428,9 @@ class TestPrintCssAndPdfHtml:
         out = tmp_path / "smoke.pdf"
         try:
             aim.to_pdf(basic_doc, out)
-        except RuntimeError as exc:  # chromium binary not installed
+        except RuntimeError as exc:
+            if "Chromium is not installed" not in str(exc):
+                raise  # a real to_pdf regression must fail, not skip
             pytest.skip(str(exc))
         data = out.read_bytes()
         assert data.startswith(b"%PDF")
