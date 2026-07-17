@@ -121,6 +121,36 @@ class TestHistoryIndex:
         # history, so smallest-unused allocation intentionally returns b2.
         assert index.next_batch == "b2"
 
+    def test_undo_redo_return_events_that_do_not_alias_the_cached_log(self):
+        # undo/redo build their inverse from a cached event; the returned
+        # Event is the caller's to keep, so mutating its nested objects must
+        # never corrupt the cached log out from under the JSONL.
+        doc = aim.new_document(title="T")
+        doc.add_chunk('<p data-aim="c1">One.</p>', author=BOT, at=ts(0))
+        doc.add_chunk('<p data-aim="c2">Two.</p>', author=BOT, at=ts(1))
+        doc.move_chunk("c1", author=ME, after="c2", at=ts(2))
+        doc.delete_chunk("c1", author=ME, at=ts(3))
+
+        def assert_cache_matches_jsonl():
+            raw = doc._state.script("history").raw
+            jsonl = [aim.Event.from_json(line).data for line in raw.split("\n") if line.strip()]
+            assert [e.data for e in doc.history] == jsonl
+            assert doc.verify() == []
+
+        undone_delete = doc.undo(author=ME, at=ts(4))  # inverse: add w/ anchor
+        undone_delete.data["anchor"]["container"] = "mutated-by-caller"
+        assert_cache_matches_jsonl()
+
+        redone = doc.redo(author=ME, at=ts(5))  # inverse of the cached undo
+        redone.data["anchor"]["container"] = "mutated-by-caller"
+        assert_cache_matches_jsonl()
+
+        doc.undo(author=ME, at=ts(6))  # cancel the redo again
+        undone_move = doc.undo(author=ME, at=ts(7))  # inverse: move w/ from/to
+        undone_move.data["from"]["after"] = "mutated-by-caller"
+        undone_move.data["to"]["container"] = "mutated-by-caller"
+        assert_cache_matches_jsonl()
+
 
 class TestVerify:
     def test_clean_lifecycle_verifies(self, lifecycle_doc):

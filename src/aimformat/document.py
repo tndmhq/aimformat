@@ -1914,6 +1914,9 @@ class AimDocument:
         return None
 
     def _inverse_data(self, ev: Event) -> dict:
+        # *ev* comes from the cached history index; nested objects lifted
+        # into the inverse are copied so the Event undo/redo hand back never
+        # aliases the cached log (the caller owns its return value).
         action, target = ev.action, ev.target
         if action == "modify":
             inv: dict = {"target": target, "action": "modify"}
@@ -1933,21 +1936,21 @@ class AimDocument:
                 "target": target,
                 "action": "delete",
                 "before": ev.applied_payload,
-                "anchor": ev.get("anchor"),
+                "anchor": deepcopy(ev.get("anchor")),
             }
         if action == "delete":
             return {
                 "target": target,
                 "action": "add",
                 "after": ev.get("before"),
-                "anchor": ev.get("anchor"),
+                "anchor": deepcopy(ev.get("anchor")),
             }
         if action == "move":
             return {
                 "target": target,
                 "action": "move",
-                "from": ev.get("to"),
-                "to": ev.get("from"),
+                "from": deepcopy(ev.get("to")),
+                "to": deepcopy(ev.get("from")),
             }
         raise HistoryError(f"cannot invert action {action!r}")
 
