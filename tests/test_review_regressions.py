@@ -2098,3 +2098,47 @@ class TestTweaksKeepTheCardsOwnNestedIds:
         )
         assert basic_doc.chunk("child").text == "tweaked"
         assert basic_doc.verify() == []
+
+
+class TestShellIdentityOnEveryTableAnchor:
+    """AF-12: destination anchors carried a shell only in the ``after is
+    None`` branch, no-op checks compared just (container, after), and
+    ``move_chunk`` exposed no shell — distinct first positions in
+    thead/tbody collapsed into one 'already at that position' and a
+    first-of-thead move was inexpressible."""
+
+    def test_concrete_row_anchor_records_its_shell(self, table_doc):
+        table_doc.add_chunk(
+            '<tr data-aim="r3"><td>3</td></tr>', author=ME, container="tbl", after="r1", at=ts(1)
+        )
+        assert table_doc.history[-1].get("anchor") == {
+            "after": "r1",
+            "container": "tbl",
+            "shell": "tbody",
+        }
+
+    def test_first_of_thead_move_is_expressible(self, table_doc):
+        table_doc.move_chunk("r1", author=ME, container="tbl", after=None, shell="thead", at=ts(1))
+        serial = table_doc._state.serial("tbl")
+        head = serial.index("<thead>"), serial.index("</thead>")
+        assert 'data-aim="r1"' in serial[head[0] : head[1]]
+        assert table_doc.verify() == []
+
+    def test_same_shell_first_position_is_still_a_noop(self, table_doc):
+        with pytest.raises(InvalidOperation):
+            table_doc.move_chunk("r1", author=ME, container="tbl", after=None, at=ts(1))
+
+    def test_wrong_shell_for_a_concrete_anchor_is_rejected(self, table_doc):
+        with pytest.raises(InvalidOperation):
+            table_doc.move_chunk(
+                "r2", author=ME, container="tbl", after="r1", shell="thead", at=ts(1)
+            )
+
+    def test_propose_move_distinguishes_shells(self, table_doc):
+        p = table_doc.propose_move(
+            "r1", author=BOT, container="tbl", after=None, shell="thead", at=ts(1)
+        )
+        table_doc.accept(p.id, decided_by=ME, at=ts(2))
+        serial = table_doc._state.serial("tbl")
+        assert serial.index('data-aim="r1"') < serial.index("</thead>")
+        assert table_doc.verify() == []

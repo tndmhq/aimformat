@@ -1022,8 +1022,15 @@ class AimDocument:
         return out
 
     def _resolve_end_anchor(
-        self, container: str, after: AnchorAfter, *, exclude: str | None = None
+        self,
+        container: str,
+        after: AnchorAfter,
+        *,
+        exclude: str | None = None,
+        shell: str | None = None,
     ) -> Anchor:
+        if shell is not None and shell not in REGISTRY.table_shells:
+            raise InvalidOperation(f"unknown table shell {shell!r}")
         if isinstance(after, _Last):
             if container == "body":
                 pool = self._state.constructs()
@@ -1042,13 +1049,43 @@ class AimDocument:
             if exclude is not None and after == exclude:
                 raise InvalidOperation(f"cannot anchor {exclude!r} after itself")
             anchor = Anchor(container, after)
-        if anchor.after is None and container != "body":
+        table = None
+        if container != "body":
             cont = self._state.container_node(container)
             if cont is not None and cont.tag == "table":
-                shells = [s.tag for s in cont.elements() if s.tag in REGISTRY.table_shells]
-                shell = "tbody" if "tbody" in shells else (shells[0] if shells else None)
-                # data rows default into the body section, not the header
-                anchor = Anchor(container, None, shell=shell)
+                table = cont
+        if table is None:
+            if shell is not None:
+                raise InvalidOperation("shell anchors apply only to table containers")
+            return anchor
+        if anchor.after is None:
+            if shell is not None:  # a caller-chosen first-of-shell position
+                if not any(s.tag == shell for s in table.elements()):
+                    raise TargetNotFound(f"shell <{shell}> not found in {container!r}")
+                return Anchor(container, None, shell=shell)
+            shells = [s.tag for s in table.elements() if s.tag in REGISTRY.table_shells]
+            # data rows default into the body section, not the header
+            default = "tbody" if "tbody" in shells else (shells[0] if shells else None)
+            return Anchor(container, None, shell=default)
+        # every table anchor carries its shell: distinct first positions in
+        # thead/tbody/tfoot must not collapse into one "same position"
+        row = next(
+            (
+                el
+                for el in table.iter()
+                if el is not table
+                and (el.chunk_id == anchor.after or el.container_id == anchor.after)
+            ),
+            None,
+        )
+        if row is not None:
+            parent = self._state._parent_of(row)
+            row_shell = parent.tag if parent.tag in REGISTRY.table_shells else None
+            if shell is not None and row_shell != shell:
+                raise InvalidOperation(
+                    f"anchor {anchor.after!r} sits in <{row_shell}>, not <{shell}>"
+                )
+            return Anchor(container, anchor.after, shell=row_shell)
         return anchor
 
     # -- direct edits -------------------------------------------------------------------
@@ -1179,15 +1216,18 @@ class AimDocument:
         author: Actor,
         container: str = "body",
         after: AnchorAfter = LAST,
+        shell: str | None = None,
         explanation: str | None = None,
         at: str | None = None,
     ) -> None:
+        """Move a chunk (direct edit). ``shell`` picks the row section
+        (thead/tbody/tfoot) for a first-position move in a table container."""
         _no_delete_move(cid, "move")
         if not self._state.exists(cid):
             raise TargetNotFound(f"no chunk {cid!r}")
         src = self._anchor_of(cid)
-        dst = self._resolve_end_anchor(container, after, exclude=cid)
-        if (src.container, src.after) == (dst.container, dst.after):
+        dst = self._resolve_end_anchor(container, after, exclude=cid, shell=shell)
+        if src == dst:  # full anchors: first-of-thead ≠ first-of-tbody
             raise InvalidOperation(f"move of {cid!r} is a no-op (already at that position)")
         self._state.move(cid, dst)
         data = {
@@ -1774,6 +1814,7 @@ class AimDocument:
         author: Actor,
         container: str,
         after: AnchorAfter = LAST,
+        shell: str | None = None,
         explanation: str | None = None,
         at: str | None = None,
     ) -> Proposal:
@@ -1781,11 +1822,11 @@ class AimDocument:
         if not self._state.exists(target):
             raise TargetNotFound(f"no chunk {target!r}")
         src = self._anchor_of(target)
-        anchor = self._resolve_end_anchor(container, after, exclude=target)
+        anchor = self._resolve_end_anchor(container, after, exclude=target, shell=shell)
         # mirror the direct move: reject no-ops (AIM-08) and validate the
         # destination container-scoped so the proposal can actually be
         # accepted (AIM-03)
-        if (src.container, src.after) == (anchor.container, anchor.after):
+        if src == anchor:  # full anchors: first-of-thead ≠ first-of-tbody
             raise InvalidOperation(f"move of {target!r} is a no-op (already at that position)")
         self._state.resolve_insert_point(anchor)
         cont_el = self._state.container_node(anchor.container)
