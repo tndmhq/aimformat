@@ -1648,6 +1648,41 @@ class TestReconcileHandlesWrappingContainers:
         assert repaired.verify() == []
         assert "P016" not in {finding.code for finding in aim.lint(repaired)}
 
+    def test_chained_add_ordered_before_its_anchor_is_revalidated(self):
+        """codex-pr15-p2-1: with the cards manually reordered dependent-first
+        (legal — card order carries no dependency meaning), the single
+        forward pass validated B while A was still pending, then rejected A
+        and rebound B to A's invalid concrete anchor AFTER B's own check had
+        run — reconcile returned with B carrying P016. The pass now iterates
+        to a fixpoint so no card order can leave a rebound anchor unchecked."""
+        doc = aim.new_document(title="T")
+        doc.add_chunk('<p data-aim="c1">alpha</p>', author=BOT, at=ts(0))
+        first = doc.propose_add(
+            '<p data-aim="a">A</p>', author=BOT, container="body", after="c1", at=ts(1)
+        )
+        second = doc.propose_add(
+            '<p data-aim="b">B</p>',
+            author=BOT,
+            container="body",
+            after=first.id,
+            at=ts(2),
+        )
+        sec = doc._state.section("aim-proposals")
+        sec.children = list(reversed(sec.children))
+        assert [p.id for p in doc.proposals] == [second.id, first.id]
+
+        wrapped = doc.dumps().replace(
+            '<p data-aim="c1">alpha</p>',
+            '<aim-slide data-aim-container="wrap"><p data-aim="c1">alpha</p></aim-slide>',
+        )
+        repaired = aim.loads(wrapped)
+        report = repaired.reconcile(at=ts(3))
+
+        assert sorted(report.rejected_proposals) == sorted([first.id, second.id])
+        assert repaired.proposals == []
+        assert repaired.verify() == []
+        assert "P016" not in {finding.code for finding in aim.lint(repaired)}
+
 
 class TestEveryAimCssBlockIsVerified:
     """AF-21: the X006 byte-match ran only when data-aim-css equalled the
