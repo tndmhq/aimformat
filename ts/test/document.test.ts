@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { AimDocument } from "../src/document.ts";
-import { AimParseError } from "../src/errors.ts";
+import { AimError, AimParseError } from "../src/errors.ts";
 
 const wrap = (body: string, head = ""): string =>
   `<!doctype html>
@@ -169,6 +169,31 @@ describe("AimDocument", () => {
       contentWidthMm: 190,
       contentHeightMm: 128,
     });
+  });
+
+  it("rejects explicit null page fields — only a missing property defaults", () => {
+    // Python parity: dict.get(key, default) falls back only on absence, so
+    // {"size": null} fails the type check (D003/D004) instead of silently
+    // reading as the registry default
+    const withDoc = (json: string): AimDocument =>
+      AimDocument.parse(
+        wrap(
+          '<p data-aim="c1">x</p>',
+          `<script type="application/aim-doc+json">\n${json}\n</script>\n`,
+        ),
+      );
+    expect(() => withDoc('{"page":{"size":null}}').pageSetup).toThrow(AimError);
+    expect(() => withDoc('{"page":{"orientation":null}}').pageSetup).toThrow(
+      AimError,
+    );
+    expect(() => withDoc('{"page":{"margins":null}}').pageSetup).toThrow(
+      AimError,
+    );
+    expect(
+      () => withDoc('{"page":{"margins":{"top":null}}}').pageSetup,
+    ).toThrow(AimError);
+    // but a null page object as a whole is "unset" in both implementations
+    expect(withDoc('{"page":null}').pageSetup.size).toBe("A4");
   });
 
   it("throws on a malformed meta cache only when accessed", () => {

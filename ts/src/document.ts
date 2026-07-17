@@ -120,9 +120,13 @@ function pageSetupFromObj(obj: unknown): PageSetup {
   if (typeof obj !== "object" || obj === null || Array.isArray(obj)) {
     throw new AimError("page setup must be a JSON object");
   }
+  // only a MISSING property falls back to the registry default (Python
+  // dict.get semantics); an explicit null is a grammar violation the type
+  // checks below must see, not silently paper over
   const page = obj as JsonObject;
-  const size = page["size"] ?? PAGE_DEFAULT.size;
-  const orientation = page["orientation"] ?? PAGE_DEFAULT.orientation;
+  const size = "size" in page ? page["size"] : PAGE_DEFAULT.size;
+  const orientation =
+    "orientation" in page ? page["orientation"] : PAGE_DEFAULT.orientation;
   if (typeof size !== "string" || !(size in PAGE_SIZES_MM)) {
     throw new AimError(`unknown page size ${JSON.stringify(size)}`);
   }
@@ -132,7 +136,7 @@ function pageSetupFromObj(obj: unknown): PageSetup {
   ) {
     throw new AimError(`unknown orientation ${JSON.stringify(orientation)}`);
   }
-  const rawMargins = page["margins"] ?? PAGE_DEFAULT.margins;
+  const rawMargins = "margins" in page ? page["margins"] : PAGE_DEFAULT.margins;
   if (
     typeof rawMargins !== "object" ||
     rawMargins === null ||
@@ -142,8 +146,8 @@ function pageSetupFromObj(obj: unknown): PageSetup {
   }
   const marginsMm = {} as Record<(typeof SIDES)[number], number>;
   for (const side of SIDES) {
-    const value =
-      (rawMargins as JsonObject)[side] ?? PAGE_DEFAULT.margins[side];
+    const margins = rawMargins as JsonObject;
+    const value = side in margins ? margins[side] : PAGE_DEFAULT.margins[side];
     if (typeof value !== "string" || !MARGIN_PATTERN.test(value)) {
       throw new AimError(
         `page margin ${side} ${JSON.stringify(value)} does not match the margin grammar`,
