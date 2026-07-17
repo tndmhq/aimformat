@@ -1706,3 +1706,39 @@ class TestCriticMarkupSurfacesPageSetupProposals:
         basic_doc.propose_theme({"--aim-brand-1": "#000000"}, author=BOT, at=ts(5))
         md = aim.to_markdown(basic_doc, pending="criticmarkup")
         assert "aim:theme" in md
+
+
+class TestCriticMarkupPayloadStructure:
+    """AF-43: ``_payload_md`` rendered tr/li payload roots via ``_inline``,
+    so the new side of ``{~~old~>new~~}`` fused a two-cell row into
+    'gammadelta' and dropped list markers — accepting the suggestion
+    corrupted the table/list."""
+
+    def test_row_replacement_keeps_cell_boundaries(self):
+        doc = aim.new_document(title="T")
+        doc.add_chunk(
+            '<table data-aim-container="tbl"><tbody>'
+            '<tr data-aim="r1"><td>alpha</td><td>beta</td></tr></tbody></table>',
+            author=ME,
+            at=ts(0),
+        )
+        doc.propose_modify(
+            "r1",
+            '<tr data-aim="r1"><td>gamma</td><td>delta</td></tr>',
+            author=BOT,
+            at=ts(1),
+        )
+        md = aim.to_markdown(doc, pending="criticmarkup")
+        assert "| gamma | delta |" in md
+        assert "gammadelta" not in md
+
+    def test_list_item_add_keeps_its_marker(self, rich_doc):
+        rich_doc.propose_add(
+            '<li data-aim="nli">Brand new item</li>',
+            author=BOT,
+            container="list",
+            after="li1",
+            at=ts(9),
+        )
+        md = aim.to_markdown(rich_doc, pending="criticmarkup")
+        assert "{++- Brand new item++}" in md

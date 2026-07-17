@@ -376,8 +376,15 @@ class _Renderer:
         frag = parse_html(proposal.payload_html)
         blocks: list[str] = []
         for node in frag.elements():
-            if node.tag in ("li", "tr"):
-                blocks.append(_inline(node))
+            if node.tag == "tr":  # keep cell boundaries: accepting the
+                cells = [  # suggestion must not fuse the row into one word
+                    _inline(td, in_table=True)
+                    for td in node.elements()
+                    if td.tag in ("td", "th")
+                ]
+                blocks.append("| " + " | ".join(cells) + " |")
+            elif node.tag == "li":
+                blocks.append("- " + _inline(node))
             else:
                 blocks.extend(self.block(node))
         return _neutralize_critic("\n\n".join(b for b in blocks if b))
