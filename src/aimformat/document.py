@@ -228,6 +228,23 @@ def resolution_order(
             }
             target_details[target] = (elements, moved_ids)
 
+        # A destination `after=` node is mutable state too. If another move
+        # relocates that node (directly or as part of a moved subtree), the
+        # anchored move must consume it first while it is still in the
+        # recorded destination container. Mutual anchors form a real cycle
+        # and are rejected by the same pre-mutation topological-sort path.
+        for anchored_sequence in move_sequences.values():
+            for anchored_move in anchored_sequence:
+                anchor_after = anchored_move.anchor_after
+                if anchor_after is None:
+                    continue
+                for relocating_target, relocating_sequence in move_sequences.items():
+                    _, relocating_ids = target_details[relocating_target]
+                    if anchor_after not in relocating_ids:
+                        continue
+                    for relocating_move in relocating_sequence:
+                        precedes(anchored_move.id, relocating_move.id)
+
         def destination_anchor_exists(container: Element, move: Proposal) -> bool:
             if move.anchor_after is None:
                 return move.anchor_shell is None or any(

@@ -33,6 +33,7 @@ class LaneSpec:
     retain_target: bool = False
     modify_kind: str = "ul"
     delete_ancestor: bool = False
+    mutual_anchor: bool = False
 
 
 @st.composite
@@ -47,6 +48,7 @@ def lane_specs(draw) -> LaneSpec:
                 "two_targets",
                 "reconciled_destination",
                 "move_delete",
+                "cross_target_anchor",
             ]
         )
     )
@@ -70,6 +72,12 @@ def lane_specs(draw) -> LaneSpec:
         return LaneSpec(family, keep_anchor=draw(st.booleans()))
     if family == "move_delete":
         return LaneSpec(family, delete_ancestor=draw(st.booleans()))
+    if family == "cross_target_anchor":
+        return LaneSpec(
+            family,
+            retain_target=draw(st.booleans()),
+            mutual_anchor=draw(st.booleans()),
+        )
     return LaneSpec(
         family,
         modify_kind=draw(st.sampled_from(["ul", "table"])),
@@ -191,7 +199,7 @@ def _build_lane(spec: LaneSpec) -> tuple[aim.AimDocument, dict[str, str | None],
         assert move_is_pending is (spec.modify_kind == "ul"), report.rejected_proposals
         if not move_is_pending:
             requested.clear()
-    else:
+    elif spec.family == "move_delete":
         doc.add_chunk(
             '<ul data-aim-container="l1"><li data-aim="x">TARGET-x</li></ul>',
             author=ME,
@@ -201,6 +209,40 @@ def _build_lane(spec: LaneSpec) -> tuple[aim.AimDocument, dict[str, str | None],
         doc.propose_move("x", author=BOT, container="l2", after="a", at=ts(2))
         doc.propose_delete("l2" if spec.delete_ancestor else "x", author=BOT, at=ts(3))
         requested["x"] = None
+    else:
+        doc.add_chunk(
+            '<ul data-aim-container="l1"><li data-aim="a">A</li></ul>',
+            author=ME,
+            at=ts(0),
+        )
+        doc.add_chunk(
+            '<ul data-aim-container="l2"><li data-aim="b">TARGET-b</li>'
+            '<li data-aim="c">C</li></ul>',
+            author=ME,
+            at=ts(1),
+        )
+        doc.add_chunk(
+            '<ul data-aim-container="l3"><li data-aim="d">TARGET-d</li></ul>',
+            author=ME,
+            at=ts(2),
+        )
+        doc.propose_move("b", author=BOT, container="l3", after="d", at=ts(3))
+        retained = '<li data-aim="b">TARGET-b</li>' if spec.retain_target else ""
+        doc.propose_modify(
+            "l2",
+            f'<ul data-aim-container="l2">{retained}<li data-aim="c">C changed</li></ul>',
+            author=BOT,
+            at=ts(4),
+        )
+        doc.propose_move(
+            "d",
+            author=BOT,
+            container="l2" if spec.mutual_anchor else "l1",
+            after="b" if spec.mutual_anchor else "a",
+            at=ts(5),
+        )
+        requested.update(b="l3", d="l2" if spec.mutual_anchor else "l1")
+        sentinels.update(["TARGET-b", "TARGET-d"])
 
     return doc, requested, sentinels
 
@@ -257,6 +299,8 @@ def _valid_order_exists(
 @example(spec=LaneSpec("reconciled_destination", modify_kind="ul"))
 @example(spec=LaneSpec("move_delete", delete_ancestor=False))
 @example(spec=LaneSpec("move_delete", delete_ancestor=True))
+@example(spec=LaneSpec("cross_target_anchor", retain_target=True))
+@example(spec=LaneSpec("cross_target_anchor", mutual_anchor=True))
 @given(spec=lane_specs())
 @settings(
     max_examples=60,

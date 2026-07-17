@@ -4092,6 +4092,86 @@ class TestMovePrecedencePerContainerModify:
             resolution_order(doc.proposals, doc)
 
 
+class TestMovesPrecedeCardsRelocatingTheirAnchors:
+    """codex-pr15-r6: move/modify edges covered only one modified subtree,
+    so a sibling move could relocate an `after=` node before the anchored
+    move used it. Accept-all then failed after partially resolving the lane."""
+
+    @pytest.fixture
+    def cross_target_anchor_lane(self):
+        doc = aim.new_document(title="T")
+        doc.add_chunk(
+            '<ul data-aim-container="l1"><li data-aim="a">A</li></ul>',
+            author=ME,
+            at=ts(0),
+        )
+        doc.add_chunk(
+            '<ul data-aim-container="l2"><li data-aim="b">B</li><li data-aim="c">C</li></ul>',
+            author=ME,
+            at=ts(1),
+        )
+        doc.add_chunk(
+            '<ul data-aim-container="l3"><li data-aim="d">D</li></ul>',
+            author=ME,
+            at=ts(2),
+        )
+        anchored = doc.propose_move("b", author=BOT, container="l3", after="d", at=ts(3))
+        modify = doc.propose_modify(
+            "l2",
+            '<ul data-aim-container="l2"><li data-aim="b">B retained</li>'
+            '<li data-aim="c">C changed</li></ul>',
+            author=BOT,
+            at=ts(4),
+        )
+        relocates_anchor = doc.propose_move("d", author=BOT, container="l1", after="a", at=ts(5))
+        return doc, anchored, modify, relocates_anchor
+
+    def test_anchored_move_runs_before_the_move_relocating_its_anchor(
+        self, cross_target_anchor_lane
+    ):
+        doc, anchored, modify, relocates_anchor = cross_target_anchor_lane
+        from aimformat.document import resolution_order
+
+        assert [p.id for p in resolution_order(doc.proposals, doc)] == [
+            modify.id,
+            anchored.id,
+            relocates_anchor.id,
+        ]
+
+    def test_accept_all_resolves_without_partial_failure(self, cross_target_anchor_lane):
+        doc, _, _, _ = cross_target_anchor_lane
+        from aimformat.document import resolution_order
+
+        for proposal in resolution_order(doc.proposals, doc):
+            doc.accept(proposal.id, decided_by=ME, at=ts(6))
+
+        assert doc.chunk("b").container == "l3"
+        assert doc.chunk("d").container == "l1"
+        assert doc.verify() == []
+        assert not [finding for finding in aim.lint(doc) if finding.level == "error"]
+
+    def test_mutual_move_anchors_reject_the_lane_before_mutation(self):
+        doc = aim.new_document(title="T")
+        doc.add_chunk(
+            '<ul data-aim-container="l2"><li data-aim="b">B</li></ul>',
+            author=ME,
+            at=ts(0),
+        )
+        doc.add_chunk(
+            '<ul data-aim-container="l3"><li data-aim="d">D</li></ul>',
+            author=ME,
+            at=ts(1),
+        )
+        doc.propose_move("b", author=BOT, container="l3", after="d", at=ts(2))
+        doc.propose_move("d", author=BOT, container="l2", after="b", at=ts(3))
+        before = doc.dumps()
+        from aimformat.document import resolution_order
+
+        with pytest.raises(aim.InvalidOperation, match="cyclic acceptance constraints"):
+            resolution_order(doc.proposals, doc)
+        assert doc.dumps() == before
+
+
 class TestOrderedMarkersInListItemModifications:
     """codex-r3-5 (completes the round-1 ordered-marker fix): additions
     got the live ordinal, but a modify proposal's replacement went through
