@@ -16,7 +16,9 @@ jobs:
         with:
           python-version: "3.12"
       - name: Install build frontend (pinned per repo convention)
-        run: pip install build==1.5.1
+        # 1.5.1 was yanked from PyPI ("considers breaking changes") —
+        # re-check yanked status whenever this pin is touched
+        run: pip install build==1.5.0
       - name: Build sdist and wheel
         run: python -m build
       - name: Assert the built version matches the release tag
