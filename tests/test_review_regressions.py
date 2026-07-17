@@ -1658,3 +1658,32 @@ class TestDocxSplitsGroupingBlocks:
         )
         texts = [text for _, text in self._paras(aim.to_docx(doc, tmp_path / "m.docx"))]
         assert "Lead-in text" in texts and "Body para." in texts
+
+
+class TestTrackedTableToListModify:
+    """AF-41: the table container-modify branch re-emitted the payload via
+    ``emit_table(new_el, force="ins")``, which early-returns when the root
+    has no ``<tr>`` — so a legal table→list replacement produced no w:ins
+    and no text at all."""
+
+    def test_list_payload_is_inserted(self, table_doc, tmp_path):
+        pytest.importorskip("docx")
+        import docx
+        from docx.oxml.ns import qn
+
+        table_doc.propose_modify(
+            "tbl",
+            '<ul data-aim-container="tbl"><li data-aim="a">one</li>'
+            '<li data-aim="b">two</li></ul>',
+            author=BOT,
+            at=ts(1),
+        )
+        out = aim.to_docx(table_doc, tmp_path / "l.docx")
+        d = docx.Document(str(out))
+        inserted = "".join(
+            t.text or "" for w in d.element.body.iter(qn("w:ins")) for t in w.iter(qn("w:t"))
+        )
+        assert "one" in inserted and "two" in inserted
+        deleted = [t.text for t in d.element.body.iter(qn("w:delText"))]
+        for text in ("K", "1", "2"):
+            assert text in deleted

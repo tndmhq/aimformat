@@ -466,8 +466,10 @@ class _Exporter:
             if prop is not None:
                 self.emit_table(el, force="del", prop=prop)
                 if prop.action == "modify":
-                    for new_el in self._payload_elements(prop):
-                        self.emit_table(new_el, force="ins", prop=prop)
+                    # dispatch each payload root by its own tag: a legal
+                    # table→list replacement has no <tr> and emit_table
+                    # would drop it silently
+                    self._emit_add_paragraphs(prop)
             else:
                 self.emit_table(el)
         elif prop is not None:
