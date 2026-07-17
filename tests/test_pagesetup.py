@@ -228,10 +228,18 @@ class TestPageBreakChunk:
         assert basic_doc.verify() == []
 
     def test_break_inside_container_is_d006(self, rich_doc):
-        rich_doc.add_chunk(
-            "<aim-page-break></aim-page-break>", author=ME, container="list", at=ts(20)
+        # the write path refuses illegal container members outright (AF-03);
+        # the D006 diagnostic must still fire on hand-authored text
+        with pytest.raises(InvalidOperation):
+            rich_doc.add_chunk(
+                "<aim-page-break></aim-page-break>", author=ME, container="list", at=ts(20)
+            )
+        text = rich_doc.dumps().replace(
+            '<li data-aim="li1">First</li>',
+            '<li data-aim="li1">First</li>'
+            '<aim-page-break data-aim="pbx"></aim-page-break>',
         )
-        codes = {f.code for f in aim.lint_text(rich_doc.dumps())}
+        codes = {f.code for f in aim.lint_text(text)}
         assert "D006" in codes
 
 

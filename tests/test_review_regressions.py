@@ -984,7 +984,9 @@ class TestMoveStaysOutOfItsOwnSubtree:
         assert nested_doc.verify() == []
 
     def test_accepting_a_self_move_proposal_fails_closed(self, nested_doc):
-        p = nested_doc.propose_move("s1", author=BOT, container="l2", at=ts(2))
+        # an aim-slide destination passes the item-carrier guard (slides
+        # take any member), so this reaches the accept-time self-move check
+        p = nested_doc.propose_move("s1", author=BOT, container="s1", at=ts(2))
         before = nested_doc.dumps()
         with pytest.raises(InvalidOperation):
             nested_doc.accept(p.id, decided_by=ME, at=ts(3))
@@ -1063,3 +1065,79 @@ class TestAcceptedAddValidatesItsPayload:
         ev = basic_doc.accept(p.id, decided_by=ME, at=ts(11))
         assert ev.get("applied") is None
         assert basic_doc.verify() == []
+
+
+class TestContainersHoldOnlyItemCarriers:
+    """AF-03: a non-item chunk (e.g. <p data-aim>) inside a list/table
+    container linted clean — S022 fired only for item carriers in the WRONG
+    container kind — and every write path (add/move/modify/accept) let one
+    in. Item-aware consumers can't see such a member: an editor hides it,
+    then the next container-level write destroys it."""
+
+    def test_p_chunk_inside_ul_is_S022(self, rich_doc):
+        text = rich_doc.dumps().replace(
+            '<li data-aim="li1">First</li>',
+            '<li data-aim="li1">First</li><p data-aim="px">hidden</p>',
+        )
+        assert "S022" in {f.code for f in aim.lint_text(text)}
+
+    def test_wrong_kind_item_carrier_still_fires_S022(self, rich_doc):
+        text = rich_doc.dumps().replace(
+            '<li data-aim="li1">First</li>',
+            '<li data-aim="li1">First</li><tr data-aim="trx"><td>x</td></tr>',
+        )
+        assert "S022" in {f.code for f in aim.lint_text(text)}
+
+    def test_add_chunk_rejects_non_item_member(self, rich_doc):
+        with pytest.raises(InvalidOperation):
+            rich_doc.add_chunk('<p data-aim="px">bad</p>', author=ME, container="list", at=ts(20))
+        assert rich_doc.verify() == []
+
+    def test_move_chunk_rejects_non_item_member(self, rich_doc):
+        before = rich_doc.dumps()
+        with pytest.raises(InvalidOperation):
+            rich_doc.move_chunk("intro", author=ME, container="list", at=ts(20))
+        assert rich_doc.dumps() == before
+        assert rich_doc.verify() == []
+
+    def test_modify_cannot_swap_item_for_non_item(self, rich_doc):
+        with pytest.raises(InvalidOperation):
+            rich_doc.modify_chunk("li1", '<p data-aim="li1">now a para</p>', author=ME, at=ts(20))
+        assert rich_doc.verify() == []
+
+    def test_propose_paths_reject_at_creation(self, rich_doc):
+        with pytest.raises(InvalidOperation):
+            rich_doc.propose_add('<p data-aim="px">bad</p>', author=BOT, container="list", at=ts(20))
+        with pytest.raises(InvalidOperation):
+            rich_doc.propose_move("intro", author=BOT, container="list", at=ts(21))
+
+    def test_hand_authored_add_card_fails_closed_at_accept(self, rich_doc):
+        card = (
+            '<aim-proposal id="p-handmade" data-action="add" '
+            'data-anchor-container="list" data-anchor-after="li1" '
+            f'data-at="{ts(20)}" data-author="human" data-author-id="eve">'
+            '<template><p data-aim="px">bad</p></template></aim-proposal>'
+        )
+        text = rich_doc.dumps().replace(
+            "<aim-proposals>", f"<aim-proposals>\n{card}", 1
+        )
+        if "<aim-proposals>" not in text:
+            text = rich_doc.dumps().replace(
+                "</body>", f"<aim-proposals>\n{card}\n</aim-proposals>\n</body>"
+            )
+        doc = aim.loads(text)
+        with pytest.raises(InvalidOperation):
+            doc.accept("p-handmade", decided_by=ME, at=ts(21))
+        assert doc.verify() == []
+
+    def test_legal_item_writes_still_work(self, rich_doc):
+        rich_doc.add_chunk('<li data-aim="li9">new item</li>', author=ME, container="list", at=ts(20))
+        rich_doc.add_chunk(
+            '<tr data-aim="row9"><td>gamma</td><td>3</td></tr>',
+            author=ME,
+            container="tbl",
+            at=ts(21),
+        )
+        rich_doc.move_chunk("li9", author=ME, container="list", after=None, at=ts(22))
+        assert rich_doc.verify() == []
+        assert not [f for f in aim.lint(rich_doc) if f.level == "error"]

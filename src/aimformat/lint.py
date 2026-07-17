@@ -360,8 +360,12 @@ class _Linter:
                         )
                 continue
             if child.chunk_id:
-                expected = REGISTRY.item_carriers.get(child.tag)
-                if expected is not None and cont.tag not in expected:
+                # every direct member must be a legal item carrier for THIS
+                # container kind — not merely "not an item carrier of some
+                # other kind": a <p data-aim> in a <ul> is just as illegal
+                # as a <tr>, and item-aware consumers cannot see it
+                legal = [t for t, cs in REGISTRY.item_carriers.items() if cont.tag in cs]
+                if legal and child.tag not in legal:
                     self.add(
                         "S022", ERROR, f"<{child.tag}> chunk inside <{cont.tag}> container", cid
                     )

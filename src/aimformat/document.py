@@ -354,11 +354,29 @@ class DocState:
             )
         return parent, parent.children.index(members[-1]) + 1
 
+    def _guard_item_members(self, parent: Element, nodes: list[Element]) -> None:
+        """List/table containers hold only their item carriers (S022): any
+        other member is invisible to item-aware consumers — an editor hides
+        it, then the next container-level write destroys it."""
+        cont = parent
+        if cont.tag in REGISTRY.table_shells:
+            cont = self._parent_of(cont)
+        legal = [t for t, cs in REGISTRY.item_carriers.items() if cont.tag in cs]
+        if not legal:
+            return
+        bad = next((n for n in nodes if n.tag not in legal), None)
+        if bad is not None:
+            raise InvalidOperation(
+                f"<{bad.tag}> cannot be a direct member of <{cont.tag}> "
+                f"container {cont.container_id!r} (expects <{'>/<'.join(legal)}>)"
+            )
+
     def insert(self, markup: str, anchor: Anchor) -> None:
         nodes = [n for n in parse_fragment(markup) if isinstance(n, Element)]
         if not nodes:
             raise InvalidOperation("empty insert payload")
         parent, idx = self.resolve_insert_point(anchor)
+        self._guard_item_members(parent, nodes)
         parent.children[idx:idx] = nodes
 
     def remove(self, target: str) -> str:
@@ -395,16 +413,20 @@ class DocState:
         cont = self.container_node(target)
         if cont is not None and cont is not self.body:
             parent = self._parent_of(cont)
+            nodes = parse_fragment(markup)
+            self._guard_item_members(parent, [n for n in nodes if isinstance(n, Element)])
             idx = parent.children.index(cont)
-            parent.children[idx : idx + 1] = parse_fragment(markup)
+            parent.children[idx : idx + 1] = nodes
             return
         parent, members = self.find_chunk(target)
         if not members:
             raise TargetNotFound(f"cannot replace {target!r}: not found")
+        nodes = parse_fragment(markup)
+        self._guard_item_members(parent, [n for n in nodes if isinstance(n, Element)])
         idx = parent.children.index(members[0])
         for m in members:
             parent.children.remove(m)
-        parent.children[idx:idx] = parse_fragment(markup)
+        parent.children[idx:idx] = nodes
 
     def _target_elements(self, target: str) -> list[tuple[Element, Element]]:
         """(parent, element) pairs for a target, in remove()'s lookup order."""
@@ -1661,6 +1683,13 @@ class AimDocument:
         at: str | None = None,
     ) -> Proposal:
         _, payload = self._normalize_payload(markup)
+        # container-membership check at creation time, so the card is not
+        # doomed to fail at accept (same contract as the direct add)
+        cont_el = self._state.container_node(container)
+        if cont_el is not None:
+            self._state._guard_item_members(
+                cont_el, [n for n in parse_fragment(payload) if isinstance(n, Element)]
+            )
         if isinstance(after, str) and ids.is_valid_proposal_id(after):
             pending = {p.id: p for p in self.proposals if p.action == "add"}
             if after not in pending:
@@ -1740,6 +1769,11 @@ class AimDocument:
         if (src.container, src.after) == (anchor.container, anchor.after):
             raise InvalidOperation(f"move of {target!r} is a no-op (already at that position)")
         self._state.resolve_insert_point(anchor)
+        cont_el = self._state.container_node(anchor.container)
+        if cont_el is not None:
+            self._state._guard_item_members(
+                cont_el, [el for _, el in self._state._target_elements(target)]
+            )
         return self._new_card(
             action="move",
             author=author,
