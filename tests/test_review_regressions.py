@@ -2345,3 +2345,23 @@ class TestDuplicateAttributesResolveFirstWins:
         doc = aim.AimDocument.loads(text)
         assert 'data-aim="intro"' in doc.dumps()
         assert 'data-aim="other"' not in doc.dumps()
+
+
+class TestWrongMarkerStrippedFromEveryRunMember:
+    """AF-20: the honored-id branch of ``_normalize_payload`` gated the
+    wrong-marker cleanup on the FIRST run member only — a dual-marked
+    second member survived, and a single public ``add_chunk`` wrote a
+    document its own linter rejects (S025/S019/V003/H006)."""
+
+    def test_dual_marked_second_member_is_cleaned(self, rich_doc):
+        rich_doc.add_chunk(
+            '<li data-aim="x9">part one</li>'
+            '<li data-aim="x9" data-aim-container="x9">part two</li>',
+            author=ME,
+            container="list",
+            at=ts(9),
+        )
+        text = rich_doc.dumps()
+        assert 'data-aim-container="x9"' not in text
+        assert not [f for f in aim.lint_text(text) if f.level == "error"]
+        assert rich_doc.verify() == []

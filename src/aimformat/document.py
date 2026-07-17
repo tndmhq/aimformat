@@ -956,7 +956,10 @@ class AimDocument:
                     n.set(marker, new)
                 payload_id = new
             else:
-                if first.get(wrong) is not None:
+                # ANY member carrying the wrong marker taints the run — the
+                # first member alone would let a dual-marked second member
+                # write a document the linter rejects (S025/S019/V003/H006)
+                if any(n.get(wrong) is not None for n in nodes):
                     for n in nodes:
                         n.remove_attr(wrong)
                         n.set(marker, payload_id)
