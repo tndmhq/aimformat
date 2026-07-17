@@ -180,30 +180,34 @@ def resolution_order(
     If that delayed modify also owns the move's destination and omits the
     incoming chunk, neither order is safe: accepting the whole lane is
     refused before any proposal mutates the document. A target moved more
-    than once is judged by its LAST pending move — moves execute in card
-    order, so earlier hops are transient and only the final destination can
-    collide with the replacement. A modify whose payload
-    keeps the member stays ahead of the move (relocating first would make the
-    payload re-introduce a duplicate id). Only a move that REQUIRES a modify
-    to wait (a rescued member, a stripped landing point) can collide with
-    THAT modify's replacement — the relationship is per (move, modify)
-    pair, so a move forcing one modify still schedules after an unrelated
-    modify it merely lands in, and forcing/landing chains interleave
-    (move → modify → move → modify). Set *accepting* false when ordering a
-    reject-all operation, where these write conflicts do not apply. Shared
-    by ``aim accept/reject --all`` and the exporters' resolve-a-copy paths.
+    than once is judged by its LAST pending move for the final destination,
+    but its whole move sequence shares each precedence constraint so a
+    replacement can never split the hops and erase the target between them.
+    A modify whose payload keeps the member stays ahead of the move
+    (relocating first would make the payload re-introduce a duplicate id).
+    Only a move sequence that REQUIRES a modify to wait (a rescued member, a
+    stripped landing point) can collide with THAT modify's replacement — the
+    relationship is per (move sequence, modify) pair, so a move forcing one
+    modify still schedules after an unrelated modify it merely lands in, and
+    forcing/landing chains interleave (move → modify → move → modify). Set
+    *accepting* false when ordering a reject-all operation, where these write
+    conflicts do not apply. Shared by ``aim accept/reject --all`` and the
+    exporters' resolve-a-copy paths.
     """
     rank = {"move": 2, "delete": 5}
     tier: dict[str, int] = {}  # chain-aware ranks for delayed modifies + landing moves
     conflicts: list[tuple[Proposal, Proposal]] = []
     if doc is not None:
         moves = [p for p in proposals if p.action == "move" and p.target]
-        # moves execute in card order (the rank sort is stable), so for a
-        # target moved more than once only the LAST card decides where it
-        # finally lands when the delayed modify runs
-        final_move = {mv.target: mv for mv in moves}
+        # Moves of one target execute in card order. Give every hop the same
+        # precedence edges so a modify can never split the sequence.
+        move_sequences: dict[str, list[Proposal]] = {}
+        for mv in moves:
+            assert mv.target is not None
+            move_sequences.setdefault(mv.target, []).append(mv)
+        final_move = {target: sequence[-1] for target, sequence in move_sequences.items()}
         forced_by: dict[str, set[str]] = {}  # delayed modify id -> move ids forcing it
-        landing: list[tuple[Proposal, Proposal]] = []  # (final move, delayed modify)
+        landing: list[tuple[str, Proposal, Proposal]] = []  # target, final move, modify
         for p in proposals:
             if p.action != "modify" or not p.target or not moves:
                 continue
@@ -215,33 +219,37 @@ def resolution_order(
             # a move needs its target rescued AND its landing point intact:
             # the modify waits when its payload drops the moved chunk, the
             # move's destination anchor, or the destination container
-            forcing = {
-                mv.id
-                for mv in moves
-                for affected in (mv.target, mv.anchor_after, mv.anchor_container)
-                if affected and affected in inside and affected not in kept
+            forcing_targets = {
+                target
+                for target, sequence in move_sequences.items()
+                if any(
+                    affected and affected in inside and affected not in kept
+                    for mv in sequence
+                    for affected in (mv.target, mv.anchor_after, mv.anchor_container)
+                )
             }
-            if not forcing:
+            if not forcing_targets:
                 continue
-            forced_by[p.id] = forcing
+            forced_by[p.id] = {mv.id for target in forcing_targets for mv in move_sequences[target]}
             if accepting:
                 # the replacement erases a moved chunk only when its FINAL
-                # destination sits inside the replaced subtree — an earlier
-                # move into it is harmless if a later card moves on
-                for mv in final_move.values():
+                # destination sits inside the replaced subtree; the sequence
+                # constraints keep every earlier hop on the same side
+                for target, mv in final_move.items():
                     if mv.anchor_container in inside and mv.target not in kept:
-                        landing.append((mv, p))
-        # a landing move conflicts only with a delayed modify IT forced to
-        # wait (must-run-before plus would-be-erased is unsatisfiable) —
-        # judged per pair, so forcing an unrelated modify does not poison
-        # this one; every other landing move simply trails the replacement
-        # and lands in the new payload
+                        landing.append((target, mv, p))
+        # A landing sequence conflicts only with a delayed modify IT forced
+        # to wait (must-run-before plus would-be-erased is unsatisfiable) —
+        # judged per pair, so forcing an unrelated modify does not poison this
+        # one; every other inbound sequence trails the replacement as a unit
+        # and lands in the new payload.
         trails: dict[str, set[str]] = {}  # move id -> delayed modify ids it lands in
-        for mv, p in landing:
+        for target, mv, p in landing:
             if mv.id in forced_by[p.id]:
                 conflicts.append((mv, p))
             else:
-                trails.setdefault(mv.id, set()).add(p.id)
+                for hop in move_sequences[target]:
+                    trails.setdefault(hop.id, set()).add(p.id)
         # longest-path tiers: each delayed modify runs after the moves that
         # force it, each landing move after the modifies it lands in — a
         # chain like move z → modify l2 → move x → modify l1 interleaves

@@ -9,6 +9,7 @@ required to add entries.)
 
 | Date | Type | Entry | Status | What |
 |---|---|---|---|---|
+| 2026-07-17 18:47 | plan | [pr15-p1-repeated-moves-before-erasing-modify](2026-07-17_1847_plan_pr15-p1-repeated-moves-before-erasing-modify.md) | done | Keep every hop in a repeated-move chain ahead of container modifies that would erase the target |
 | 2026-07-17 18:06 | plan | [pr15-p1-per-pair-precedence-and-move-cycle-guard](2026-07-17_1806_plan_pr15-p1-per-pair-precedence-and-move-cycle-guard.md) | done | Fix two Codex P1s: per-(move,modify) precedence in resolution_order; self-subtree guard for reconciled moves |
 | 2026-07-17 17:42 | plan | [pr15-r2-inbound-moves-trail-modify](2026-07-17_1742_plan_pr15-r2-inbound-moves-trail-modify.md) | done | Schedule unrelated inbound moves after a delayed container modify instead of refusing the lane (Codex PR #15 round-2 P2) |
 | 2026-07-17 17:16 | plan | [pr15-p2-postmerge-fixes](2026-07-17_1716_plan_pr15-p2-postmerge-fixes.md) | done | Fix four Codex P2 findings on PR #15: reject-dangling fixpoint for reordered chained adds; final-location-aware move/modify conflict detection; outer-row-only proposed table widths; member-guard revalidation for reconciled move destinations |

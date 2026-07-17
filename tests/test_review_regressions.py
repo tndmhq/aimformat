@@ -3637,7 +3637,10 @@ class TestLaterMovesClearEarlierMoveConflicts:
     omitting x flagged the FIRST move — even though ordered execution (both
     moves before the modify) leaves x safely in l3. The conflict now
     evaluates each move target's final destination across the whole pending
-    move sequence."""
+    move sequence. Codex PR #15's follow-up found that precedence must also
+    apply to the whole sequence: otherwise a delayed modify can split two
+    hops, erase the target, and make the later hop fail after partial
+    mutation."""
 
     @pytest.fixture
     def rescued_lane(self):
@@ -3704,6 +3707,31 @@ class TestLaterMovesClearEarlierMoveConflicts:
 
         with pytest.raises(aim.InvalidOperation, match="would erase moved chunk 'x'"):
             resolution_order(doc.proposals, doc)
+
+    def test_repeated_moves_are_rejected_before_erasing_modify_mutates(self):
+        doc = aim.new_document(title="T")
+        doc.add_chunk(
+            '<ul data-aim-container="l1"><li data-aim="x">X</li></ul>',
+            author=ME,
+            at=ts(0),
+        )
+        doc.add_chunk(
+            '<ul data-aim-container="l2"><li data-aim="a">A</li></ul>',
+            author=ME,
+            at=ts(1),
+        )
+        doc.propose_move("x", author=BOT, container="l2", after="a", at=ts(2))
+        doc.propose_move("x", author=BOT, container="l2", after=None, at=ts(3))
+        doc.propose_modify("l2", '<ul data-aim-container="l2"></ul>', author=BOT, at=ts(4))
+        from aimformat.document import resolution_order
+
+        before = doc.dumps()
+        with pytest.raises(aim.AimError) as exc_info:
+            for proposal in resolution_order(doc.proposals, doc):
+                doc.accept(proposal.id, decided_by=ME, at=ts(5))
+        assert doc.dumps() == before
+        assert isinstance(exc_info.value, aim.InvalidOperation)
+        assert "would erase moved chunk 'x'" in str(exc_info.value)
 
 
 class TestInboundMovesTrailTheDelayedModify:
