@@ -798,6 +798,14 @@ class _Exporter:
         # row-adds only after the content loop: inserting rows mid-loop would
         # shift the (ri, ci) coordinates the loop and the merges rely on
         orig_trs = [r._tr for r in table.rows]  # 1:1 with the AIM rows
+        if force and prop is not None:
+            # container-level tracked change: the table STRUCTURE itself is
+            # pending, not just its text — without trPr markers, accepting
+            # the revisions in Word leaves an empty grid behind (del) and
+            # rejecting an added table strands one (ins)
+            mark = self.rev.row_dele if force == "del" else self.rev.row_ins
+            for tr in orig_trs:
+                mark(tr, _actor_label(prop.author), prop.at)
         for ri in sorted(structural_del):
             prop_mod = self.pending_mod[rows[ri].chunk_id or ""]
             self.rev.row_dele(orig_trs[ri], _actor_label(prop_mod.author), prop_mod.at)

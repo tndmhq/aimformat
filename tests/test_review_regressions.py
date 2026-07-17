@@ -1922,6 +1922,83 @@ class TestStructuralReplacementRecreatesSpans:
         )
 
 
+class TestTrackedTableContainerTracksItsStructure:
+    """codex-r2-6 (refines codex-3/AF-39): a pending delete or modify of a
+    TABLE container only wrapped each cell's text in run-level w:del — the
+    rows carried no structural deletion, so accepting the revisions in Word
+    left an empty grid behind (and a table modify left that grid alongside
+    the inserted replacement). The container-level force passes now mark
+    every row: del on the old grid, ins on an inserted one."""
+
+    @pytest.fixture
+    def table_doc(self):
+        doc = aim.new_document(title="T")
+        doc.add_chunk(
+            '<table data-aim-container="tbl">'
+            '<thead><tr data-aim="h"><th>K</th><th>V</th></tr></thead>'
+            '<tbody><tr data-aim="r1"><td>A</td><td>B</td></tr></tbody></table>',
+            author=ME,
+            at=ts(0),
+        )
+        return doc
+
+    @staticmethod
+    def _row_marks(path, tag):
+        import docx
+        from docx.oxml.ns import qn
+
+        out = []
+        for tbl in docx.Document(str(path)).tables:
+            rows = tbl._tbl.findall(qn("w:tr"))
+            out.append(
+                [
+                    (pr := r.find(qn("w:trPr"))) is not None and pr.find(qn(tag)) is not None
+                    for r in rows
+                ]
+            )
+        return out
+
+    def test_container_delete_marks_every_row_deleted(self, table_doc, tmp_path):
+        pytest.importorskip("docx")
+        table_doc.propose_delete("tbl", author=BOT, at=ts(1))
+        out = aim.to_docx(table_doc, tmp_path / "del.docx")
+        assert self._row_marks(out, "w:del") == [[True, True]]
+
+    def test_container_modify_deletes_old_grid_and_inserts_the_new(self, table_doc, tmp_path):
+        pytest.importorskip("docx")
+        table_doc.propose_modify(
+            "tbl",
+            '<table data-aim-container="tbl"><tbody>'
+            '<tr data-aim="n1"><td>X</td></tr></tbody></table>',
+            author=BOT,
+            at=ts(1),
+        )
+        out = aim.to_docx(table_doc, tmp_path / "mod.docx")
+        assert self._row_marks(out, "w:del") == [[True, True], [False]]
+        assert self._row_marks(out, "w:ins") == [[False, False], [True]]
+
+    def test_pending_table_add_marks_its_rows_inserted(self, tmp_path):
+        pytest.importorskip("docx")
+        doc = aim.new_document(title="T")
+        doc.add_chunk('<p data-aim="a">before</p>', author=ME, at=ts(0))
+        doc.propose_add(
+            '<table data-aim-container="t2"><tbody>'
+            '<tr data-aim="n1"><td>X</td></tr></tbody></table>',
+            author=BOT,
+            container="body",
+            after="a",
+            at=ts(1),
+        )
+        out = aim.to_docx(doc, tmp_path / "add.docx")
+        assert self._row_marks(out, "w:ins") == [[True]]
+
+    def test_resolve_modes_still_export(self, table_doc, tmp_path):
+        pytest.importorskip("docx")
+        table_doc.propose_delete("tbl", author=BOT, at=ts(1))
+        assert aim.to_docx(table_doc, tmp_path / "acc.docx", pending="accept-all").exists()
+        assert aim.to_docx(table_doc, tmp_path / "rej.docx", pending="reject-all").exists()
+
+
 class TestDocxSplitsGroupingBlocks:
     """AF-40: ``_block_children`` unpacked only section/slides, so a
     div/blockquote fell through whole to one ``add_paragraph`` whose
