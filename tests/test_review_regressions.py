@@ -2206,3 +2206,32 @@ class TestEventValidationIsTypeStrict:
     def test_real_utc_instant_still_passes(self):
         assert self._event().validate() == []
         assert self._event(t="2024-02-29T23:59:59Z").validate() == []  # leap day
+
+
+class TestChunkModifyRequiresBefore:
+    """AF-15: a chunk ``modify`` event needed only ``after``, so with no
+    ``before`` the inverse walk fell through silently and ``state_at``
+    reconstructed the post-modify content as the past — fabricated history
+    with no diagnostic once the original add was pruned."""
+
+    def _doc_with_strippable_modify(self, basic_doc):
+        basic_doc.modify_chunk(
+            "intro", '<p data-aim="intro">Rewritten.</p>', author=ME, at=ts(5)
+        )
+        text = basic_doc.dumps()
+        line_re = re.compile(r'\{[^\n]*"action":"modify"[^\n]*"target":"intro"[^\n]*\}')
+        line = line_re.search(text).group(0)
+        stripped = re.sub(r'"before":"(?:[^"\\]|\\.)*",', "", line, count=1)
+        return text.replace(line, stripped)
+
+    def test_validate_flags_the_stripped_event(self, basic_doc):
+        from aimformat.events import Event
+
+        text = self._doc_with_strippable_modify(basic_doc)
+        doc = aim.AimDocument.loads(text)
+        ev = next(e for e in doc.history if e.action == "modify" and e.target == "intro")
+        assert Event(ev.data).validate()  # non-empty: 'before' is required
+
+    def test_lint_reports_the_gap(self, basic_doc):
+        text = self._doc_with_strippable_modify(basic_doc)
+        assert "H003" in {f.code for f in aim.lint_text(text)}

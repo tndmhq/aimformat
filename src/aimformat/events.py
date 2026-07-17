@@ -228,9 +228,14 @@ class Event:
                 require("after", "add direct edit")
             elif act == "modify":
                 # a theme/settings removal (undo of the block's introduction)
-                # legitimately carries no 'after'; every other modify must
+                # legitimately carries no 'after', and the block's own
+                # introduction no 'before'; every other modify needs both
+                # (§6.6) — without 'before' the inverse is a silent no-op
+                # and state_at reconstructs the post-modify content as the
+                # past
                 if self.data.get("target") not in ("aim:theme", "aim:doc"):
                     require("after", "modify direct edit")
+                    require("before", "modify direct edit")
             elif act == "delete":
                 require("before", "delete direct edit")
                 require("anchor", "delete direct edit")
