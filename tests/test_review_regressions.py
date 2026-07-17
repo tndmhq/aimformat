@@ -1194,3 +1194,43 @@ class TestResolutionOrderProtectsAnchors:
             doc.accept(p.id, decided_by=ME, at=ts(3))
         assert doc.body_ids == ["n1"]
         assert doc.verify() == []
+
+
+class TestPruneFlattenKeepBurnedIds:
+    """AF-05: prune()/flatten() dropped the only record of burned ids, so a
+    later write re-honored a previously seen id — an external reference to
+    the old id then aliases unrelated content while verify() stays clean
+    (spec §4.4: an id is never reused within a document lifetime)."""
+
+    def _doc(self):
+        doc = aim.new_document(title="T")
+        doc.add_chunk('<p data-aim="victim">to be deleted</p>', author=BOT, at=ts(0))
+        doc.add_chunk('<p data-aim="keeper">stays</p>', author=BOT, at=ts(1))
+        doc.delete_chunk("victim", author=ME, at=ts(2))
+        doc.checkpoint("cut", at=ts(3))
+        doc.modify_chunk("keeper", '<p data-aim="keeper">stays!</p>', author=ME, at=ts(4))
+        return doc
+
+    def test_pruned_burned_id_is_not_rehonored(self):
+        doc = self._doc()
+        doc.prune(before="cut")
+        # the burn record left the retained log…
+        assert all(e.get("target") != "victim" for e in doc.history)
+        # …but the id must still mint fresh, not alias the old reference
+        c = doc.add_chunk('<p data-aim="victim">impostor</p>', author=BOT, at=ts(5))
+        assert c.id != "victim"
+        assert doc.verify() == []
+
+    def test_flattened_burned_id_is_not_rehonored(self):
+        doc = self._doc()
+        doc.flatten()
+        c = doc.add_chunk('<p data-aim="victim">impostor</p>', author=BOT, at=ts(5))
+        assert c.id != "victim"
+        assert doc.verify() == []
+
+    def test_pending_card_still_accepts_after_prune(self):
+        doc = self._doc()
+        p = doc.propose_add('<p data-aim="pnew">proposed</p>', author=BOT, at=ts(5))
+        doc.prune(before="cut")
+        doc.accept(p.id, decided_by=ME, at=ts(6))
+        assert "pnew" in doc.body_ids

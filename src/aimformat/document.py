@@ -563,6 +563,9 @@ class AimDocument:
         self._fragment = fragment
         self._state = DocState(html)
         self._batch: str | None = None
+        # burned ids whose burn record left the retained log (prune/flatten)
+        # — kept for this instance's lifetime so they are never re-honored
+        self._burned: set[str] = set()
 
     # -- constructors ---------------------------------------------------------
     @classmethod
@@ -812,24 +815,30 @@ class AimDocument:
     # -- payload plumbing ------------------------------------------------------------
     _PAYLOAD_ID_RE = re.compile(r'data-aim(?:-container)?="([^"]+)"')
 
-    def _recorded_ids(self, *, skip_payload_of: str | None = None) -> set[str]:
-        """Ids mentioned by history or the pending lane (live or burned).
-
-        ``skip_payload_of`` leaves one pending card's payload ids out: at
-        resolution time they are the write's own reservations (minted when
-        the card was created), not competing claims."""
+    def _history_burned_ids(self) -> set[str]:
+        """Every id the retained log burns: event targets, proposal ids,
+        and ids that only ever existed inside recorded payloads (items of a
+        deleted container, replaced-away members)."""
         taken: set[str] = set()
         for ev in self.history:  # ids are never reused, deleted ones stay burned
             for key in ("target", "proposal"):
                 v = ev.get(key)
                 if isinstance(v, str):
                     taken.add(v)
-            # ids that only ever existed inside a payload (items of a deleted
-            # container, replaced-away members) are burned too
             for key in ("before", "after", "proposed", "applied"):
                 v = ev.get(key)
                 if isinstance(v, str):
                     taken.update(self._PAYLOAD_ID_RE.findall(v))
+        return taken
+
+    def _recorded_ids(self, *, skip_payload_of: str | None = None) -> set[str]:
+        """Ids mentioned by history or the pending lane (live or burned),
+        plus ids whose burn record was pruned/flattened away this session.
+
+        ``skip_payload_of`` leaves one pending card's payload ids out: at
+        resolution time they are the write's own reservations (minted when
+        the card was created), not competing claims."""
+        taken = self._history_burned_ids() | self._burned
         for p in self.proposals:
             taken.add(p.id)
             if p.payload_html and p.id != skip_payload_of:
@@ -2194,14 +2203,26 @@ class AimDocument:
 
     # -- lifecycle operations --------------------------------------------------------------------
     def flatten(self, *, drop_embeddings: bool = True) -> None:
-        """Drop the history (and by default the embeddings) — a clean file."""
+        """Drop the history (and by default the embeddings) — a clean file.
+
+        Ids the dropped log had burned stay burned on this instance (§4.4:
+        an id is never reused within a document lifetime), so an id seen
+        before the flatten is never re-honored by a later write. The saved
+        file carries no burn ledger — reloading it starts a fresh lifetime.
+        """
+        self._burned |= self._history_burned_ids()
         for kind in ("history",) + (("embeddings",) if drop_embeddings else ()):
             s = self._state.script(kind)
             if s is not None:
                 self._state.body.children.remove(s)
 
     def prune(self, *, before: int | str) -> int:
-        """Truncate history before a seq or checkpoint label; returns dropped count."""
+        """Truncate history before a seq or checkpoint label; returns dropped count.
+
+        Ids burned by the dropped prefix stay burned on this instance (§4.4)
+        so they are never re-honored; the saved file's ledger shrinks to
+        what the retained log records."""
+        self._burned |= self._history_burned_ids()
         events = self.history
         if isinstance(before, str):
             match = next(
