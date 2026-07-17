@@ -1481,3 +1481,51 @@ class TestDocxKeepsInlineImages:
             t.text or "" for t in docx.Document(str(out)).element.body.iter(qn("w:delText"))
         )
         assert "[image: chart]" in deleted
+
+
+class TestCriticMarkupKeepsHeaderAnchoredRowAdds:
+    """AF-38: the header loop of the Markdown table renderer never drained
+    ``adds_by_anchor``, so a pending ``<tr>`` anchored after a thead row —
+    and every add chained on it — vanished from criticmarkup output."""
+
+    def test_row_add_after_header_is_rendered(self, table_doc):
+        table_doc.propose_add(
+            '<tr data-aim="nr"><td>9</td></tr>',
+            author=BOT,
+            container="tbl",
+            after="h",
+            at=ts(1),
+        )
+        md = aim.to_markdown(table_doc, pending="criticmarkup")
+        assert "{++" in md and "9" in md
+
+    def test_chained_add_on_the_header_anchor_is_rendered(self, table_doc):
+        first = table_doc.propose_add(
+            '<tr data-aim="nr"><td>9</td></tr>',
+            author=BOT,
+            container="tbl",
+            after="h",
+            at=ts(1),
+        )
+        table_doc.propose_add(
+            '<tr data-aim="nr2"><td>10</td></tr>',
+            author=BOT,
+            container="tbl",
+            after=first.id,
+            at=ts(2),
+        )
+        md = aim.to_markdown(table_doc, pending="criticmarkup")
+        assert "9" in md and "10" in md
+
+    def test_add_lands_after_the_separator(self, table_doc):
+        table_doc.propose_add(
+            '<tr data-aim="nr"><td>9</td></tr>',
+            author=BOT,
+            container="tbl",
+            after="h",
+            at=ts(1),
+        )
+        lines = aim.to_markdown(table_doc, pending="criticmarkup").splitlines()
+        sep = next(i for i, ln in enumerate(lines) if ln.startswith("| ---"))
+        added = next(i for i, ln in enumerate(lines) if "{++" in ln)
+        assert added == sep + 1

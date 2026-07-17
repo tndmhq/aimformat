@@ -350,14 +350,16 @@ class _Renderer:
         lines: list[str] = []
         if self.critic and container_id:
             lines.extend(self._critic_adds((container_id, None)))
-        for cid, cells in head:
+        head_adds: list[str] = []  # drained after the separator: accepting a
+        for cid, cells in head:  # header-anchored add makes it the first body row
             row = fmt(cells)
             if self.critic and cid:
-                wrapped = self._critic_wrap_lines(cid, [row])
-                lines.extend(wrapped)
+                lines.extend(self._critic_wrap_lines(cid, [row]))
+                head_adds.extend(self._critic_adds((container_id, cid)))
             else:
                 lines.append(row)
         lines.append("|" + " --- |" * width)
+        lines.extend(head_adds)
         for cid, cells in body:
             row = fmt(cells)
             if self.critic and cid:
