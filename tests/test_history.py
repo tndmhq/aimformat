@@ -57,6 +57,71 @@ class TestEventShape:
         assert not ev.validate()
 
 
+class TestHistoryIndex:
+    def test_loaded_history_parses_once_then_updates_incrementally(self, basic_doc, monkeypatch):
+        doc = aim.loads(basic_doc.dumps())
+        assert doc._history_index is None
+        parsed = 0
+        original = aim.Event.from_json
+
+        def counted(line):
+            nonlocal parsed
+            parsed += 1
+            return original(line)
+
+        monkeypatch.setattr(aim.Event, "from_json", staticmethod(counted))
+        initial_events = len(basic_doc.history)
+
+        assert doc.seq == initial_events
+        assert len(doc.history) == initial_events
+        index = doc._get_history_index()
+        assert parsed == initial_events
+        assert index.next_seq == initial_events + 1
+        assert index.next_batch == f"b{initial_events + 1}"
+        assert {"h1", "intro"} <= index.burned_ids == index.recorded_ids
+
+        doc.add_chunk('<p data-aim="later">Later.</p>', author=BOT, at=ts(9))
+        assert doc._get_history_index() is index
+        assert doc.seq == initial_events + 1
+        assert index.next_seq == initial_events + 2
+        assert "later" in index.burned_ids
+        assert parsed == initial_events
+
+        # Event.data is open for x_* extensions, so public reads are copies:
+        # mutating one must not poison the authoritative cached parse.
+        doc.history[-1].data["seq"] = 999
+        assert doc.seq == initial_events + 1
+
+    def test_pending_reservations_update_on_amend_and_resolution(self):
+        doc = aim.new_document(title="T")
+        doc.add_chunk('<p data-aim="base">Base.</p>', author=BOT, at=ts(0))
+        proposal = doc.propose_add(
+            '<aim-slide data-aim-container="pending-slide">'
+            '<p data-aim="inside-old">Old.</p></aim-slide>',
+            author=BOT,
+            at=ts(1),
+        )
+        index = doc._get_history_index()
+        assert {proposal.id, "pending-slide", "inside-old"} <= index.recorded_ids
+        assert "pending-slide" not in index.burned_ids
+
+        amended = doc.amend_proposal(
+            proposal.id,
+            '<aim-slide><p data-aim="inside-new">New.</p></aim-slide>',
+            at=ts(2),
+        )
+        assert amended.id == proposal.id
+        assert "inside-old" not in index.recorded_ids
+        assert {proposal.id, "pending-slide", "inside-new"} <= index.recorded_ids
+
+        doc.reject(proposal.id, decided_by=ME, at=ts(3))
+        assert doc.proposals == []
+        assert {proposal.id, "pending-slide", "inside-new"} <= index.burned_ids
+        # b2 belonged only to the removed card; the b3 resolution stays in
+        # history, so smallest-unused allocation intentionally returns b2.
+        assert index.next_batch == "b2"
+
+
 class TestVerify:
     def test_clean_lifecycle_verifies(self, lifecycle_doc):
         assert lifecycle_doc.verify() == []

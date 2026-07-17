@@ -15,7 +15,9 @@ import contextlib
 import datetime as _dt
 import hashlib
 import re
-from collections.abc import Callable, Sequence
+from collections import Counter
+from collections.abc import Callable, Iterable, Sequence
+from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, TypeVar
@@ -55,6 +57,7 @@ _BODY_SECTIONS = ("aim-proposals", "aim-assets", "script")
 #: Reserved singleton targets (spec §3.5/§3.6): they can be modified but
 #: never deleted or moved — they have no body anchor to restore them at.
 _RESERVED_TARGETS = ("aim:theme", "aim:doc")
+_PAYLOAD_ID_RE = re.compile(r'data-aim(?:-container)?="([^"]+)"')
 _T = TypeVar("_T")
 
 
@@ -164,6 +167,181 @@ class _ChainedAddCycle(InvalidOperation):
             "pending adds anchor on each other in a cycle — the file is "
             "corrupt (aim lint reports P015)"
         )
+
+
+@dataclass
+class _HistoryIndex:
+    """Derived history/id state for one :class:`AimDocument` instance.
+
+    The history JSONL and pending lane remain authoritative. ``raw`` is the
+    exact string object this index was built from, so an internal replacement
+    outside the normal writers invalidates the cache on the next read. Burned
+    ids additionally carry the instance-lifetime AF-05 tombstones that survive
+    prune/flatten; they are deliberately not persisted.
+    """
+
+    raw: str | None
+    events: list[Event]
+    burned_ids: set[str]
+    recorded_ids: set[str]
+    next_seq: int | None
+    next_batch: str
+    _pending_id_counts: Counter[str]
+    _proposal_payload_ids: dict[str, Counter[str]]
+    _batch_counts: Counter[str]
+
+    @classmethod
+    def build(
+        cls,
+        raw: str | None,
+        proposals: Iterable[Proposal],
+        *,
+        burned_seed: Iterable[str] = (),
+    ) -> _HistoryIndex:
+        events = [Event.from_json(line) for line in (raw or "").split("\n") if line.strip()]
+        index = cls(
+            raw=raw,
+            events=[],
+            burned_ids=set(burned_seed),
+            recorded_ids=set(burned_seed),
+            next_seq=1,
+            next_batch="b1",
+            _pending_id_counts=Counter(),
+            _proposal_payload_ids={},
+            _batch_counts=Counter(),
+        )
+        for event in events:
+            index._index_event(event)
+        for proposal in proposals:
+            index.add_proposal(proposal)
+        index._reset_next_batch()
+        return index
+
+    @staticmethod
+    def _payload_ids(payload: str | None) -> set[str]:
+        return set(_PAYLOAD_ID_RE.findall(payload or ""))
+
+    @classmethod
+    def _event_ids(cls, event: Event) -> set[str]:
+        found: set[str] = set()
+        for key in ("target", "proposal"):
+            value = event.get(key)
+            if isinstance(value, str):
+                found.add(value)
+        for key in ("before", "after", "proposed", "applied"):
+            value = event.get(key)
+            if isinstance(value, str):
+                found.update(cls._payload_ids(value))
+        return found
+
+    @staticmethod
+    def _batch_number(batch: str | None) -> int | None:
+        match = re.fullmatch(r"b([1-9]\d*)", batch or "")
+        return int(match.group(1)) if match else None
+
+    def _reset_next_batch(self) -> None:
+        number = 1
+        while self._batch_counts[f"b{number}"]:
+            number += 1
+        self.next_batch = f"b{number}"
+
+    def _add_batch(self, batch: str | None) -> None:
+        if not batch:
+            return
+        self._batch_counts[batch] += 1
+        if batch == self.next_batch:
+            self._reset_next_batch()
+
+    def _remove_batch(self, batch: str | None) -> None:
+        if not batch or not self._batch_counts[batch]:
+            return
+        self._batch_counts[batch] -= 1
+        if not self._batch_counts[batch]:
+            del self._batch_counts[batch]
+            number = self._batch_number(batch)
+            current = self._batch_number(self.next_batch)
+            if number is not None and current is not None and number < current:
+                self.next_batch = batch
+
+    def _burn(self, values: Iterable[str]) -> None:
+        for value in values:
+            self.burned_ids.add(value)
+            self.recorded_ids.add(value)
+
+    def _index_event(self, event: Event) -> None:
+        self.events.append(event)
+        self._burn(self._event_ids(event))
+        self._add_batch(event.batch)
+        seq = event.data.get("seq")
+        self.next_seq = seq + 1 if isinstance(seq, int) else None
+
+    def append_event(self, event: Event, raw: str) -> None:
+        self._index_event(event)
+        self.raw = raw
+
+    def replace_events(self, events: Iterable[Event], raw: str | None) -> None:
+        """Replace retained events while preserving lifetime-burned ids."""
+        for event in self.events:
+            self._remove_batch(event.batch)
+        self.events = []
+        self.next_seq = 1
+        for event in events:
+            self.events.append(event)
+            self._add_batch(event.batch)
+            seq = event.data.get("seq")
+            self.next_seq = seq + 1 if isinstance(seq, int) else None
+        self.raw = raw
+        self._reset_next_batch()
+
+    def _add_pending_id(self, value: str) -> None:
+        self._pending_id_counts[value] += 1
+        self.recorded_ids.add(value)
+
+    def _remove_pending_id(self, value: str) -> None:
+        if not self._pending_id_counts[value]:
+            return
+        self._pending_id_counts[value] -= 1
+        if not self._pending_id_counts[value]:
+            del self._pending_id_counts[value]
+            if value not in self.burned_ids:
+                self.recorded_ids.discard(value)
+
+    def add_proposal(self, proposal: Proposal) -> None:
+        self._add_pending_id(proposal.id)
+        payload_ids = self._payload_ids(proposal.payload_html)
+        for value in payload_ids:
+            self._add_pending_id(value)
+            by_proposal = self._proposal_payload_ids.setdefault(proposal.id, Counter())
+            by_proposal[value] += 1
+        self._add_batch(proposal.batch)
+
+    def remove_proposal(self, proposal: Proposal) -> None:
+        self._remove_pending_id(proposal.id)
+        payload_ids = self._payload_ids(proposal.payload_html)
+        for value in payload_ids:
+            self._remove_pending_id(value)
+            by_proposal = self._proposal_payload_ids.get(proposal.id)
+            if by_proposal is not None and by_proposal[value]:
+                by_proposal[value] -= 1
+                if not by_proposal[value]:
+                    del by_proposal[value]
+                if not by_proposal:
+                    del self._proposal_payload_ids[proposal.id]
+        self._remove_batch(proposal.batch)
+
+    def replace_proposal(self, before: Proposal, after: Proposal) -> None:
+        self.remove_proposal(before)
+        self.add_proposal(after)
+
+    def recorded(self, *, skip_payload_of: str | None = None) -> set[str]:
+        recorded = set(self.recorded_ids)
+        if skip_payload_of is None:
+            return recorded
+        skipped = self._proposal_payload_ids.get(skip_payload_of, Counter())
+        for value, count in skipped.items():
+            if self._pending_id_counts[value] == count and value not in self.burned_ids:
+                recorded.discard(value)
+        return recorded
 
 
 def _chained_add_cycle_ids(proposals: Sequence[Proposal]) -> tuple[str, ...]:
@@ -674,9 +852,7 @@ class AimDocument:
         self._fragment = fragment
         self._state = DocState(html)
         self._batch: str | None = None
-        # burned ids whose burn record left the retained log (prune/flatten)
-        # — kept for this instance's lifetime so they are never re-honored
-        self._burned: set[str] = set()
+        self._history_index: _HistoryIndex | None = None
 
     # -- constructors ---------------------------------------------------------
     @classmethod
@@ -708,8 +884,9 @@ class AimDocument:
 
     def _clone(self) -> AimDocument:
         """A structural copy suitable for validation and replay."""
+        burned = set(self._get_history_index().burned_ids)
         clone = AimDocument(parse_html(canonical.document_text(self._fragment)))
-        clone._burned = set(self._burned)
+        clone._rebuild_history_index(burned_seed=burned)
         return clone
 
     def _projected_operation(
@@ -734,14 +911,16 @@ class AimDocument:
         those payloads in history before the replacement can be accepted.
         """
         projection = self._clone()
+        index = projection._get_history_index()
         for pid in exclude:
             proposal = projection.proposal(pid)
             if proposal.payload_html:
-                projection._burned.update(self._PAYLOAD_ID_RE.findall(proposal.payload_html))
+                index._burn(index._payload_ids(proposal.payload_html))
             card = projection._card_el(pid)
             sec = projection._state.section("aim-proposals")
             assert sec is not None
             sec.children.remove(card)
+            index.remove_proposal(proposal)
         order = _creation_order(projection.proposals)
         decider = Actor("external", id="pending-projection")
 
@@ -813,8 +992,13 @@ class AimDocument:
 
     @property
     def seq(self) -> int:
-        events = self.history
-        return events[-1].seq if events else 0
+        index = self._get_history_index()
+        if index.next_seq is not None:
+            return index.next_seq - 1
+        # Preserve the pre-index behavior on malformed history: reading the
+        # events remains possible for lint's field diagnostics, while asking
+        # for seq still raises/returns exactly through Event.seq.
+        return index.events[-1].seq if index.events else 0
 
     @property
     def theme(self) -> dict[str, str]:
@@ -961,14 +1145,41 @@ class AimDocument:
         return [e.chunk_id or e.container_id or "" for e in self._state.constructs()]
 
     # -- history ---------------------------------------------------------------------
+    def _history_raw(self) -> str | None:
+        el = self._state.script("history")
+        return el.raw if el is not None else None
+
+    def _rebuild_history_index(self, *, burned_seed: Iterable[str] = ()) -> _HistoryIndex:
+        self._history_index = _HistoryIndex.build(
+            self._history_raw(), self.proposals, burned_seed=burned_seed
+        )
+        return self._history_index
+
+    def _get_history_index(self) -> _HistoryIndex:
+        raw = self._history_raw()
+        if self._history_index is None:
+            return self._rebuild_history_index()
+        if self._history_index.raw is not raw:
+            # The JSONL is authoritative even if an internal caller replaced
+            # it without using one of the three normal writers. Preserve only
+            # the instance-lifetime tombstones that cannot be reconstructed
+            # after prune/flatten, then derive everything else afresh.
+            burned = set(self._history_index.burned_ids)
+            return self._rebuild_history_index(burned_seed=burned)
+        return self._history_index
+
+    def _history_events(self) -> list[Event]:
+        return self._get_history_index().events
+
     @property
     def history(self) -> list[Event]:
-        el = self._state.script("history")
-        if el is None or not el.raw:
-            return []
-        return [Event.from_json(line) for line in el.raw.split("\n") if line.strip()]
+        # Event.data is intentionally an open dict for forward-compatible
+        # x_* fields. Return defensive copies so mutating a read result cannot
+        # corrupt the cache or diverge it from the authoritative JSONL.
+        return [Event(deepcopy(event.data)) for event in self._history_events()]
 
     def _append_event(self, data: dict) -> Event:
+        index = self._get_history_index()
         el = self._state.script("history")
         if el is None:
             el = Element("script", [("type", REGISTRY.script_types["history"])])
@@ -982,18 +1193,12 @@ class AimDocument:
         body = (el.raw or "").rstrip("\n")
         line = canonical_json(data)
         el.raw = "\n" + (body + "\n" if body else "") + line + "\n"
+        index.append_event(Event(deepcopy(data)), el.raw)
         return Event(data)
 
     # -- batching -----------------------------------------------------------------
     def _next_batch(self) -> str:
-        used = {e.batch for e in self.history if e.batch}
-        for p in self.proposals:
-            if p.batch:
-                used.add(p.batch)
-        n = 1
-        while f"b{n}" in used:
-            n += 1
-        return f"b{n}"
+        return self._get_history_index().next_batch
 
     @contextlib.contextmanager
     def batch(self):
@@ -1011,24 +1216,6 @@ class AimDocument:
         return self._batch or self._next_batch()
 
     # -- payload plumbing ------------------------------------------------------------
-    _PAYLOAD_ID_RE = re.compile(r'data-aim(?:-container)?="([^"]+)"')
-
-    def _history_burned_ids(self) -> set[str]:
-        """Every id the retained log burns: event targets, proposal ids,
-        and ids that only ever existed inside recorded payloads (items of a
-        deleted container, replaced-away members)."""
-        taken: set[str] = set()
-        for ev in self.history:  # ids are never reused, deleted ones stay burned
-            for key in ("target", "proposal"):
-                v = ev.get(key)
-                if isinstance(v, str):
-                    taken.add(v)
-            for key in ("before", "after", "proposed", "applied"):
-                v = ev.get(key)
-                if isinstance(v, str):
-                    taken.update(self._PAYLOAD_ID_RE.findall(v))
-        return taken
-
     def _recorded_ids(self, *, skip_payload_of: str | None = None) -> set[str]:
         """Ids mentioned by history or the pending lane (live or burned),
         plus ids whose burn record was pruned/flattened away this session.
@@ -1036,12 +1223,7 @@ class AimDocument:
         ``skip_payload_of`` leaves one pending card's payload ids out: at
         resolution time they are the write's own reservations (minted when
         the card was created), not competing claims."""
-        taken = self._history_burned_ids() | self._burned
-        for p in self.proposals:
-            taken.add(p.id)
-            if p.payload_html and p.id != skip_payload_of:
-                taken.update(self._PAYLOAD_ID_RE.findall(p.payload_html))
-        return taken
+        return self._get_history_index().recorded(skip_payload_of=skip_payload_of)
 
     def _taken_ids(self, *, skip_payload_of: str | None = None) -> set[str]:
         return self._state.all_ids() | self._recorded_ids(skip_payload_of=skip_payload_of)
@@ -1326,14 +1508,18 @@ class AimDocument:
         if explanation:
             data["explanation"] = explanation
         self._append_event(data)
-        try:
-            return self.chunk(cid)
-        except TargetNotFound:  # container payload: synthesize the view
-            root = parse_fragment(payload)[0]
-            assert isinstance(root, Element)
-            return Chunk(
-                id=cid, container=container, tags=(root.tag,), html=payload, text=root.text()
-            )
+        # The normalized payload already is the canonical view of the unit we
+        # inserted. Re-discovering it through chunk() would rebuild every
+        # chunk view in the growing tree after every bulk-import add; no tree
+        # cache is needed to return information this method already owns.
+        roots = [node for node in parse_fragment(payload) if isinstance(node, Element)]
+        return Chunk(
+            id=cid,
+            container=container,
+            tags=tuple(root.tag for root in roots),
+            html=payload,
+            text="".join(root.text() for root in roots),
+        )
 
     def modify_chunk(
         self,
@@ -1676,7 +1862,7 @@ class AimDocument:
         """
         redos_pending = 0
         candidate: Event | None = None
-        for ev in reversed(self.history):
+        for ev in reversed(self._history_events()):
             if not ev.state_changing:
                 continue
             if ev.origin == "redo":
@@ -1714,7 +1900,7 @@ class AimDocument:
         a redo waits for the undo it cancelled.
         """
         pending_undos = 0
-        for ev in reversed(self.history):
+        for ev in reversed(self._history_events()):
             if not ev.state_changing:
                 continue
             if ev.origin == "undo":
@@ -1859,8 +2045,7 @@ class AimDocument:
         return cards[0]
 
     def _new_proposal_id(self) -> str:
-        taken = self._taken_ids() | {p.id for p in self.proposals}
-        return ids.new_proposal_id(taken)
+        return ids.new_proposal_id(self._taken_ids())
 
     def _new_card(
         self,
@@ -1902,7 +2087,9 @@ class AimDocument:
             tmpl.children = list(parse_fragment(payload))
             card.children.append(tmpl)
         self._proposals_section().children.append(card)
-        return self.proposal(pid)
+        proposal = self.proposal(pid)
+        self._get_history_index().add_proposal(proposal)
+        return proposal
 
     def _supersede_if_pending(
         self, target: str, new_pid: str, author: Actor, at: str | None
@@ -2238,7 +2425,10 @@ class AimDocument:
                 card.remove_attr("data-explanation")
         if at is not None:
             card.set("data-at", at)
-        return self.proposal(pid)
+        amended = self.proposal(pid)
+        if self._history_index is not None:
+            self._get_history_index().replace_proposal(prop, amended)
+        return amended
 
     # -- resolution ---------------------------------------------------------------------------
     def accept_all(
@@ -2546,6 +2736,7 @@ class AimDocument:
         sec.children.remove(card)
         if not sec.elements():
             self._state.body.children.remove(sec)
+        self._get_history_index().remove_proposal(prop)
         self._rebind_chained(prop, decision)
         return self._append_event(data)
 
@@ -2573,7 +2764,7 @@ class AimDocument:
     def verify(self) -> list[str]:
         """Replay the history backwards over a copy; report chain problems."""
         problems: list[str] = []
-        events = self.history
+        events = self._history_events()
         if any(not isinstance(e.data.get("seq"), int) for e in events):
             problems.append("history has an event with a missing or non-integer seq")
             return problems
@@ -2649,7 +2840,7 @@ class AimDocument:
 
     def state_at(self, seq: int) -> AimDocument:
         """Reconstruct the document as of *seq* (pending lane + caches dropped)."""
-        events = self.history
+        events = self._history_events()
         if events and seq < min(e.seq for e in events) - 1:
             raise HistoryError(
                 f"cannot reconstruct below seq {min(e.seq for e in events) - 1} (history pruned)"
@@ -2678,11 +2869,7 @@ class AimDocument:
             state.head.children.remove(meta)
         hist = state.script("history")
         if hist is not None and hist.raw:
-            kept = [
-                line
-                for line in hist.raw.split("\n")
-                if line.strip() and Event.from_json(line).seq <= seq
-            ]
+            kept = [event.to_json() for event in events if event.seq <= seq]
             hist.raw = "\n" + "\n".join(kept) + "\n" if kept else "\n"
         return clone
 
@@ -2695,11 +2882,12 @@ class AimDocument:
         before the flatten is never re-honored by a later write. The saved
         file carries no burn ledger — reloading it starts a fresh lifetime.
         """
-        self._burned |= self._history_burned_ids()
+        index = self._get_history_index()
         for kind in ("history",) + (("embeddings",) if drop_embeddings else ()):
             s = self._state.script(kind)
             if s is not None:
                 self._state.body.children.remove(s)
+        index.replace_events([], None)
         # §9.3: gc is the final pass — a "clean file" must not ship the
         # dead blobs its dropped history kept alive
         self.gc_assets()
@@ -2710,8 +2898,8 @@ class AimDocument:
         Ids burned by the dropped prefix stay burned on this instance (§4.4)
         so they are never re-honored; the saved file's ledger shrinks to
         what the retained log records."""
-        self._burned |= self._history_burned_ids()
-        events = self.history
+        index = self._get_history_index()
+        events = index.events
         if isinstance(before, str):
             match = next(
                 (e for e in events if e.kind == "checkpoint" and e.get("label") == before), None
@@ -2731,6 +2919,7 @@ class AimDocument:
         el = self._state.script("history")
         if el is not None:
             el.raw = "\n" + "\n".join(e.to_json() for e in kept) + "\n" if kept else "\n"
+        index.replace_events(kept, el.raw if el is not None else None)
         self.gc_assets()  # §9.3: gc is the final pass of prune
         return dropped
 
@@ -3037,7 +3226,7 @@ class AimDocument:
         hay = [serialize(c) for c in self._state.constructs()]
         hay += [
             ev.get(k) or ""
-            for ev in self.history
+            for ev in self._history_events()
             for k in ("before", "after", "proposed", "applied")
         ]
         hay += [p.payload_html or "" for p in self.proposals]
