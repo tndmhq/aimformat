@@ -708,6 +708,12 @@ Byte-deterministic serialization is load-bearing: chain verification and
   self-close with `/>`; non-empty foreign elements use explicit open and close
   tags.
 
+**Compatibility note (owner decision):** requiring explicit end tags for empty
+non-void HTML elements is an intentionally incompatible canonical-form and
+`doc_hash` change. Because this draft change was adopted before any `.aim`
+documents were deployed, it is intentionally not assigned a new format version
+and has no migration or legacy-hash-preservation path.
+
 ### 11.2 JSON serialization
 
 Sorted keys, compact separators, raw UTF-8, `</` written `<\/`; one object
