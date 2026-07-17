@@ -2384,3 +2384,30 @@ class TestMcpWarnsWhenUnscoped:
         monkeypatch.setenv("AIMFORMAT_MCP_ROOT", str(tmp_path))
         assert mcp_mod._warn_if_unscoped() is False
         assert capsys.readouterr().err == ""
+
+
+class TestEveryWorkflowActionIsShaPinned:
+    """AF-25: publish.yml — the OIDC→PyPI workflow, the repo's highest
+    privilege — was the only workflow with floating action refs; a moved
+    tag (tj-actions 2025 precedent) could publish a trojaned package with
+    zero repo changes. Every `uses:` in every workflow must pin a full
+    commit SHA."""
+
+    def test_all_uses_refs_are_full_shas(self):
+        import pathlib
+
+        workflows = sorted(
+            (pathlib.Path(__file__).parent.parent / ".github" / "workflows").glob("*.yml")
+        )
+        assert workflows, "no workflows found"
+        offenders = []
+        for wf in workflows:
+            for line in wf.read_text().splitlines():
+                stripped = line.strip()
+                if not stripped.startswith("- uses:") and not stripped.startswith("uses:"):
+                    continue
+                ref = stripped.split("uses:", 1)[1].split("#")[0].strip()
+                _, _, pin = ref.partition("@")
+                if not re.fullmatch(r"[0-9a-f]{40}", pin):
+                    offenders.append(f"{wf.name}: {ref}")
+        assert offenders == []
