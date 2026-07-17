@@ -189,6 +189,26 @@ def resolution_order(
         by_id = {p.id: p for p in original}
         position = {p.id: i for i, p in enumerate(original)}
         final_moves = {p.target: p for p in original if p.action == "move" and p.target is not None}
+        deletes = [p for p in original if p.action == "delete" and p.target]
+        intentionally_deleted_moves: set[str] = set()
+        for target, move in final_moves.items():
+            for delete in deletes:
+                assert delete.target is not None
+                if delete.target == target:
+                    intentionally_deleted_moves.add(target)
+                    break
+                deleted_node = doc._state.container_node(delete.target)
+                if deleted_node is None:
+                    continue
+                deleted_ids = {
+                    value
+                    for element in deleted_node.iter()
+                    for value in (element.chunk_id, element.container_id)
+                    if value
+                }
+                if (move.anchor_container or "body") in deleted_ids:
+                    intentionally_deleted_moves.add(target)
+                    break
         memo: set[tuple[str, frozenset[str]]] = set()
 
         def modify_keeps_live_foreign_ids(work: AimDocument, proposal: Proposal) -> bool:
@@ -216,6 +236,8 @@ def resolution_order(
         def final_moves_land(work: AimDocument) -> bool:
             for target, move in final_moves.items():
                 if not work._state.exists(target):
+                    if target in intentionally_deleted_moves:
+                        continue
                     return False
                 try:
                     if work._anchor_of(target).container != (move.anchor_container or "body"):

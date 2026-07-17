@@ -3,10 +3,10 @@
 The examples are deliberately small enough for an independent permutation
 oracle.  This keeps the property about observable semantics, rather than about
 the implementation's chosen ranks: every returned order must accept atomically,
-preserve one logical copy of every moved target, land each target in its final
-requested container, and leave lint/verify clean.  If no permutation has those
-properties, resolution_order must refuse the lane before the real document is
-mutated.
+preserve one logical copy of every surviving moved target, land each target in
+its final requested container (or intentionally delete it), and leave
+lint/verify clean.  If no permutation has those properties, resolution_order
+must refuse the lane before the real document is mutated.
 """
 
 from __future__ import annotations
@@ -32,6 +32,7 @@ class LaneSpec:
     keep_anchor: bool = True
     retain_target: bool = False
     modify_kind: str = "ul"
+    delete_ancestor: bool = False
 
 
 @st.composite
@@ -45,6 +46,7 @@ def lane_specs(draw) -> LaneSpec:
                 "outbound",
                 "two_targets",
                 "reconciled_destination",
+                "move_delete",
             ]
         )
     )
@@ -66,6 +68,8 @@ def lane_specs(draw) -> LaneSpec:
         )
     if family == "two_targets":
         return LaneSpec(family, keep_anchor=draw(st.booleans()))
+    if family == "move_delete":
+        return LaneSpec(family, delete_ancestor=draw(st.booleans()))
     return LaneSpec(
         family,
         modify_kind=draw(st.sampled_from(["ul", "table"])),
@@ -84,9 +88,9 @@ def _table_l2() -> str:
     return '<table data-aim-container="l2"><tbody><tr data-aim="a"><td>A</td></tr></tbody></table>'
 
 
-def _build_lane(spec: LaneSpec) -> tuple[aim.AimDocument, dict[str, str], set[str]]:
+def _build_lane(spec: LaneSpec) -> tuple[aim.AimDocument, dict[str, str | None], set[str]]:
     doc = aim.new_document(title="ordering property")
-    requested: dict[str, str] = {}
+    requested: dict[str, str | None] = {}
     sentinels: set[str] = set()
 
     if spec.family == "retained_intermediate":
@@ -168,7 +172,7 @@ def _build_lane(spec: LaneSpec) -> tuple[aim.AimDocument, dict[str, str], set[st
         doc.propose_modify("l2", _ul_l2(*payload_ids), author=BOT, at=ts(5))
         requested.update(x="l2", z="l3")
         sentinels.update(["TARGET-x", "TARGET-z"])
-    else:
+    elif spec.family == "reconciled_destination":
         doc.add_chunk(
             '<ul data-aim-container="l1"><li data-aim="x">TARGET-x</li></ul>',
             author=ME,
@@ -187,6 +191,16 @@ def _build_lane(spec: LaneSpec) -> tuple[aim.AimDocument, dict[str, str], set[st
         assert move_is_pending is (spec.modify_kind == "ul"), report.rejected_proposals
         if not move_is_pending:
             requested.clear()
+    else:
+        doc.add_chunk(
+            '<ul data-aim-container="l1"><li data-aim="x">TARGET-x</li></ul>',
+            author=ME,
+            at=ts(0),
+        )
+        doc.add_chunk(_ul_l2("a"), author=ME, at=ts(1))
+        doc.propose_move("x", author=BOT, container="l2", after="a", at=ts(2))
+        doc.propose_delete("l2" if spec.delete_ancestor else "x", author=BOT, at=ts(3))
+        requested["x"] = None
 
     return doc, requested, sentinels
 
@@ -201,13 +215,18 @@ def _moves_keep_card_order(order: tuple[Proposal, ...], original: list[Proposal]
 
 
 def _resolved_invariants(
-    doc: aim.AimDocument, requested: dict[str, str], sentinels: set[str]
+    doc: aim.AimDocument, requested: dict[str, str | None], sentinels: set[str]
 ) -> bool:
     try:
-        if any(doc.chunk(target).container != container for target, container in requested.items()):
-            return False
+        for target, container in requested.items():
+            if container is None:
+                if doc._state.exists(target):
+                    return False
+            elif doc.chunk(target).container != container:
+                return False
     except aim.AimError:
-        return False
+        if any(container is not None for container in requested.values()):
+            return False
     texts = [chunk.text for chunk in doc.chunks]
     if any(texts.count(sentinel) != 1 for sentinel in sentinels):
         return False
@@ -217,7 +236,7 @@ def _resolved_invariants(
 
 
 def _valid_order_exists(
-    doc: aim.AimDocument, requested: dict[str, str], sentinels: set[str]
+    doc: aim.AimDocument, requested: dict[str, str | None], sentinels: set[str]
 ) -> bool:
     original = doc.proposals
     for order in permutations(original):
@@ -236,6 +255,8 @@ def _valid_order_exists(
 
 @example(spec=LaneSpec("retained_intermediate", keep_anchor=False, retain_target=True))
 @example(spec=LaneSpec("reconciled_destination", modify_kind="ul"))
+@example(spec=LaneSpec("move_delete", delete_ancestor=False))
+@example(spec=LaneSpec("move_delete", delete_ancestor=True))
 @given(spec=lane_specs())
 @settings(
     max_examples=60,

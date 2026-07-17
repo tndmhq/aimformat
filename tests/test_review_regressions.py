@@ -1275,6 +1275,43 @@ class TestResolutionOrderProtectsAnchors:
         assert doc.verify() == []
 
 
+class TestMoveThenDeleteResolution:
+    """codex-pr15-r5: terminal move validation must treat an accepted
+    delete as intentional final absence, not as a failed move plan."""
+
+    @staticmethod
+    def _lane(*, delete_ancestor: bool):
+        doc = aim.new_document(title="T")
+        doc.add_chunk(
+            '<ul data-aim-container="l1"><li data-aim="x">X</li></ul>',
+            author=ME,
+            at=ts(0),
+        )
+        doc.add_chunk(
+            '<ul data-aim-container="l2"><li data-aim="a">A</li></ul>',
+            author=ME,
+            at=ts(1),
+        )
+        doc.propose_move("x", author=BOT, container="l2", after="a", at=ts(2))
+        doc.propose_delete("l2" if delete_ancestor else "x", author=BOT, at=ts(3))
+        return doc
+
+    @pytest.mark.parametrize("delete_ancestor", [False, True])
+    def test_accept_all_allows_move_then_delete(self, delete_ancestor):
+        from aimformat.document import resolution_order
+
+        doc = self._lane(delete_ancestor=delete_ancestor)
+        order = resolution_order(doc.proposals, doc)
+
+        assert [proposal.action for proposal in order] == ["move", "delete"]
+        for proposal in order:
+            doc.accept(proposal.id, decided_by=ME, at=ts(4))
+
+        assert not doc._state.exists("x")
+        assert doc.verify() == []
+        assert not [finding for finding in aim.lint(doc) if finding.level == "error"]
+
+
 class TestMovesStayAheadOfAncestorReplacements:
     """codex-r2-5 (refines AF-04): ranking every modify below every move
     broke lanes where a move rescues a descendant before its container is
