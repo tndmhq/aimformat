@@ -73,6 +73,7 @@ class _Linter:
         self.proposals()
         self.history()
         self.caches()
+        self.authored_self_closing()
         self.canonical_form()
         return self.findings
 
@@ -892,8 +893,40 @@ class _Linter:
             self.add("M003", ERROR, f"embeddings cache: {exc}")
 
     # -- C: canonical form ---------------------------------------------------------------------
+    def authored_self_closing(self) -> None:
+        """Reject HTML's unsafe ``<tag/>`` spelling outside foreign content.
+
+        The transparent parser preserves the authored spelling on
+        ``Element.self_closing``. Propagate SVG context exactly as the
+        canonical serializer does so empty foreign elements remain the one
+        non-void case where ``/>`` is canonical.
+        """
+
+        def visit(el: Element, *, in_svg: bool, where: str = "") -> None:
+            svg_here = in_svg or el.tag == "svg"
+            loc = el.chunk_id or el.container_id or el.get("id") or where
+            if el.self_closing and el.tag not in REGISTRY.void_elements and not svg_here:
+                self.add(
+                    "C002",
+                    ERROR,
+                    f"non-void HTML element <{el.tag}> must use explicit open+close "
+                    "tags (self-closing breaks HTML parsing)",
+                    loc,
+                )
+            for child in el.elements():
+                visit(child, in_svg=svg_here, where=loc)
+
+        for el in self.doc._fragment.elements():
+            visit(el, in_svg=False)
+
     def canonical_form(self) -> None:
         if self.text is None:
+            return
+        # C002 is the precise canonical-form error for a non-void authored
+        # ``/>``. Do not also emit the generic C001 for the same byte
+        # difference: conformance nok fixtures must trip exactly their named
+        # error, and one actionable finding is clearer than two aliases.
+        if any(f.code == "C002" for f in self.findings):
             return
         canon = document_text(self.doc._fragment)
         if self.text == canon:

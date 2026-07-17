@@ -1426,6 +1426,50 @@ class TestPruneCliResolvesNumericCheckpointLabels:
         assert [e.seq for e in aim.load(path).history][0] == 2
 
 
+class TestCanonicalSelfClosingNormalization:
+    """AF-06: canonical serialization echoed ``Element.self_closing`` for
+    ordinary HTML/custom elements. That forked ``doc_hash`` for equivalent
+    empty elements and preserved browser-unsafe ``<aim-slide/>`` markup."""
+
+    def test_span_spellings_share_canonical_form_and_doc_hash(self):
+        self_closed = aim.loads(_mini('<p data-aim="x"><span/></p>'))
+        explicit = aim.loads(_mini('<p data-aim="x"><span></span></p>'))
+
+        assert self_closed._state.serial("x") == '<p data-aim="x"><span></span></p>'
+        assert self_closed.doc_hash == explicit.doc_hash
+
+    def test_self_closed_slide_is_closed_before_its_sibling(self):
+        doc = aim.loads(
+            _mini('<aim-slide data-aim-container="s1"/><p data-aim="after">still a sibling</p>')
+        )
+
+        canonical = doc.dumps()
+        assert (
+            '<aim-slide data-aim-container="s1"></aim-slide>\n'
+            '<p data-aim="after">still a sibling</p>'
+        ) in canonical
+        assert aim.loads(canonical).body_ids == ["s1", "after"]
+
+    def test_authored_non_void_self_close_is_C002(self):
+        errors = {
+            f.code
+            for f in aim.lint_text(_mini('<p data-aim="x"><span/></p>'))
+            if f.level == "error"
+        }
+        assert errors == {"C002"}
+
+    @pytest.mark.parametrize(
+        "markup",
+        [
+            '<p data-aim="x">before<br>after</p>',
+            '<p data-aim="x">before<br/>after</p>',
+            '<p data-aim="x"><svg><use href="#asset-x"/></svg></p>',
+        ],
+    )
+    def test_C002_ignores_void_and_svg_context(self, markup):
+        assert "C002" not in {f.code for f in aim.lint_text(_mini(markup))}
+
+
 class TestReconcileHandlesWrappingContainers:
     """AF-07: a hand edit that wraps existing units into a NEW container is
     one of the most natural out-of-band edits, but _drive counted a

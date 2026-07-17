@@ -5,6 +5,13 @@ version tracks the spec version it implements (0.x minors may break).
 
 ## 0.2.1 — unreleased
 
+- **Canonical self-closing normalization (AF-06)**: non-void elements outside
+  foreign/SVG context now always serialize with explicit open and close tags;
+  authored self-closing spellings are rejected by lint rule C002. HTML void
+  elements remain slashless and empty SVG-context elements remain self-closed.
+  This deliberately changes `doc_hash` for legacy documents that authored a
+  non-void element with `/>`; no migration or legacy-hash preservation is
+  provided.
 - **`AimDocument.amend_proposal(pid, markup=None, *, explanation=None,
   at=None)`** — in-place amend of a pending proposal's payload and/or
   explanation, preserving id, anchor, author, batch, and dependencies.
