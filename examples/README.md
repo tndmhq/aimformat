@@ -16,9 +16,12 @@ To look at them:
 ```sh
 aim show examples/proposal.aim
 aim lint examples/proposal.aim
-python3 -m http.server              # then open http://localhost:8000/examples/proposal.aim
+python3 -c "import http.server as s; \
+  s.SimpleHTTPRequestHandler.extensions_map['.aim'] = 'text/html'; \
+  s.test(s.SimpleHTTPRequestHandler)"   # then open http://localhost:8000/examples/proposal.aim
 ```
 
 (Served with a `text/html` content type, they render as styled documents,
-including the raw-tier "Pending changes" memo at the bottom. A bare `.aim`
-over `file://` shows source; see spec §10.)
+including the raw-tier "Pending changes" memo at the bottom. A bare
+`python3 -m http.server` serves `.aim` as a download — it doesn't know the
+extension — and `.aim` over `file://` shows source; see spec §10.)
