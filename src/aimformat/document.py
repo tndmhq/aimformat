@@ -179,7 +179,10 @@ def resolution_order(
     modify first would strip the move's landing point and fail the lane).
     If that delayed modify also owns the move's destination and omits the
     incoming chunk, neither order is safe: accepting the whole lane is
-    refused before any proposal mutates the document. A modify whose payload
+    refused before any proposal mutates the document. A target moved more
+    than once is judged by its LAST pending move — moves execute in card
+    order, so earlier hops are transient and only the final destination can
+    collide with the replacement. A modify whose payload
     keeps the member stays ahead of the move (relocating first would make the
     payload re-introduce a duplicate id). Set *accepting* false when ordering
     a reject-all operation, where these write conflicts do not apply.
@@ -191,6 +194,10 @@ def resolution_order(
     conflicts: list[tuple[Proposal, Proposal]] = []
     if doc is not None:
         moves = [p for p in proposals if p.action == "move" and p.target]
+        # moves execute in card order (the rank sort is stable), so for a
+        # target moved more than once only the LAST card decides where it
+        # finally lands when the delayed modify runs
+        final_move = {mv.target: mv for mv in moves}
         for p in proposals:
             if p.action != "modify" or not p.target or not moves:
                 continue
@@ -202,17 +209,22 @@ def resolution_order(
             # a move needs its target rescued AND its landing point intact:
             # the modify waits when its payload drops the moved chunk, the
             # move's destination anchor, or the destination container
-            for mv in moves:
-                delayed = any(
-                    affected in inside and affected not in kept
-                    for affected in (mv.target, mv.anchor_after, mv.anchor_container)
-                    if affected
-                )
-                if not delayed:
-                    continue
-                after_moves.add(p.id)
-                if accepting and mv.anchor_container in inside and mv.target not in kept:
-                    conflicts.append((mv, p))
+            delayed = any(
+                affected in inside and affected not in kept
+                for mv in moves
+                for affected in (mv.target, mv.anchor_after, mv.anchor_container)
+                if affected
+            )
+            if not delayed:
+                continue
+            after_moves.add(p.id)
+            if accepting:
+                # the replacement erases a moved chunk only when its FINAL
+                # destination sits inside the replaced subtree — an earlier
+                # move into it is harmless if a later card moves on
+                for mv in final_move.values():
+                    if mv.anchor_container in inside and mv.target not in kept:
+                        conflicts.append((mv, p))
     if conflicts:
         move, modify = conflicts[0]
         raise InvalidOperation(
