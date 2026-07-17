@@ -1945,3 +1945,36 @@ class TestSiblingAddOrderMatchesAcceptAll:
         for md in (accept, critic):
             assert md.index("First card") < md.index("Chained on first")
             assert md.index("Second card") < md.index("First card")
+
+
+class TestRowAddsAnchorAfterTheWholeRunChunk:
+    """AF-48: ``emit_table`` drained row-adds per physical ``tr``, so the
+    FIRST member of a run chunk popped the proposal and the added row
+    landed mid-run — splitting the chunk in tracked DOCX."""
+
+    def test_added_row_lands_after_the_last_run_member(self, tmp_path):
+        docx = pytest.importorskip("docx")
+        from docx.oxml.ns import qn
+
+        doc = aim.new_document(title="T")
+        doc.add_chunk(
+            '<table data-aim-container="tbl"><tbody>'
+            '<tr data-aim="rr"><td>one</td></tr>'
+            '<tr data-aim="rr"><td>two</td></tr></tbody></table>',
+            author=ME,
+            at=ts(0),
+        )
+        doc.propose_add(
+            '<tr data-aim="nr"><td>new</td></tr>',
+            author=BOT,
+            container="tbl",
+            after="rr",
+            at=ts(1),
+        )
+        out = aim.to_docx(doc, tmp_path / "r.docx")
+        tbl = docx.Document(str(out)).tables[0]
+        row_texts = [
+            "".join(t.text or "" for t in tr.iter(qn("w:t")))
+            for tr in tbl._tbl.findall(qn("w:tr"))
+        ]
+        assert row_texts == ["one", "two", "new"]

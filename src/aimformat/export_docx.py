@@ -787,7 +787,10 @@ class _Exporter:
             self._emit_row_adds(table, None, container_id, None, ncols, first=True)
             for ri, row in enumerate(rows):
                 rid = row.chunk_id
-                if rid:
+                # anchor on the LAST member of a run chunk: draining on the
+                # first member would insert the added row mid-run
+                last_of_run = not (ri + 1 < len(rows) and rows[ri + 1].chunk_id == rid)
+                if rid and last_of_run:
                     self._emit_row_adds(table, orig_trs[ri], container_id, rid, ncols)
         # structural replacements insert right after their (deleted) old rows —
         # closest to the anchor, ahead of any row-adds anchored on the chunk
