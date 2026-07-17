@@ -417,12 +417,21 @@ class _Exporter:
         els = self._payload_elements(prop)
         slide_payload = any(el.tag == "aim-slide" for el in els)
         # a pending add anchored after a slide (or adding a slide) belongs to
-        # the next page, exactly like accepted content; the plain break
-        # survives a rejection, which is the accepted-state layout
+        # the next page, exactly like accepted content. A pending slide owns
+        # its break, so Word rejects both together.
         if self._break_before_next or (slide_payload and self._has_content()):
             self._break_before_next = False
             if not self._ends_with_page_break():
-                self._page_break()
+                if slide_payload:
+                    para = self.out.add_paragraph()
+                    self.rev.ins(
+                        para,
+                        [{"page_break": True}],
+                        _actor_label(prop.author),
+                        prop.at,
+                    )
+                else:
+                    self._page_break()
         for el in els:
             for block in _block_children(el):
                 if block.tag in ("ul", "ol"):

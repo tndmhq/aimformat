@@ -3407,3 +3407,33 @@ class TestCyclicNestedListIngestion:
 
         assert [chunk.text for chunk in doc.chunks] == ["outerinner"]
         assert aim.lint(doc) == []
+
+
+class TestPendingSlideBreakRevision:
+    """AF-49: the page break that introduces a pending slide is part of
+    that addition. Emitting it outside ``w:ins`` left a blank page after a
+    Word user rejected the slide."""
+
+    def test_slide_break_is_inserted_revision(self, tmp_path):
+        docx = pytest.importorskip("docx")
+        from docx.oxml.ns import qn
+
+        doc = aim.new_document(title="Deck")
+        doc.add_chunk("<p>Before.</p>", author=ME, at=ts(0))
+        doc.propose_add(
+            '<aim-slide style="width:420px; height:595px">'
+            '<p style="left:10px; top:10px; width:300px">Pending page.</p>'
+            "</aim-slide>",
+            author=BOT,
+            at=ts(1),
+        )
+
+        tracked = aim.to_docx(doc, tmp_path / "tracked.docx", pending="tracked")
+        body = docx.Document(str(tracked)).element.body
+        breaks = [br for br in body.iter(qn("w:br")) if br.get(qn("w:type")) == "page"]
+        assert len(breaks) == 1
+        assert breaks[0].getparent().getparent().tag == qn("w:ins")
+
+        rejected = aim.to_docx(doc, tmp_path / "rejected.docx", pending="reject-all")
+        rejected_body = docx.Document(str(rejected)).element.body
+        assert not [br for br in rejected_body.iter(qn("w:br")) if br.get(qn("w:type")) == "page"]
