@@ -180,8 +180,11 @@ The [specification](https://github.com/tndmhq/aimformat/blob/main/spec.md) is on
 ` ```aim ` snippet in it is linted in CI, the construct reference appendix
 is generated from the same [registry](https://github.com/tndmhq/aimformat/blob/main/src/aimformat/registry.json) that
 drives the linter and the stylesheet, and the conformance suite
-([`tests/fixtures/`](https://github.com/tndmhq/aimformat/blob/main/tests/fixtures/)) pins every rule with an `ok_*` /
-`nok_<CODE>_*` file pair that third-party implementations can reuse.
+([`tests/fixtures/`](https://github.com/tndmhq/aimformat/blob/main/tests/fixtures/)) ships `ok_*` files that must lint
+clean plus `nok_<CODE>_*` files that must trip exactly their rule —
+covering a growing subset of the rulebook (every rule's firing behavior
+is additionally pinned in the test suite) — for third-party
+implementations to reuse.
 
 Design pillars (details and rationale in the spec):
 

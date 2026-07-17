@@ -18,7 +18,9 @@ NOK = sorted(FIXTURES.glob("nok_*.aim"))
 
 
 def test_fixture_suite_is_present():
-    assert len(OK) >= 5 and len(NOK) >= 15
+    # floors track the shipped kit: a fixture-losing refactor must fail,
+    # not shrink quietly (the old >= 15 floor hid half the nok set)
+    assert len(OK) >= 5 and len(NOK) >= 31
 
 
 @pytest.mark.parametrize("path", OK, ids=lambda p: p.name)
