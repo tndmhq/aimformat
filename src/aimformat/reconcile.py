@@ -539,8 +539,8 @@ def _drive(S: AimDocument, work: AimDocument, author: Actor, at: str | None) -> 
 def _reject_dangling(
     S: AimDocument, author: Actor, at: str | None, report: ReconcileReport
 ) -> None:
-    """Pending proposals whose target or anchor vanished can never resolve;
-    reject them so the reconciled document lints clean."""
+    """Pending proposals whose target or anchor no longer resolves can never
+    be accepted; reject them so the reconciled document lints clean."""
     pending_adds = {p.id for p in S.proposals if p.action == "add"}
     for p in list(S.proposals):
         dangling = False
@@ -551,19 +551,31 @@ def _reject_dangling(
         ):
             dangling = not S._state.exists(p.target)
         if not dangling and p.action in ("add", "move"):
-            cont = p.anchor_container
-            if cont and cont != "body" and S._state.container_node(cont) is None:
-                dangling = True
-            after = p.anchor_after
-            if after and not S._state.exists(after) and after not in pending_adds:
-                dangling = True
+            # A wrapping reconciliation can keep an anchor id alive while
+            # moving it below a new container. Global existence is therefore
+            # insufficient: re-run the same container-scoped validation used
+            # by proposal creation and acceptance against the reconciled tree.
+            if p.action == "add" and p.anchor_after in pending_adds:
+                cont = p.anchor_container
+                dangling = bool(cont and cont != "body" and S._state.container_node(cont) is None)
+            else:
+                try:
+                    S._state.resolve_insert_point(
+                        Anchor(
+                            p.anchor_container or "body",
+                            p.anchor_after,
+                            shell=p.anchor_shell,
+                        )
+                    )
+                except AimError:
+                    dangling = True
         if dangling:
             S.reject(
                 p.id,
                 decided_by=author,
                 at=at,
-                explanation="reconcile: the proposal's target or anchor "
-                "was removed by an out-of-band edit",
+                explanation="reconcile: the proposal's target or anchor no "
+                "longer resolves after an out-of-band edit",
             )
             report.rejected_proposals.append(p.id)
 

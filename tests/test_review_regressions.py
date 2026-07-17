@@ -1575,6 +1575,34 @@ class TestReconcileHandlesWrappingContainers:
         assert d.verify() == []
         assert d.body_ids == ["ws"]
 
+    @pytest.mark.parametrize("action", ["add", "move"])
+    def test_wrapping_an_anchor_rejects_the_now_cross_container_proposal(self, action):
+        doc = aim.new_document(title="T")
+        doc.add_chunk('<h1 data-aim="h1">Title</h1>', author=BOT, at=ts(0))
+        doc.add_chunk('<p data-aim="c1">alpha</p>', author=BOT, at=ts(1))
+        if action == "add":
+            proposal = doc.propose_add(
+                '<p data-aim="new">new</p>',
+                author=BOT,
+                container="body",
+                after="c1",
+                at=ts(2),
+            )
+        else:
+            proposal = doc.propose_move("h1", author=BOT, container="body", after="c1", at=ts(2))
+
+        wrapped = doc.dumps().replace(
+            '<p data-aim="c1">alpha</p>',
+            '<aim-slide data-aim-container="wrap"><p data-aim="c1">alpha</p></aim-slide>',
+        )
+        repaired = aim.loads(wrapped)
+        report = repaired.reconcile(at=ts(3))
+
+        assert report.rejected_proposals == [proposal.id]
+        assert repaired.proposals == []
+        assert repaired.verify() == []
+        assert not [finding for finding in aim.lint(repaired) if finding.level == "error"]
+
 
 class TestEveryAimCssBlockIsVerified:
     """AF-21: the X006 byte-match ran only when data-aim-css equalled the
