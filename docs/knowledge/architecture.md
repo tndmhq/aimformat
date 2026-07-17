@@ -54,10 +54,13 @@ codes bidirectionally in sync with what `lint.py` can actually emit.
   edges from current/payload container states and topologically sorts them;
   it never enumerates subsets or clone-replays candidate orders. Repeated moves
   keep card order while each hop is constrained against the exact pre/post
-  container state it needs. Cyclic constraints refuse an impossible lane
+  container state it needs. A move anchored `after=N` precedes every move card
+  that relocates `N`, including through a moved ancestor; mutual anchor
+  dependencies become a cycle. Cyclic constraints refuse an impossible lane
   before the live document mutates. Reconcile applies the same principle to
   viability: a move's adopted destination kind may be superseded by a pending
-  destination modify.
+  destination modify only when that candidate payload accepts the members and
+  still resolves the move's scoped `after=`/table-shell anchor.
 - **Payload equality is the verification primitive.** If you change
   canonical form in any way, every stored payload in every fixture/example
   changes meaning — regenerate fixtures and examples, and expect checkpoint

@@ -34,6 +34,7 @@ class LaneSpec:
     modify_kind: str = "ul"
     delete_ancestor: bool = False
     mutual_anchor: bool = False
+    use_anchor: bool = False
 
 
 @st.composite
@@ -78,9 +79,12 @@ def lane_specs(draw) -> LaneSpec:
             retain_target=draw(st.booleans()),
             mutual_anchor=draw(st.booleans()),
         )
+    use_anchor = draw(st.booleans())
     return LaneSpec(
         family,
+        keep_anchor=draw(st.booleans()) if use_anchor else True,
         modify_kind=draw(st.sampled_from(["ul", "table"])),
+        use_anchor=use_anchor,
     )
 
 
@@ -186,17 +190,27 @@ def _build_lane(spec: LaneSpec) -> tuple[aim.AimDocument, dict[str, str | None],
             author=ME,
             at=ts(0),
         )
-        doc.add_chunk(_ul_l2("a"), author=ME, at=ts(1))
-        doc.propose_move("x", author=BOT, container="l2", after=None, at=ts(2))
-        payload = _ul_l2("a") if spec.modify_kind == "ul" else _table_l2()
+        doc.add_chunk(_ul_l2("a", "b"), author=ME, at=ts(1))
+        doc.propose_move(
+            "x",
+            author=BOT,
+            container="l2",
+            after="a" if spec.use_anchor else None,
+            at=ts(2),
+        )
+        if spec.modify_kind == "ul":
+            payload = _ul_l2(*(("a", "b") if spec.keep_anchor else ("b",)))
+        else:
+            payload = _table_l2()
         doc.propose_modify("l2", payload, author=BOT, at=ts(3))
         requested["x"] = "l2"
         sentinels.add("TARGET-x")
-        edited = doc.dumps().replace(_ul_l2("a"), _table_l2(), 1)
+        edited = doc.dumps().replace(_ul_l2("a", "b"), _table_l2(), 1)
         doc = aim.loads(edited)
         report = doc.reconcile(at=ts(4))
         move_is_pending = any(p.action == "move" and p.target == "x" for p in doc.proposals)
-        assert move_is_pending is (spec.modify_kind == "ul"), report.rejected_proposals
+        candidate_is_viable = spec.modify_kind == "ul" and (not spec.use_anchor or spec.keep_anchor)
+        assert move_is_pending is candidate_is_viable, report.rejected_proposals
         if not move_is_pending:
             requested.clear()
     elif spec.family == "move_delete":
@@ -297,6 +311,14 @@ def _valid_order_exists(
 
 @example(spec=LaneSpec("retained_intermediate", keep_anchor=False, retain_target=True))
 @example(spec=LaneSpec("reconciled_destination", modify_kind="ul"))
+@example(
+    spec=LaneSpec(
+        "reconciled_destination",
+        keep_anchor=False,
+        modify_kind="ul",
+        use_anchor=True,
+    )
+)
 @example(spec=LaneSpec("move_delete", delete_ancestor=False))
 @example(spec=LaneSpec("move_delete", delete_ancestor=True))
 @example(spec=LaneSpec("cross_target_anchor", retain_target=True))

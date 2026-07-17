@@ -1866,6 +1866,82 @@ class TestReconcileValidatesMoveMembership:
         assert repaired._state.container_node("l2").tag == "ul"
         assert repaired.verify() == []
 
+    def test_pending_modify_that_removes_the_move_anchor_is_not_viable(self):
+        doc = aim.new_document(title="T")
+        doc.add_chunk(
+            '<ul data-aim-container="l1"><li data-aim="x">X</li></ul>',
+            author=ME,
+            at=ts(0),
+        )
+        doc.add_chunk(
+            '<ul data-aim-container="l2"><li data-aim="a">A</li><li data-aim="b">B</li></ul>',
+            author=ME,
+            at=ts(1),
+        )
+        move = doc.propose_move("x", author=BOT, container="l2", after="a", at=ts(2))
+        modify = doc.propose_modify(
+            "l2",
+            '<ul data-aim-container="l2"><li data-aim="b">B restored</li></ul>',
+            author=BOT,
+            at=ts(3),
+        )
+        edited = doc.dumps().replace(
+            '<ul data-aim-container="l2"><li data-aim="a">A</li><li data-aim="b">B</li></ul>',
+            '<table data-aim-container="l2"><tbody>'
+            '<tr data-aim="a"><td>A out of band</td></tr></tbody></table>',
+            1,
+        )
+        repaired = aim.loads(edited)
+
+        report = repaired.reconcile(at=ts(4))
+
+        assert report.rejected_proposals == [move.id]
+        assert [p.id for p in repaired.proposals] == [modify.id]
+        assert repaired.verify() == []
+        assert not [finding for finding in aim.lint(repaired) if finding.level == "error"]
+
+    def test_pending_modify_without_the_recorded_table_shell_is_not_viable(self):
+        doc = aim.new_document(title="T")
+        doc.add_chunk(
+            '<table data-aim-container="t1"><tbody>'
+            '<tr data-aim="x"><td>X</td></tr></tbody></table>',
+            author=ME,
+            at=ts(0),
+        )
+        doc.add_chunk(
+            '<table data-aim-container="t2"><tbody>'
+            '<tr data-aim="a"><td>A</td></tr></tbody></table>',
+            author=ME,
+            at=ts(1),
+        )
+        move = doc.propose_move(
+            "x", author=BOT, container="t2", after=None, shell="tbody", at=ts(2)
+        )
+        modify = doc.propose_modify(
+            "t2",
+            '<table data-aim-container="t2"><thead>'
+            '<tr data-aim="a"><th>A</th></tr></thead></table>',
+            author=BOT,
+            at=ts(3),
+        )
+        # Reconcile records invalid out-of-band structure honestly. Keeping a
+        # tbody under the adopted list makes the current anchor resolve while
+        # its member guard fails, exercising candidate-payload shell viability.
+        edited = doc.dumps().replace(
+            '<table data-aim-container="t2"><tbody>'
+            '<tr data-aim="a"><td>A</td></tr></tbody></table>',
+            '<ul data-aim-container="t2"><tbody><tr data-aim="a"><td>A</td></tr></tbody></ul>',
+            1,
+        )
+        repaired = aim.loads(edited)
+
+        report = repaired.reconcile(at=ts(4))
+
+        assert report.rejected_proposals == [move.id]
+        assert [p.id for p in repaired.proposals] == [modify.id]
+        assert repaired.verify() == []
+        assert not [finding for finding in aim.lint(repaired) if finding.code.startswith("P")]
+
 
 class TestReconcileRejectsMovesIntoOwnSubtree:
     """codex-pr15-r3 (refines codex-pr15-p2-4): the move-viability check at

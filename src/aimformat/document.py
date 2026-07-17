@@ -145,6 +145,46 @@ class Proposal:
     anchor_shell: str | None = None  # thead/tbody/tfoot for table rows
 
 
+def _anchor_resolves_in_container(container: Element, anchor: Anchor) -> bool:
+    """Whether *anchor* is a direct insertion point in candidate *container*.
+
+    This is the detached-payload counterpart of ``resolve_insert_point``:
+    proposed container replacements are not attached to a ``DocState``, but
+    ordering and reconcile must apply the same scoped ``after=``/table-shell
+    rules before treating their post-modify state as viable.
+    """
+    if container.container_id != anchor.container:
+        return False
+    if anchor.after is None:
+        return anchor.shell is None or any(
+            child.tag == anchor.shell for child in container.elements()
+        )
+    matches = [
+        element
+        for element in container.iter()
+        if element is not container
+        and (element.chunk_id == anchor.after or element.container_id == anchor.after)
+    ]
+    if not matches:
+        return False
+    matched = matches[-1]
+    parent = next(
+        (candidate for candidate in container.iter() if matched in candidate.children),
+        None,
+    )
+    if parent is None:
+        return False
+    direct = parent is container or (
+        container.tag == "table"
+        and parent.tag in REGISTRY.table_shells
+        and parent in container.children
+    )
+    if not direct:
+        return False
+    shell = parent.tag if parent.tag in REGISTRY.table_shells else None
+    return anchor.shell is None or anchor.shell == shell
+
+
 def _payload_ids(payload_html: str) -> set[str]:
     """Every chunk/container id a proposal payload carries."""
     out: set[str] = set()
@@ -245,39 +285,6 @@ def resolution_order(
                     for relocating_move in relocating_sequence:
                         precedes(anchored_move.id, relocating_move.id)
 
-        def destination_anchor_exists(container: Element, move: Proposal) -> bool:
-            if move.anchor_after is None:
-                return move.anchor_shell is None or any(
-                    child.tag == move.anchor_shell for child in container.elements()
-                )
-            matches = [
-                element
-                for element in container.iter()
-                if element is not container
-                and (
-                    element.chunk_id == move.anchor_after
-                    or element.container_id == move.anchor_after
-                )
-            ]
-            if not matches:
-                return False
-            anchor = matches[-1]
-            parent = next(
-                (candidate for candidate in container.iter() if anchor in candidate.children),
-                None,
-            )
-            if parent is None:
-                return False
-            direct = parent is container or (
-                container.tag == "table"
-                and parent.tag in REGISTRY.table_shells
-                and parent in container.children
-            )
-            if not direct:
-                return False
-            shell = parent.tag if parent.tag in REGISTRY.table_shells else None
-            return move.anchor_shell is None or move.anchor_shell == shell
-
         def current_destination_accepts(move: Proposal, elements: list[Element]) -> bool:
             anchor = Anchor(move.anchor_container or "body", move.anchor_after, move.anchor_shell)
             try:
@@ -293,7 +300,8 @@ def resolution_order(
             move: Proposal, elements: list[Element], containers: dict[str, Element]
         ) -> bool:
             container = containers.get(move.anchor_container or "body")
-            if container is None or not destination_anchor_exists(container, move):
+            anchor = Anchor(move.anchor_container or "body", move.anchor_after, move.anchor_shell)
+            if container is None or not _anchor_resolves_in_container(container, anchor):
                 return False
             try:
                 doc._state._guard_item_members(container, elements)

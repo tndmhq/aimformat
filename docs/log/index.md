@@ -9,7 +9,7 @@ required to add entries.)
 
 | Date | Type | Entry | Status | What |
 |---|---|---|---|---|
-| 2026-07-17 20:18 | plan | [pr15-cross-target-move-anchor-constraints](2026-07-17_2018_plan_pr15-cross-target-move-anchor-constraints.md) | active | Add cross-target move-anchor precedence and reconcile candidate-anchor viability with property coverage |
+| 2026-07-17 20:18 | plan | [pr15-cross-target-move-anchor-constraints](2026-07-17_2018_plan_pr15-cross-target-move-anchor-constraints.md) | done | Add cross-target move-anchor precedence and reconcile candidate-anchor viability with property coverage |
 | 2026-07-17 19:46 | plan | [pr15-move-delete-and-linear-ordering](2026-07-17_1946_plan_pr15-move-delete-and-linear-ordering.md) | done | Allow move-then-delete resolution and replace exhaustive lane search with linear graph ordering |
 | 2026-07-17 19:16 | plan | [pr15-constraint-ordering-property](2026-07-17_1916_plan_pr15-constraint-ordering-property.md) | done | Model move/modify/reconcile ordering as constraints, fix both P1s, and add a family-wide Hypothesis property |
 | 2026-07-17 18:47 | plan | [pr15-p1-repeated-moves-before-erasing-modify](2026-07-17_1847_plan_pr15-p1-repeated-moves-before-erasing-modify.md) | done | Keep every hop in a repeated-move chain ahead of container modifies that would erase the target |

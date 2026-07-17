@@ -39,7 +39,7 @@ from dataclasses import dataclass, field
 
 from . import ids
 from .canonical import document_text, serialize
-from .document import AimDocument, Anchor, DocState, _now_iso
+from .document import AimDocument, Anchor, DocState, _anchor_resolves_in_container, _now_iso
 from .dom import Element, parse_fragment, parse_html
 from .errors import AimError, HistoryError
 from .events import Actor, Event, external
@@ -547,9 +547,7 @@ def _reject_dangling(
     card this pass already validated. Iterate to a fixpoint: after any pass
     that rejected something, validate every survivor again."""
 
-    def pending_destination_accepts(
-        destination: str, targets: list[tuple[Element, Element]]
-    ) -> bool:
+    def pending_destination_accepts(anchor: Anchor, targets: list[tuple[Element, Element]]) -> bool:
         """Can a pending replacement make these move members legal?
 
         Reconcile validates against the adopted out-of-band body, but lane
@@ -559,7 +557,7 @@ def _reject_dangling(
         """
         members = [element for _, element in targets]
         for proposal in S.proposals:
-            if proposal.action != "modify" or proposal.target != destination:
+            if proposal.action != "modify" or proposal.target != anchor.container:
                 continue
             roots = [
                 node
@@ -567,10 +565,10 @@ def _reject_dangling(
                 if isinstance(node, Element)
             ]
             container = next(
-                (node for node in roots if node.container_id == destination),
+                (node for node in roots if node.container_id == anchor.container),
                 None,
             )
-            if container is None:
+            if container is None or not _anchor_resolves_in_container(container, anchor):
                 continue
             try:
                 S._state._guard_item_members(container, members)
@@ -629,7 +627,12 @@ def _reject_dangling(
                                     )
                                 except AimError:
                                     if not pending_destination_accepts(
-                                        p.anchor_container or "body", targets
+                                        Anchor(
+                                            p.anchor_container or "body",
+                                            p.anchor_after,
+                                            shell=p.anchor_shell,
+                                        ),
+                                        targets,
                                     ):
                                         raise
                             # an edit can also nest the destination INSIDE
