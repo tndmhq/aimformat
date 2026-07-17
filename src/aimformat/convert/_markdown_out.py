@@ -318,9 +318,7 @@ class _Renderer:
                 # the replacement renders from the group's own first ordinal
                 # (a throwaway counter), so accepting the span keeps the
                 # ordered marker instead of demoting the item to a bullet
-                body = self._critic_wrap_lines(
-                    cid, body, [start] if start is not None else None
-                )
+                body = self._critic_wrap_lines(cid, body, [start] if start is not None else None)
                 body.extend(self._critic_adds((container_id, cid), list_number))
             lines.extend(body)
         return "\n".join(lines)

@@ -3082,8 +3082,7 @@ class TestNestedContainersValidateRecursively:
     def test_unmarked_nested_list_stays_chunk_content(self):
         doc = aim.new_document(title="T")
         doc.add_chunk(
-            '<ul data-aim-container="l">'
-            '<li data-aim="i1">item<ul><li>sub</li></ul></li></ul>',
+            '<ul data-aim-container="l"><li data-aim="i1">item<ul><li>sub</li></ul></li></ul>',
             author=ME,
             at=ts(0),
         )
