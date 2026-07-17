@@ -296,9 +296,9 @@ class _Renderer:
         container_id = el.container_id
         items = [li for li in el.elements() if li.tag == "li"]
         lines: list[str] = []
-        n = 0
+        list_number = [1] if ordered else None
         if self.critic and container_id:
-            lines.extend(self._critic_adds((container_id, None)))
+            lines.extend(self._critic_adds((container_id, None), list_number))
         i = 0
         while i < len(items):
             cid = items[i].chunk_id
@@ -309,12 +309,13 @@ class _Renderer:
             i += 1
             body: list[str] = []
             for li in group:
-                n += 1
-                marker = f"{n}. " if ordered else "- "
+                marker = f"{list_number[0]}. " if list_number is not None else "- "
+                if list_number is not None:
+                    list_number[0] += 1
                 body.extend(self._li_lines(li, marker, indent))
             if self.critic and cid:
                 body = self._critic_wrap_lines(cid, body)
-                body.extend(self._critic_adds((container_id, cid)))
+                body.extend(self._critic_adds((container_id, cid), list_number))
             lines.extend(body)
         return "\n".join(lines)
 
@@ -370,7 +371,7 @@ class _Renderer:
         return "\n".join(lines)
 
     # -- pending lane (CriticMarkup) -----------------------------------
-    def _payload_md(self, proposal: Proposal) -> str:
+    def _payload_md(self, proposal: Proposal, list_number: list[int] | None = None) -> str:
         if not proposal.payload_html:
             return ""
         frag = parse_html(proposal.payload_html)
@@ -382,7 +383,10 @@ class _Renderer:
                 ]
                 blocks.append("| " + " | ".join(cells) + " |")
             elif node.tag == "li":
-                blocks.append("- " + _inline(node))
+                marker = f"{list_number[0]}. " if list_number is not None else "- "
+                if list_number is not None:
+                    list_number[0] += 1
+                blocks.append(marker + _inline(node))
             else:
                 blocks.extend(self.block(node))
         return _neutralize_critic("\n\n".join(b for b in blocks if b))
@@ -400,14 +404,16 @@ class _Renderer:
         new = self._payload_md(prop)
         return [f"{{~~{old}~>{new}~~}}{self._note(prop)}"]
 
-    def _critic_adds(self, key: tuple[str | None, str | None]) -> list[str]:
+    def _critic_adds(
+        self, key: tuple[str | None, str | None], list_number: list[int] | None = None
+    ) -> list[str]:
         out: list[str] = []
         # reversed: resolution inserts every same-anchor add at
         # index(anchor)+1, so accept-all leaves the LAST-proposed sibling
         # closest to the anchor — render what accepting produces
         for prop in reversed(self.adds.get(key, [])):
-            out.append(f"{{++{self._payload_md(prop)}++}}{self._note(prop)}")
-            out.extend(self._critic_adds((prop.anchor_container, prop.id)))
+            out.append(f"{{++{self._payload_md(prop, list_number)}++}}{self._note(prop)}")
+            out.extend(self._critic_adds((prop.anchor_container, prop.id), list_number))
         return out
 
     def chunk_blocks(self, el: Element, cid: str | None) -> list[str]:

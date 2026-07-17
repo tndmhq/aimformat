@@ -1815,6 +1815,28 @@ class TestCriticMarkupPayloadStructure:
         md = aim.to_markdown(rich_doc, pending="criticmarkup")
         assert "{++- Brand new item++}" in md
 
+    def test_ordered_list_item_add_keeps_its_numbered_marker(self):
+        doc = aim.new_document(title="T")
+        doc.add_chunk(
+            '<ol data-aim-container="steps">'
+            '<li data-aim="one">First</li><li data-aim="two">Second</li>'
+            "</ol>",
+            author=ME,
+            at=ts(0),
+        )
+        doc.propose_add(
+            '<li data-aim="new">Inserted</li>',
+            author=BOT,
+            container="steps",
+            after="one",
+            at=ts(1),
+        )
+
+        critic = aim.to_markdown(doc, pending="criticmarkup")
+        accepted = aim.to_markdown(doc, pending="accept-all")
+        assert "{++2. Inserted++}" in critic
+        assert "2. Inserted" in accepted
+
 
 class TestMidParagraphBreakAnchorsOnItsOwnParagraph:
     """AF-44: a mid-paragraph page break was anchored on ``(prefix,
