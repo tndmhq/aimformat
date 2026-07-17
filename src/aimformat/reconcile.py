@@ -546,6 +546,39 @@ def _reject_dangling(
     rejecting an add rebinds any chained card's anchor in place — possibly a
     card this pass already validated. Iterate to a fixpoint: after any pass
     that rejected something, validate every survivor again."""
+
+    def pending_destination_accepts(
+        destination: str, targets: list[tuple[Element, Element]]
+    ) -> bool:
+        """Can a pending replacement make these move members legal?
+
+        Reconcile validates against the adopted out-of-band body, but lane
+        ordering may put a pending destination modify before the move. Judge
+        that post-modify container as an alternative viable state instead of
+        permanently rejecting the move from the current container kind alone.
+        """
+        members = [element for _, element in targets]
+        for proposal in S.proposals:
+            if proposal.action != "modify" or proposal.target != destination:
+                continue
+            roots = [
+                node
+                for node in parse_fragment(proposal.payload_html or "")
+                if isinstance(node, Element)
+            ]
+            container = next(
+                (node for node in roots if node.container_id == destination),
+                None,
+            )
+            if container is None:
+                continue
+            try:
+                S._state._guard_item_members(container, members)
+            except AimError:
+                continue
+            return True
+        return False
+
     rejected_one = True
     while rejected_one:
         rejected_one = False
@@ -583,14 +616,22 @@ def _reject_dangling(
                         if p.action == "move" and p.target:
                             # a resolving anchor is not enough for a move: an
                             # out-of-band edit can flip the destination
-                            # container's kind (ul → table, same id), leaving
-                            # the moved element an illegal member that only
-                            # explodes at accept. Re-run the same member
-                            # guard propose_move applies at creation time.
+                            # container's kind. The current kind is not the
+                            # only viable state, though: a pending modify of
+                            # that destination may restore compatibility and
+                            # is safely ordered before the move.
                             targets = S._state._target_elements(p.target)
                             cont = S._state.container_node(p.anchor_container or "body")
                             if cont is not None:
-                                S._state._guard_item_members(cont, [el for _, el in targets])
+                                try:
+                                    S._state._guard_item_members(
+                                        cont, [element for _, element in targets]
+                                    )
+                                except AimError:
+                                    if not pending_destination_accepts(
+                                        p.anchor_container or "body", targets
+                                    ):
+                                        raise
                             # an edit can also nest the destination INSIDE
                             # the moved subtree (c2 wrapped into c1): anchor
                             # and members check out, but accept explodes on

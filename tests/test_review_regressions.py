@@ -1737,6 +1737,50 @@ class TestReconcileValidatesMoveMembership:
         assert repaired.chunk("x").container == "l2"
         assert repaired.verify() == []
 
+    def test_pending_modify_can_restore_a_legal_move_destination(self):
+        doc = aim.new_document(title="T")
+        doc.add_chunk(
+            '<ul data-aim-container="l1"><li data-aim="x">X</li></ul>',
+            author=ME,
+            at=ts(0),
+        )
+        doc.add_chunk(
+            '<ul data-aim-container="l2"><li data-aim="a">A</li></ul>',
+            author=ME,
+            at=ts(1),
+        )
+        move = doc.propose_move("x", author=BOT, container="l2", after=None, at=ts(2))
+        modify = doc.propose_modify(
+            "l2",
+            '<ul data-aim-container="l2"><li data-aim="a">A restored</li></ul>',
+            author=BOT,
+            at=ts(3),
+        )
+        edited = doc.dumps().replace(
+            '<ul data-aim-container="l2"><li data-aim="a">A</li></ul>',
+            '<table data-aim-container="l2"><tbody>'
+            '<tr data-aim="a"><td>A out of band</td></tr></tbody></table>',
+            1,
+        )
+        repaired = aim.loads(edited)
+
+        report = repaired.reconcile(at=ts(4))
+
+        assert report.rejected_proposals == []
+        assert {p.id for p in repaired.proposals} == {move.id, modify.id}
+        from aimformat.document import resolution_order
+
+        order = resolution_order(repaired.proposals, repaired)
+        assert [(p.action, p.target) for p in order] == [
+            ("modify", "l2"),
+            ("move", "x"),
+        ]
+        for proposal in order:
+            repaired.accept(proposal.id, decided_by=ME, at=ts(5))
+        assert repaired.chunk("x").container == "l2"
+        assert repaired._state.container_node("l2").tag == "ul"
+        assert repaired.verify() == []
+
 
 class TestReconcileRejectsMovesIntoOwnSubtree:
     """codex-pr15-r3 (refines codex-pr15-p2-4): the move-viability check at
