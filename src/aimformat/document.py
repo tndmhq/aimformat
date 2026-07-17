@@ -1845,7 +1845,9 @@ class AimDocument:
                         raise TargetNotFound(f"no chunk {target!r}")
                     _, payload = self._normalize_payload(markup, expect_id=target)
             elif prop.action == "add":
-                _, payload = self._payload_like(prop.payload_html or "", markup)
+                _, payload = self._payload_like(
+                    prop.payload_html or "", markup, skip_payload_of=pid
+                )
             else:
                 raise InvalidOperation(f"a {prop.action} proposal carries no payload to amend")
             tmpl = next((c for c in card.elements() if c.tag == "template"), None)
@@ -1887,7 +1889,9 @@ class AimDocument:
                     _, applied_payload = (
                         self._normalize_payload(applied, expect_id=expect, assign=False)
                         if expect
-                        else self._payload_like(prop.payload_html or "", applied)
+                        else self._payload_like(
+                            prop.payload_html or "", applied, skip_payload_of=prop.id
+                        )
                     )
             else:
                 applied_payload = prop.payload_html
@@ -1900,12 +1904,17 @@ class AimDocument:
             at=at,
         )
 
-    def _payload_like(self, original: str, replacement: str) -> tuple[str, str]:
+    def _payload_like(
+        self, original: str, replacement: str, *, skip_payload_of: str | None = None
+    ) -> tuple[str, str]:
         """Canonicalize an add-tweak/amend payload, keeping the proposed
         chunk id and marker kind. The replacement must also keep the
         proposed root's KIND (§4.3): flipping container↔chunk would mint a
         card whose marker contradicts its tag (V003) or accept an
-        ``aim-slide`` marked as a chunk (S031) — review finding."""
+        ``aim-slide`` marked as a chunk (S031) — review finding.
+        ``skip_payload_of`` names the card being rewritten so the nested
+        ids it reserved for itself stay honored instead of being reminted
+        as collisions with the card's own record."""
         orig_nodes = [n for n in parse_fragment(original) if isinstance(n, Element)]
         keep = orig_nodes[0].chunk_id or orig_nodes[0].container_id
         marker = "data-aim-container" if orig_nodes[0].container_id is not None else "data-aim"
@@ -1916,7 +1925,12 @@ class AimDocument:
                 new_nodes[0],
                 kind="container" if marker == "data-aim-container" else "chunk",
             )
-        return self._normalize_payload(replacement, expect_id=keep, expect_marker=marker)
+        return self._normalize_payload(
+            replacement,
+            expect_id=keep,
+            expect_marker=marker,
+            skip_payload_of=skip_payload_of,
+        )
 
     def _validated_theme_markup(self, markup: str) -> str:
         """Validate + canonicalize a whole-theme-block payload."""

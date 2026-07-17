@@ -2074,3 +2074,27 @@ class TestPackAssetsKeepsImageFidelity:
 
     def test_unparseable_blob_falls_back_to_square(self):
         assert aim.AimDocument._image_dimensions(b"not an image") is None
+
+
+class TestTweaksKeepTheCardsOwnNestedIds:
+    """AF-10: ``_taken_ids()`` includes the card's own payload ids, so a
+    text-only amend (or accept-with-tweaks) of a pending add reminted an
+    unchanged nested ``child`` id to a random one — recorded as if a human
+    renamed it; only the root escaped via ``payload_id == expect_id``."""
+
+    PAYLOAD = '<ul data-aim-container="nlist"><li data-aim="child">{text}</li></ul>'
+
+    def test_amend_keeps_nested_ids(self, basic_doc):
+        p = basic_doc.propose_add(self.PAYLOAD.format(text="old"), author=BOT, at=ts(5))
+        basic_doc.amend_proposal(p.id, self.PAYLOAD.format(text="new"), at=ts(6))
+        amended = basic_doc.proposal(p.id)
+        assert 'data-aim="child"' in amended.payload_html
+        assert "new" in amended.payload_html
+
+    def test_accept_with_tweaks_keeps_nested_ids(self, basic_doc):
+        p = basic_doc.propose_add(self.PAYLOAD.format(text="old"), author=BOT, at=ts(5))
+        basic_doc.accept(
+            p.id, decided_by=ME, applied=self.PAYLOAD.format(text="tweaked"), at=ts(6)
+        )
+        assert basic_doc.chunk("child").text == "tweaked"
+        assert basic_doc.verify() == []
