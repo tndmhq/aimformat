@@ -50,12 +50,14 @@ codes bidirectionally in sync with what `lint.py` can actually emit.
 - **Ids are never reused** (deleted ids stay burned; `_taken_ids()` scans
   body + history + pending payloads).
 - **Pending-lane ordering is a state constraint problem, not a global action
-  rank.** `resolution_order(..., doc)` preflights acceptance on throwaway
-  states; repeated moves keep card order but each hop is scheduled against the
-  exact pre/post container state it needs. A returned lane must already have a
-  complete clean resolution, and an impossible lane is refused before the live
-  document mutates. Reconcile applies the same principle to viability: a move's
-  adopted destination kind may be superseded by a pending destination modify.
+  rank.** `resolution_order(..., doc)` derives explicit proposal-precedence
+  edges from current/payload container states and topologically sorts them;
+  it never enumerates subsets or clone-replays candidate orders. Repeated moves
+  keep card order while each hop is constrained against the exact pre/post
+  container state it needs. Cyclic constraints refuse an impossible lane
+  before the live document mutates. Reconcile applies the same principle to
+  viability: a move's adopted destination kind may be superseded by a pending
+  destination modify.
 - **Payload equality is the verification primitive.** If you change
   canonical form in any way, every stored payload in every fixture/example
   changes meaning — regenerate fixtures and examples, and expect checkpoint

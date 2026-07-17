@@ -6,6 +6,7 @@ they look redundant with broader tests — they encode the exact failure.
 """
 
 import re
+import time
 
 import pytest
 
@@ -1310,6 +1311,53 @@ class TestMoveThenDeleteResolution:
         assert not doc._state.exists("x")
         assert doc.verify() == []
         assert not [finding for finding in aim.lint(doc) if finding.level == "error"]
+
+
+class TestResolutionOrderScalesWithIndependentCards:
+    """codex-pr15-r5: an impossible pair must not make unrelated cards
+    multiply an exhaustive acceptance-order search."""
+
+    def test_eight_independent_modifies_and_one_conflict_finish_under_half_second(self):
+        from aimformat.document import resolution_order
+
+        doc = aim.new_document(title="T")
+        for index in range(8):
+            chunk_id = f"independent-{index}"
+            doc.add_chunk(
+                f'<p data-aim="{chunk_id}">before</p>',
+                author=ME,
+                at=ts(index),
+            )
+            doc.propose_modify(
+                chunk_id,
+                f'<p data-aim="{chunk_id}">after</p>',
+                author=BOT,
+                at=ts(index + 10),
+            )
+        doc.add_chunk(
+            '<ul data-aim-container="l1"><li data-aim="x">X</li></ul>',
+            author=ME,
+            at=ts(20),
+        )
+        doc.add_chunk(
+            '<ul data-aim-container="l2"><li data-aim="a">A</li><li data-aim="b">B</li></ul>',
+            author=ME,
+            at=ts(21),
+        )
+        doc.propose_move("x", author=BOT, container="l2", after="b", at=ts(22))
+        doc.propose_modify(
+            "l2",
+            '<ul data-aim-container="l2"><li data-aim="a">A</li></ul>',
+            author=BOT,
+            at=ts(23),
+        )
+
+        started = time.perf_counter()
+        with pytest.raises(aim.InvalidOperation, match="would erase moved chunk 'x'"):
+            resolution_order(doc.proposals, doc)
+        elapsed = time.perf_counter() - started
+
+        assert elapsed < 0.5, f"constraint planning took {elapsed:.3f}s"
 
 
 class TestMovesStayAheadOfAncestorReplacements:

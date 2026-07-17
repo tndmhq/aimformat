@@ -15,6 +15,7 @@ import contextlib
 import datetime as _dt
 import hashlib
 import re
+from collections import deque
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -24,7 +25,7 @@ from . import canonical, ids
 from .canonical import canonical_json, serialize, serialize_run
 from .css import generate_aim_css
 from .dom import Comment, Element, Fragment, Text, parse_fragment, parse_html
-from .errors import AimError, HistoryError, InvalidOperation, ParseError, TargetNotFound
+from .errors import HistoryError, InvalidOperation, ParseError, TargetNotFound
 from .events import Actor, Event
 from .note import find_note, is_canonical, render_note
 from .pagesetup import (
@@ -168,151 +169,237 @@ def resolution_order(
     Card order in the file carries no dependency meaning (a manual reorder
     is legal), except that repeated moves of one target are an ordered chain.
     Without *doc*, resolve in dependency rounds and prefer adds/modifies,
-    moves, then deletes. With *doc* while accepting, plan against a throwaway
-    copy of the exact document state. Each proposal contributes a precondition:
-    anchors and targets must resolve, container members must be legal, and a
-    container replacement may not remint a retained id that a preceding move
-    has carried outside its subtree. Repeated moves become individual hops in
-    the constraint search, so a modify can safely split a chain
+    moves, then deletes. With *doc* while accepting, derive a precedence graph
+    from the exact current and proposed container states. Each proposal
+    contributes preconditions: anchors and targets must resolve, destination
+    members must be legal, and a container replacement may not remint a
+    retained id that a preceding move has carried outside its subtree.
+    Repeated moves become individual hops, so a modify can safely split a chain
     (move → modify → move) when the first hop needs pre-modify state and the
     second needs post-modify state.
 
-    The returned order has already been accepted and verified on the copy;
-    when no complete order exists, the lane is refused before the caller can
-    mutate the real document. Set *accepting* false for reject-all, where write
-    conflicts do not apply. Shared by ``aim accept/reject --all`` and the
-    exporters' resolve-a-copy paths.
+    Kahn's algorithm returns one valid topological order. A cycle means the
+    lane has mutually incompatible preconditions and is refused before the
+    caller can mutate the real document. Set *accepting* false for reject-all,
+    where write conflicts do not apply. Shared by ``aim accept/reject --all``
+    and the exporters' resolve-a-copy paths.
     """
     rank = {"move": 2, "delete": 5}
     if doc is not None and accepting:
         original = list(proposals)
         by_id = {p.id: p for p in original}
-        position = {p.id: i for i, p in enumerate(original)}
-        final_moves = {p.target: p for p in original if p.action == "move" and p.target is not None}
-        deletes = [p for p in original if p.action == "delete" and p.target]
-        intentionally_deleted_moves: set[str] = set()
-        for target, move in final_moves.items():
-            for delete in deletes:
-                assert delete.target is not None
-                if delete.target == target:
-                    intentionally_deleted_moves.add(target)
-                    break
-                deleted_node = doc._state.container_node(delete.target)
-                if deleted_node is None:
-                    continue
-                deleted_ids = {
-                    value
-                    for element in deleted_node.iter()
-                    for value in (element.chunk_id, element.container_id)
-                    if value
-                }
-                if (move.anchor_container or "body") in deleted_ids:
-                    intentionally_deleted_moves.add(target)
-                    break
-        memo: set[tuple[str, frozenset[str]]] = set()
+        outgoing: dict[str, dict[str, None]] = {p.id: {} for p in original}
+        indegree = {p.id: 0 for p in original}
 
-        def modify_keeps_live_foreign_ids(work: AimDocument, proposal: Proposal) -> bool:
-            """Would accepting this container payload silently remint a live id?
+        def precedes(before: str, after: str) -> None:
+            if before == after or after in outgoing[before]:
+                return
+            outgoing[before][after] = None
+            indegree[after] += 1
 
-            Replacement normalization may reuse ids still inside the target
-            subtree, but deliberately remints collisions elsewhere. During a
-            pending lane that behavior turns a retained moved member into a
-            clean-verifying duplicate, so that relative order is not viable.
-            """
-            if proposal.action != "modify" or not proposal.target:
-                return False
-            node = work._state.container_node(proposal.target)
-            if node is None:
-                return False
-            inside = {
+        # Chained adds materialize their proposal id as the concrete anchor.
+        for proposal in original:
+            anchor_after = proposal.anchor_after
+            if proposal.action == "add" and anchor_after is not None and anchor_after in by_id:
+                precedes(anchor_after, proposal.id)
+
+        move_sequences: dict[str, list[Proposal]] = {}
+        for proposal in original:
+            if proposal.action == "move" and proposal.target is not None:
+                move_sequences.setdefault(proposal.target, []).append(proposal)
+        for sequence in move_sequences.values():
+            for before, after in zip(sequence, sequence[1:], strict=False):
+                precedes(before.id, after.id)
+
+        target_details: dict[str, tuple[list[Element], set[str]]] = {}
+        for target in move_sequences:
+            try:
+                elements = [element for _, element in doc._state._target_elements(target)]
+            except TargetNotFound as exc:
+                raise InvalidOperation(
+                    f"pending move target {target!r} is missing — reject the dangling proposal"
+                ) from exc
+            moved_ids = {
                 value
-                for element in node.iter()
-                for value in (element.chunk_id, element.container_id)
+                for element in elements
+                for descendant in element.iter()
+                for value in (descendant.chunk_id, descendant.container_id)
                 if value
             }
-            outside = work._state.all_ids() - inside
-            return bool(_payload_ids(proposal.payload_html or "") & outside)
+            target_details[target] = (elements, moved_ids)
 
-        def final_moves_land(work: AimDocument) -> bool:
-            for target, move in final_moves.items():
-                if not work._state.exists(target):
-                    if target in intentionally_deleted_moves:
-                        continue
-                    return False
-                try:
-                    if work._anchor_of(target).container != (move.anchor_container or "body"):
-                        return False
-                except AimError:
-                    return False
-            return not work.verify()
+        def destination_anchor_exists(container: Element, move: Proposal) -> bool:
+            if move.anchor_after is None:
+                return move.anchor_shell is None or any(
+                    child.tag == move.anchor_shell for child in container.elements()
+                )
+            matches = [
+                element
+                for element in container.iter()
+                if element is not container
+                and (
+                    element.chunk_id == move.anchor_after
+                    or element.container_id == move.anchor_after
+                )
+            ]
+            if not matches:
+                return False
+            anchor = matches[-1]
+            parent = next(
+                (candidate for candidate in container.iter() if anchor in candidate.children),
+                None,
+            )
+            if parent is None:
+                return False
+            direct = parent is container or (
+                container.tag == "table"
+                and parent.tag in REGISTRY.table_shells
+                and parent in container.children
+            )
+            if not direct:
+                return False
+            shell = parent.tag if parent.tag in REGISTRY.table_shells else None
+            return move.anchor_shell is None or move.anchor_shell == shell
 
-        def ready_proposals(remaining: tuple[str, ...]) -> list[Proposal]:
-            pending = set(remaining)
-            ready: list[Proposal] = []
-            for pid in remaining:
-                proposal = by_id[pid]
-                if proposal.action == "add" and proposal.anchor_after in pending:
-                    continue
-                if proposal.action == "move" and any(
-                    other.id in pending
-                    and other.action == "move"
-                    and other.target == proposal.target
-                    and position[other.id] < position[pid]
-                    for other in original
-                ):
-                    continue
-                ready.append(proposal)
-            ready.sort(key=lambda p: (rank.get(p.action, 0), position[p.id]))
-            return ready
+        def current_destination_accepts(move: Proposal, elements: list[Element]) -> bool:
+            anchor = Anchor(move.anchor_container or "body", move.anchor_after, move.anchor_shell)
+            try:
+                doc._state.resolve_insert_point(anchor)
+                container = doc._state.container_node(anchor.container)
+                if container is not None:
+                    doc._state._guard_item_members(container, elements)
+            except (InvalidOperation, TargetNotFound):
+                return False
+            return True
 
-        def solve(work: AimDocument, remaining: tuple[str, ...]) -> list[str] | None:
-            if not remaining:
-                return [] if final_moves_land(work) else None
-            key = (work.doc_hash, frozenset(remaining))
-            if key in memo:
-                return None
-            for proposal in ready_proposals(remaining):
-                if modify_keeps_live_foreign_ids(work, proposal):
-                    continue
-                candidate = AimDocument.loads(work.dumps())
-                try:
-                    candidate.accept(proposal.id, decided_by=proposal.author, at=proposal.at)
-                except AimError:
-                    continue
-                tail = solve(candidate, tuple(pid for pid in remaining if pid != proposal.id))
-                if tail is not None:
-                    return [proposal.id, *tail]
-            memo.add(key)
-            return None
+        def proposed_destination_accepts(
+            move: Proposal, elements: list[Element], containers: dict[str, Element]
+        ) -> bool:
+            container = containers.get(move.anchor_container or "body")
+            if container is None or not destination_anchor_exists(container, move):
+                return False
+            try:
+                doc._state._guard_item_members(container, elements)
+            except InvalidOperation:
+                return False
+            return True
 
-        solution = solve(AimDocument.loads(doc.dumps()), tuple(p.id for p in original))
-        if solution is not None:
-            return [by_id[pid] for pid in solution]
-
-        # Keep the established actionable diagnostic for the common hard
-        # conflict: the final hop lands inside a replacement that omits it.
-        for modify in original:
-            if modify.action != "modify" or not modify.target:
-                continue
-            node = doc._state.container_node(modify.target)
-            if node is None:
+        erasing_destinations: list[tuple[Proposal, Proposal]] = []
+        modifies = [p for p in original if p.action == "modify" and p.target]
+        for modify in modifies:
+            assert modify.target is not None
+            current = doc._state.container_node(modify.target)
+            if current is None:
                 continue
             inside = {
                 value
-                for element in node.iter()
+                for element in current.iter()
                 for value in (element.chunk_id, element.container_id)
                 if value
             }
-            kept = _payload_ids(modify.payload_html or "")
-            for move in final_moves.values():
-                if move.anchor_container in inside and move.target not in kept:
-                    raise InvalidOperation(
-                        f"cannot accept move proposal {move.id!r}: delayed modify proposal "
-                        f"{modify.id!r} would erase moved chunk {move.target!r}; reject one "
-                        "of the proposals first"
-                    )
+            payload_roots = [
+                node
+                for node in parse_fragment(modify.payload_html or "")
+                if isinstance(node, Element)
+            ]
+            kept = {
+                value
+                for root in payload_roots
+                for element in root.iter()
+                for value in (element.chunk_id, element.container_id)
+                if value
+            }
+            proposed_containers = {
+                element.container_id: element
+                for root in payload_roots
+                for element in root.iter()
+                if element.container_id is not None
+            }
+
+            for target, sequence in move_sequences.items():
+                elements, moved_ids = target_details[target]
+                source_inside = target in inside
+                for move in sequence:
+                    destination = move.anchor_container or "body"
+                    destination_inside = destination in inside
+
+                    # A hop must use the pre-modify state when replacement
+                    # would erase its source target or landing point.
+                    if source_inside and target not in kept:
+                        precedes(move.id, modify.id)
+                    if any(
+                        dependency is not None and dependency in inside and dependency not in kept
+                        for dependency in (move.anchor_after, destination)
+                    ):
+                        precedes(move.id, modify.id)
+
+                    # A retained member moving out must first receive the
+                    # replacement; otherwise payload normalization remints a
+                    # duplicate copy after the move carries the live ids out.
+                    if source_inside and not destination_inside and moved_ids & kept:
+                        precedes(modify.id, move.id)
+
+                    # Reconcile may leave the current destination kind
+                    # incompatible because this pending replacement makes the
+                    # move legal. The reverse kind change must trail the hop.
+                    if destination_inside:
+                        accepts_before = current_destination_accepts(move, elements)
+                        accepts_after = proposed_destination_accepts(
+                            move, elements, proposed_containers
+                        )
+                        if accepts_after and not accepts_before:
+                            precedes(modify.id, move.id)
+                        elif accepts_before and not accepts_after:
+                            precedes(move.id, modify.id)
+                        elif not accepts_before and not accepts_after:
+                            precedes(move.id, modify.id)
+                            precedes(modify.id, move.id)
+
+                    source_inside = destination_inside
+
+                final_move = sequence[-1]
+                if final_move.anchor_container in inside and target not in kept:
+                    # An otherwise unrelated inbound sequence trails the
+                    # replacement so its final target is not erased.
+                    precedes(modify.id, final_move.id)
+                    erasing_destinations.append((final_move, modify))
+
+        # Three fixed action priorities preserve the established preference
+        # without a comparison heap: adds/modifies, moves, then deletes.
+        ready_buckets: list[deque[str]] = [deque() for _ in range(max(rank.values()) + 1)]
+        for proposal in original:
+            if indegree[proposal.id] == 0:
+                ready_buckets[rank.get(proposal.action, 0)].append(proposal.id)
+
+        ordered_ids: list[str] = []
+        while any(ready_buckets):
+            bucket = next(queue for queue in ready_buckets if queue)
+            pid = bucket.popleft()
+            ordered_ids.append(pid)
+            for dependent in outgoing[pid]:
+                indegree[dependent] -= 1
+                if indegree[dependent] == 0:
+                    proposal = by_id[dependent]
+                    ready_buckets[rank.get(proposal.action, 0)].append(dependent)
+
+        if len(ordered_ids) == len(original):
+            return [by_id[pid] for pid in ordered_ids]
+
+        cyclic = {pid for pid, degree in indegree.items() if degree > 0}
+        for move, modify in erasing_destinations:
+            if move.id in cyclic and modify.id in cyclic and modify.id in outgoing[move.id]:
+                raise InvalidOperation(
+                    f"cannot accept move proposal {move.id!r}: delayed modify proposal "
+                    f"{modify.id!r} would erase moved chunk {move.target!r}; reject one "
+                    "of the proposals first"
+                )
+        if cyclic and all(by_id[pid].action == "add" for pid in cyclic):
+            raise InvalidOperation(
+                "pending adds anchor on each other in a cycle — the file is "
+                "corrupt (aim lint reports P015)"
+            )
         raise InvalidOperation(
-            "pending proposals have no dependency-safe acceptance order — "
+            "pending proposals have cyclic acceptance constraints — "
             "the lane cannot be resolved; reject one of the proposals first"
         )
 
