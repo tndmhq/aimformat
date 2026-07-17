@@ -184,13 +184,18 @@ def resolution_order(
     order, so earlier hops are transient and only the final destination can
     collide with the replacement. A modify whose payload
     keeps the member stays ahead of the move (relocating first would make the
-    payload re-introduce a duplicate id). Set *accepting* false when ordering
-    a reject-all operation, where these write conflicts do not apply.
-    Shared by ``aim accept/reject --all`` and the exporters'
-    resolve-a-copy paths.
+    payload re-introduce a duplicate id). Only moves that REQUIRE the modify
+    to wait (a rescued member, a stripped landing point) can collide with
+    the replacement; an unrelated inbound move whose final destination sits
+    inside the replaced subtree is scheduled after the modify instead, so
+    it lands in the replacement rather than being erased by it. Set
+    *accepting* false when ordering a reject-all operation, where these
+    write conflicts do not apply. Shared by ``aim accept/reject --all`` and
+    the exporters' resolve-a-copy paths.
     """
-    rank = {"move": 2, "delete": 4}
+    rank = {"move": 2, "delete": 5}
     after_moves: set[str] = set()  # modify card ids that must trail the moves
+    trailing_moves: set[str] = set()  # move card ids that must trail a delayed modify
     conflicts: list[tuple[Proposal, Proposal]] = []
     if doc is not None:
         moves = [p for p in proposals if p.action == "move" and p.target]
@@ -198,6 +203,8 @@ def resolution_order(
         # target moved more than once only the LAST card decides where it
         # finally lands when the delayed modify runs
         final_move = {mv.target: mv for mv in moves}
+        must_precede: set[str] = set()  # move ids that forced some modify to wait
+        landing: list[tuple[Proposal, Proposal]] = []  # (final move, delayed modify)
         for p in proposals:
             if p.action != "modify" or not p.target or not moves:
                 continue
@@ -209,22 +216,32 @@ def resolution_order(
             # a move needs its target rescued AND its landing point intact:
             # the modify waits when its payload drops the moved chunk, the
             # move's destination anchor, or the destination container
-            delayed = any(
-                affected in inside and affected not in kept
+            forcing = {
+                mv.id
                 for mv in moves
                 for affected in (mv.target, mv.anchor_after, mv.anchor_container)
-                if affected
-            )
-            if not delayed:
+                if affected and affected in inside and affected not in kept
+            }
+            if not forcing:
                 continue
             after_moves.add(p.id)
+            must_precede |= forcing
             if accepting:
                 # the replacement erases a moved chunk only when its FINAL
                 # destination sits inside the replaced subtree — an earlier
                 # move into it is harmless if a later card moves on
                 for mv in final_move.values():
                     if mv.anchor_container in inside and mv.target not in kept:
-                        conflicts.append((mv, p))
+                        landing.append((mv, p))
+        # a move landing inside the replaced subtree conflicts only when it
+        # must ALSO run before a delayed modify (rescue or stripped anchor)
+        # — every other inbound move simply waits for the replacement and
+        # lands in the new payload
+        for mv, p in landing:
+            if mv.id in must_precede:
+                conflicts.append((mv, p))
+            else:
+                trailing_moves.add(mv.id)
     if conflicts:
         move, modify = conflicts[0]
         raise InvalidOperation(
@@ -242,7 +259,11 @@ def resolution_order(
                 "pending adds anchor on each other in a cycle — the file is "
                 "corrupt (aim lint reports P015)"
             )
-        ready.sort(key=lambda p: 3 if p.id in after_moves else rank.get(p.action, 0))
+        ready.sort(
+            key=lambda p: (
+                3 if p.id in after_moves else 4 if p.id in trailing_moves else rank.get(p.action, 0)
+            )
+        )
         order.extend(ready)
         done = {p.id for p in ready}
         pending = [p for p in pending if p.id not in done]

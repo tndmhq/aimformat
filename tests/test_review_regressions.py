@@ -3639,6 +3639,89 @@ class TestLaterMovesClearEarlierMoveConflicts:
             resolution_order(doc.proposals, doc)
 
 
+class TestInboundMovesTrailTheDelayedModify:
+    """codex-pr15-r2 (refines codex-pr15-p2-2): an OUTBOUND move rescuing a
+    member out of a modified container forces the replacement into
+    after_moves — and the erase-conflict check then flagged EVERY final
+    move landing inside the replaced subtree, including an unrelated
+    INBOUND move that never needed to precede the modify. The lane is
+    resolvable: rescue → modify → inbound move lands in the replacement.
+    Only moves that must run before the modify (rescued targets, stripped
+    landing points) can collide with it; unrelated inbound moves are now
+    scheduled after the modify instead of being refused."""
+
+    @pytest.fixture
+    def inbound_lane(self):
+        doc = aim.new_document(title="T")
+        doc.add_chunk(
+            '<ul data-aim-container="l1"><li data-aim="y">Y</li></ul>', author=ME, at=ts(0)
+        )
+        doc.add_chunk(
+            '<ul data-aim-container="l2"><li data-aim="a">A</li><li data-aim="x">X</li></ul>',
+            author=ME,
+            at=ts(1),
+        )
+        # outbound rescue: x leaves l2 before the replacement drops it
+        doc.propose_move("x", author=BOT, container="l1", after="y", at=ts(2))
+        # unrelated inbound move: y lands on an anchor the payload keeps
+        doc.propose_move("y", author=BOT, container="l2", after="a", at=ts(3))
+        doc.propose_modify(
+            "l2", '<ul data-aim-container="l2"><li data-aim="a">A</li></ul>', author=BOT, at=ts(4)
+        )
+        return doc
+
+    def test_inbound_move_is_scheduled_after_the_delayed_modify(self, inbound_lane):
+        from aimformat.document import resolution_order
+
+        order = resolution_order(inbound_lane.proposals, inbound_lane)
+        assert [(p.action, p.target) for p in order] == [
+            ("move", "x"),
+            ("modify", "l2"),
+            ("move", "y"),
+        ]
+
+    def test_accept_all_leaves_both_targets_in_their_requested_containers(self, inbound_lane):
+        from aimformat.document import resolution_order
+
+        for p in resolution_order(inbound_lane.proposals, inbound_lane):
+            inbound_lane.accept(p.id, decided_by=ME, at=ts(5))
+        assert inbound_lane.chunk("x").container == "l1"
+        assert inbound_lane.chunk("y").container == "l2"
+        assert inbound_lane.verify() == []
+
+    def test_accept_all_export_resolves_the_lane(self, inbound_lane):
+        from aimformat.export_docx import _resolve_copy
+
+        resolved = _resolve_copy(inbound_lane, "accept-all")
+        assert resolved.proposals == []
+        assert resolved.chunk("x").container == "l1"
+        assert resolved.chunk("y").container == "l2"
+        assert resolved.verify() == []
+
+    def test_inbound_move_onto_a_dropped_anchor_still_conflicts(self):
+        doc = aim.new_document(title="T")
+        doc.add_chunk(
+            '<ul data-aim-container="l1"><li data-aim="y">Y</li></ul>', author=ME, at=ts(0)
+        )
+        doc.add_chunk(
+            '<ul data-aim-container="l2"><li data-aim="a">A</li><li data-aim="b">B</li>'
+            '<li data-aim="x">X</li></ul>',
+            author=ME,
+            at=ts(1),
+        )
+        doc.propose_move("x", author=BOT, container="l1", after="y", at=ts(2))
+        # the inbound anchor b exists only pre-modify, so the move must run
+        # first — and the replacement then erases y: neither order is safe
+        doc.propose_move("y", author=BOT, container="l2", after="b", at=ts(3))
+        doc.propose_modify(
+            "l2", '<ul data-aim-container="l2"><li data-aim="a">A</li></ul>', author=BOT, at=ts(4)
+        )
+        from aimformat.document import resolution_order
+
+        with pytest.raises(aim.InvalidOperation, match="would erase moved chunk 'y'"):
+            resolution_order(doc.proposals, doc)
+
+
 class TestOrderedMarkersInListItemModifications:
     """codex-r3-5 (completes the round-1 ordered-marker fix): additions
     got the live ordinal, but a modify proposal's replacement went through
