@@ -192,6 +192,28 @@ describe("AimDocument", () => {
     expect(doc.embeddingsJsonl).toBeNull();
   });
 
+  it("builds views for a large document without per-id rescans", () => {
+    // perf guard: view construction must stay one traversal. The per-id
+    // findChunk rescan this replaces was O(n²) — at this size several
+    // seconds of work; a single walk is tens of milliseconds. The bound is
+    // deliberately loose so only a complexity regression can trip it.
+    const n = 6000;
+    const parts: string[] = [];
+    for (let i = 0; i < n / 3; i += 1) {
+      parts.push(`<p data-aim="p${i}">paragraph ${i}</p>`);
+      parts.push(
+        `<ul data-aim-container="l${i}"><li data-aim="a${i}">one</li>` +
+          `<li data-aim="b${i}">run</li><li data-aim="b${i}">run</li></ul>`,
+      );
+    }
+    const started = performance.now();
+    const doc = AimDocument.parse(wrap(parts.join("\n")));
+    expect(doc.chunks).toHaveLength(n);
+    expect(doc.containers).toHaveLength(n / 3);
+    expect(doc.get(`b${n / 3 - 1}`)).toMatchObject({ isRun: true });
+    expect(performance.now() - started).toBeLessThan(2000);
+  });
+
   it("lists packed asset ids", () => {
     const doc = AimDocument.parse(
       wrap(

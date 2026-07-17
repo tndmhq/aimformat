@@ -456,31 +456,10 @@ export class AimDocument {
 
   // -- chunk/container views -----------------------------------------------------
 
-  /** Mirror of Python `DocState.find_chunk`: every element carrying the id,
-   * then the members that share the first hit's parent. */
-  private findChunk(cid: string): {
-    parent: Element | null;
-    members: Element[];
-  } {
-    const hits: Array<[Element, Element]> = [];
-    const walk = (parent: Element): void => {
-      for (const child of parent.elements()) {
-        if (child.tag === "template") continue;
-        if (child.chunkId === cid) hits.push([parent, child]);
-        walk(child);
-      }
-    };
-    for (const top of this.constructs()) {
-      if (top.chunkId === cid) hits.push([this.body, top]);
-      walk(top);
-    }
-    if (hits.length === 0) return { parent: null, members: [] };
-    const parent = hits[0]![0];
-    return {
-      parent,
-      members: hits.filter(([p]) => p === parent).map(([, el]) => el),
-    };
-  }
+  /** Each chunk id's member elements grouped by parent, in first-hit
+   * pre-order — Python `DocState.find_chunk`'s hit list, precollected for
+   * every id by one walk in `buildViews` (a per-id rescan is O(n²)). */
+  private readonly chunkGroups = new Map<string, Map<Element, Element[]>>();
 
   /** The container a chunk lives in: nearest container ancestor or "body". */
   private containerOfChunk(parent: Element): string {
@@ -516,8 +495,17 @@ export class AimDocument {
   private chunkView(cid: string): Chunk {
     const cached = this.chunkViews.get(cid);
     if (cached !== undefined) return cached;
-    const { parent, members } = this.findChunk(cid);
-    const view = this.makeChunkView(cid, parent, members);
+    // the first collected group is find_chunk's answer: the members that
+    // share the first hit's parent (no group = an id seen only inside a
+    // template, which contributes no members)
+    const first: [Element, Element[]] | undefined = this.chunkGroups
+      .get(cid)
+      ?.entries()
+      .next().value;
+    const view =
+      first === undefined
+        ? this.makeChunkView(cid, null, [])
+        : this.makeChunkView(cid, first[0], first[1]);
     this.chunkViews.set(cid, view);
     return view;
   }
@@ -566,24 +554,45 @@ export class AimDocument {
     chunks: Chunk[];
     containers: Container[];
   } {
-    // one walk defines every ordering: chunks emit at first sight of their
+    // pass 1 — one template-skipping walk precollects every chunk id's
+    // member groups in pre-order, so `chunkView` reads its group instead of
+    // rescanning the tree per id. Semantics are Python `find_chunk`'s:
+    // template subtrees never contribute members.
+    const collect = (parent: Element, el: Element): void => {
+      if (el.tag === "template") return;
+      const cid = el.chunkId;
+      if (cid !== null && cid.length > 0) {
+        let groups = this.chunkGroups.get(cid);
+        if (groups === undefined) {
+          groups = new Map();
+          this.chunkGroups.set(cid, groups);
+        }
+        const members = groups.get(parent);
+        if (members === undefined) groups.set(parent, [el]);
+        else members.push(el);
+      }
+      for (const child of el.elements()) collect(el, child);
+    };
+    for (const top of this.constructs()) collect(this.body, top);
+
+    // pass 2 defines every ordering: chunks emit at first sight of their
     // id (Python `AimDocument.chunks`), containers at their element. The
     // index gets one entry per (id, parent) group, so an id repeated under
     // several parents — invalid (S016), but real files can be broken — is
     // a multimap hit, never a silent overwrite.
     const chunks: Chunk[] = [];
     const containers: Container[] = [];
-    const chunkGroups = new Map<string, Set<Element>>();
+    const emitted = new Map<string, Set<Element>>();
     for (const top of this.constructs()) {
       for (const el of top.iter()) {
         const chunkId = el.chunkId;
         const containerId = el.containerId;
         if (chunkId !== null && chunkId.length > 0) {
           const parent = this.parents.get(el) ?? this.body;
-          let groupParents = chunkGroups.get(chunkId);
+          let groupParents = emitted.get(chunkId);
           if (groupParents === undefined) {
             groupParents = new Set();
-            chunkGroups.set(chunkId, groupParents);
+            emitted.set(chunkId, groupParents);
           }
           if (!groupParents.has(parent)) {
             const isFirstGroup = groupParents.size === 0;
