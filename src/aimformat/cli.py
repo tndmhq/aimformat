@@ -218,8 +218,9 @@ def _cmd_resolve(args: argparse.Namespace, decision: str) -> int:
         # dependency-safe order shared with the exporters: chained adds
         # resolve after the add they anchor on; per round adds/modifies go
         # first, then moves, then deletes, so nothing pulls an anchor out
-        # from under a card that still needs it
-        pids = [p.id for p in resolution_order(doc.proposals)]
+        # from under a card that still needs it (and a container modify
+        # waits for a move that rescues a member its payload drops)
+        pids = [p.id for p in resolution_order(doc.proposals, doc)]
     else:
         pids = args.pids
     if not pids:

@@ -919,7 +919,7 @@ def _resolve_copy(doc: AimDocument, decision: str) -> AimDocument:
     decider = external("docx-export")
     # dependency-safe order (chained adds after their anchor, deletes last
     # per round) — shared with `aim accept/reject --all`
-    for p in resolution_order(clone.proposals):
+    for p in resolution_order(clone.proposals, clone):
         if decision == "accept-all":
             clone.accept(p.id, decided_by=decider)
         else:

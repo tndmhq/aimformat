@@ -144,7 +144,22 @@ class Proposal:
     anchor_shell: str | None = None  # thead/tbody/tfoot for table rows
 
 
-def resolution_order(proposals: Sequence[Proposal]) -> list[Proposal]:
+def _payload_ids(payload_html: str) -> set[str]:
+    """Every chunk/container id a proposal payload carries."""
+    out: set[str] = set()
+    for node in parse_fragment(payload_html):
+        if isinstance(node, Element):
+            for el in node.iter():
+                if el.chunk_id:
+                    out.add(el.chunk_id)
+                if el.container_id:
+                    out.add(el.container_id)
+    return out
+
+
+def resolution_order(
+    proposals: Sequence[Proposal], doc: AimDocument | None = None
+) -> list[Proposal]:
     """A dependency-safe order for resolving a whole pending lane.
 
     Card order in the file carries no dependency meaning (a manual reorder
@@ -153,10 +168,32 @@ def resolution_order(proposals: Sequence[Proposal]) -> list[Proposal]:
     moves, then deletes — an add anchored on a chunk that a sibling card
     moves away or deletes lands while the anchor is still in place, and a
     move whose destination anchors on a to-be-deleted chunk resolves before
-    the delete. Shared by ``aim accept/reject --all`` and the exporters'
+    the delete. When *doc* is given, a container modify whose payload drops
+    a member that a sibling card moves away waits for that move — the move
+    rescues the member before its container is replaced, exactly as a
+    delete would wait; a modify whose payload keeps the member stays ahead
+    of the move (relocating first would make the payload re-introduce a
+    duplicate id). Shared by ``aim accept/reject --all`` and the exporters'
     resolve-a-copy paths.
     """
-    rank = {"move": 1, "delete": 2}
+    rank = {"move": 2, "delete": 4}
+    after_moves: set[str] = set()  # modify card ids that must trail the moves
+    if doc is not None:
+        moves = [p for p in proposals if p.action == "move" and p.target]
+        for p in proposals:
+            if p.action != "modify" or not p.target or not moves:
+                continue
+            node = doc._state.container_node(p.target)
+            if node is None:
+                continue
+            kept = _payload_ids(p.payload_html or "")
+            for mv in moves:
+                t = mv.target
+                if t in kept:
+                    continue
+                if node.find(lambda e, t=t: e.chunk_id == t or e.container_id == t) is not None:
+                    after_moves.add(p.id)
+                    break
     pending = list(proposals)
     order: list[Proposal] = []
     while pending:
@@ -167,7 +204,7 @@ def resolution_order(proposals: Sequence[Proposal]) -> list[Proposal]:
                 "pending adds anchor on each other in a cycle — the file is "
                 "corrupt (aim lint reports P015)"
             )
-        ready.sort(key=lambda p: rank.get(p.action, 0))
+        ready.sort(key=lambda p: 3 if p.id in after_moves else rank.get(p.action, 0))
         order.extend(ready)
         done = {p.id for p in ready}
         pending = [p for p in pending if p.id not in done]

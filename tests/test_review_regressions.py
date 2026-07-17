@@ -1275,6 +1275,80 @@ class TestResolutionOrderProtectsAnchors:
         assert doc.verify() == []
 
 
+class TestMovesStayAheadOfAncestorReplacements:
+    """codex-r2-5 (refines AF-04): ranking every modify below every move
+    broke lanes where a move rescues a descendant before its container is
+    replaced — ``accept --all`` resolved the container modify first,
+    deleting the member, and the move then raised TargetNotFound after
+    partially resolving the document. A container modify whose payload
+    drops a pending move's target now waits for that move; a payload that
+    keeps the member stays ahead of the move (relocating first would make
+    the payload re-introduce a duplicate id)."""
+
+    @pytest.fixture
+    def rescue_lane(self):
+        doc = aim.new_document(title="T")
+        doc.add_chunk(
+            '<ul data-aim-container="lst"><li data-aim="x">keep me</li>'
+            '<li data-aim="y">other</li></ul>',
+            author=ME,
+            at=ts(0),
+        )
+        # move card FIRST rescues x; the container replacement drops it
+        doc.propose_move("x", author=BOT, container="body", at=ts(1))
+        doc.propose_modify(
+            "lst",
+            '<table data-aim-container="lst"><tbody>'
+            '<tr data-aim="r1"><td>other</td></tr></tbody></table>',
+            author=BOT,
+            at=ts(2),
+        )
+        return doc
+
+    def test_move_orders_before_the_container_replacement(self, rescue_lane):
+        from aimformat.document import resolution_order
+
+        actions = [p.action for p in resolution_order(rescue_lane.proposals, rescue_lane)]
+        assert actions == ["move", "modify"]
+
+    def test_accept_all_resolves_the_whole_lane(self, rescue_lane):
+        from aimformat.document import resolution_order
+
+        for p in resolution_order(rescue_lane.proposals, rescue_lane):
+            rescue_lane.accept(p.id, decided_by=ME, at=ts(3))
+        assert rescue_lane.proposals == []
+        assert "x" in rescue_lane.body_ids
+        assert rescue_lane.verify() == []
+
+    def test_docx_accept_all_export_succeeds(self, rescue_lane, tmp_path):
+        pytest.importorskip("docx")
+        out = aim.to_docx(rescue_lane, tmp_path / "t.docx", pending="accept-all")
+        assert out.exists()
+
+    def test_payload_keeping_the_member_stays_ahead_of_the_move(self):
+        doc = aim.new_document(title="T")
+        doc.add_chunk(
+            '<ul data-aim-container="lst"><li data-aim="x">keep</li></ul>', author=ME, at=ts(0)
+        )
+        doc.propose_move("x", author=BOT, container="body", at=ts(1))
+        doc.propose_modify(
+            "lst", '<ul data-aim-container="lst"><li data-aim="x">keep!</li></ul>', author=BOT, at=ts(2)
+        )
+        from aimformat.document import resolution_order
+
+        assert [p.action for p in resolution_order(doc.proposals, doc)] == ["modify", "move"]
+        for p in resolution_order(doc.proposals, doc):
+            doc.accept(p.id, decided_by=ME, at=ts(3))
+        assert doc.body_ids == ["lst", "x"]
+        assert doc.verify() == []
+
+    def test_without_the_doc_the_static_order_is_unchanged(self, rescue_lane):
+        from aimformat.document import resolution_order
+
+        actions = [p.action for p in resolution_order(rescue_lane.proposals)]
+        assert actions == ["modify", "move"]
+
+
 class TestPruneFlattenKeepBurnedIds:
     """AF-05: prune()/flatten() dropped the only record of burned ids, so a
     later write re-honored a previously seen id — an external reference to
