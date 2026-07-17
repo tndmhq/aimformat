@@ -730,9 +730,10 @@ class _Exporter:
                 else:
                     structural_ins[indices[-1]] = payload_rows
                     structural_del.update(indices)
-        # true grid width: simulate the emit loop's cursor (spans shift later
-        # cells right; a rowspan reaching below the last row is clamped), so
-        # every (ri, ci) the loop touches exists in the table
+        # true width of the live table: simulate the emit loop's cursor (spans
+        # shift later cells right; a rowspan reaching below the last row is
+        # clamped). Pending structural replacements build their own row shape
+        # below and must not widen the original rows outside tracked revisions.
         ncols = 0
         spanned: set[tuple[int, int]] = set()
         for ri, row in enumerate(rows):
@@ -750,9 +751,6 @@ class _Exporter:
                             spanned.add((ri + dr, ci + dc))
                 ci += cs
             ncols = max(ncols, ci)
-        for payload_rows in structural_ins.values():  # replacement rows may be wider
-            for p_row in payload_rows:
-                ncols = max(ncols, len([c for c in p_row.elements() if c.tag in ("td", "th")]))
         table = self.out.add_table(rows=len(rows), cols=ncols)
         table.style = "Table Grid" if self._has_style("Table Grid") else None
         occupied: set[tuple[int, int]] = set()
@@ -821,7 +819,11 @@ class _Exporter:
             for p_row in payload_rows:
                 new_row = table.add_row()  # appended; repositioned below
                 p_cells = [c for c in p_row.elements() if c.tag in ("td", "th")]
-                for idx in range(min(len(p_cells), ncols)):
+                while len(new_row._tr.tc_lst) < len(p_cells):
+                    new_row._tr.add_tc()
+                while len(new_row._tr.tc_lst) > len(p_cells):
+                    new_row._tr.remove(new_row._tr.tc_lst[-1])
+                for idx in range(len(p_cells)):
                     para = new_row.cells[idx].paragraphs[0]
                     self.rev.ins(para, _runs_of(p_cells[idx]), label, date)
                 self.rev.row_ins(new_row._tr, label, date)

@@ -1628,6 +1628,27 @@ class TestTrackedStructuralRowModify:
         deleted = [t.text for t in docx.Document(str(out)).element.body.iter(qn("w:delText"))]
         assert "A" in deleted and "B" in deleted
 
+    def test_wider_replacement_does_not_widen_original_rows(self, two_col_doc, tmp_path):
+        pytest.importorskip("docx")
+        import docx
+        from docx.oxml.ns import qn
+
+        two_col_doc.propose_modify(
+            "r1",
+            '<tr data-aim="r1"><td>X</td><td>Y</td><td>Z</td></tr>',
+            author=BOT,
+            at=ts(1),
+        )
+        out = aim.to_docx(two_col_doc, tmp_path / "width.docx")
+        rows = docx.Document(str(out)).tables[0]._tbl.findall(qn("w:tr"))
+        header = next(row for row in rows if "K" in [t.text for t in row.iter(qn("w:t"))])
+        old_row = next(row for row in rows if "A" in [t.text for t in row.iter(qn("w:delText"))])
+        new_row = next(row for row in rows if "X" in [t.text for t in row.iter(qn("w:t"))])
+
+        assert len(header.findall(qn("w:tc"))) == 2
+        assert len(old_row.findall(qn("w:tc"))) == 2
+        assert len(new_row.findall(qn("w:tc"))) == 3
+
     def test_shape_changing_rows_carry_structural_revisions(self, two_col_doc, tmp_path):
         pytest.importorskip("docx")
         import docx
