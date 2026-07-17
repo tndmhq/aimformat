@@ -102,6 +102,14 @@ def _runs_of(el: Element, fmt: dict | None = None) -> list[dict]:
                 href = child.get("href") or ""
                 if href and not href.startswith("#"):
                     runs.append({"text": f" ({href})", **fmt})
+            elif child.tag == "img":
+                # inline image: honest placeholder (figure-fallback style),
+                # URL kept unless it's an embedded data blob
+                label = f"[image: {child.get('alt') or 'image'}]"
+                src = child.get("src") or ""
+                if src and not src.startswith("data:"):
+                    label += f" ({src})"
+                runs.append({"text": label, **fmt, "italic": True})
             else:
                 runs += _runs_of(child, fmt)
     return runs

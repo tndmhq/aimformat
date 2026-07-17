@@ -1428,3 +1428,56 @@ class TestMarkdownKeepsGroupingBlockText:
         )
         md = aim.to_markdown(doc)
         assert "One.\n\nTwo." in md
+
+
+class TestDocxKeepsInlineImages:
+    """AF-37: ``_runs_of`` recursed into an ``<img>``'s (nonexistent)
+    children, so ``Before <img> after`` exported as ``Before  after`` —
+    no alt, no URL, anywhere; the supported md→AIM→DOCX path silently
+    dropped every inline image."""
+
+    def _texts(self, path):
+        import docx
+
+        return [p.text for p in docx.Document(str(path)).paragraphs]
+
+    def test_url_image_leaves_placeholder_and_url(self, tmp_path):
+        pytest.importorskip("docx")
+        doc = aim.new_document(title="T")
+        doc.add_chunk(
+            '<p data-aim="p1">Before <img src="https://x.example/i.png" alt="chart"> after</p>',
+            author=ME,
+            at=ts(0),
+        )
+        texts = self._texts(aim.to_docx(doc, tmp_path / "i.docx"))
+        assert "Before [image: chart] (https://x.example/i.png) after" in texts
+
+    def test_data_image_placeholder_elides_the_blob(self, tmp_path):
+        pytest.importorskip("docx")
+        doc = aim.new_document(title="T")
+        doc.add_chunk(
+            '<p data-aim="p1">See <img src="data:image/png;base64,iVBORw0KGgo=" alt="logo">.</p>',
+            author=ME,
+            at=ts(0),
+        )
+        texts = self._texts(aim.to_docx(doc, tmp_path / "d.docx"))
+        assert "See [image: logo]." in texts
+        assert not any("data:" in t for t in texts)
+
+    def test_tracked_delete_keeps_the_placeholder(self, tmp_path):
+        pytest.importorskip("docx")
+        import docx
+        from docx.oxml.ns import qn
+
+        doc = aim.new_document(title="T")
+        doc.add_chunk(
+            '<p data-aim="p1">Before <img src="https://x.example/i.png" alt="chart"> after</p>',
+            author=ME,
+            at=ts(0),
+        )
+        doc.propose_delete("p1", author=BOT, at=ts(1))
+        out = aim.to_docx(doc, tmp_path / "t.docx")
+        deleted = "".join(
+            t.text or "" for t in docx.Document(str(out)).element.body.iter(qn("w:delText"))
+        )
+        assert "[image: chart]" in deleted
