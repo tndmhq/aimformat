@@ -177,8 +177,9 @@ and the asset registry are exempt — they are not document content.
 A format that renders on double-click inherits HTML's threat surface; the
 constraints below are conformance requirements, enforced by the linter.
 
-- No executable script: the only `<script>` elements allowed are the three
-  typed data blocks (§2.2, §2.1), which browsers treat as inert data.
+- No executable script: the only `<script>` elements allowed are the four
+  typed data blocks (§2.1, §2.2 — `aim-meta`, `aim-doc`, history,
+  embeddings), which browsers treat as inert data.
 - No event-handler attributes (`on*`).
 - No `javascript:` or `data:text/*` URLs. `a@href` MUST be `https:`,
   `http:`, `mailto:`, or a fragment; `img@src` MUST be `https:`, `http:`,
@@ -589,7 +590,7 @@ baseline below the prune floor is unrecoverable).
 | chunk content + order | `aim-meta` (summary, TOC) — carries `as_of_seq`/`doc_hash` staleness markers |
 | containers (slides, list/table shells) + geometry | embeddings (per-chunk `text_hash` + `model`) |
 | theme block (`aim:theme`) | `aim.css` (pinned by `data-aim-css`, regenerable) |
-| future `aim:doc` settings | packed asset registry (content-addressed, immutable) |
+| `aim:doc` settings (page setup, §3.6) | packed asset registry (content-addressed, immutable) |
 
 Caches are never load-bearing: delete them all and the document plus
 history are intact and regenerable. Pending proposals are neither: they are
@@ -614,7 +615,7 @@ an agent reads; staleness is checkable against the current `doc_hash`.
 `application/aim-embeddings+jsonl`: one line per chunk per model —
 `{chunk, model, text_hash, vec}`. Multiple models per chunk are allowed;
 there is no "primary" marker (readers select by `model`). Vectors are JSON
-numbers (no quantized packing in v0.1). Stale = `text_hash` differs from
+numbers (no quantized packing in this version). Stale = `text_hash` differs from
 the hash of the chunk's current canonical serialization; cosmetic changes
 over-invalidate, which is safe. Last section in the file — least useful to
 raw readers.
@@ -670,7 +671,8 @@ pass of pack/flatten/prune.
   `text/html`) suffices. Media-type registration is future work.
 - Version control: map `*.aim` to HTML syntax highlighting
   (`.gitattributes`: `*.aim linguist-language=HTML`).
-- There is no container format in v0.1: a single text file is the format.
+- There is no container format in this version: a single text file is the
+  format.
 
 ---
 
