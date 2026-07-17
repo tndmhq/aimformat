@@ -178,25 +178,8 @@ def _creation_order(proposals: Sequence[Proposal]) -> list[Proposal]:
 
 
 def _apply_move_data(state: DocState, data: dict) -> None:
-    """Apply a move, including the inverse of a nested-source extraction.
-
-    Anchors represent positions between container members, not positions
-    inside a chunk's private markup. When a reconciled document has a pending
-    move that extracts a nested target, the accepted event carries reserved
-    ``x_*`` parent payloads so its inverse can restore that exact markup.
-    """
-    parent = data.get("x_destination_parent")
-    if parent is None:
-        state.move(data["target"], Anchor.from_obj(data["to"]))
-        return
-    before = data.get("x_destination_before")
-    after = data.get("x_destination_after")
-    if before is None or after is None:
-        raise HistoryError("nested move destination carries incomplete replay metadata")
-    if state.serial(parent) != before:
-        raise HistoryError(f"nested move parent {parent!r} does not match its recorded source")
-    state.remove(data["target"])
-    state.replace(parent, after)
+    """Apply a spec move using only its recorded destination anchor."""
+    state.move(data["target"], Anchor.from_obj(data["to"]))
 
 
 def resolution_order(
@@ -1362,6 +1345,12 @@ class AimDocument:
         _no_delete_move(cid, "move")
         if not self._state.exists(cid):
             raise TargetNotFound(f"no chunk {cid!r}")
+        nested_parent = self._nested_move_parent(cid)
+        if nested_parent is not None:
+            raise InvalidOperation(
+                f"cannot move {cid!r} out of nested markup in {nested_parent!r}; "
+                "modify the enclosing target instead"
+            )
         src = self._anchor_of(cid)
         dst = self._resolve_end_anchor(container, after, exclude=cid, shell=shell)
         if src == dst:  # full anchors: first-of-thead ≠ first-of-tbody
@@ -1679,31 +1668,12 @@ class AimDocument:
                 "anchor": ev.get("anchor"),
             }
         if action == "move":
-            inverse = {
+            return {
                 "target": target,
                 "action": "move",
                 "from": ev.get("to"),
                 "to": ev.get("from"),
             }
-            source_parent = ev.get("x_source_parent")
-            destination_parent = ev.get("x_destination_parent")
-            if source_parent is not None:
-                inverse.update(
-                    {
-                        "x_destination_parent": source_parent,
-                        "x_destination_before": ev.get("x_source_after"),
-                        "x_destination_after": ev.get("x_source_before"),
-                    }
-                )
-            elif destination_parent is not None:
-                inverse.update(
-                    {
-                        "x_source_parent": destination_parent,
-                        "x_source_before": ev.get("x_destination_after"),
-                        "x_source_after": ev.get("x_destination_before"),
-                    }
-                )
-            return inverse
         raise HistoryError(f"cannot invert action {action!r}")
 
     def _apply_data(self, data: dict) -> None:
@@ -2386,26 +2356,16 @@ class AimDocument:
                 if decision == "accepted":
                     _no_delete_move(prop.target or "", "move proposal")
                     nested_parent = self._nested_move_parent(prop.target or "")
-                    nested_before = (
-                        self._state.serial(nested_parent) if nested_parent is not None else None
-                    )
+                    if nested_parent is not None:
+                        raise InvalidOperation(
+                            f"cannot move {prop.target!r} out of nested markup in "
+                            f"{nested_parent!r}; reject the proposal or modify the "
+                            "enclosing target instead"
+                        )
                     src = self._anchor_of(prop.target or "")
                     data["anchor"] = dst.to_obj()
                     data["from"] = src.to_obj()
                     self._state.move(prop.target or "", dst)
-                    if nested_parent is not None:
-                        nested_after = self._state.serial(nested_parent)
-                        if nested_before is None or nested_after is None:
-                            raise HistoryError(
-                                "nested move parent vanished while recording replay metadata"
-                            )
-                        data.update(
-                            {
-                                "x_source_parent": nested_parent,
-                                "x_source_before": nested_before,
-                                "x_source_after": nested_after,
-                            }
-                        )
 
         # drop the card; rebind chained adds that anchored on this proposal
         sec = self._state.section("aim-proposals")
@@ -2504,20 +2464,6 @@ class AimDocument:
             frm = ev.get("from")
             if frm is None:
                 raise HistoryError("move event carries no 'from' — not invertible")
-            source_parent = ev.get("x_source_parent")
-            destination_parent = ev.get("x_destination_parent")
-            if source_parent is not None:
-                current_parent = state.serial(source_parent)
-                if current_parent != ev.get("x_source_after"):
-                    problems.append(
-                        f"seq {ev.seq}: nested move parent payload mismatch on {source_parent!r}"
-                    )
-                state.remove(target)
-                state.replace(source_parent, ev.get("x_source_before") or "")
-                return
-            if destination_parent is not None:
-                state.move(target, Anchor.from_obj(frm))
-                return
             to = ev.get("to")
             if to is not None:
                 # at this point the state IS the post-move state, so the
