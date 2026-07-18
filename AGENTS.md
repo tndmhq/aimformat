@@ -35,6 +35,11 @@ technical content only (see Governance below).
 - [`src/aimformat/`](src/aimformat/) — SDK, verifier, CLI, css generator,
   ingest/export; [`registry.json`](src/aimformat/registry.json) is the
   single source of truth for the vocabulary.
+- [`ts/`](ts/) — `@aimformat/reader`, the official TypeScript **read**
+  library (writes stay Python-only); `ts/src/registry.data.ts` is generated
+  from the registry (`scripts/gen_ts_registry.py`), and
+  [`tests/parity/`](tests/parity/) pins the TS projection to Python goldens
+  (`scripts/gen_parity_fixtures.py` + `scripts/dump_projection.py`).
 - [`tests/`](tests/) — the suite; [`tests/fixtures/`](tests/fixtures/) is
   the ok/nok conformance kit (regenerate via `scripts/gen_fixtures.py`).
 - [`examples/`](examples/) — SDK-generated (`scripts/gen_examples.py`).
@@ -66,6 +71,9 @@ technical content only (see Governance below).
    version** (`pip install <name>==<version>` / `npm install <name>@<version>`,
    pinned in the requirements/lock file). Never install unpinned and never
    trust a version number from memory — training-data versions are stale.
+   When touching an existing pin, re-check its **yanked** status too (the
+   PyPI JSON's `releases[v][0].yanked`): pip still installs an exact-pinned
+   yanked version, silently building on a release its authors pulled.
 
 2. **Plan before implementing.** For any non-trivial task, write the plan as a
    `…_plan_…` entry in `docs/log/` (scaffold with

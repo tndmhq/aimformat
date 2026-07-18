@@ -92,6 +92,15 @@ def main() -> None:
     flat.flatten()
     files["ok_flattened.aim"] = flat.dumps()
 
+    self_closing_exceptions = aim.new_document(title="Self-closing exceptions")
+    self_closing_exceptions.add_chunk(
+        '<p data-aim="syntax"><span></span><br><svg><use href="#asset-unused"/></svg></p>',
+        author=BOT,
+        at=t(0),
+    )
+    self_closing_exceptions.flatten()
+    files["ok_self_closing_exceptions.aim"] = self_closing_exceptions.dumps()
+
     paginated = base_doc()
     paginated.set_page_setup(
         {
@@ -214,15 +223,22 @@ def main() -> None:
             '<p data-aim="p1">One paragraph &amp; some text.</p>\n'
             '<aim-page-break data-aim="pbx">stray</aim-page-break>',
         ),
+        # nested in a section chunk, NOT a list container: a ul member
+        # would co-fire S022 (illegal item carrier) and break exactness
         "nok_D006_page_break_nested.aim": flat.replace(
-            '<li data-aim="i1">First</li>',
-            '<li data-aim="i1">First</li><aim-page-break data-aim="pbn"></aim-page-break>',
+            '<p data-aim="p1">One paragraph &amp; some text.</p>',
+            '<section data-aim="s1"><h2>Heading</h2>'
+            "<aim-page-break></aim-page-break></section>\n"
+            '<p data-aim="p1">One paragraph &amp; some text.</p>',
         ),
         "nok_H006_history_chain_broken.aim": life.replace(
             "Better text.</p>", "Sneakily different.</p>", 1
         ),
         "nok_C001_not_canonical.aim": flat.replace(
             'class="font-bold text-3xl"', 'class="text-3xl font-bold"'
+        ),
+        "nok_C002_self_closing_non_void.aim": files["ok_self_closing_exceptions.aim"].replace(
+            "<span></span>", "<span/>"
         ),
     }
     files.update(nok)

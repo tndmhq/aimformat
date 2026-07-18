@@ -152,7 +152,13 @@ def create_server() -> FastMCP:
             ],
         }
         if include_history:
-            out["history"] = [ev.data for ev in doc.history]
+            # elide like every other projection: raw add/modify payloads
+            # would dump full base64 data URIs into model context — the
+            # exact token blowup _elide exists to prevent
+            out["history"] = [
+                {k: _elide(v) if isinstance(v, str) else v for k, v in ev.data.items()}
+                for ev in doc.history
+            ]
         return out
 
     @server.tool()
@@ -396,8 +402,30 @@ def create_server() -> FastMCP:
     return server
 
 
+def _warn_if_unscoped() -> bool:
+    """Warn (stderr) when the server is about to run with no filesystem
+    confinement; returns True when unscoped. The unscoped default stays —
+    it is the documented local-trusted-stdio contract — but it must be
+    loud: wiring ``aim mcp`` to a hosted or semi-trusted client without a
+    root grants that client arbitrary host filesystem access."""
+    import sys
+
+    if os.environ.get("AIMFORMAT_MCP_ROOT"):
+        return False
+    print(
+        "aim mcp: AIMFORMAT_MCP_ROOT is not set — tools can read, write and "
+        "export ANY path this process can reach. Fine for a local, trusted "
+        "stdio client; for anything less trusted, set "
+        "AIMFORMAT_MCP_ROOT=<dir> to confine every path argument to that "
+        "directory tree.",
+        file=sys.stderr,
+    )
+    return True
+
+
 def main(args: Any = None) -> int:
     """Entry point for ``aim mcp``: serve on stdio until the client hangs up."""
+    _warn_if_unscoped()
     create_server().run(transport="stdio")
     return 0
 

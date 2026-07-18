@@ -104,12 +104,24 @@ doc.save("kickoff.aim")
 aim lint kickoff.aim        # the full verifier; exit code 1 on errors
 aim show kickoff.aim        # chunks, pending lane, history
 aim note kickoff.aim --check   # the agent note is present and current
-python3 -m http.server      # browsers render .aim when served as text/html
+```
+
+To view it in a browser, serve it with a `text/html` content type — a bare
+`python3 -m http.server` won't do (it doesn't know the `.aim` extension and
+serves a download instead):
+
+```sh
+python3 -c "import http.server as s; \
+  s.SimpleHTTPRequestHandler.extensions_map['.aim'] = 'text/html'; \
+  s.test(s.SimpleHTTPRequestHandler)"     # then open http://localhost:8000/kickoff.aim
+# or render a plain-HTML copy and open that:
+aim export kickoff.aim -o kickoff.html
 ```
 
 Note on double-clicking: local files are typed by extension, so a bare
-`.aim` opened via `file://` shows source. Serve it, use the `.aim.html`
-alias for sharing, or use an editor that registers the type (spec §10).
+`.aim` opened via `file://` shows source. Serve it as above, use the
+`.aim.html` alias for sharing, or use an editor that registers the type
+(spec §10).
 
 ## 6. In and out of other formats
 

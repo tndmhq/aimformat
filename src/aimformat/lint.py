@@ -21,13 +21,14 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import dataclass
+from html.parser import HTMLParser
 from pathlib import Path
 
 from . import ids
-from .canonical import document_text
+from .canonical import LINE_CONTAINERS, document_text
 from .css import generate_aim_css
 from .document import AimDocument, Anchor
-from .dom import Comment, Element, Text
+from .dom import Comment, Element, Text, parse_fragment
 from .errors import AimError, HistoryError, InvalidOperation, ParseError, TargetNotFound
 from .events import _ISO_RE
 from .pagesetup import page_setup_from_obj, parse_doc_settings
@@ -37,6 +38,65 @@ __all__ = ["Finding", "lint", "lint_text", "lint_path"]
 
 ERROR = "error"
 WARNING = "warning"
+
+
+class _SelfClosingSourceNormalizer(HTMLParser):
+    """Expand only C002 spellings while preserving every other source byte."""
+
+    def __init__(self, text: str):
+        super().__init__(convert_charrefs=False)
+        self.text = text
+        self.line_offsets = [0]
+        self.line_offsets.extend(match.end() for match in re.finditer("\n", text))
+        self.stack: list[str] = []
+        self.replacements: list[tuple[int, int, str]] = []
+        self.unsafe_tags: list[str] = []
+
+    def handle_starttag(self, tag: str, attrs: list) -> None:
+        if tag not in REGISTRY.void_elements:
+            self.stack.append(tag)
+
+    def handle_startendtag(self, tag: str, attrs: list) -> None:
+        if tag in REGISTRY.void_elements or tag == "svg" or "svg" in self.stack:
+            return
+        raw = self.get_starttag_text()
+        if raw is None:
+            return
+        line, column = self.getpos()
+        start = self.line_offsets[line - 1] + column
+        opening = raw[:-2].rstrip() + ">"
+        separator = "\n" if tag in LINE_CONTAINERS else ""
+        self.replacements.append((start, start + len(raw), opening + separator + f"</{tag}>"))
+        self.unsafe_tags.append(tag)
+
+    def handle_endtag(self, tag: str) -> None:
+        for i in range(len(self.stack) - 1, -1, -1):
+            if self.stack[i] == tag:
+                del self.stack[i:]
+                return
+
+    def normalized(self) -> str:
+        parts: list[str] = []
+        cursor = 0
+        for start, end, replacement in self.replacements:
+            parts.extend((self.text[cursor:start], replacement))
+            cursor = end
+        parts.append(self.text[cursor:])
+        return "".join(parts)
+
+
+def _without_c002_differences(text: str) -> str:
+    normalizer = _SelfClosingSourceNormalizer(text)
+    normalizer.feed(text)
+    normalizer.close()
+    return normalizer.normalized()
+
+
+def _unsafe_self_closing_tags(text: str) -> list[str]:
+    detector = _SelfClosingSourceNormalizer(text)
+    detector.feed(text)
+    detector.close()
+    return detector.unsafe_tags
 
 
 @dataclass(frozen=True)
@@ -73,6 +133,8 @@ class _Linter:
         self.proposals()
         self.history()
         self.caches()
+        if self.text is not None:
+            self.authored_self_closing()
         self.canonical_form()
         return self.findings
 
@@ -340,6 +402,12 @@ class _Linter:
                         cid,
                     )
             return
+        # every member must be a legal item carrier for THIS container kind —
+        # not merely "not an item carrier of some other kind": a <p data-aim>
+        # in a <ul> is just as illegal as a <tr>, and item-aware consumers
+        # cannot see it. A table shell only relays the table's item grammar,
+        # so its children are held to the same rule.
+        legal = [t for t, cs in REGISTRY.item_carriers.items() if cont.tag in cs]
         for child in cont.elements():
             if child.tag in REGISTRY.table_shells and cont.tag == "table":
                 for node in child.children:
@@ -358,10 +426,13 @@ class _Linter:
                             f"row <{row.tag}> in container {cid!r} lacks data-aim",
                             cid,
                         )
+                    elif legal and row.tag not in legal:
+                        self.add(
+                            "S022", ERROR, f"<{row.tag}> chunk inside <{cont.tag}> container", cid
+                        )
                 continue
             if child.chunk_id:
-                expected = REGISTRY.item_carriers.get(child.tag)
-                if expected is not None and cont.tag not in expected:
+                if legal and child.tag not in legal:
                     self.add(
                         "S022", ERROR, f"<{child.tag}> chunk inside <{cont.tag}> container", cid
                     )
@@ -565,32 +636,36 @@ class _Linter:
                         f"executable or unknown <script> (type={stype!r}) is forbidden",
                     )
             if el.tag == "style":
-                if not el.has("data-aim-css") and not el.has("data-aim-theme"):
+                if el.has("data-aim-css"):
+                    # aim.css is machine-managed and excluded from doc_hash
+                    # (spec §10), so its content is trusted at the raw tier —
+                    # verify it byte-equals the generated stylesheet rather
+                    # than letting an arbitrary (e.g. @import) replacement
+                    # pass lint-clean (review AIM-02). EVERY data-aim-css
+                    # block is held to this, whatever version it claims and
+                    # wherever it sits: gating on the current spec version
+                    # let a stale-version spelling smuggle arbitrary CSS
+                    # past lint, and only the first head block was checked
+                    # (AF-21). An inert placeholder (empty or comments-only,
+                    # as the spec's illustrative snippets use) carries no
+                    # declarations and can do no harm.
+                    raw = el.raw or ""
+                    inert = not re.sub(r"/\*.*?\*/", "", raw, flags=re.S).strip()
+                    if not inert and raw.strip("\n") != generate_aim_css().strip("\n"):
+                        self.add(
+                            "X006",
+                            ERROR,
+                            "embedded aim.css does not match the generated "
+                            "stylesheet for this spec version (it is "
+                            "machine-managed; regenerate via dumps())",
+                        )
+                elif not el.has("data-aim-theme"):
                     self.add(
                         "X005",
                         ERROR,
                         "free <style> blocks are forbidden (only the "
                         "embedded aim.css and the theme block)",
                     )
-        # aim.css is machine-managed and excluded from doc_hash (spec §10), so
-        # its content is trusted at the raw tier — verify it byte-equals the
-        # generated stylesheet for this spec version rather than letting an
-        # arbitrary (e.g. @import) replacement pass lint-clean (review AIM-02)
-        css = self.state.css_el()
-        if css is not None and css.get("data-aim-css") == REGISTRY.spec_version:
-            raw = css.raw or ""
-            # an inert placeholder (empty or comments-only, as the spec's
-            # illustrative snippets use) carries no declarations and can do no
-            # harm; any real CSS must be exactly the generated stylesheet
-            inert = not re.sub(r"/\*.*?\*/", "", raw, flags=re.S).strip()
-            if not inert and raw.strip("\n") != generate_aim_css().strip("\n"):
-                self.add(
-                    "X006",
-                    ERROR,
-                    "embedded aim.css does not match the generated "
-                    "stylesheet for this spec version (it is "
-                    "machine-managed; regenerate via dumps())",
-                )
 
     # -- theme -------------------------------------------------------------------------------------
     def check_theme_block(self, raw: str, where: str) -> None:
@@ -703,10 +778,47 @@ class _Linter:
                 else:
                     from .dom import parse_fragment
 
+                    # every root is checked, not just the first: a second
+                    # root would be written wholesale on accept
                     roots = [n for n in parse_fragment(p.payload_html) if isinstance(n, Element)]
-                    root_id = roots[0].chunk_id or roots[0].container_id if roots else None
-                    if root_id != p.target:
+                    if not roots or any((r.chunk_id or r.container_id) != p.target for r in roots):
                         self.add("P010", ERROR, "modify payload id must equal data-for", where)
+                    elif len(roots) > 1 and any(r.tag not in REGISTRY.item_carriers for r in roots):
+                        self.add(
+                            "P010",
+                            ERROR,
+                            "multi-element modify payload is only legal for list/table item runs",
+                            where,
+                        )
+                    else:
+                        # marker/kind parity with accept: a payload keeping the
+                        # target id but on the wrong kind of root — or carrying
+                        # the opposite marker alongside the right one, on any
+                        # run root — would pass the id check yet be rejected at
+                        # accept time. The card must not lint green while being
+                        # unacceptable.
+                        live = self.state.kind_of(p.target)
+                        marked = "container" if roots[0].container_id is not None else "chunk"
+                        if live in ("chunk", "container") and marked != live:
+                            self.add(
+                                "P010",
+                                ERROR,
+                                f"modify payload root is marked as a {marked}, "
+                                f"but target {p.target!r} is a {live}",
+                                where,
+                            )
+                        elif live in ("chunk", "container") and any(
+                            (r.chunk_id if live == "container" else r.container_id) is not None
+                            for r in roots
+                        ):
+                            wrong = "data-aim" if live == "container" else "data-aim-container"
+                            self.add(
+                                "P010",
+                                ERROR,
+                                f"modify payload root also carries {wrong}, "
+                                f"but target {p.target!r} is a {live}",
+                                where,
+                            )
             if p.action == "add" and p.anchor_after:
                 ok = self.state.exists(p.anchor_after) or p.anchor_after in pending_ids
                 if not ok:
@@ -842,13 +954,70 @@ class _Linter:
             self.add("M003", ERROR, f"embeddings cache: {exc}")
 
     # -- C: canonical form ---------------------------------------------------------------------
+    def authored_self_closing(self) -> None:
+        """Reject HTML's unsafe ``<tag/>`` spelling outside foreign content.
+
+        The transparent parser preserves the authored spelling on
+        ``Element.self_closing``. Propagate SVG context exactly as the
+        canonical serializer does so empty foreign elements remain the one
+        non-void case where ``/>`` is canonical.
+        """
+
+        def report(tag: str, where: str) -> None:
+            self.add(
+                "C002",
+                ERROR,
+                f"non-void HTML element <{tag}> must use explicit open+close "
+                "tags (self-closing breaks HTML parsing)",
+                where,
+            )
+
+        def visit(el: Element, *, in_svg: bool, where: str = "") -> None:
+            svg_here = in_svg or el.tag == "svg"
+            loc = el.chunk_id or el.container_id or el.get("id") or where
+            if el.self_closing and el.tag not in REGISTRY.void_elements and not svg_here:
+                report(el.tag, loc)
+            for child in el.elements():
+                visit(child, in_svg=svg_here, where=loc)
+
+        for el in self.doc._fragment.elements():
+            visit(el, in_svg=False)
+
+        try:
+            events = self.doc.history
+        except HistoryError:
+            return  # malformed history is already reported as H002
+        for ev in events:
+            for field in ("before", "after", "proposed", "applied"):
+                markup = ev.get(field)
+                if not isinstance(markup, str):
+                    continue
+                unsafe_tags = _unsafe_self_closing_tags(markup)
+                try:
+                    nodes = parse_fragment(markup)
+                except ParseError:
+                    where = f"seq {ev.data.get('seq')} {field}"
+                    for tag in unsafe_tags:
+                        report(tag, where)
+                    continue  # keep lexical C002 independent of DOM parseability
+                where = f"seq {ev.data.get('seq')} {field}"
+                for node in nodes:
+                    if isinstance(node, Element):
+                        visit(node, in_svg=False, where=where)
+
     def canonical_form(self) -> None:
         if self.text is None:
             return
+        compared_text = self.text
+        # C002 is the precise error for a non-void authored ``/>``. Expand
+        # only that spelling before the generic comparison so C001 remains
+        # additive for independent defects without aliasing C002 itself.
+        if any(f.code == "C002" for f in self.findings):
+            compared_text = _without_c002_differences(compared_text)
         canon = document_text(self.doc._fragment)
-        if self.text == canon:
+        if compared_text == canon:
             return
-        got, want = self.text.split("\n"), canon.split("\n")
+        got, want = compared_text.split("\n"), canon.split("\n")
         for i, (a, b) in enumerate(zip(got, want, strict=False)):
             if a != b:
                 self.add(

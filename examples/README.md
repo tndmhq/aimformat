@@ -7,7 +7,7 @@ lints them in CI.
 
 | file | shows |
 |---|---|
-| [`proposal.aim`](proposal.aim) | prose document: heading/paragraph/section chunks, a list with a run chunk, a pricing table with row chunks, an accepted and a rejected resolution, accept-with-tweaks provenance, a checkpoint, and a still-pending lane (a table-row add + a theme swap) with a fresh summary/TOC cache |
+| [`proposal.aim`](proposal.aim) | prose document: heading/paragraph/section chunks, a list with a run chunk, a pricing table with row chunks, an accepted and a rejected resolution, a checkpoint, and a still-pending lane (a table-row add + a theme swap) with a fresh summary/TOC cache |
 | [`deck.aim`](deck.aim) | slides: fixed-canvas `aim-slide` containers (960×540; canvas px ≡ pt, spec §3.3), positioned chunks with explicit z-index layering, a pending text proposal, a checkpoint |
 | [`booklet.aim`](booklet.aim) | fixed-layout *paper* pages: A5 canvases (420×595, printing as true A5 PDF pages), a positioned image figure with an embedded data-URI photo, a positioned list container |
 
@@ -16,9 +16,12 @@ To look at them:
 ```sh
 aim show examples/proposal.aim
 aim lint examples/proposal.aim
-python3 -m http.server              # then open http://localhost:8000/examples/proposal.aim
+python3 -c "import http.server as s; \
+  s.SimpleHTTPRequestHandler.extensions_map['.aim'] = 'text/html'; \
+  s.test(s.SimpleHTTPRequestHandler)"   # then open http://localhost:8000/examples/proposal.aim
 ```
 
 (Served with a `text/html` content type, they render as styled documents,
-including the raw-tier "Pending changes" memo at the bottom. A bare `.aim`
-over `file://` shows source; see spec §10.)
+including the raw-tier "Pending changes" memo at the bottom. A bare
+`python3 -m http.server` serves `.aim` as a download — it doesn't know the
+extension — and `.aim` over `file://` shows source; see spec §10.)

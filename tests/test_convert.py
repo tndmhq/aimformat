@@ -246,14 +246,14 @@ class TestRoundTripHardening:
         doc = aim.from_path(p)
         assert doc.title == "BOM Title"
 
-    def test_accept_all_delete_plus_dependent_add(self):
+    def test_accept_all_add_then_delete_anchor(self):
         doc = aim.from_text("Alpha.\n\nBeta.")
         bot = aim.agent("m")
         doomed = doc.chunks[1]
-        doc.propose_delete(doomed.id, author=bot, explanation="x")
         doc.propose_add(
             "<p>After beta.</p>", author=bot, container="body", after=doomed.id, explanation="y"
         )
+        doc.propose_delete(doomed.id, author=bot, explanation="x")
         html = aim.to_html(doc, pending="accept-all")
         assert "After beta." in html and "Beta." not in html
 
@@ -500,7 +500,9 @@ class TestToPdf:
         try:
             aim.to_pdf(doc, out)
         except RuntimeError as exc:
-            pytest.skip(str(exc))  # chromium not installed
+            if "Chromium is not installed" not in str(exc):
+                raise  # a real to_pdf regression must fail, not skip
+            pytest.skip(str(exc))
         assert out.stat().st_size > 1000
         assert out.read_bytes()[:5] == b"%PDF-"
 
@@ -535,8 +537,12 @@ class TestPdfSlidePages:
         assert "@page pg-pg1{size:420pt 595pt;margin:0}" in html
         # … an unsized canvas gets the 16:9 convention default …
         assert "@page pg-pg2{size:960pt 540pt;margin:0}" in html
-        # … slides are assigned their page and print-scaled px→pt (×4/3) …
-        assert 'aim-slide[data-aim-container="pg1"]{page:pg-pg1;zoom:1.33333}' in html
+        # … slides are assigned their page, print-scaled px→pt (×4/3), and
+        # given the resolved canvas box (unsized slides would collapse) …
+        assert (
+            'aim-slide[data-aim-container="pg1"]'
+            "{page:pg-pg1;zoom:1.33333;width:420px;height:595px}" in html
+        )
         # … and the flow keeps the document page setup (A4 default).
         assert "@page{size:210mm 297mm" in html
 
@@ -568,7 +574,9 @@ class TestPdfSlidePages:
         try:
             aim.to_pdf(_mixed_deck(), out)
         except RuntimeError as exc:
-            pytest.skip(str(exc))  # chromium not installed
+            if "Chromium is not installed" not in str(exc):
+                raise  # a real to_pdf regression must fail, not skip
+            pytest.skip(str(exc))
         boxes = re.findall(rb"/MediaBox \[([\d. ]+)\]", out.read_bytes())
         sizes = set()
         for raw in boxes:

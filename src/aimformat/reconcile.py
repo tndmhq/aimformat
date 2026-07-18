@@ -39,7 +39,15 @@ from dataclasses import dataclass, field
 
 from . import ids
 from .canonical import document_text, serialize
-from .document import AimDocument, Anchor, DocState, _now_iso
+from .document import (
+    AimDocument,
+    Anchor,
+    DocState,
+    _apply_move_data,
+    _ChainedAddCycle,
+    _now_iso,
+    resolution_order,
+)
 from .dom import Element, parse_fragment, parse_html
 from .errors import AimError, HistoryError
 from .events import Actor, Event, external
@@ -108,6 +116,14 @@ def _check_log(events: list[Event]) -> None:
             raise HistoryError(
                 f"cannot reconcile: unknown event kind {ev.kind!r} at seq {ev.data.get('seq')}"
             )
+        # full schema validation: a baseline the linter itself rejects
+        # (H003) must never count as intact — "repairing" on top of it
+        # plans a lint-clean-looking write over corrupt provenance
+        problems = ev.validate()
+        if problems:
+            raise HistoryError(
+                f"cannot reconcile: invalid event at seq {ev.data.get('seq')}: {problems[0]}"
+            )
 
 
 def _apply_event(state: DocState, ev: Event) -> None:
@@ -134,7 +150,7 @@ def _apply_event(state: DocState, ev: Event) -> None:
         to = ev.get("to")
         if to is None:
             raise HistoryError("move event carries no destination")
-        state.move(target, Anchor.from_obj(to))
+        _apply_move_data(state, ev.data)
     else:
         raise HistoryError(f"unknown action {action!r}")
 
@@ -154,7 +170,9 @@ def _replay(S: AimDocument, events: list[Event]) -> None:
 
 
 def _clone(doc: AimDocument) -> AimDocument:
-    return doc.__class__(parse_html(document_text(doc._fragment)))
+    clone = doc.__class__(parse_html(document_text(doc._fragment)))
+    clone._rebuild_history_index(burned_seed=doc._get_history_index().burned_ids)
+    return clone
 
 
 def _strip_body_state(S: AimDocument) -> None:
@@ -440,6 +458,12 @@ def _drive(S: AimDocument, work: AimDocument, author: Actor, at: str | None) -> 
 
     gone = {uid for uid in E if uid not in A}
     both = [uid for uid in E if uid in A]
+    # containers that exist only in A — a hand edit wrapped existing units
+    # into a new container. The order walk adds the wrapper whole, which
+    # materializes its interior: units inside count as covered on the A
+    # side, so their E-side copies are doomed before the add (otherwise
+    # they survive as duplicates and the doc_hash check cannot converge)
+    added = {uid for uid, u in A.items() if uid not in E and u.is_container}
 
     def chain(units: dict[str, _Unit], uid: str) -> set[str]:
         out: set[str] = set()
@@ -463,16 +487,19 @@ def _drive(S: AimDocument, work: AimDocument, author: Actor, at: str | None) -> 
             if e_el is not None and a_el is not None and _skeleton(e_el) == _skeleton(a_el):
                 continue  # item-level events suffice
         whole.add(uid)
-    # a whole-modified/deleted ancestor governs everything inside it
+    # a whole-modified/deleted (or A-only added) ancestor governs
+    # everything inside it
     whole = {
-        uid for uid in whole if not (chain(E, uid) & (whole | gone)) and not (chain(A, uid) & whole)
+        uid
+        for uid in whole
+        if not (chain(E, uid) & (whole | gone)) and not (chain(A, uid) & (whole | added))
     }
 
     def covered_e(uid: str) -> bool:
         return bool(chain(E, uid) & (whole | gone))
 
     def covered_a(uid: str) -> bool:
-        return bool(chain(A, uid) & whole)
+        return bool(chain(A, uid) & (whole | added))
 
     # deletes — including units whose A-side landed inside a whole-modified
     # container (the modify materializes them there; their old spot empties)
@@ -522,33 +549,47 @@ def _drive(S: AimDocument, work: AimDocument, author: Actor, at: str | None) -> 
 def _reject_dangling(
     S: AimDocument, author: Actor, at: str | None, report: ReconcileReport
 ) -> None:
-    """Pending proposals whose target or anchor vanished can never resolve;
-    reject them so the reconciled document lints clean."""
-    pending_adds = {p.id for p in S.proposals if p.action == "add"}
-    for p in list(S.proposals):
-        dangling = False
-        if (
-            p.action in ("modify", "delete", "move")
-            and p.target
-            and p.target not in ("aim:theme", "aim:doc")
-        ):
-            dangling = not S._state.exists(p.target)
-        if not dangling and p.action in ("add", "move"):
-            cont = p.anchor_container
-            if cont and cont != "body" and S._state.container_node(cont) is None:
-                dangling = True
-            after = p.anchor_after
-            if after and not S._state.exists(after) and after not in pending_adds:
-                dangling = True
-        if dangling:
-            S.reject(
-                p.id,
-                decided_by=author,
-                at=at,
-                explanation="reconcile: the proposal's target or anchor "
-                "was removed by an out-of-band edit",
-            )
-            report.rejected_proposals.append(p.id)
+    """Reject pending cards that fail against the reconciled projection.
+
+    Reconcile is deliberately fail-closed. Replay survivors in creation order
+    on a clone of the adopted body; the first target, anchor, self-subtree, or
+    destination-member failure rejects that card on the real reconcile state.
+    Rejection can rebind chained adds, so restart until every survivor replays
+    cleanly.
+    """
+    while S.proposals:
+        projection = S._clone()
+        try:
+            order = resolution_order(projection.proposals)
+        except _ChainedAddCycle as exc:
+            # A foreign-authored chained-add cycle has no valid first card.
+            # Reject a participant, not an unrelated earlier valid card; the
+            # fixpoint then revalidates every survivor after normal rebinding.
+            proposal = S.proposal(exc.proposal_ids[0])
+            reason = str(exc)
+        else:
+            proposal = None
+            reason = ""
+            for candidate in order:
+                try:
+                    projection.accept(candidate.id, decided_by=author, at=at)
+                except Exception as exc:  # foreign cards can fail outside AimError
+                    proposal = S.proposal(candidate.id)
+                    reason = str(exc) or type(exc).__name__
+                    break
+
+        if proposal is None:
+            return
+        S.reject(
+            proposal.id,
+            decided_by=author,
+            at=at,
+            explanation=(
+                "reconcile: the proposal no longer applies in creation order "
+                f"after an out-of-band edit: {reason}"
+            ),
+        )
+        report.rejected_proposals.append(proposal.id)
 
 
 # ===========================================================================
@@ -590,7 +631,9 @@ def reconcile_document(
     report.residual = S.verify()
 
     if report.changed and not dry_run:
+        burned = set(S._get_history_index().burned_ids)
         doc._fragment = S._fragment
         doc._state = S._state
         doc._batch = None
+        doc._rebuild_history_index(burned_seed=burned)
     return report

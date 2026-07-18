@@ -89,7 +89,15 @@ def _slide_page_css(doc: AimDocument) -> str:
             continue
         w, h = _canvas_size(el.get("style"))
         pages.append(f"@page pg-{sid}{{size:{_fmt_pt(w)}pt {_fmt_pt(h)}pt;margin:0}}")
-        assigns.append(f'aim-slide[data-aim-container="{sid}"]{{page:pg-{sid};zoom:{_PRINT_ZOOM}}}')
+        # the resolved size rides the element rule too: inline canvas styles
+        # win the cascade when present, and a slide that omits them would
+        # otherwise collapse to a zero-height box (the stylesheet gives
+        # aim-slide no width/height) and print blank on its named page
+        assigns.append(
+            f'aim-slide[data-aim-container="{sid}"]'
+            f"{{page:pg-{sid};zoom:{_PRINT_ZOOM};"
+            f"width:{_fmt_pt(w)}px;height:{_fmt_pt(h)}px}}"
+        )
     if not pages:
         return ""
     return "\n".join(pages) + "\n@media print{" + "".join(assigns) + "}"
@@ -146,11 +154,17 @@ def to_pdf(
     with sync_playwright() as pw:
         try:
             browser = pw.chromium.launch()
-        except Exception as exc:  # browser binary missing
-            raise RuntimeError(
-                "Chromium is not installed for Playwright — run: "
-                "python -m playwright install chromium"
-            ) from exc
+        except Exception as exc:
+            # translate ONLY the missing-binary case: swallowing every
+            # launch failure into "not installed" let real to_pdf
+            # regressions skip green in the test suite
+            msg = str(exc)
+            if "Executable doesn't exist" in msg or "playwright install" in msg:
+                raise RuntimeError(
+                    "Chromium is not installed for Playwright — run: "
+                    "python -m playwright install chromium"
+                ) from exc
+            raise
         try:
             page = browser.new_page()
             page.set_content(html, wait_until="load")

@@ -5,6 +5,23 @@ version tracks the spec version it implements (0.x minors may break).
 
 ## 0.2.1 — unreleased
 
+- **Canonical self-closing normalization (AF-06)**: non-void elements outside
+  foreign/SVG context now always serialize with explicit open and close tags;
+  authored self-closing spellings are rejected by lint rule C002. HTML void
+  elements remain slashless and empty SVG-context elements remain self-closed.
+  By explicit owner decision, this is an intentionally incompatible canonical
+  form and `doc_hash` change that is intentionally not assigned a new format
+  version: it was adopted before any `.aim` documents were deployed. No
+  migration or legacy-hash preservation is provided.
+- **`@aimformat/reader` (`ts/`)** — the official TypeScript read library:
+  parses a canonical `.aim` document into a read-only projection (ordered
+  node tree with recursive container members, chunks with first-class
+  runs, proposals, theme/page setup, `docHash`) mirroring the Python
+  SDK's read surface. Zero dependencies, no build step, one code path in
+  browsers and Node; writes stay with the Python SDK. A parity suite
+  (`tests/parity/`) pins both implementations to committed goldens —
+  field-for-field projections plus byte-exact `docHash` across the
+  examples, edge fixtures, and the conformance kit. No spec change.
 - **`AimDocument.amend_proposal(pid, markup=None, *, explanation=None,
   at=None)`** — in-place amend of a pending proposal's payload and/or
   explanation, preserving id, anchor, author, batch, and dependencies.
@@ -13,6 +30,27 @@ version tracks the spec version it implements (0.x minors may break).
   payload validation matches the original propose path (add payloads keep
   the proposed root id, so chained anchors stay stable). delete/move
   proposals are explanation-only. No spec change.
+
+Fixed-layout-pages fixes (2026-07-16, final review round on the PR):
+
+- **Accepting a modify validates the whole payload**: a hand-authored
+  card whose payload hid a second root element behind a valid first one
+  was written wholesale, corrupting the document past lint and history
+  verification. Accept now re-validates every root (id, kind, run shape,
+  nested ids) and rejects what the SDK would never have proposed; the
+  linter's P010 likewise checks every payload root, so such cards fail
+  `aim lint` while still pending. When the written form differs from the
+  card (a tweak, or a non-canonical hand-authored payload), the
+  resolution event records it as `applied`.
+- **DOCX**: an empty slide keeps its page (one placeholder paragraph)
+  instead of silently vanishing whenever its neighbor was another slide.
+- **SDK**: `add_chunk`/`propose_add` of an `aim-slide` carrying a
+  caller-supplied id on `data-aim` now moves the id to
+  `data-aim-container` (slides are always containers) instead of minting
+  an S031-failing document.
+- **PDF**: a slide that omits its inline canvas size now gets the
+  resolved default box (`960×540`) in the print CSS instead of
+  collapsing to zero height and printing a blank page.
 
 Exporter and MCP fixes (2026-07-16 deep-review round 2):
 
@@ -65,7 +103,7 @@ Fixed-layout pages: slides become correct pages end to end.
   Replacements now keep the target's kind: an `aim-slide` payload can
   never replace a chunk (and a container never becomes a flat block) —
   `modify_chunk`, `propose_modify`, and the accept path all reject what
-  would fail S030/S031 on the next lint, including proposals authored
+  would fail V003/S031 on the next lint, including proposals authored
   by external tools.
 
 ## 0.2.0 — 2026-07-10
@@ -94,6 +132,14 @@ First release published to PyPI: `pip install aimformat`.
   `aim accept` / `aim reject` (by id or `--all`), with `--author human:ID |
   agent:MODEL | external:ID` attribution (`aim.parse_actor`), and
   `aim show --format json` for machine reads.
+- **Format converters**: `from_text`, `from_markdown`, `from_docx`,
+  `from_pdf`, and extension-dispatched `from_path`; `to_markdown`, `to_html`,
+  `to_pdf`, and the existing `to_docx`. The matching CLI verbs are `aim import`
+  and `aim export`; non-stdlib dependencies remain behind optional extras.
+- **Canonical normalization**: `aim normalize FILE [-o OUT] [--check]`
+  rewrites a loadable document in the spec §11 canonical form, or checks it
+  without writing. The operation is idempotent. Lint the authored file first:
+  normalization can discard invalid declarations and their diagnostic evidence.
 - **MCP server**: `pip install 'aimformat[mcp]'` (pinned `mcp==1.28.1`)
   then `aim mcp` — local stdio, six workflow tools: `aim_read` (projected
   view), `aim_edit`, `aim_propose`, `aim_resolve`, `aim_lint`,

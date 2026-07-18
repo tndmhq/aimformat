@@ -177,8 +177,9 @@ and the asset registry are exempt — they are not document content.
 A format that renders on double-click inherits HTML's threat surface; the
 constraints below are conformance requirements, enforced by the linter.
 
-- No executable script: the only `<script>` elements allowed are the three
-  typed data blocks (§2.2, §2.1), which browsers treat as inert data.
+- No executable script: the only `<script>` elements allowed are the four
+  typed data blocks (§2.1, §2.2 — `aim-meta`, `aim-doc`, history,
+  embeddings), which browsers treat as inert data.
 - No event-handler attributes (`on*`).
 - No `javascript:` or `data:text/*` URLs. `a@href` MUST be `https:`,
   `http:`, `mailto:`, or a fragment; `img@src` MUST be `https:`, `http:`,
@@ -202,11 +203,11 @@ placed immediately after `<meta charset="utf-8">` — the note sits at the
 top of the file, SPDX-style, while the charset stays within sniffing range.
 Parsers MUST accept an aim-note anywhere in the head.
 
-The canonical v0.1 note:
+The canonical note for this spec version:
 
 ```html
 <!--
-aim-note: This file is an AIM document (open format, v0.1) — valid HTML plus
+aim-note: This file is an AIM document (open format, v0.2) — valid HTML plus
 chunk identity, a pending-suggestions lane, and an edit history.
 Agent docs: https://aimformat.com/llms.txt
 The reliable way to edit this file is the `aimformat` tooling, which manages
@@ -589,7 +590,7 @@ baseline below the prune floor is unrecoverable).
 | chunk content + order | `aim-meta` (summary, TOC) — carries `as_of_seq`/`doc_hash` staleness markers |
 | containers (slides, list/table shells) + geometry | embeddings (per-chunk `text_hash` + `model`) |
 | theme block (`aim:theme`) | `aim.css` (pinned by `data-aim-css`, regenerable) |
-| future `aim:doc` settings | packed asset registry (content-addressed, immutable) |
+| `aim:doc` settings (page setup, §3.6) | packed asset registry (content-addressed, immutable) |
 
 Caches are never load-bearing: delete them all and the document plus
 history are intact and regenerable. Pending proposals are neither: they are
@@ -614,7 +615,7 @@ an agent reads; staleness is checkable against the current `doc_hash`.
 `application/aim-embeddings+jsonl`: one line per chunk per model —
 `{chunk, model, text_hash, vec}`. Multiple models per chunk are allowed;
 there is no "primary" marker (readers select by `model`). Vectors are JSON
-numbers (no quantized packing in v0.1). Stale = `text_hash` differs from
+numbers (no quantized packing in this version). Stale = `text_hash` differs from
 the hash of the chunk's current canonical serialization; cosmetic changes
 over-invalidate, which is safe. Last section in the file — least useful to
 raw readers.
@@ -670,7 +671,8 @@ pass of pack/flatten/prune.
   `text/html`) suffices. Media-type registration is future work.
 - Version control: map `*.aim` to HTML syntax highlighting
   (`.gitattributes`: `*.aim linguist-language=HTML`).
-- There is no container format in v0.1: a single text file is the format.
+- There is no container format in this version: a single text file is the
+  format.
 
 ---
 
@@ -686,9 +688,12 @@ Byte-deterministic serialization is load-bearing: chain verification and
   `preserveAspectRatio`, …) — a naive all-lowercase rule is unimplementable
   because HTML tokenization lowercases and tree construction re-adjusts.
 - Attribute order: `data-aim`/`data-aim-container`, `id`, `class`, `style`
-  first; remaining attributes alphabetical; `src`/`href` always last.
-- `class` tokens sorted alphabetically. Inline style properties in
-  whitelist order (§3.3), `; `-separated, no trailing semicolon.
+  first; remaining attributes alphabetical; `src`/`href` always last. If an
+  attribute name occurs more than once, its first value wins.
+- `class` tokens sorted alphabetically and deduplicated. Inline style
+  properties appear in whitelist order (§3.3), `; `-separated, with no trailing
+  semicolon; if a whitelisted property occurs more than once, its last value
+  wins.
 - Double-quoted attributes. Text escapes `& < >` only; attribute values
   escape `& "` only. Raw UTF-8 (no entity-encoding of non-ASCII). LF line
   endings.
@@ -699,7 +704,18 @@ Byte-deterministic serialization is load-bearing: chain verification and
   line (it is hashed content). In the asset registry, each symbol sits on
   its own line — one data-URI per line, so one changed image is one
   changed diff line.
-- Void elements without `/`; foreign (SVG) empty elements self-close.
+- HTML void elements always serialize without `/`. HTML non-void elements,
+  including empty custom elements, always serialize with explicit open and
+  close tags and never self-close; an authored self-closing spelling for one
+  is a conformance error (C002). Empty elements in foreign (SVG) context always
+  self-close with `/>`; non-empty foreign elements use explicit open and close
+  tags.
+
+**Compatibility note (owner decision):** requiring explicit end tags for empty
+non-void HTML elements is an intentionally incompatible canonical-form and
+`doc_hash` change. Because this draft change was adopted before any `.aim`
+documents were deployed, it is intentionally not assigned a new format version
+and has no migration or legacy-hash-preservation path.
 
 ### 11.2 JSON serialization
 
@@ -859,7 +875,7 @@ stylesheet. Do not edit it by hand.*
 
 - **Block chunk carriers** (top level and inside slides): `h1` `h2` `h3` `h4` `h5` `h6` `p` `section` `blockquote` `figure` `pre` `div` `hr` `aim-page-break` `ul` `ol` `table`
 - **Item chunk carriers**: `li` inside `ul` `ol`; `tr` inside `table`
-- **Containers** (`data-aim-container`): `ul` `ol` `table` `aim-slide` plus `aim-slide`
+- **Containers** (`data-aim-container`): `ul` `ol` `table` `aim-slide`
 - **Table shells** (scaffolding between container and row chunks): `thead` `tbody` `tfoot`
 - **Allowed inside chunk subtrees**: `h1` `h2` `h3` `h4` `h5` `h6` `p` `section` `blockquote` `figure` `figcaption` `pre` `div` `hr` `aim-page-break` `ul` `ol` `li` `table` `thead` `tbody` `tfoot` `tr` `td` `th` `img` `svg` `use` `code` `a` `strong` `em` `b` `i` `u` `s` `sub` `sup` `mark` `br` `span`
 - **Asset registry content**: `svg` `symbol` `image` `rect` `circle` `ellipse` `path` `g`
@@ -871,7 +887,7 @@ stylesheet. Do not edit it by hand.*
 - **Weights** `font-*`: `normal` `medium` `semibold` `bold`
 - **Leading** `leading-*`: `tight` `snug` `normal` `relaxed`
 - **Alignment** `text-*`: `left` `center` `right`
-- **Palette** for `text-` / `bg-` / `border-`: `gray` (50, 100, 200, 300, 400, 500, 600, 700, 800, 900); `red` (50, 600); `green` (50, 600); `amber` (50, 600); plus `white` and theme-backed `brand-1…4`
+- **Palette** for `text-` / `bg-` / `border-`: `gray` (50, 100, 200, 300, 400, 500, 600, 700, 800, 900); `red` (50, 600); `green` (50, 600); `amber` (50, 600); plus theme-backed `brand-1…4`. White is available only as `text-white` and `bg-white`.
 - **Spacing** `m`, `mt`, `mb`, `ml`, `mr`, `mx`, `my`, `p`, `pt`, `pb`, `pl`, `pr`, `px`, `py` × scale `0` `1` `2` `3` `4` `6` `8` `10` `12` `16`
 - **Singles**: `bg-white` `border` `border-b` `border-t` `font-body` `font-heading` `font-mono` `italic` `line-through` `list-decimal` `list-disc` `list-none` `rounded` `rounded-full` `rounded-lg` `rounded-md` `shadow` `text-white` `tracking-tight` `tracking-wide` `underline` `uppercase`
 
@@ -1014,6 +1030,7 @@ Total registered utilities: **243**.
 | D005 | error | aim-page-break must be empty (explicit open+close tags) |
 | D006 | error | aim-page-break outside the top-level body flow |
 | C001 | error | file is not in canonical form |
+| C002 | error | non-void HTML element uses self-closing syntax outside foreign content |
 <!-- END GENERATED REGISTRY REFERENCE -->
 
 ## Appendix B. Recommendations (informative)

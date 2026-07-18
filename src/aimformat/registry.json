@@ -176,6 +176,7 @@
         "role",
         "aria-label",
         "aria-hidden",
+        "viewBox",
         "width",
         "height"
       ],
@@ -1019,6 +1020,10 @@
     "C001": [
       "error",
       "file is not in canonical form"
+    ],
+    "C002": [
+      "error",
+      "non-void HTML element uses self-closing syntax outside foreign content"
     ]
   }
 }

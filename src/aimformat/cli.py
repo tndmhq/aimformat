@@ -9,6 +9,9 @@
     aim accept FILE PID...  accept pending proposals (or --all)
     aim reject FILE PID...  reject pending proposals (or --all)
     aim flatten FILE        drop history (+embeddings) -> clean file
+    aim pack FILE           hoist embedded data images into the asset registry
+    aim prune FILE BEFORE   truncate history before a seq/checkpoint label
+    aim gc FILE             collect dead asset symbols
     aim normalize FILE      rewrite in canonical form (lossless, idempotent)
     aim reconcile FILE      detect out-of-band edits; append reconcile events
     aim css                 print the generated aim.css for this spec version
@@ -28,7 +31,7 @@ from pathlib import Path
 
 from . import __version__
 from .css import css_stats, generate_aim_css
-from .document import LAST, AimDocument, AnchorAfter, new_document, resolution_order
+from .document import LAST, AimDocument, AnchorAfter, new_document
 from .errors import AimError
 from .lint import lint_path
 from .registry import REGISTRY
@@ -212,20 +215,26 @@ def _cmd_resolve(args: argparse.Namespace, decision: str) -> int:
     doc = AimDocument.load(args.file)
     decided_by = parse_actor(args.author)
     if args.all:
-        # dependency-safe order shared with the exporters: chained adds
-        # resolve after the add they anchor on, deletes go last per round
-        pids = [p.id for p in resolution_order(doc.proposals)]
+        pids = [proposal.id for proposal in doc.proposals]
     else:
         pids = args.pids
     if not pids:
         print("[]" if args.format == "json" else "no pending proposals")
         return 0
-    events = []
-    for pid in pids:
-        if decision == "accept":
-            events.append(doc.accept(pid, decided_by=decided_by, explanation=args.explanation))
-        else:
-            events.append(doc.reject(pid, decided_by=decided_by, explanation=args.explanation))
+    if args.all:
+        events = (
+            doc.accept_all(decided_by=decided_by, explanation=args.explanation)
+            if decision == "accept"
+            else doc.reject_all(decided_by=decided_by, explanation=args.explanation)
+        )
+        pids = [event.get("proposal") for event in events]
+    else:
+        events = []
+        for pid in pids:
+            if decision == "accept":
+                events.append(doc.accept(pid, decided_by=decided_by, explanation=args.explanation))
+            else:
+                events.append(doc.reject(pid, decided_by=decided_by, explanation=args.explanation))
     out = Path(args.output or args.file)
     doc.save(out)
     if args.format == "json":
@@ -325,6 +334,42 @@ def _cmd_flatten(args: argparse.Namespace) -> int:
     out = Path(args.output or args.file)
     doc.save(out)
     print(f"wrote {out}")
+    return 0
+
+
+def _cmd_pack(args: argparse.Namespace) -> int:
+    from .events import parse_actor
+
+    doc = AimDocument.load(args.file)
+    packed = doc.pack_assets(author=parse_actor(args.author))
+    out = Path(args.output or args.file)
+    doc.save(out)
+    print(f"packed {packed} image{'s' if packed != 1 else ''}, wrote {out}")
+    return 0
+
+
+def _cmd_prune(args: argparse.Namespace) -> int:
+    doc = AimDocument.load(args.file)
+    # "seq number or checkpoint label": an exact label match wins, so a
+    # checkpoint someone named "1" stays selectable; only an argument that
+    # matches no label reads as a sequence number
+    labels = {e.get("label") for e in doc.history if e.kind == "checkpoint"}
+    before: int | str = (
+        args.before if args.before in labels or not args.before.isdigit() else int(args.before)
+    )
+    dropped = doc.prune(before=before)
+    out = Path(args.output or args.file)
+    doc.save(out)
+    print(f"dropped {dropped} event{'s' if dropped != 1 else ''}, wrote {out}")
+    return 0
+
+
+def _cmd_gc(args: argparse.Namespace) -> int:
+    doc = AimDocument.load(args.file)
+    collected = doc.gc_assets()
+    out = Path(args.output or args.file)
+    doc.save(out)
+    print(f"collected {collected} dead asset{'s' if collected != 1 else ''}, wrote {out}")
     return 0
 
 
@@ -599,6 +644,43 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("-o", "--output")
     p.add_argument("--keep-embeddings", action="store_true")
     p.set_defaults(func=_cmd_flatten)
+
+    p = sub.add_parser(
+        "pack",
+        help="hoist embedded data images into the asset registry (spec §9); "
+        "dead assets are collected as the final pass; modifies the file "
+        "in place unless -o is given",
+    )
+    p.add_argument("file")
+    p.add_argument("-o", "--output")
+    p.add_argument(
+        "--author", default="external:aim-cli", help="human:ID | agent:MODEL | external:ID"
+    )
+    p.set_defaults(func=_cmd_pack)
+
+    p = sub.add_parser(
+        "prune",
+        help="truncate history before a seq number or checkpoint label; "
+        "dead assets are collected as the final pass; modifies the file "
+        "in place unless -o is given",
+    )
+    p.add_argument("file")
+    p.add_argument(
+        "before",
+        help="seq number or checkpoint label to keep from; an exact label match wins",
+    )
+    p.add_argument("-o", "--output")
+    p.set_defaults(func=_cmd_prune)
+
+    p = sub.add_parser(
+        "gc",
+        help="collect asset symbols referenced by no body content, retained "
+        "history payload, or pending card; modifies the file in place "
+        "unless -o is given",
+    )
+    p.add_argument("file")
+    p.add_argument("-o", "--output")
+    p.set_defaults(func=_cmd_gc)
 
     p = sub.add_parser(
         "normalize",

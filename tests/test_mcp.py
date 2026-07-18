@@ -267,3 +267,18 @@ def test_guard_resolves_and_scopes(tmp_path, monkeypatch):
     link.symlink_to("/etc/hosts")
     with pytest.raises(ValueError, match="escapes workspace root"):
         _guard(str(link))
+
+
+def test_history_payloads_are_elided(tmp_path):
+    # AF-23: the include_history branch returned raw event payloads, so
+    # add/modify events dumped full base64 data URIs into model context —
+    # the exact token blowup _elide exists to prevent
+    uri = "data:image/png;base64," + "A" * 200
+    doc = aim.new_document(title="MCP fixture")
+    doc.add_chunk(f'<figure data-aim="fig"><img alt="dot" src="{uri}"></figure>', author=BOT)
+    path = tmp_path / "img.aim"
+    doc.save(path)
+    out = _payload(_call("aim_read", {"path": str(path), "include_history": True}))
+    dumped = json.dumps(out["history"])
+    assert "A" * 64 not in dumped
+    assert "[data-uri elided]" in dumped

@@ -73,7 +73,12 @@ def canonical_attrs(el: Element, *, in_svg: bool) -> str:
     def fix(name: str) -> str:
         return adjust.get(name, name) if in_svg else name
 
-    remaining = {k: v for k, v in el.attrs}
+    remaining: dict[str, str | None] = {}
+    for k, v in el.attrs:
+        # HTML semantics: the FIRST duplicate wins, matching Element.get —
+        # last-wins here would rename a chunk under `aim normalize` and
+        # break the events targeting the id the reader resolved
+        remaining.setdefault(k, v)
     ordered: list[tuple[str, str | None]] = []
     for k in REGISTRY.attr_first:
         if k in remaining:
@@ -108,9 +113,9 @@ def _is_registry_svg(el: Element) -> bool:
 def serialize(node: Nodeish, *, in_svg: bool = False) -> str:
     """Inline canonical serialization of one node (no trailing newline).
 
-    A normal form, not an echo: HTML void elements never carry a slash
-    however they were written, and foreign (SVG-context) elements with no
-    content always self-close (spec §11.1)."""
+    A normal form, not an echo: HTML void elements never carry a slash,
+    non-void HTML elements always have an explicit end tag, and foreign
+    (SVG-context) elements with no content always self-close (spec §11.1)."""
     if isinstance(node, Text):
         return escape_text(node.data)
     if isinstance(node, Comment):
@@ -120,8 +125,6 @@ def serialize(node: Nodeish, *, in_svg: bool = False) -> str:
     if node.tag in REGISTRY.void_elements and not svg_here:
         return open_tag + ">"
     if svg_here and not node.children and node.raw is None:
-        return open_tag + "/>"
-    if node.self_closing:
         return open_tag + "/>"
     if node.raw is not None:
         return f"{open_tag}>{node.raw}</{node.tag}>"
@@ -139,6 +142,8 @@ def _lines(node: Nodeish, *, in_svg: bool = False) -> list[str]:
         s = serialize(node)
         return [s] if s.strip() else []
     svg_here = in_svg or node.tag == "svg"
+    if svg_here and not node.children and node.raw is None:
+        return [serialize(node, in_svg=in_svg)]
     if node.tag in LINE_CONTAINERS or _is_registry_svg(node):
         out = [f"<{node.tag}{canonical_attrs(node, in_svg=svg_here)}>"]
         for c in node.children:

@@ -35,6 +35,7 @@ aim hash FILE
 aim new -o FILE [--title T] [--lang L]
 aim note FILE... [--check | --remove] [--format json]
 aim show FILE [--format json]
+aim normalize FILE [-o OUT] [--check]
 aim propose {modify,add,delete,move,theme} FILE …
 aim accept FILE [PID...] [--all]
 aim reject FILE [PID...] [--all]

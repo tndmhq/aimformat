@@ -1,7 +1,7 @@
 # .aim format reference (condensed)
 
 Normative source: [spec.md](https://github.com/tndmhq/aimformat/blob/main/spec.md)
-(v0.1). This is the working subset an agent needs while editing.
+(v0.2). This is the working subset an agent needs while editing.
 
 ## Anatomy
 
@@ -10,13 +10,14 @@ current document before any blob:
 
 ```
 <!doctype html>
-<html data-aim-version="0.1" lang="en">
+<html data-aim-version="0.2" lang="en">
 <head>
   <meta charset="utf-8">
   <!--\naim-note: … -->                        ← agent note (§2.5)
   <title>…</title>
   <script type="application/aim-meta+json">…   ← summary + toc cache
-  <style data-aim-css="0.1">…                  ← machine-managed stylesheet
+  <script type="application/aim-doc+json">…    ← page setup (aim:doc)
+  <style data-aim-css="0.2">…                  ← machine-managed stylesheet
   <style data-aim-theme>:root{--aim-brand-1:…} ← theme slots
 </head>
 <body>
@@ -53,6 +54,11 @@ so substring checks for structural markers never false-positive on it.
   order). Canvas px are point-equivalent at print — 960×540 is a 16:9
   slide, 420×595 a true A5 page — and each slide exports as its own
   correctly sized PDF page.
+- **Page breaks**: `<aim-page-break></aim-page-break>` — an empty
+  top-level body chunk (explicit open+close tags, never self-closed)
+  forcing a hard break; page size/orientation/margins live in the head
+  `aim:doc` settings script (edit via `set_page_setup`/proposals, not
+  by hand).
 - **Ids**: `^[a-z0-9][a-z0-9_-]{0,63}$`, unique per document, opaque, never
   renumbered, never reused (deleted ids stay burned). `p-` prefix reserved
   for proposals; `body`, `aim:theme`, `aim:doc` reserved. The SDK mints

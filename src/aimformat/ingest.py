@@ -225,15 +225,23 @@ def _list_tag(res: _Resolver, group: dict) -> str:
     return "ol" if items and all(c.get("enumerated") for c in items) else "ul"
 
 
-def _li_markup(res: _Resolver, item: dict) -> str:
-    """One list item; nested lists and tables become its inline content."""
+def _li_markup(res: _Resolver, item: dict, _stack: set[int] | None = None) -> str | None:
+    """One list item; nested lists and tables become its inline content.
+
+    ``None`` means the item was contentless only because a nested list hit a
+    cycle; an ordinary blank item is the valid markup ``<li></li>``.
+    """
     inner = _fmt_markup(item)
+    cyclic_contentless = False
     for child in res.children(item):
         label = child.get("label")
         if label in ("list", "ordered_list"):
             tag = _list_tag(res, child)
-            nested = _list_items_markup(res, child)
-            inner += f"<{tag}>{nested}</{tag}>"
+            nested = _list_items_markup(res, child, _stack)
+            if nested is None:
+                cyclic_contentless = True
+            elif nested:
+                inner += f"<{tag}>{nested}</{tag}>"
         elif label == "table":
             nested_table = _table_markup(child)
             if nested_table:
@@ -244,26 +252,47 @@ def _li_markup(res: _Resolver, item: dict) -> str:
             inner += _inline_group_markup(res, child)
         elif label in ("text", "paragraph") and child.get("text"):
             inner += f"<p>{_fmt_markup(child)}</p>"
-    return f"<li>{inner}</li>"
+    return None if cyclic_contentless and not inner else f"<li>{inner}</li>"
 
 
-def _list_items_markup(res: _Resolver, group: dict) -> str:
+def _list_items_markup(res: _Resolver, group: dict, _stack: set[int] | None = None) -> str | None:
     """A list group's items — including sub-groups docling parents directly
     on the group (not on an item), which become a nested list inside the
-    preceding item (or a wrapper item when they lead)."""
-    parts: list[str] = []
-    for child in res.children(group):
-        label = child.get("label")
-        if label == "list_item":
-            parts.append(_li_markup(res, child))
-        elif label in ("list", "ordered_list"):
-            tag = _list_tag(res, child)
-            nested = f"<{tag}>{_list_items_markup(res, child)}</{tag}>"
-            if parts:
-                parts[-1] = parts[-1][: -len("</li>")] + nested + "</li>"
-            else:
-                parts.append(f"<li>{nested}</li>")
-    return "".join(parts)
+    preceding item (or a wrapper item when they lead). ``None`` propagates a
+    contentless cyclic edge so callers do not turn it into a blank wrapper."""
+    if _stack is None:
+        _stack = set()
+    identity = id(group)
+    if identity in _stack:
+        return None
+    _stack.add(identity)
+    try:
+        parts: list[str] = []
+        cyclic_contentless = False
+        for child in res.children(group):
+            label = child.get("label")
+            if label == "list_item":
+                item = _li_markup(res, child, _stack)
+                if item is None:
+                    cyclic_contentless = True
+                elif item:
+                    parts.append(item)
+            elif label in ("list", "ordered_list"):
+                tag = _list_tag(res, child)
+                nested_items = _list_items_markup(res, child, _stack)
+                if nested_items is None:
+                    cyclic_contentless = True
+                    continue
+                if not nested_items:
+                    continue
+                nested = f"<{tag}>{nested_items}</{tag}>"
+                if parts:
+                    parts[-1] = parts[-1][: -len("</li>")] + nested + "</li>"
+                else:
+                    parts.append(f"<li>{nested}</li>")
+        return "".join(parts) if parts or not cyclic_contentless else None
+    finally:
+        _stack.remove(identity)
 
 
 def _table_markup(table: dict) -> str | None:
@@ -273,6 +302,7 @@ def _table_markup(table: dict) -> str | None:
         return None
     head_rows: list[str] = []
     body_rows: list[str] = []
+    last_section = body_rows
     for ri, row in enumerate(grid):
         # a cell belongs to the row where it STARTS; the grid repeats
         # spanning cells in every row/column they cover
@@ -287,7 +317,11 @@ def _table_markup(table: dict) -> str | None:
             seen_cols.add(col)
             own.append(cell)
         if not own:
-            continue  # row consists entirely of continuations
+            # the row is entirely covered by earlier rowspans: emit it empty
+            # — dropping it while the covering cells keep their span count
+            # would shift the span onto the NEXT real row
+            last_section.append("<tr></tr>")
+            continue
         header = all(c.get("column_header") for c in own)
         cells = []
         for cell in own:
@@ -299,7 +333,8 @@ def _table_markup(table: dict) -> str | None:
                 attrs += f' rowspan="{cell["row_span"]}"'
             cells.append(f"<{tag}{attrs}>{escape_text(cell.get('text', ''))}</{tag}>")
         row_html = "<tr>" + "".join(cells) + "</tr>"
-        (head_rows if header else body_rows).append(row_html)
+        last_section = head_rows if header else body_rows
+        last_section.append(row_html)
     if not head_rows and not body_rows:
         return None
     html = "<table>"
@@ -422,7 +457,9 @@ def from_docling(
                 if items:
                     blocks.append(f"<{tag}>{items}</{tag}>")
             elif label == "list_item":  # stray item outside a group
-                blocks.append(f"<ul>{_li_markup(res, child)}</ul>")
+                item = _li_markup(res, child)
+                if item:
+                    blocks.append(f"<ul>{item}</ul>")
             elif label == "table":
                 markup = _table_markup(child)
                 if markup:

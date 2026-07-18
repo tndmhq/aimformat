@@ -499,6 +499,24 @@ class TestPendingLane:
         doc.accept(doc.proposals[0].id, decided_by=ME, at=ts(70))
         assert doc.verify() == []  # the lane still works after reconcile
 
+    def test_chained_add_cycle_rejects_cycle_members_not_earlier_valid_modify(self, basic_doc):
+        modify = basic_doc.propose_modify(
+            "intro", '<p data-aim="intro">Sharper.</p>', author=BOT, at=ts(5)
+        )
+        add_x = basic_doc.propose_add('<p data-aim="x">X</p>', author=BOT, after="intro", at=ts(6))
+        add_y = basic_doc.propose_add('<p data-aim="y">Y</p>', author=BOT, after=add_x.id, at=ts(7))
+        # Foreign-authored corruption: X and Y now anchor on each other.
+        basic_doc._card_el(add_x.id).set("data-anchor-after", add_y.id)
+
+        report = reconciled(basic_doc)
+
+        assert set(report.rejected_proposals) == {add_x.id, add_y.id}
+        assert [proposal.id for proposal in basic_doc.proposals] == [modify.id]
+        basic_doc.accept(modify.id, decided_by=ME, at=ts(70))
+        assert basic_doc.chunk("intro").text == "Sharper."
+        assert basic_doc.verify() == []
+        assert errors(basic_doc) == []
+
 
 # ===========================================================================
 class TestGuardsAndResidual:

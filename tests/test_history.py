@@ -57,6 +57,152 @@ class TestEventShape:
         assert not ev.validate()
 
 
+class TestHistoryIndex:
+    def test_loaded_history_parses_once_then_updates_incrementally(self, basic_doc, monkeypatch):
+        doc = aim.loads(basic_doc.dumps())
+        assert doc._history_index is None
+        parsed = 0
+        original = aim.Event.from_json
+
+        def counted(line):
+            nonlocal parsed
+            parsed += 1
+            return original(line)
+
+        monkeypatch.setattr(aim.Event, "from_json", staticmethod(counted))
+        initial_events = len(basic_doc.history)
+
+        assert doc.seq == initial_events
+        assert len(doc.history) == initial_events
+        index = doc._get_history_index()
+        assert parsed == initial_events
+        assert index.next_seq == initial_events + 1
+        assert index.next_batch == f"b{initial_events + 1}"
+        assert {"h1", "intro"} <= index.burned_ids == index.recorded_ids
+
+        doc.add_chunk('<p data-aim="later">Later.</p>', author=BOT, at=ts(9))
+        assert doc._get_history_index() is index
+        assert doc.seq == initial_events + 1
+        assert index.next_seq == initial_events + 2
+        assert "later" in index.burned_ids
+        assert parsed == initial_events
+
+        # Event.data is open for x_* extensions, so public reads are copies:
+        # mutating one must not poison the authoritative cached parse.
+        doc.history[-1].data["seq"] = 999
+        assert doc.seq == initial_events + 1
+
+    def test_pending_reservations_update_on_amend_and_resolution(self):
+        doc = aim.new_document(title="T")
+        doc.add_chunk('<p data-aim="base">Base.</p>', author=BOT, at=ts(0))
+        proposal = doc.propose_add(
+            '<aim-slide data-aim-container="pending-slide">'
+            '<p data-aim="inside-old">Old.</p></aim-slide>',
+            author=BOT,
+            at=ts(1),
+        )
+        index = doc._get_history_index()
+        assert {proposal.id, "pending-slide", "inside-old"} <= index.recorded_ids
+        assert "pending-slide" not in index.burned_ids
+
+        amended = doc.amend_proposal(
+            proposal.id,
+            '<aim-slide><p data-aim="inside-new">New.</p></aim-slide>',
+            at=ts(2),
+        )
+        assert amended.id == proposal.id
+        assert "inside-old" not in index.recorded_ids
+        assert {proposal.id, "pending-slide", "inside-new"} <= index.recorded_ids
+
+        doc.reject(proposal.id, decided_by=ME, at=ts(3))
+        assert doc.proposals == []
+        assert {proposal.id, "pending-slide", "inside-new"} <= index.burned_ids
+        # b2 belonged only to the removed card; the b3 resolution stays in
+        # history, so smallest-unused allocation intentionally returns b2.
+        assert index.next_batch == "b2"
+
+    def test_amend_refreshes_trial_clone_pending_reservations(self):
+        authored = aim.new_document(title="T")
+        earlier = authored.propose_add(
+            '<ul data-aim-container="x"><li data-aim="old">Old.</li></ul>',
+            author=BOT,
+            after=None,
+            at=ts(0),
+        )
+        later = authored.propose_add(
+            '<p data-aim="fresh">Later.</p>',
+            author=BOT,
+            after=earlier.id,
+            at=ts(1),
+        )
+        foreign_text = authored.dumps().replace(
+            '<p data-aim="fresh">Later.</p>', '<p data-aim="old">Later.</p>', 1
+        )
+        doc = aim.loads(foreign_text)
+
+        amended = doc.amend_proposal(
+            earlier.id,
+            '<ul data-aim-container="x"><li data-aim="new">New.</li></ul>',
+            at=ts(2),
+        )
+
+        assert 'data-aim="old"' not in (amended.payload_html or "")
+        assert doc.proposal(later.id).payload_html == '<p data-aim="old">Later.</p>'
+        index = doc._get_history_index()
+
+        def assert_matches_recompute():
+            rebuilt = type(index).build(doc._history_raw(), doc.proposals)
+            assert [event.data for event in index.events] == [
+                event.data for event in rebuilt.events
+            ]
+            assert index.raw == rebuilt.raw
+            assert index.burned_ids == rebuilt.burned_ids
+            assert index.recorded_ids == rebuilt.recorded_ids
+            assert index.next_seq == rebuilt.next_seq
+            assert index.next_batch == rebuilt.next_batch
+            assert index._pending_id_counts == rebuilt._pending_id_counts
+            assert index._proposal_payload_ids == rebuilt._proposal_payload_ids
+            assert index._batch_counts == rebuilt._batch_counts
+
+        assert_matches_recompute()
+
+        doc.accept_all(decided_by=ME, at=ts(3))
+
+        assert doc.body_ids == ["x", "old"]
+        assert doc.verify() == []
+        assert_matches_recompute()
+
+    def test_undo_redo_return_events_that_do_not_alias_the_cached_log(self):
+        # undo/redo build their inverse from a cached event; the returned
+        # Event is the caller's to keep, so mutating its nested objects must
+        # never corrupt the cached log out from under the JSONL.
+        doc = aim.new_document(title="T")
+        doc.add_chunk('<p data-aim="c1">One.</p>', author=BOT, at=ts(0))
+        doc.add_chunk('<p data-aim="c2">Two.</p>', author=BOT, at=ts(1))
+        doc.move_chunk("c1", author=ME, after="c2", at=ts(2))
+        doc.delete_chunk("c1", author=ME, at=ts(3))
+
+        def assert_cache_matches_jsonl():
+            raw = doc._state.script("history").raw
+            jsonl = [aim.Event.from_json(line).data for line in raw.split("\n") if line.strip()]
+            assert [e.data for e in doc.history] == jsonl
+            assert doc.verify() == []
+
+        undone_delete = doc.undo(author=ME, at=ts(4))  # inverse: add w/ anchor
+        undone_delete.data["anchor"]["container"] = "mutated-by-caller"
+        assert_cache_matches_jsonl()
+
+        redone = doc.redo(author=ME, at=ts(5))  # inverse of the cached undo
+        redone.data["anchor"]["container"] = "mutated-by-caller"
+        assert_cache_matches_jsonl()
+
+        doc.undo(author=ME, at=ts(6))  # cancel the redo again
+        undone_move = doc.undo(author=ME, at=ts(7))  # inverse: move w/ from/to
+        undone_move.data["from"]["after"] = "mutated-by-caller"
+        undone_move.data["to"]["container"] = "mutated-by-caller"
+        assert_cache_matches_jsonl()
+
+
 class TestVerify:
     def test_clean_lifecycle_verifies(self, lifecycle_doc):
         assert lifecycle_doc.verify() == []
