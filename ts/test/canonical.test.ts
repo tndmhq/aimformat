@@ -71,6 +71,16 @@ describe("canonical serialization", () => {
     expect(serialize(first("<br/>"))).toBe("<br>");
   });
 
+  it("keeps the FIRST duplicate attribute value, matching Element.get", () => {
+    // pinned against Python: canonical_attrs uses setdefault, so the id a
+    // reader resolves and the id the serializer writes never diverge
+    const p = first(
+      '<p data-aim="x" data-aim="y" class="b a" class="zz" title="one" title="two">t</p>',
+    );
+    expect(p.get("data-aim")).toBe("x");
+    expect(serialize(p)).toBe('<p data-aim="x" class="a b" title="one">t</p>');
+  });
+
   it("self-closes empty foreign elements and restores SVG attribute case", () => {
     const svg = first(
       '<svg role="img" aria-label="chart"><use href="#asset-ab"/></svg>',

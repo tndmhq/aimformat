@@ -8,6 +8,14 @@ these target the constructs a second implementation is most likely to get
 wrong: runs, nested containers, every proposal action, theme/doc blocks,
 packed assets, unicode/whitespace edges, and a flattened file.
 
+A second tier, ``noncanonical-*.aim``, is deliberately NOT lint-clean:
+SDK-built documents with deterministic string edits that simulate malformed
+hand-editing (duplicate attributes, self-closing non-void tags,
+semicolonless character references, duplicate chunk ids). Both readers must
+still agree on them — where Python decodes/normalizes, TS must project
+identically — so they get goldens like every other source, but they are
+exempt from the lint-clean check.
+
 Run from the repo root: python3 scripts/gen_parity_fixtures.py
 Then refresh the goldens: python3 scripts/dump_projection.py
 
@@ -317,6 +325,38 @@ def empty_registry_doc() -> aim.AimDocument:
     return doc
 
 
+# --------------------------------------------------------------------------
+# non-canonical tier: hand-editing simulated by deterministic string edits
+
+
+def _edited(doc: aim.AimDocument, *edits: tuple[str, str]) -> str:
+    """The document's text with each edit applied exactly once, verified to
+    still load — these are reader-parity fixtures, not nok parse cases."""
+    text = doc.dumps()
+    for old, new in edits:
+        if text.count(old) != 1:
+            raise SystemExit(f"edit target occurs {text.count(old)}× (want 1): {old!r}")
+        text = text.replace(old, new)
+    aim.loads(text)
+    return text
+
+
+def noncanonical_dup_attrs_text() -> str:
+    """Duplicate attributes: HTML first-wins semantics (Element.get and the
+    canonical serializer agree on the FIRST value; docHash follows)."""
+    doc = aim.new_document(title="Non-canonical — duplicate attributes")
+    with doc.batch():
+        doc.add_chunk('<p data-aim="p1" class="zz">First attribute wins.</p>', author=BOT, at=t(0))
+    doc.flatten()
+    return _edited(
+        doc,
+        (
+            '<p data-aim="p1" class="zz">',
+            '<p data-aim="p1" data-aim="p9" class="b a" class="zz" title="one" title="two">',
+        ),
+    )
+
+
 FIXTURES = {
     "runs": runs_doc,
     "nested-slides": nested_slides_doc,
@@ -329,6 +369,11 @@ FIXTURES = {
     "empty-registry": empty_registry_doc,
 }
 
+# intentionally NOT lint-clean (see module docstring); builders return text
+NONCANONICAL = {
+    "noncanonical-dup-attrs": noncanonical_dup_attrs_text,
+}
+
 
 def main() -> None:
     OUT.mkdir(parents=True, exist_ok=True)
@@ -339,6 +384,9 @@ def main() -> None:
             raise SystemExit(f"{name}: generated fixture fails lint: {errors}")
         doc.save(OUT / f"{name}.aim")
         print(f"wrote tests/parity/fixtures/{name}.aim")
+    for name, build_text in NONCANONICAL.items():
+        (OUT / f"{name}.aim").write_text(build_text(), "utf-8")
+        print(f"wrote tests/parity/fixtures/{name}.aim (non-canonical)")
 
 
 if __name__ == "__main__":

@@ -81,7 +81,12 @@ export function canonicalAttrs(el: Element, inSvg: boolean): string {
     inSvg ? (SVG_CASE_ADJUST[name] ?? name) : name;
 
   const remaining = new Map<string, string | null>();
-  for (const [k, v] of el.attrs) remaining.set(k, v); // later duplicates win
+  for (const [k, v] of el.attrs) {
+    // HTML semantics: the FIRST duplicate wins, matching Element.get —
+    // last-wins here would rename a chunk under `aim normalize` and
+    // break the events targeting the id the reader resolved
+    if (!remaining.has(k)) remaining.set(k, v);
+  }
   const ordered: Array<[string, string | null]> = [];
   for (const k of ATTR_FIRST) {
     if (remaining.has(k)) {

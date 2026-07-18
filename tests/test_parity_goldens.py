@@ -41,7 +41,14 @@ def test_corpus_covers_examples_and_fixtures():
 
 @pytest.mark.parametrize("path", SOURCES, ids=[p.stem for p in SOURCES])
 def test_fixture_lints_clean(path):
-    errors = [f for f in aim.lint_text(path.read_text("utf-8")) if f.level == "error"]
+    """Canonical sources lint clean; the noncanonical-* tier exists to be
+    malformed (simulated hand-editing) and must instead KEEP lint findings —
+    a noncanonical fixture that lints clean has lost its point."""
+    findings = aim.lint_text(path.read_text("utf-8"))
+    if path.stem.startswith("noncanonical-"):
+        assert findings, f"{path.stem} lints clean — no longer non-canonical"
+        return
+    errors = [f for f in findings if f.level == "error"]
     assert not errors, "\n".join(str(e) for e in errors)
 
 
