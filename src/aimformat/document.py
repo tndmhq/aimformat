@@ -2410,7 +2410,9 @@ class AimDocument:
             # payload that breaks a later pending card fails HERE, not as a
             # whole-lane rejection at accept-all
             trial = self._clone()
+            trial_prop = trial.proposal(pid)
             _set_card_payload(trial._card_el(pid), payload)
+            trial._get_history_index().replace_proposal(trial_prop, trial.proposal(pid))
             decider = Actor("external", id="pending-projection")
             for proposal in resolution_order(trial.proposals):
                 try:

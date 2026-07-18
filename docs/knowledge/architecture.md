@@ -51,7 +51,9 @@ codes bidirectionally in sync with what `lint.py` can actually emit.
   `_HistoryIndex`; its sole instance-lifetime ledger survives prune/flatten
   without being persisted. `_taken_ids()` combines that history/pending cache
   with a fresh body-tree scan. There is deliberately no mutable id→node tree
-  index.
+  index. Every in-place pending-card mutation must update that document
+  instance's `_HistoryIndex` before the next id/history read; this includes
+  validation clones, whose indexes are populated when `_clone()` creates them.
 - **Pending lanes are creation-order programs.** Every SDK proposal is
   validated against a clone containing all earlier pending cards applied in
   creation order. The projection answers *structural* legality only: no-op

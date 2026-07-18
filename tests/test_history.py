@@ -121,6 +121,57 @@ class TestHistoryIndex:
         # history, so smallest-unused allocation intentionally returns b2.
         assert index.next_batch == "b2"
 
+    def test_amend_refreshes_trial_clone_pending_reservations(self):
+        authored = aim.new_document(title="T")
+        earlier = authored.propose_add(
+            '<ul data-aim-container="x"><li data-aim="old">Old.</li></ul>',
+            author=BOT,
+            after=None,
+            at=ts(0),
+        )
+        later = authored.propose_add(
+            '<p data-aim="fresh">Later.</p>',
+            author=BOT,
+            after=earlier.id,
+            at=ts(1),
+        )
+        foreign_text = authored.dumps().replace(
+            '<p data-aim="fresh">Later.</p>', '<p data-aim="old">Later.</p>', 1
+        )
+        doc = aim.loads(foreign_text)
+
+        amended = doc.amend_proposal(
+            earlier.id,
+            '<ul data-aim-container="x"><li data-aim="new">New.</li></ul>',
+            at=ts(2),
+        )
+
+        assert 'data-aim="old"' not in (amended.payload_html or "")
+        assert doc.proposal(later.id).payload_html == '<p data-aim="old">Later.</p>'
+        index = doc._get_history_index()
+
+        def assert_matches_recompute():
+            rebuilt = type(index).build(doc._history_raw(), doc.proposals)
+            assert [event.data for event in index.events] == [
+                event.data for event in rebuilt.events
+            ]
+            assert index.raw == rebuilt.raw
+            assert index.burned_ids == rebuilt.burned_ids
+            assert index.recorded_ids == rebuilt.recorded_ids
+            assert index.next_seq == rebuilt.next_seq
+            assert index.next_batch == rebuilt.next_batch
+            assert index._pending_id_counts == rebuilt._pending_id_counts
+            assert index._proposal_payload_ids == rebuilt._proposal_payload_ids
+            assert index._batch_counts == rebuilt._batch_counts
+
+        assert_matches_recompute()
+
+        doc.accept_all(decided_by=ME, at=ts(3))
+
+        assert doc.body_ids == ["x", "old"]
+        assert doc.verify() == []
+        assert_matches_recompute()
+
     def test_undo_redo_return_events_that_do_not_alias_the_cached_log(self):
         # undo/redo build their inverse from a cached event; the returned
         # Event is the caller's to keep, so mutating its nested objects must
