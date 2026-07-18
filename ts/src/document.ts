@@ -57,7 +57,8 @@ export interface Container {
   readonly attrs: Readonly<Record<string, string>>;
   /** Canonical serialization of the container element, subtree included.
    * TS-side convenience mirroring `Chunk.html` (a viewer rendering a slide
-   * verbatim); not part of the Python read surface. */
+   * verbatim); not part of the Python read surface. Computed on first
+   * access and memoized — parsing never serializes container subtrees. */
   readonly html: string;
   /** Ordered members: item chunks and nested containers (recursive). */
   readonly members: readonly AimNode[];
@@ -630,13 +631,19 @@ export class AimDocument {
       if (!(k in attrs)) attrs[k] = v ?? "";
     }
     const parent = this.parents.get(el);
+    // html is lazy + memoized: each value is the container's full descendant
+    // subtree, so materializing it for every container at parse time costs
+    // O(depth²) bytes on nested outlines even when callers never read it.
+    let html: string | undefined;
     const view: Container = {
       kind: "container",
       id: el.containerId ?? "",
       tag: el.tag,
       container: parent === undefined ? "body" : this.containerOfChunk(parent),
       attrs,
-      html: serialize(el),
+      get html(): string {
+        return (html ??= serialize(el));
+      },
       members,
     };
     this.containerViews.set(el, view);
