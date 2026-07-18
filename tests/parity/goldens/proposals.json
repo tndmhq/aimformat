@@ -209,7 +209,7 @@
       "batch": "b2",
       "dependsOn": null,
       "explanation": "Lead with the point.",
-      "id": "p-bf30vfdr",
+      "id": "p-vfj4soqh",
       "payloadHtml": "<p data-aim=\"c2\">Second, sharpened.</p>",
       "target": "c2"
     },
@@ -227,7 +227,7 @@
       "batch": "b3",
       "dependsOn": null,
       "explanation": "Redundant with c2.",
-      "id": "p-p2lttonf",
+      "id": "p-d3erl0tm",
       "payloadHtml": null,
       "target": "c3"
     },
@@ -245,7 +245,7 @@
       "batch": "b4",
       "dependsOn": null,
       "explanation": null,
-      "id": "p-8ofq5v22",
+      "id": "p-vrc2s797",
       "payloadHtml": null,
       "target": "c4"
     },
@@ -263,13 +263,13 @@
       "batch": "b5",
       "dependsOn": null,
       "explanation": "Bridge paragraph.",
-      "id": "p-559ed88s",
+      "id": "p-94ug65a8",
       "payloadHtml": "<p data-aim=\"add1\">Inserted after the title.</p>",
       "target": null
     },
     {
       "action": "add",
-      "anchorAfter": "p-559ed88s",
+      "anchorAfter": "p-94ug65a8",
       "anchorContainer": "body",
       "anchorShell": null,
       "at": "2026-07-17T10:00:14Z",
@@ -281,7 +281,7 @@
       "batch": "b6",
       "dependsOn": null,
       "explanation": null,
-      "id": "p-gfeoiq6v",
+      "id": "p-23rc05qb",
       "payloadHtml": "<p data-aim=\"add2\">Chained onto the pending add.</p>",
       "target": null
     },
@@ -299,7 +299,7 @@
       "batch": "b7",
       "dependsOn": null,
       "explanation": "Row at the top of the body section.",
-      "id": "p-m99e32rt",
+      "id": "p-dkgtakj5",
       "payloadHtml": "<tr data-aim=\"add3\"><td>three</td></tr>",
       "target": null
     },
@@ -315,9 +315,9 @@
         "type": "agent"
       },
       "batch": "b8",
-      "dependsOn": "p-bf30vfdr",
+      "dependsOn": "p-vfj4soqh",
       "explanation": "Teal primary.",
-      "id": "p-igg0e71g",
+      "id": "p-mfsfdju6",
       "payloadHtml": "<style data-aim-theme>:root{--aim-brand-1:#0f766e}</style>",
       "target": "aim:theme"
     },
@@ -335,7 +335,7 @@
       "batch": "b9",
       "dependsOn": null,
       "explanation": "Booklet trim.",
-      "id": "p-9pbr7koo",
+      "id": "p-prb0qmdm",
       "payloadHtml": "<script type=\"application/aim-doc+json\">\n{\"page\":{\"margins\":{\"bottom\":\"10mm\",\"left\":\"12mm\",\"right\":\"12mm\",\"top\":\"10mm\"},\"orientation\":\"landscape\",\"size\":\"A5\"}}\n</script>",
       "target": "aim:doc"
     }

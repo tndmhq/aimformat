@@ -19,7 +19,7 @@
     },
     {
       "container": "body",
-      "html": "<p data-aim=\"c2\" title=\"1 < 2 &amp; 3, say &quot;hi&quot;\">Attribute references.</p>",
+      "html": "<p data-aim=\"c2\" title=\"1 < 2 &amp; 3\">Attribute references.</p>",
       "id": "c2",
       "isRun": false,
       "kind": "chunk",
@@ -31,7 +31,7 @@
     }
   ],
   "containers": [],
-  "docHash": "sha256:d5c2cbbd007aa79b765e3928901add27c61bc1191f0c10961f931ac8b5707aae",
+  "docHash": "sha256:bcbb03d196694cd9b507f7f99fbac591d8c47807c5d363c9248f868a255543d7",
   "docSettings": {},
   "embeddings": null,
   "hasCanonicalNote": true,
@@ -53,7 +53,7 @@
     },
     {
       "container": "body",
-      "html": "<p data-aim=\"c2\" title=\"1 < 2 &amp; 3, say &quot;hi&quot;\">Attribute references.</p>",
+      "html": "<p data-aim=\"c2\" title=\"1 < 2 &amp; 3\">Attribute references.</p>",
       "id": "c2",
       "isRun": false,
       "kind": "chunk",

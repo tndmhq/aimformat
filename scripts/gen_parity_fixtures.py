@@ -390,7 +390,14 @@ def noncanonical_charrefs_text() -> str:
     """Semicolonless character references, decoded like ``html.unescape``:
     numeric with trailing garbage, bare core names, the HTML4 legacy set,
     and longest-prefix matching — plus ``&apos`` which HTML never resolves
-    bare and so stays literal."""
+    bare and so stays literal.
+
+    Every case here must decode identically on all supported CPythons.
+    In particular, a semicolonless named reference followed by an
+    alphanumeric inside an ATTRIBUTE (e.g. ``&quothi``) is off-limits:
+    ``HTMLParser`` stopped decoding that spelling in Python 3.13
+    (matching the HTML5 attribute rule), so pinning it would make the
+    golden Python-version-dependent."""
     doc = aim.new_document(title="Non-canonical — semicolonless references")
     with doc.batch():
         doc.add_chunk('<p data-aim="c1">TEXT_REFS</p>', author=BOT, at=t(0))
@@ -405,7 +412,7 @@ def noncanonical_charrefs_text() -> str:
             "A&#65b, amp &amp b, &copy 2026, hex &#x41z, "
             "prefix &ampx, dropped &#6a;, literal &apos b",
         ),
-        ("ATTR_REFS", "1 &lt 2 &amp 3, say &quothi&quot"),
+        ("ATTR_REFS", "1 &lt 2 &amp 3"),
     )
 
 
