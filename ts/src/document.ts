@@ -507,18 +507,33 @@ export class AimDocument {
     return "body";
   }
 
+  /** Whether a TOP-LEVEL construct carries this id, as chunk or container
+   * — Python `DocState.top_index`, which `container_of_chunk` consults
+   * before the first hit's ancestry. */
+  private topLevelIds: Set<string> | null = null;
+
+  private isTopLevelId(id: string): boolean {
+    if (this.topLevelIds === null) {
+      this.topLevelIds = new Set();
+      for (const e of this.constructs()) {
+        const cid = e.chunkId;
+        const contId = e.containerId;
+        if (cid !== null && cid.length > 0) this.topLevelIds.add(cid);
+        if (contId !== null && contId.length > 0) this.topLevelIds.add(contId);
+      }
+    }
+    return this.topLevelIds.has(id);
+  }
+
   private makeChunkView(
     cid: string,
-    parent: Element | null,
+    container: string,
     members: Element[],
   ): Chunk {
     return {
       kind: "chunk",
       id: cid,
-      container:
-        parent === this.body || parent === null
-          ? "body"
-          : this.containerOfChunk(parent),
+      container,
       tags: members.map((m) => m.tag),
       html: serializeRun(members),
       text: members.map((m) => m.text()).join(""),
@@ -544,7 +559,11 @@ export class AimDocument {
     const members =
       this.chunkGroups.get(cid)?.get(parent) ??
       parent.elements().filter((e) => e.chunkId === cid);
-    const view = this.makeChunkView(cid, parent, members);
+    const view = this.makeChunkView(
+      cid,
+      parent === this.body ? "body" : this.containerOfChunk(parent),
+      members,
+    );
     byParent.set(parent, view);
     return view;
   }
@@ -559,10 +578,18 @@ export class AimDocument {
       .get(cid)
       ?.entries()
       .next().value;
-    const view =
-      first === undefined
-        ? this.makeChunkView(cid, null, [])
-        : this.groupChunkView(cid, first[0]);
+    let view: Chunk;
+    if (first === undefined) {
+      view = this.makeChunkView(cid, "body", []);
+    } else if (first[0] !== this.body && this.isTopLevelId(cid)) {
+      // Python container_of_chunk consults top_index FIRST: a top-level
+      // construct reusing the id (invalid, S016) pins the public chunk to
+      // container "body" even though html/text still come from the first
+      // (nested) member group. Per-container member views stay local.
+      view = this.makeChunkView(cid, "body", first[1]);
+    } else {
+      view = this.groupChunkView(cid, first[0]);
+    }
     this.chunkViews.set(cid, view);
     return view;
   }

@@ -131,6 +131,32 @@ describe("AimDocument", () => {
     ]);
   });
 
+  it("pins a nested chunk shadowed by a top-level id to container body", () => {
+    // pinned against Python container_of_chunk: it consults top_index
+    // BEFORE the first hit's ancestry, so a later top-level construct
+    // reusing the id (invalid, S016) — as chunk id, or even as container
+    // id — reports container "body" while html/text keep coming from the
+    // first (nested) member group
+    const doc = AimDocument.parse(
+      wrap(
+        '<section data-aim-container="c1"><p data-aim="dup">first</p></section>\n' +
+          '<p data-aim="dup">second</p>\n' +
+          '<section data-aim-container="c2"><p data-aim="dup2">other</p></section>\n' +
+          '<div data-aim-container="dup2"><p data-aim="x1">inside</p></div>',
+      ),
+    );
+    expect(doc.chunks.filter((c) => c.id === "dup")).toMatchObject([
+      { container: "body", text: "first" },
+    ]);
+    expect(doc.chunks.filter((c) => c.id === "dup2")).toMatchObject([
+      { container: "body", text: "other" },
+    ]);
+    // the container's own member view stays local
+    const c1 = doc.get("c1");
+    if (c1?.kind !== "container") throw new Error("no container c1");
+    expect(c1.members[0]).toMatchObject({ container: "c1", text: "first" });
+  });
+
   it("treats sibling elements sharing an id as one run, one lookup entry", () => {
     const doc = AimDocument.parse(
       wrap(

@@ -482,6 +482,42 @@ def noncanonical_dup_ids_text() -> str:
     )
 
 
+def noncanonical_dup_top_level_text() -> str:
+    """A nested chunk id reused by a LATER top-level construct (S016):
+    the public chunk list keeps the FIRST (nested) hit's html/text, but
+    ``container_of_chunk`` consults ``top_index`` before the hit's ancestry
+    — a top-level construct carrying the id (as chunk id ``dup``, or even
+    as CONTAINER id ``dup2``) pins the chunk's container to "body".
+    Per-container member views stay local (the c1/c2 members keep their
+    own container)."""
+    doc = aim.new_document(title="Non-canonical — top-level id shadowing")
+    with doc.batch():
+        doc.add_chunk(
+            '<section data-aim-container="c1"><p data-aim="n1">Nested first.</p></section>',
+            author=BOT,
+            at=t(0),
+        )
+        doc.add_chunk('<p data-aim="t1">Top-level second.</p>', author=BOT, at=t(1))
+        doc.add_chunk(
+            '<section data-aim-container="c2"><p data-aim="n2">Nested other.</p></section>',
+            author=BOT,
+            at=t(2),
+        )
+        doc.add_chunk(
+            '<div data-aim-container="t2"><p data-aim="x1">Inside the shadow.</p></div>',
+            author=BOT,
+            at=t(3),
+        )
+    doc.flatten()
+    return _edited(
+        doc,
+        ('data-aim="n1"', 'data-aim="dup"'),
+        ('data-aim="t1"', 'data-aim="dup"'),
+        ('data-aim="n2"', 'data-aim="dup2"'),
+        ('data-aim-container="t2"', 'data-aim-container="dup2"'),
+    )
+
+
 def noncanonical_rawtext_closes_text() -> str:
     """Hand-edited raw-text end tags, the version-STABLE cases only:
     ``</SCRIPT>``/``</STYLE >`` close on every CPython (the CDATA scan is
@@ -528,6 +564,7 @@ NONCANONICAL = {
     "noncanonical-charrefs": noncanonical_charrefs_text,
     "noncanonical-unicode-margins": noncanonical_unicode_margins_text,
     "noncanonical-dup-ids": noncanonical_dup_ids_text,
+    "noncanonical-dup-top-level": noncanonical_dup_top_level_text,
     "noncanonical-rawtext-closes": noncanonical_rawtext_closes_text,
 }
 
