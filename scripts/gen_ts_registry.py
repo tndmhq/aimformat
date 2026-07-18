@@ -27,6 +27,14 @@ def _ts(value: object) -> str:
     return json.dumps(value, ensure_ascii=False, sort_keys=False)
 
 
+def _ts_regex(pattern: str) -> str:
+    """Render a Python ``re`` pattern as an equivalent JS RegExp: Python's
+    ``\\d`` matches any Unicode decimal digit (Nd), JS's only ASCII, so it
+    becomes ``\\p{Nd}`` compiled with the ``u`` flag."""
+    translated = pattern.replace("\\d", "\\p{Nd}")
+    return f'new RegExp({_ts(translated)}, "u")'
+
+
 def render() -> str:
     registry = json.loads((ROOT / "src" / "aimformat" / "registry.json").read_text("utf-8"))
     lines = [
@@ -64,7 +72,7 @@ def render() -> str:
         "margins: Readonly<Record<string, string>> } = "
         f"{_ts(registry['page']['default'])};",
         "",
-        f"export const MARGIN_PATTERN = new RegExp({_ts(registry['page']['margin_pattern'])});",
+        f"export const MARGIN_PATTERN = {_ts_regex(registry['page']['margin_pattern'])};",
         "",
         f"export const MARGIN_MAX_MM = {_ts(registry['page']['margin_max_mm'])};",
         "",

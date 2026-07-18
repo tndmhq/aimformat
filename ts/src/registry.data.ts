@@ -24,7 +24,7 @@ export const PAGE_ORIENTATIONS: readonly string[] = ["portrait", "landscape"];
 
 export const PAGE_DEFAULT: { size: string; orientation: string; margins: Readonly<Record<string, string>> } = {"size": "A4", "orientation": "portrait", "margins": {"top": "15mm", "right": "15mm", "bottom": "15mm", "left": "15mm"}};
 
-export const MARGIN_PATTERN = new RegExp("^\\d+(\\.\\d+)?mm$");
+export const MARGIN_PATTERN = new RegExp("^\\p{Nd}+(\\.\\p{Nd}+)?mm$", "u");
 
 export const MARGIN_MAX_MM = 100;
 

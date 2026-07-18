@@ -116,6 +116,37 @@ type JsonObject = Record<string, unknown>;
 
 const SIDES = ["top", "right", "bottom", "left"] as const;
 
+const DECIMAL_DIGIT = /^\p{Nd}$/u;
+
+/** The numeric value of a Unicode decimal digit. Nd code points sit in
+ * ascending 0-9 decades (adjacent decades exist, e.g. the mathematical
+ * digits), so the value is the distance to the first non-digit below,
+ * mod 10. */
+function decimalDigitValue(cp: number): number {
+  let steps = 0;
+  while (
+    cp - steps > 0 &&
+    DECIMAL_DIGIT.test(String.fromCodePoint(cp - steps - 1))
+  ) {
+    steps += 1;
+  }
+  return steps % 10;
+}
+
+/** Parse a margin number the way Python ``float`` does: any Unicode decimal
+ * digit maps to its digit value (``float("١٥")`` is 15.0), the rest of the
+ * grammar — one optional ASCII "." — passes through. */
+function marginNumber(text: string): number {
+  let ascii = "";
+  for (const ch of text) {
+    const cp = ch.codePointAt(0)!;
+    if (cp >= 0x30 && cp <= 0x39) ascii += ch;
+    else if (DECIMAL_DIGIT.test(ch)) ascii += String(decimalDigitValue(cp));
+    else ascii += ch;
+  }
+  return parseFloat(ascii);
+}
+
 function pageSetupFromObj(obj: unknown): PageSetup {
   if (typeof obj !== "object" || obj === null || Array.isArray(obj)) {
     throw new AimError("page setup must be a JSON object");
@@ -153,7 +184,7 @@ function pageSetupFromObj(obj: unknown): PageSetup {
         `page margin ${side} ${JSON.stringify(value)} does not match the margin grammar`,
       );
     }
-    const mm = parseFloat(value.slice(0, -2));
+    const mm = marginNumber(value.slice(0, -2));
     if (mm > MARGIN_MAX_MM) {
       throw new AimError(
         `page margin ${side} ${value} exceeds the maximum ${MARGIN_MAX_MM}mm`,

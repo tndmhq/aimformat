@@ -11,7 +11,8 @@ packed assets, unicode/whitespace edges, and a flattened file.
 A second tier, ``noncanonical-*.aim``, is deliberately NOT lint-clean:
 SDK-built documents with deterministic string edits that simulate malformed
 hand-editing (duplicate attributes, self-closing non-void tags,
-semicolonless character references, duplicate chunk ids). Both readers must
+semicolonless character references, Unicode-digit margins, duplicate
+chunk ids). Both readers must
 still agree on them — where Python decodes/normalizes, TS must project
 identically — so they get goldens like every other source, but they are
 exempt from the lint-clean check.
@@ -416,6 +417,38 @@ def noncanonical_charrefs_text() -> str:
     )
 
 
+def noncanonical_unicode_margins_text() -> str:
+    """Margins spelled with non-ASCII Unicode decimal digits: Python's
+    ``re`` ``\\d`` and ``float()`` are Nd-aware, so ``"١٥mm"`` is
+    grammar-valid and resolves to 15 — including an astral-plane digit
+    (``𝟝``, U+1D7DD) from the mathematical block, where 0-9 decades sit
+    adjacent to each other."""
+    doc = aim.new_document(title="Non-canonical — Unicode-digit margins")
+    with doc.batch():
+        doc.add_chunk(
+            '<p data-aim="m1">Margins written in other digit scripts.</p>',
+            author=BOT,
+            at=t(0),
+        )
+    doc.set_page_setup(
+        {
+            "size": "A4",
+            "orientation": "portrait",
+            "margins": {"top": "15mm", "right": "19mm", "bottom": "12.7mm", "left": "5mm"},
+        },
+        author=ME,
+        at=t(1),
+    )
+    doc.flatten()
+    return _edited(
+        doc,
+        ('"top":"15mm"', '"top":"١٥mm"'),  # Arabic-Indic 15
+        ('"right":"19mm"', '"right":"१९mm"'),  # Devanagari 19
+        ('"bottom":"12.7mm"', '"bottom":"١٢.٧mm"'),  # Arabic-Indic 12.7
+        ('"left":"5mm"', '"left":"𝟝mm"'),  # mathematical double-struck 5
+    )
+
+
 def noncanonical_dup_ids_text() -> str:
     """One chunk id repeated across containers (S016): each container's
     member view stays LOCAL — the second container shows its own html/text,
@@ -466,6 +499,7 @@ NONCANONICAL = {
     "noncanonical-dup-attrs": noncanonical_dup_attrs_text,
     "noncanonical-self-closing": noncanonical_self_closing_text,
     "noncanonical-charrefs": noncanonical_charrefs_text,
+    "noncanonical-unicode-margins": noncanonical_unicode_margins_text,
     "noncanonical-dup-ids": noncanonical_dup_ids_text,
 }
 

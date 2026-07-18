@@ -207,6 +207,25 @@ describe("AimDocument", () => {
     });
   });
 
+  it("accepts Unicode-decimal-digit margins, like Python", () => {
+    // Python parity: re's \d and float() take any Unicode decimal digit
+    // (Nd), so "١٥mm" is grammar-valid and resolves to 15 — including the
+    // astral mathematical digit 𝟝 (U+1D7DD), whose 0-9 decade sits
+    // adjacent to its neighbours
+    const doc = AimDocument.parse(
+      wrap(
+        '<p data-aim="c1">x</p>',
+        '<script type="application/aim-doc+json">\n{"page":{"margins":{"bottom":"١٢.٧mm","left":"𝟝mm","right":"१९mm","top":"١٥mm"}}}\n</script>\n',
+      ),
+    );
+    expect(doc.pageSetup.marginsMm).toEqual({
+      top: 15,
+      right: 19,
+      bottom: 12.7,
+      left: 5,
+    });
+  });
+
   it("rejects explicit null page fields — only a missing property defaults", () => {
     // Python parity: dict.get(key, default) falls back only on absence, so
     // {"size": null} fails the type check (D003/D004) instead of silently
