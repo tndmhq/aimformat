@@ -27,6 +27,9 @@ from conftest import BOT, ME, ts
 class LaneSpec:
     second_hop: bool
     chained_adds: bool
+    pending_container_position: str
+    move_to_pending_tail: bool
+    reject_tail_dependency: bool
     delete_body_anchor: bool
     drift: str
     reverse_cards: bool
@@ -37,6 +40,9 @@ def lane_specs(draw: st.DrawFn) -> LaneSpec:
     return LaneSpec(
         second_hop=draw(st.booleans()),
         chained_adds=draw(st.booleans()),
+        pending_container_position=draw(st.sampled_from(("none", "first", "last"))),
+        move_to_pending_tail=draw(st.booleans()),
+        reject_tail_dependency=draw(st.booleans()),
         delete_body_anchor=draw(st.booleans()),
         drift=draw(
             st.sampled_from(
@@ -70,7 +76,12 @@ def _build_lane(spec: LaneSpec) -> aim.AimDocument:
         author=ME,
         at=ts(2),
     )
-    doc.add_chunk('<p data-aim="p">TOKEN-P</p>', author=ME, at=ts(3))
+    doc.add_chunk(
+        '<ul data-aim-container="l4"><li data-aim="d">TOKEN-D</li></ul>',
+        author=ME,
+        at=ts(3),
+    )
+    doc.add_chunk('<p data-aim="p">TOKEN-P</p>', author=ME, at=ts(4))
 
     # The load-bearing sequence: rescue z before replacing l2, then move x
     # into the projected replacement. This is rich but unambiguous.
@@ -86,23 +97,52 @@ def _build_lane(spec: LaneSpec) -> aim.AimDocument:
     if spec.second_hop:
         doc.propose_move("x", author=BOT, container="l3", after="c", at=ts(7))
 
-    first_add = doc.propose_add(
-        '<p data-aim="n1">TOKEN-N1</p>',
+    tail_add = doc.propose_add(
+        '<li data-aim="n1">TOKEN-N1</li>',
         author=BOT,
-        container="body",
-        after="p",
+        container="l4",
+        after="d",
         at=ts(8),
     )
     if spec.chained_adds:
-        doc.propose_add(
-            '<p data-aim="n2">TOKEN-N2</p>',
+        tail_add = doc.propose_add(
+            '<li data-aim="n2">TOKEN-N2</li>',
             author=BOT,
-            container="body",
-            after=first_add.id,
+            container="l4",
+            after=tail_add.id,
             at=ts(9),
         )
+
+    if spec.pending_container_position != "none":
+        doc.propose_add(
+            '<ul data-aim-container="pc"></ul>',
+            author=BOT,
+            container="body",
+            after="p",
+            at=ts(10),
+        )
+        before = doc.dumps()
+        after = None if spec.pending_container_position == "first" else aim.LAST
+        with pytest.raises(aim.InvalidOperation, match="container.*current document"):
+            doc.propose_add(
+                '<li data-aim="pc-item">TOKEN-PC-ITEM</li>',
+                author=BOT,
+                container="pc",
+                after=after,
+                at=ts(11),
+            )
+        assert doc.dumps() == before
+
+    if spec.move_to_pending_tail:
+        move = doc.propose_move("x", author=BOT, container="l4", at=ts(12))
+        assert move.anchor_after == tail_add.id
+        if spec.reject_tail_dependency:
+            rejected_root = doc._payload_root_id(tail_add.payload_html or "")
+            doc.reject(tail_add.id, decided_by=ME, at=ts(13))
+            assert doc.proposal(move.id).anchor_after != rejected_root
+
     if spec.delete_body_anchor:
-        doc.propose_delete("p", author=BOT, at=ts(10))
+        doc.propose_delete("p", author=BOT, at=ts(14))
 
     if spec.drift != "none":
         source = doc.dumps()

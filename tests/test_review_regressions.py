@@ -3934,6 +3934,80 @@ class TestAddAnchorsLintCleanAgainstTheCurrentBody:
         assert aim.lint(doc) == []
 
 
+class TestMoveAnchorsSurvivePendingDependencyRejection:
+    """Move destinations follow the same current-body rule as add anchors.
+
+    A projected pending-add root is recorded as the proposal-id chain so
+    rejection can rebind it. Pending-only containers and positions introduced
+    by other pending actions cannot be encoded and must be refused.
+    """
+
+    @staticmethod
+    def _base():
+        doc = aim.new_document(title="T")
+        doc.add_chunk('<p data-aim="x">X</p>', author=ME, at=ts(0))
+        doc.add_chunk('<p data-aim="c1">One</p>', author=ME, at=ts(1))
+        return doc
+
+    @pytest.mark.parametrize("after", [aim.LAST, "n1"], ids=["last", "explicit-root"])
+    def test_pending_add_destination_records_rebindable_chain(self, after):
+        doc = self._base()
+        add = doc.propose_add('<p data-aim="n1">N1</p>', author=BOT, at=ts(2))
+
+        move = doc.propose_move("x", author=BOT, container="body", after=after, at=ts(3))
+
+        assert move.anchor_after == add.id
+        assert aim.lint(doc) == []
+        doc.reject(add.id, decided_by=ME, at=ts(4))
+        assert doc.proposal(move.id).anchor_after == "c1"
+        doc.accept(move.id, decided_by=ME, at=ts(5))
+        assert doc.body_ids == ["c1", "x"]
+        assert doc.verify() == []
+
+    @pytest.mark.parametrize("after", [None, aim.LAST], ids=["explicit-first", "last-in-empty"])
+    def test_move_into_an_empty_pending_container_is_refused(self, after):
+        doc = self._base()
+        doc.add_chunk(
+            '<ul data-aim-container="source"><li data-aim="item">Item</li></ul>',
+            author=ME,
+            at=ts(2),
+        )
+        doc.propose_add('<ul data-aim-container="lc"></ul>', author=BOT, at=ts(2))
+        before = doc.dumps()
+
+        with pytest.raises(InvalidOperation, match="container.*current document"):
+            doc.propose_move("item", author=BOT, container="lc", after=after, at=ts(3))
+
+        assert doc.dumps() == before
+        assert aim.lint(doc) == []
+
+    def test_move_behind_a_pending_move_in_is_refused(self):
+        doc = self._base()
+        doc.add_chunk(
+            '<ul data-aim-container="source"><li data-aim="item">Item</li></ul>',
+            author=ME,
+            at=ts(2),
+        )
+        doc.add_chunk(
+            '<ul data-aim-container="l2"><li data-aim="a">A</li></ul>',
+            author=ME,
+            at=ts(3),
+        )
+        doc.add_chunk(
+            '<ul data-aim-container="l3"><li data-aim="z">Z</li></ul>',
+            author=ME,
+            at=ts(4),
+        )
+        doc.propose_move("z", author=BOT, container="l2", at=ts(5))
+        before = doc.dumps()
+
+        with pytest.raises(InvalidOperation, match="until the pending lane resolves"):
+            doc.propose_move("item", author=BOT, container="l2", at=ts(6))
+
+        assert doc.dumps() == before
+        assert aim.lint(doc) == []
+
+
 class TestAmendKeepsTheLaneAppliable:
     """Amend validates like the original propose call (§5.4 docstring): an
     amended payload that breaks a later pending card must be rejected at

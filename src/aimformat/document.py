@@ -204,20 +204,21 @@ def _creation_order(proposals: Sequence[Proposal]) -> list[Proposal]:
     order: list[Proposal] = []
     while pending:
         pending_ids = {proposal.id for proposal in pending}
-        ready = [
-            proposal
-            for proposal in pending
-            if not (
-                proposal.action == "add"
-                and proposal.anchor_after is not None
-                and proposal.anchor_after in pending_ids
-            )
-        ]
-        if not ready:
+        ready_index = next(
+            (
+                index
+                for index, proposal in enumerate(pending)
+                if not (
+                    proposal.action == "add"
+                    and proposal.anchor_after is not None
+                    and proposal.anchor_after in pending_ids
+                )
+            ),
+            None,
+        )
+        if ready_index is None:
             raise _ChainedAddCycle(_chained_add_cycle_ids(pending))
-        order.extend(ready)
-        ready_ids = {proposal.id for proposal in ready}
-        pending = [proposal for proposal in pending if proposal.id not in ready_ids]
+        order.append(pending.pop(ready_index))
     return order
 
 
@@ -2152,7 +2153,8 @@ class AimDocument:
                 target, author=author, container=container, after=after, shell=shell, at=at
             )
         )
-        anchor = self._projected_operation(f"new move of {target!r}", validate)
+        projected_anchor = self._projected_operation(f"new move of {target!r}", validate)
+        anchor = self._card_position_anchor("move", projected_anchor)
         return self._new_card(
             action="move",
             author=author,
@@ -2534,7 +2536,7 @@ class AimDocument:
                     data["from"] = src.to_obj()
                     self._state.move(prop.target or "", dst)
 
-        # drop the card; rebind chained adds that anchored on this proposal
+        # drop the card; rebind dependent position cards anchored on this proposal
         sec = self._state.section("aim-proposals")
         assert sec is not None
         sec.children.remove(card)
@@ -2548,6 +2550,7 @@ class AimDocument:
         return (nodes[0].chunk_id or nodes[0].container_id or "") if nodes else ""
 
     def _rebind_chained(self, resolved: Proposal, decision: str) -> None:
+        """Materialize or bypass a pending-add position dependency."""
         sec = self._state.section("aim-proposals")
         if sec is None:
             return

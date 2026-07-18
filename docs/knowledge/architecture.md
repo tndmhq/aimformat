@@ -54,17 +54,20 @@ codes bidirectionally in sync with what `lint.py` can actually emit.
   creation order. The projection answers *structural* legality only: no-op
   guards (identical content, no-op move) judge against the current document,
   cards the new proposal supersedes (§5.4) are excluded from the projection,
-  and proposal targets and recorded add anchors must exist in the current
-  body (lint P008/P011 parity — an add position that resolves to a pending
-  add's root is written as the proposal-id chain instead). Amending a payload
-  replays the whole lane on a clone first and fails closed if the amendment
-  would break a later card. `resolution_order()` preserves creation order;
-  its only exception is moving a chained add behind the pending add it names
-  so normal acceptance or rejection rebinding can materialize the anchor. A
-  lane whose cards passed projected validation applies cleanly in creation
-  order. Accept-all first replays the whole lane on a clone and refuses with
-  zero live mutation if a foreign-authored card, out-of-band edit, or partial
-  manual resolution broke the projection. Reconcile uses the same replay as a
+  and proposal targets plus add/move destination containers must exist in the
+  current body. Recorded add/move anchors must also resolve there; the one
+  sanctioned exception is a position on a pending add's payload root, which
+  is written as the proposal-id chain so accepting or rejecting that add
+  rebinds every dependent position (lint P008/P011 parity for the linted
+  target/add cases). Amending a payload replays the whole lane on a clone first
+  and fails closed if the amendment would break a later card.
+  `resolution_order()` preserves creation order one ready card at a time; its
+  only exception is moving a foreign-reordered chained add behind the pending
+  add it names, without letting later cards overtake either one. A lane whose
+  cards passed projected validation applies cleanly in creation order.
+  Accept-all first replays the whole lane on a clone and refuses with zero live
+  mutation if a foreign-authored card, out-of-band edit, or partial manual
+  resolution broke the projection. Reconcile uses the same replay as a
   fail-closed fixpoint and records rejections for cards that no longer apply;
   it never searches for a rescuing order. An unorderable foreign chained-add
   cycle surfaces its actual cycle members so reconcile rejects only cycle
