@@ -76,12 +76,52 @@ describe("parser", () => {
     expect(el(parseFragment("<p>&apos b</p>")).text()).toBe("&apos b");
     // dropped control code point, then literal remainder
     expect(el(parseFragment("<p>x&#6a;y</p>")).text()).toBe("xa;y");
-    // attribute values decode identically
+    // bare exact legacy names still decode inside attribute values
     expect(
       el(parseFragment('<p data-x-note="1 &lt 2 &amp 3">t</p>')).get(
         "data-x-note",
       ),
     ).toBe("1 < 2 & 3");
+  });
+
+  it("keeps non-exact semicolonless references literal in attributes", () => {
+    // pinned against Python 3.13+ (_unescape_attrvalue, the HTML5 attribute
+    // rule): a named reference decodes only on an EXACT entity match, so a
+    // name running into following text stays literal instead of decoding by
+    // longest prefix — Python ≤3.12 ran full html.unescape here, which is
+    // the version-fragile legacy behavior this test deliberately excludes
+    const attr = (markup: string): string | null =>
+      el(parseFragment(markup)).get("data-x-note");
+    expect(attr('<p data-x-note="&quothi">t</p>')).toBe("&quothi");
+    expect(attr('<p data-x-note="?a=1&ampb=2">t</p>')).toBe("?a=1&ampb=2");
+    // ...while the same forms in body text keep decoding by longest prefix
+    expect(el(parseFragment("<p>&quothi and &ampb</p>")).text()).toBe(
+      '"hi and &b',
+    );
+    // a match ending in `=` never decodes, even an exact name
+    expect(attr('<p data-x-note="&amp=1">t</p>')).toBe("&amp=1");
+    // exact names still decode, bare or semicolon-terminated, and a
+    // non-alphanumeric stops the name so the exact match resumes
+    expect(attr('<p data-x-note="&amp b">t</p>')).toBe("& b");
+    expect(attr('<p data-x-note="&amp">t</p>')).toBe("&");
+    expect(attr('<p data-x-note="&quot;x">t</p>')).toBe('"x');
+    expect(attr('<p data-x-note="&amp-x">t</p>')).toBe("&-x");
+    expect(attr('<p data-x-note="&copy 2026">t</p>')).toBe("© 2026");
+    // numeric references always decode, trailing text left literal
+    expect(attr('<p data-x-note="&#65b">t</p>')).toBe("Ab");
+    expect(attr('<p data-x-note="&#65=">t</p>')).toBe("A=");
+    // a legacy name with a semicolon is an exact html5 entity — decodes
+    expect(attr('<p data-x-note="caf&eacute;">t</p>')).toBe("café");
+    // the deliberate strictness divergence carries over: a name-shaped
+    // `&name;` outside the shipped tables is a parse error (Python decodes
+    // `&hellip;` from the full table, keeps `&ampx;` literal; erring loud
+    // beats guessing wrong with a partial table)
+    expect(() => parseFragment('<p data-x-note="a&hellip;b">t</p>')).toThrow(
+      AimParseError,
+    );
+    expect(() => parseFragment('<p data-x-note="&ampx;">t</p>')).toThrow(
+      AimParseError,
+    );
   });
 
   it("decodes the legacy uppercase core spellings with semicolons", () => {

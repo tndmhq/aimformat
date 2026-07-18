@@ -210,11 +210,12 @@ function decodeNumericRef(cp: number): string {
 }
 
 /** Python's `html._charref` regex: what `html.unescape` — and therefore the
- * Python reader, for text and attribute values alike — treats as one
- * character reference, semicolon optional. */
+ * Python reader, in BODY TEXT (attribute values follow the stricter
+ * `decodeAttrRefs` below) — treats as one character reference, semicolon
+ * optional. */
 const CHARREF_RE = /&(#[0-9]+;?|#[xX][0-9a-fA-F]+;?|[^\t\n\f <&#;]{1,32};?)/g;
 
-/** Decode character references the way the Python reader does
+/** Decode character references in body text the way the Python reader does
  * (`html.unescape` semantics), restricted to what canonical .aim can spell:
  * numeric forms plus the core named references, with the HTML legacy
  * semicolon-optional set for hand-edited input (`&#65b` → `Ab`,
@@ -247,6 +248,48 @@ function decodeRefs(s: string): string {
     for (let cut = body.length - 1; cut >= 2; cut -= 1) {
       const prefix = SEMICOLON_OPTIONAL_REFS[body.slice(0, cut)];
       if (prefix !== undefined) return prefix + body.slice(cut);
+    }
+    return match;
+  });
+}
+
+/** Python 3.13+'s `html.parser.attr_charref`: what one character reference
+ * looks like inside an attribute value — a strict name (no dots/dashes)
+ * with an optional trailing `;` or `=` captured into the match. */
+const ATTR_CHARREF_RE =
+  /&(#[0-9]+|#[xX][0-9a-fA-F]+|[a-zA-Z][a-zA-Z0-9]*)[;=]?/g;
+
+/** Decode character references in ATTRIBUTE values the way Python 3.13+
+ * does (`html.parser._unescape_attrvalue`, the HTML5 attribute rule):
+ * numeric references always decode, but a named reference only decodes on
+ * an EXACT entity match that does not end with `=` — so `title="&quothi"`
+ * and `href="?a=1&ampb=2"` stay literal while `&amp ` still becomes `& `.
+ * (Python ≤3.12 ran full `html.unescape` here, decoding by longest prefix;
+ * that is the version-fragile legacy behavior, not the spec.)
+ *
+ * The reader's deliberate strictness carries over from `decodeRefs`: an
+ * unknown name-shaped `&name;` is a parse error rather than a silent
+ * guess against a table this library does not ship. */
+function decodeAttrRefs(s: string): string {
+  if (!s.includes("&")) return s;
+  return s.replace(ATTR_CHARREF_RE, (match, body: string) => {
+    if (body.startsWith("#")) {
+      const hex = body[1] === "x" || body[1] === "X";
+      const decoded = decodeNumericRef(
+        parseInt(body.slice(hex ? 2 : 1), hex ? 16 : 10),
+      );
+      // the regex eats a trailing `;` but a trailing `=` stays literal text
+      return match.endsWith("=") ? decoded + "=" : decoded;
+    }
+    if (match.endsWith("=")) return match;
+    const named = match.endsWith(";")
+      ? (NAMED_REFS[`${body};`] ?? SEMICOLON_OPTIONAL_REFS[body])
+      : SEMICOLON_OPTIONAL_REFS[body];
+    if (named !== undefined) return named;
+    if (match.endsWith(";")) {
+      throw new AimParseError(
+        `unsupported character reference ${match} — canonical .aim uses raw UTF-8`,
+      );
     }
     return match;
   });
@@ -386,7 +429,7 @@ class Scanner {
       }
       const close = this.text.indexOf('"', i + 1);
       if (close < 0) this.fail(`unterminated attribute value in <${tag}>`);
-      attrs.push([name, decodeRefs(this.text.slice(i + 1, close))]);
+      attrs.push([name, decodeAttrRefs(this.text.slice(i + 1, close))]);
       i = close + 1;
     }
     let selfClosing = false;
