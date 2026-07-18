@@ -2029,10 +2029,7 @@ class AimDocument:
         payload, projected_anchor = self._projected_operation(
             f"new add into {container!r}", validate
         )
-        if isinstance(after, str) and ids.is_valid_proposal_id(after):
-            anchor = Anchor(container, after, projected_anchor.shell)
-        else:
-            anchor = self._card_add_anchor(container, projected_anchor)
+        anchor = self._card_position_anchor("add", projected_anchor)
         return self._new_card(
             action="add",
             author=author,
@@ -2044,13 +2041,24 @@ class AimDocument:
             at=at,
         )
 
-    def _card_add_anchor(self, container: str, projected: Anchor) -> Anchor:
-        """The anchor recorded on an add card must lint clean against the
-        CURRENT body (P011/P016): an existing chunk at a valid insertion
-        point, or a pending-add chain. When the projection resolved the
-        position to a pending add's root, record the chain on its proposal
-        id instead (AIM-03 — so rejection rebinding keeps working); any
-        other projected-only position is refused."""
+    def _card_position_anchor(self, action: str, projected: Anchor) -> Anchor:
+        """Record a position that remains valid without pending projection.
+
+        The destination container (and table shell) must exist in the CURRENT
+        body. A projected anchor on a pending add's payload root is encoded as
+        the proposal-id chain so normal rejection rebinding keeps the dependent
+        card viable; every other projected-only position is refused.
+        """
+        try:
+            self._state.resolve_insert_point(
+                Anchor(projected.container, None, shell=projected.shell)
+            )
+        except AimError as exc:
+            raise InvalidOperation(
+                f"{action} would use container {projected.container!r} (or its "
+                "table shell), which is not a valid position in the current document"
+            ) from exc
+
         if projected.after is None:
             return projected
         owner = next(
@@ -2058,19 +2066,19 @@ class AimDocument:
                 p
                 for p in self.proposals
                 if p.action == "add"
-                and (p.anchor_container or "body") == container
+                and (p.anchor_container or "body") == projected.container
                 and self._payload_root_id(p.payload_html or "") == projected.after
             ),
             None,
         )
         if owner is not None:
-            return Anchor(container, owner.id, projected.shell)
+            return Anchor(projected.container, owner.id, projected.shell)
         try:
             self._state.resolve_insert_point(projected)
         except AimError as exc:
             raise InvalidOperation(
-                f"add would anchor on {projected.after!r}, which is not a valid "
-                f"position in {container!r} until the pending lane resolves — "
+                f"{action} would anchor on {projected.after!r}, which is not a valid "
+                f"position in {projected.container!r} until the pending lane resolves — "
                 "anchor on a pending add's proposal id or on a current chunk"
             ) from exc
         return projected

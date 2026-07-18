@@ -3900,6 +3900,24 @@ class TestAddAnchorsLintCleanAgainstTheCurrentBody:
         assert doc.dumps() == before
         assert aim.lint(doc) == []
 
+    @pytest.mark.parametrize("after", [None, aim.LAST], ids=["explicit-first", "last-in-empty"])
+    def test_add_into_an_empty_pending_container_is_refused(self, after):
+        doc = self._base()
+        doc.propose_add('<ul data-aim-container="lc"></ul>', author=BOT, at=ts(1))
+        before = doc.dumps()
+
+        with pytest.raises(InvalidOperation, match="container.*current document"):
+            doc.propose_add(
+                '<li data-aim="i2">I2</li>',
+                author=BOT,
+                container="lc",
+                after=after,
+                at=ts(2),
+            )
+
+        assert doc.dumps() == before
+        assert aim.lint(doc) == []
+
     def test_anchor_behind_a_pending_move_in_is_refused(self):
         doc = self._base()
         doc.add_chunk(
