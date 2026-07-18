@@ -9,6 +9,7 @@ required to add entries.)
 
 | Date | Type | Entry | Status | What |
 |---|---|---|---|---|
+| 2026-07-18 04:24 | report | [pr17-minor-parity-fixes](2026-07-18_0424_report_pr17-minor-parity-fixes.md) | done | The three Codex minor TS-vs-Python parity findings on PR #17 fixed (attribute charrefs per 3.13+ exact-match rule, case-insensitive raw end-tag scan with tag boundary, top-level id shadowing pins container to body); version-dependent html.parser behavior pinned by TS unit tests only, version-stable behavior by two new noncanonical fixtures + goldens diffed identical under CPython 3.10-3.14. |
 | 2026-07-18 02:51 | plan | [pr17-p2-parity-fixes](2026-07-18_0251_plan_pr17-p2-parity-fixes.md) | done | Fix four Codex P2 parity findings on PR #17: first-duplicate-attribute canonical serialization, self-closing non-void normalization, semicolonless character-reference decoding, and local duplicate-id chunks in container members — each pinned by a non-canonical parity fixture |
 | 2026-07-18 01:50 | plan | [pr16-trial-clone-index-refresh](2026-07-18_0150_plan_pr16-trial-clone-index-refresh.md) | done | Refresh amended trial-clone proposal reservations before creation-order replay, with red-first index-parity coverage |
 | 2026-07-18 00:57 | plan | [pr15-superseded-payload-id-reservation](2026-07-18_0057_plan_pr15-superseded-payload-id-reservation.md) | done | Keep superseded proposal payload IDs burned during replacement normalization so displayed and accepted markup agree |

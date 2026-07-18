@@ -124,13 +124,29 @@ mirrors the Python modules (`dom.ts`/`parser.ts`/`canonical.ts`/
    default only when *missing*, never on explicit `null` (so no `??`);
    numeric character references go through HTML's replacement table
    (`html._replace_charref`), not raw `fromCodePoint`. The 2026-07-18
-   PR #17 round added the same class on malformed input: duplicate
+   PR #17 rounds added the same class on malformed input: duplicate
    attributes are FIRST-wins (`setdefault`, matching `Element.get`);
    self-closed non-void elements serialize open+close (the serializer
    never echoes the slash); semicolonless character references decode
-   with full `html.unescape` semantics (legacy no-semicolon table +
-   longest-prefix fallback); and a duplicate chunk id reads LOCALLY per
-   container, never as the global first hit.
+   with full `html.unescape` semantics in BODY TEXT (legacy no-semicolon
+   table + longest-prefix fallback) but in ATTRIBUTE values follow
+   Python 3.13+'s `_unescape_attrvalue` (exact-entity match only, never
+   before `=`); raw `<script>`/`<style>` end-tag scanning is
+   case-insensitive with a tag-boundary lookahead (`</SCRIPT>` closes,
+   `</scriptx>` is data); a duplicate chunk id reads LOCALLY per
+   container, never as the global first hit, while the public chunk of a
+   nested id shadowed by a top-level construct reports container "body"
+   (`container_of_chunk` consults `top_index` first).
+5. **Python `html.parser` behavior is VERSION-dependent; goldens must be
+   byte-identical across the CPython 3.10–3.13 CI matrix.** 3.13 changed
+   both attribute unescaping (`_unescape_attrvalue`) and the CDATA
+   end-tag regex (`</tag(?=[\t\n\r\f />])` vs `</\s*tag\s*>`). Before
+   pinning malformed-input behavior, verify it on the oldest AND newest
+   supported interpreters (`python3.X` + `sys.path` to `src/`). Where
+   versions agree, pin with a parity fixture + golden (and diff the
+   regenerated golden under every interpreter); where they disagree,
+   match the spec-correct (HTML5 / newer-Python) side and pin with a TS
+   unit test only — never a Python-generated golden.
 
 Fixture regeneration re-mints proposal ids (tool-assigned, like
 `gen_examples.py`): always regenerate fixtures and goldens together.
