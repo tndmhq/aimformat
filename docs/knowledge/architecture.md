@@ -66,9 +66,11 @@ codes bidirectionally in sync with what `lint.py` can actually emit.
   zero live mutation if a foreign-authored card, out-of-band edit, or partial
   manual resolution broke the projection. Reconcile uses the same replay as a
   fail-closed fixpoint and records rejections for cards that no longer apply;
-  it never searches for a rescuing order. The property oracle in
-  `tests/test_resolution_order_properties.py` is exactly this creation-order
-  clone replay.
+  it never searches for a rescuing order. An unorderable foreign chained-add
+  cycle surfaces its actual cycle members so reconcile rejects only cycle
+  participants, never unrelated valid cards earlier in the lane. The property
+  oracle in `tests/test_resolution_order_properties.py` is exactly this
+  creation-order clone replay.
 - **Payload equality is the verification primitive.** If you change
   canonical form in any way, every stored payload in every fixture/example
   changes meaning — regenerate fixtures and examples, and expect checkpoint

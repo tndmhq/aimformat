@@ -155,6 +155,43 @@ class Proposal:
     anchor_shell: str | None = None  # thead/tbody/tfoot for table rows
 
 
+class _ChainedAddCycle(InvalidOperation):
+    """An unorderable pending-add cycle, with its actual participants."""
+
+    def __init__(self, proposal_ids: Sequence[str]):
+        self.proposal_ids = tuple(proposal_ids)
+        super().__init__(
+            "pending adds anchor on each other in a cycle — the file is "
+            "corrupt (aim lint reports P015)"
+        )
+
+
+def _chained_add_cycle_ids(proposals: Sequence[Proposal]) -> tuple[str, ...]:
+    """Return cycle members, excluding non-cyclic paths that lead into one."""
+    proposal_ids = {proposal.id for proposal in proposals}
+    dependencies: dict[str, str] = {}
+    for proposal in proposals:
+        after = proposal.anchor_after
+        if proposal.action == "add" and after is not None and after in proposal_ids:
+            dependencies[proposal.id] = after
+
+    cycle_ids: set[str] = set()
+    finished: set[str] = set()
+    for start in dependencies:
+        path: list[str] = []
+        positions: dict[str, int] = {}
+        current = start
+        while current in dependencies and current not in finished:
+            if current in positions:
+                cycle_ids.update(path[positions[current] :])
+                break
+            positions[current] = len(path)
+            path.append(current)
+            current = dependencies[current]
+        finished.update(path)
+    return tuple(proposal.id for proposal in proposals if proposal.id in cycle_ids)
+
+
 def _creation_order(proposals: Sequence[Proposal]) -> list[Proposal]:
     """Return card creation order, moving only chained adds behind anchors.
 
@@ -177,10 +214,7 @@ def _creation_order(proposals: Sequence[Proposal]) -> list[Proposal]:
             )
         ]
         if not ready:
-            raise InvalidOperation(
-                "pending adds anchor on each other in a cycle — the file is "
-                "corrupt (aim lint reports P015)"
-            )
+            raise _ChainedAddCycle(_chained_add_cycle_ids(pending))
         order.extend(ready)
         ready_ids = {proposal.id for proposal in ready}
         pending = [proposal for proposal in pending if proposal.id not in ready_ids]

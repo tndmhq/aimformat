@@ -44,11 +44,12 @@ from .document import (
     Anchor,
     DocState,
     _apply_move_data,
+    _ChainedAddCycle,
     _now_iso,
     resolution_order,
 )
 from .dom import Element, parse_fragment, parse_html
-from .errors import AimError, HistoryError, InvalidOperation
+from .errors import AimError, HistoryError
 from .events import Actor, Event, external
 from .registry import REGISTRY
 
@@ -558,11 +559,11 @@ def _reject_dangling(
         projection = S._clone()
         try:
             order = resolution_order(projection.proposals)
-        except InvalidOperation as exc:
+        except _ChainedAddCycle as exc:
             # A foreign-authored chained-add cycle has no valid first card.
-            # Rejecting the first card breaks the cycle and lets the fixpoint
-            # revalidate every survivor after normal rejection rebinding.
-            proposal = S.proposals[0]
+            # Reject a participant, not an unrelated earlier valid card; the
+            # fixpoint then revalidates every survivor after normal rebinding.
+            proposal = S.proposal(exc.proposal_ids[0])
             reason = str(exc)
         else:
             proposal = None
