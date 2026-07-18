@@ -88,13 +88,80 @@ codes bidirectionally in sync with what `lint.py` can actually emit.
   execute, install, or fetch anything based on header content — the
   vim-modeline lesson, written into the format.
 
+## The TypeScript reader (`ts/`)
+
+`@aimformat/reader` is the official TypeScript **read** library — a
+read-only projection of a canonical document (ordered node tree, chunks
+with first-class runs, proposals, theme/page setup, `docHash`). Writes are
+Python-only by design; the TS side must never grow write paths. Structure
+mirrors the Python modules (`dom.ts`/`parser.ts`/`canonical.ts`/
+`document.ts`), and three invariants hold:
+
+1. **`ts/src/registry.data.ts` is generated** from `registry.json` (+ the
+   aim-note template) by `scripts/gen_ts_registry.py`;
+   `tests/test_ts_registry.py` fails when stale.
+2. **Parity is pinned by goldens.** `scripts/dump_projection.py` dumps the
+   Python projection of `examples/*.aim` + `tests/parity/fixtures/*.aim`
+   (edge fixtures from `scripts/gen_parity_fixtures.py`) to
+   `tests/parity/goldens/`; `tests/test_parity_goldens.py` asserts
+   regeneration is byte-stable, and the vitest suite asserts the TS
+   projection equals the goldens field-for-field (plus `docHash` parity
+   over the ok_* conformance kit). Any behavior change on either side
+   surfaces as a reviewed golden diff. On divergence, `spec.md` decides
+   which implementation is wrong. The `noncanonical-*` fixture tier
+   (SDK-built + deterministic string edits) pins agreement on *malformed
+   hand-edited* input too — those are exempt from the lint-clean check
+   and asserted to keep lint findings.
+3. **One parser code path.** The TS parser is a strict scanner for the
+   canonical subset (no DOMParser, no Node APIs) — trade-offs documented
+   in `ts/README.md`.
+4. **Port Python semantics, not JS defaults** (each of these shipped as a
+   real divergence, caught in the 2026-07-17 Codex review): string
+   ordering is *code point* (Python `sorted`), never JS's UTF-16
+   code-unit `sort()` — they differ when BMP chars above U+D7FF meet
+   astral chars (`compareCodePoints` in `canonical.ts`; pinned by the
+   `unicode-attrs` parity fixture); JSON field fallback is `dict.get` —
+   default only when *missing*, never on explicit `null` (so no `??`);
+   numeric character references go through HTML's replacement table
+   (`html._replace_charref`), not raw `fromCodePoint`. The 2026-07-18
+   PR #17 rounds added the same class on malformed input: duplicate
+   attributes are FIRST-wins (`setdefault`, matching `Element.get`);
+   self-closed non-void elements serialize open+close (the serializer
+   never echoes the slash); semicolonless character references decode
+   with full `html.unescape` semantics in BODY TEXT (legacy no-semicolon
+   table + longest-prefix fallback) but in ATTRIBUTE values follow
+   Python 3.13+'s `_unescape_attrvalue` (exact-entity match only, never
+   before `=`); raw `<script>`/`<style>` end-tag scanning is
+   case-insensitive with a tag-boundary lookahead (`</SCRIPT>` closes,
+   `</scriptx>` is data); a duplicate chunk id reads LOCALLY per
+   container, never as the global first hit, while the public chunk of a
+   nested id shadowed by a top-level construct reports container "body"
+   (`container_of_chunk` consults `top_index` first).
+5. **Python `html.parser` behavior is VERSION-dependent; goldens must be
+   byte-identical across the CPython 3.10–3.13 CI matrix.** 3.13 changed
+   both attribute unescaping (`_unescape_attrvalue`) and the CDATA
+   end-tag regex (`</tag(?=[\t\n\r\f />])` vs `</\s*tag\s*>`). Before
+   pinning malformed-input behavior, verify it on the oldest AND newest
+   supported interpreters (`python3.X` + `sys.path` to `src/`). Where
+   versions agree, pin with a parity fixture + golden (and diff the
+   regenerated golden under every interpreter); where they disagree,
+   match the spec-correct (HTML5 / newer-Python) side and pin with a TS
+   unit test only — never a Python-generated golden.
+
+Fixture regeneration re-mints proposal ids (tool-assigned, like
+`gen_examples.py`): always regenerate fixtures and goldens together.
+
 ## Regeneration commands
 
 ```sh
-python3 scripts/gen_spec_appendix.py   # after registry changes
-python3 scripts/gen_fixtures.py        # after lint/canonical changes
-python3 scripts/gen_examples.py        # after SDK-visible changes
-python3 -m pytest                      # 598+ tests, a few seconds
+python3 scripts/gen_spec_appendix.py     # after registry changes
+python3 scripts/gen_fixtures.py          # after lint/canonical changes
+python3 scripts/gen_examples.py          # after SDK-visible changes
+python3 scripts/gen_ts_registry.py       # after registry changes (TS tables)
+python3 scripts/gen_parity_fixtures.py   # after SDK-visible changes…
+python3 scripts/dump_projection.py       # …then always refresh the goldens
+python3 -m pytest                        # 680+ tests, a few seconds
+cd ts && npm test                        # TS reader + parity suite
 ```
 
 ## Dependency pins (search-then-pin convention)

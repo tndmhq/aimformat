@@ -1,0 +1,26 @@
+{
+  "name": "@aimformat/reader",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Official TypeScript read library for the .aim document format (read model only; writes go through the Python SDK)",
+  "license": "MIT",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "files": [
+    "src"
+  ],
+  "scripts": {
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit",
+    "format": "prettier --write .",
+    "format:check": "prettier --check ."
+  },
+  "devDependencies": {
+    "@types/node": "26.1.1",
+    "prettier": "3.9.5",
+    "typescript": "7.0.2",
+    "vitest": "4.1.10"
+  }
+}
