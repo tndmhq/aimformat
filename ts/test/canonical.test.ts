@@ -81,6 +81,14 @@ describe("canonical serialization", () => {
     expect(serialize(p)).toBe('<p data-aim="x" class="a b" title="one">t</p>');
   });
 
+  it("serializes self-closed non-void elements open+close, like Python", () => {
+    // <p/> is invalid input; the normal form has exactly one spelling
+    expect(serialize(first('<p data-aim="x"/>'))).toBe('<p data-aim="x"></p>');
+    expect(serialize(first('<p>a <span class="x"/> b</p>'))).toBe(
+      '<p>a <span class="x"></span> b</p>',
+    );
+  });
+
   it("self-closes empty foreign elements and restores SVG attribute case", () => {
     const svg = first(
       '<svg role="img" aria-label="chart"><use href="#asset-ab"/></svg>',

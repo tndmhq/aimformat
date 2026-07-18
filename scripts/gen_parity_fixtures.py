@@ -357,6 +357,35 @@ def noncanonical_dup_attrs_text() -> str:
     )
 
 
+def noncanonical_self_closing_text() -> str:
+    """Non-void elements written self-closing: parsed as empty, serialized
+    back open+close; a void element's stray slash is dropped either way."""
+    doc = aim.new_document(title="Non-canonical — self-closing spellings")
+    with doc.batch():
+        doc.add_chunk('<p data-aim="sc">PLACEHOLDER</p>', author=BOT, at=t(0))
+        doc.add_chunk(
+            '<p data-aim="wrap">Inline <span class="x">SPAN</span> content.</p>',
+            author=BOT,
+            at=t(1),
+        )
+        doc.add_chunk(
+            '<figure data-aim="fig"><img alt="dot" src="https://example.com/x.png">'
+            "<figcaption>A void element.</figcaption></figure>",
+            author=BOT,
+            at=t(2),
+        )
+    doc.flatten()
+    return _edited(
+        doc,
+        ('<p data-aim="sc">PLACEHOLDER</p>', '<p data-aim="sc"/>'),
+        ('<span class="x">SPAN</span>', '<span class="x"/>'),
+        (
+            '<img alt="dot" src="https://example.com/x.png">',
+            '<img alt="dot" src="https://example.com/x.png"/>',
+        ),
+    )
+
+
 FIXTURES = {
     "runs": runs_doc,
     "nested-slides": nested_slides_doc,
@@ -372,6 +401,7 @@ FIXTURES = {
 # intentionally NOT lint-clean (see module docstring); builders return text
 NONCANONICAL = {
     "noncanonical-dup-attrs": noncanonical_dup_attrs_text,
+    "noncanonical-self-closing": noncanonical_self_closing_text,
 }
 
 

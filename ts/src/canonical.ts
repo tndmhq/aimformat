@@ -126,8 +126,10 @@ export function canonicalAttrs(el: Element, inSvg: boolean): string {
  * Inline canonical serialization of one node (no trailing newline).
  *
  * A normal form, not an echo: HTML void elements never carry a slash
- * however they were written, and foreign (SVG-context) elements with no
- * content always self-close (spec §11.1).
+ * however they were written, non-void HTML elements always have an explicit
+ * end tag (a self-closing spelling is invalid input, normalized here), and
+ * foreign (SVG-context) elements with no content always self-close
+ * (spec §11.1).
  */
 export function serialize(node: Nodeish, inSvg = false): string {
   if (node instanceof Text) return escapeText(node.data);
@@ -137,7 +139,6 @@ export function serialize(node: Nodeish, inSvg = false): string {
   if (VOID_ELEMENTS.has(node.tag) && !svgHere) return `${openTag}>`;
   if (svgHere && node.children.length === 0 && node.raw === null)
     return `${openTag}/>`;
-  if (node.selfClosing) return `${openTag}/>`;
   if (node.raw !== null) return `${openTag}>${node.raw}</${node.tag}>`;
   const inner = node.children.map((c) => serialize(c, svgHere)).join("");
   return `${openTag}>${inner}</${node.tag}>`;
