@@ -27,7 +27,7 @@ codes bidirectionally in sync with what `lint.py` can actually emit.
 |---|---|---|
 | `dom.py` | mini-DOM + transparent HTML reader | reports the file as written (no tag inference) so canonical round-trips are byte-exact |
 | `canonical.py` | serializer, escaping, `doc_hash`, canonical JSON | THE definition of equality; every other module defers to it |
-| `document.py` | `AimDocument`: ops, pending lane, verify, time travel, assets | every state change mutates the tree AND appends the matching event — never one without the other; replay/verify always run on a deep copy (`DocState` over a clone), never the live tree |
+| `document.py` | `AimDocument`: ops, pending lane, verify, time travel, assets | every state change mutates the tree AND appends the matching event — never one without the other; a lazy per-instance `_HistoryIndex` derives parsed events, id reservations/tombstones, and seq/batch counters from authoritative JSONL + pending state, then the three history writers update it incrementally; replay/verify always run on a deep copy (`DocState` over a clone), never the live tree |
 | `events.py` | `Actor`/`Event` over canonical dicts | unknown fields ignored; `x_*` reserved |
 | `lint.py` | the verifier; stable codes S/V/X/P/H/M/C | collects all findings in one run; `C001` byte-compares the source against the canonical serialization |
 | `reconcile.py` | repair out-of-band edits; adoption path for hand-written files | edit script from expected state E (forward replay of the FULL log) to actual body A, appended as `origin:"reconcile"` events — so `verify()` passes by construction; refuses pruned/damaged logs; never rewrites body content (only ids) |
@@ -47,8 +47,13 @@ codes bidirectionally in sync with what `lint.py` can actually emit.
 - **The file is canonical on disk.** `dumps()` refreshes only the
   machine-managed stylesheet; everything else must already be canonical —
   if a test fails with C001, fix the producer, don't post-process.
-- **Ids are never reused** (deleted ids stay burned; `_taken_ids()` scans
-  body + history + pending payloads).
+- **Ids are never reused.** Deleted and recorded payload ids stay burned in
+  `_HistoryIndex`; its sole instance-lifetime ledger survives prune/flatten
+  without being persisted. `_taken_ids()` combines that history/pending cache
+  with a fresh body-tree scan. There is deliberately no mutable id→node tree
+  index. Every in-place pending-card mutation must update that document
+  instance's `_HistoryIndex` before the next id/history read; this includes
+  validation clones, whose indexes are populated when `_clone()` creates them.
 - **Pending lanes are creation-order programs.** Every SDK proposal is
   validated against a clone containing all earlier pending cards applied in
   creation order. The projection answers *structural* legality only: no-op

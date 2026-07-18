@@ -170,7 +170,9 @@ def _replay(S: AimDocument, events: list[Event]) -> None:
 
 
 def _clone(doc: AimDocument) -> AimDocument:
-    return doc.__class__(parse_html(document_text(doc._fragment)))
+    clone = doc.__class__(parse_html(document_text(doc._fragment)))
+    clone._rebuild_history_index(burned_seed=doc._get_history_index().burned_ids)
+    return clone
 
 
 def _strip_body_state(S: AimDocument) -> None:
@@ -629,7 +631,9 @@ def reconcile_document(
     report.residual = S.verify()
 
     if report.changed and not dry_run:
+        burned = set(S._get_history_index().burned_ids)
         doc._fragment = S._fragment
         doc._state = S._state
         doc._batch = None
+        doc._rebuild_history_index(burned_seed=burned)
     return report
