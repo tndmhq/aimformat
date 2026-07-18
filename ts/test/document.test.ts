@@ -95,6 +95,42 @@ describe("AimDocument", () => {
     expect(doc.chunks.filter((c) => c.id === "dup")).toHaveLength(1);
   });
 
+  it("shows each container its LOCAL duplicate-id chunk, not the first", () => {
+    // an id repeated across containers is invalid (S016), but every
+    // container's member view must stay local — Python's per-container
+    // primitives read container.elements(), never the global first hit
+    const doc = AimDocument.parse(
+      wrap(
+        '<ul data-aim-container="l1"><li data-aim="dup">one</li></ul>\n' +
+          '<ul data-aim-container="l2"><li data-aim="dup">two</li>' +
+          '<li data-aim="dup">three</li></ul>',
+      ),
+    );
+    const memberOf = (cid: string) => {
+      const c = doc.get(cid);
+      if (c?.kind !== "container") throw new Error(`no container ${cid}`);
+      const m = c.members[0];
+      if (m?.kind !== "chunk") throw new Error(`no chunk member in ${cid}`);
+      return m;
+    };
+    expect(memberOf("l1")).toMatchObject({
+      container: "l1",
+      text: "one",
+      isRun: false,
+    });
+    expect(memberOf("l2")).toMatchObject({
+      container: "l2",
+      text: "twothree",
+      isRun: true,
+    });
+    // getAll returns the same local views, in document order
+    expect(doc.getAll("dup")).toEqual([memberOf("l1"), memberOf("l2")]);
+    // the flat chunks view still mirrors Python: one chunk, first group
+    expect(doc.chunks.filter((c) => c.id === "dup")).toMatchObject([
+      { text: "one" },
+    ]);
+  });
+
   it("treats sibling elements sharing an id as one run, one lookup entry", () => {
     const doc = AimDocument.parse(
       wrap(

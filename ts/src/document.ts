@@ -496,6 +496,28 @@ export class AimDocument {
     };
   }
 
+  /** One id's chunk view under one specific parent — the LOCAL group, so a
+   * duplicated id (invalid, S016) still reads per-container: the second
+   * container's member shows its own html/text, exactly like Python's
+   * per-container primitives (`container.elements()`). */
+  private readonly groupViews = new Map<string, Map<Element, Chunk>>();
+
+  private groupChunkView(cid: string, parent: Element): Chunk {
+    let byParent = this.groupViews.get(cid);
+    if (byParent === undefined) {
+      byParent = new Map();
+      this.groupViews.set(cid, byParent);
+    }
+    const cached = byParent.get(parent);
+    if (cached !== undefined) return cached;
+    const members =
+      this.chunkGroups.get(cid)?.get(parent) ??
+      parent.elements().filter((e) => e.chunkId === cid);
+    const view = this.makeChunkView(cid, parent, members);
+    byParent.set(parent, view);
+    return view;
+  }
+
   private chunkView(cid: string): Chunk {
     const cached = this.chunkViews.get(cid);
     if (cached !== undefined) return cached;
@@ -509,7 +531,7 @@ export class AimDocument {
     const view =
       first === undefined
         ? this.makeChunkView(cid, null, [])
-        : this.makeChunkView(cid, first[0], first[1]);
+        : this.groupChunkView(cid, first[0]);
     this.chunkViews.set(cid, view);
     return view;
   }
@@ -526,7 +548,9 @@ export class AimDocument {
         members.push(this.containerView(m));
       } else if (chunkId !== null && chunkId.length > 0 && !seen.has(chunkId)) {
         seen.add(chunkId); // run members collapse into one chunk node
-        members.push(this.chunkView(chunkId));
+        members.push(
+          this.groupChunkView(chunkId, this.parents.get(m) ?? this.body),
+        );
       }
     };
     for (const child of el.elements()) {
@@ -603,11 +627,7 @@ export class AimDocument {
             groupParents.add(parent);
             const view = isFirstGroup
               ? this.chunkView(chunkId) // walk order matches findChunk's first hit
-              : this.makeChunkView(
-                  chunkId,
-                  parent,
-                  parent.elements().filter((e) => e.chunkId === chunkId),
-                );
+              : this.groupChunkView(chunkId, parent);
             if (isFirstGroup) chunks.push(view);
             this.pushIndex(chunkId, view);
           }

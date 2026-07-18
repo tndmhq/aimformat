@@ -26,6 +26,7 @@ ROOT = pathlib.Path(__file__).parent.parent
 sys.path.insert(0, str(ROOT / "src"))
 
 import aimformat as aim  # noqa: E402
+from aimformat.canonical import serialize_run  # noqa: E402
 from aimformat.document import AimDocument, DocState  # noqa: E402
 from aimformat.dom import Element  # noqa: E402
 from aimformat.registry import REGISTRY  # noqa: E402
@@ -81,16 +82,36 @@ def _parent_container(state: DocState, el: Element) -> str:
     return "body"
 
 
-def _container_obj(state: DocState, el: Element, chunk_by_id: dict[str, dict]) -> dict:
+def _local_chunk_obj(state: DocState, m: Element) -> dict:
+    """The chunk view of *m*'s LOCAL sibling group: a duplicated id
+    (invalid, S016) still reads per-container, so the second container's
+    member shows its own html/text — Python's per-container primitives
+    (``container.elements()``) are local, and the TS reader mirrors this.
+    For unique ids this equals the global ``doc.chunks`` entry."""
+    cid = m.chunk_id
+    members = [e for e in state._parent_of(m).elements() if e.chunk_id == cid]
+    return {
+        "kind": "chunk",
+        "id": cid,
+        "container": _parent_container(state, m),
+        "tags": [e.tag for e in members],
+        "html": serialize_run(members),
+        "text": "".join(e.text() for e in members),
+        "tag": members[0].tag,
+        "isRun": len(members) > 1,
+    }
+
+
+def _container_obj(state: DocState, el: Element) -> dict:
     members: list[dict] = []
     seen: set[str] = set()
 
     def add(m: Element) -> None:
         if m.container_id:
-            members.append(_container_obj(state, m, chunk_by_id))
+            members.append(_container_obj(state, m))
         elif m.chunk_id and m.chunk_id not in seen:
             seen.add(m.chunk_id)  # run members collapse into one chunk node
-            members.append(chunk_by_id[m.chunk_id])
+            members.append(_local_chunk_obj(state, m))
 
     for child in el.elements():
         if el.tag == "table" and child.tag in REGISTRY.table_shells:
@@ -117,7 +138,7 @@ def _nodes(state: DocState, chunk_by_id: dict[str, dict]) -> list[dict]:
     seen: set[str] = set()
     for top in state.constructs():
         if top.container_id:
-            out.append(_container_obj(state, top, chunk_by_id))
+            out.append(_container_obj(state, top))
         elif top.chunk_id and top.chunk_id not in seen:
             seen.add(top.chunk_id)
             out.append(chunk_by_id[top.chunk_id])

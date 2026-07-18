@@ -409,6 +409,39 @@ def noncanonical_charrefs_text() -> str:
     )
 
 
+def noncanonical_dup_ids_text() -> str:
+    """One chunk id repeated across containers (S016): each container's
+    member view stays LOCAL — the second container shows its own html/text,
+    including a local run — while the flat chunk list keeps the first hit."""
+    doc = aim.new_document(title="Non-canonical — duplicate chunk ids")
+    with doc.batch():
+        doc.add_chunk('<h2 data-aim="hd">Duplicated ids</h2>', author=BOT, at=t(0))
+        doc.add_chunk(
+            '<ul data-aim-container="l1"><li data-aim="dup">First list item.</li></ul>',
+            author=BOT,
+            at=t(1),
+        )
+        doc.add_chunk(
+            '<ul data-aim-container="l2"><li data-aim="d2a">Second list, spilling…</li>'
+            '<li data-aim="d2b">…into a second bullet.</li></ul>',
+            author=BOT,
+            at=t(2),
+        )
+        doc.add_chunk(
+            '<table data-aim-container="tb"><tbody>'
+            '<tr data-aim="d3"><td>A table row too.</td></tr></tbody></table>',
+            author=BOT,
+            at=t(3),
+        )
+    doc.flatten()
+    return _edited(
+        doc,
+        ('data-aim="d2a"', 'data-aim="dup"'),
+        ('data-aim="d2b"', 'data-aim="dup"'),
+        ('data-aim="d3"', 'data-aim="dup"'),
+    )
+
+
 FIXTURES = {
     "runs": runs_doc,
     "nested-slides": nested_slides_doc,
@@ -426,6 +459,7 @@ NONCANONICAL = {
     "noncanonical-dup-attrs": noncanonical_dup_attrs_text,
     "noncanonical-self-closing": noncanonical_self_closing_text,
     "noncanonical-charrefs": noncanonical_charrefs_text,
+    "noncanonical-dup-ids": noncanonical_dup_ids_text,
 }
 
 
