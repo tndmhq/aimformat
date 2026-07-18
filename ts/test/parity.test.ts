@@ -30,11 +30,18 @@ const sourcePath = (stem: string): string => {
 };
 
 /** Plain-JSON clone of a node tree entry (chunks and containers are already
- * plain data; this just drops readonly typing for comparison). */
-const nodeObj = (n: AimNode): unknown =>
-  n.kind === "chunk"
-    ? { ...n, tags: [...n.tags] }
-    : { ...n, attrs: { ...n.attrs }, members: n.members.map(nodeObj) };
+ * plain data; this just drops readonly typing for comparison). The TS-side
+ * convenience fields (`Chunk.memberHtmls`, `Container.html`) are derived
+ * from `serialize` — already pinned here via `html`/`docHash` — and have no
+ * Python twin, so they stay out of the cross-implementation schema. */
+const nodeObj = (n: AimNode): unknown => {
+  if (n.kind === "chunk") {
+    const { memberHtmls: _memberHtmls, ...rest } = n;
+    return { ...rest, tags: [...n.tags] };
+  }
+  const { html: _html, ...rest } = n;
+  return { ...rest, attrs: { ...n.attrs }, members: n.members.map(nodeObj) };
+};
 
 const opaque = (raw: string | null): unknown =>
   raw === null

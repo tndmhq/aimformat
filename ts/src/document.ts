@@ -6,13 +6,8 @@
  * other, with `spec.md` as the ground truth when they disagree.
  */
 
-import { Comment, Element, Fragment, type Nodeish } from "./dom.ts";
-import {
-  canonicalAttrs,
-  docHash,
-  serialize,
-  serializeRun,
-} from "./canonical.ts";
+import { Comment, Element, Fragment } from "./dom.ts";
+import { canonicalAttrs, docHash, serialize } from "./canonical.ts";
 import { AimError, AimParseError } from "./errors.ts";
 import { parseHtml } from "./parser.ts";
 import {
@@ -42,6 +37,10 @@ export interface Chunk {
   readonly tags: readonly string[];
   /** Canonical serialization (run members concatenated). */
   readonly html: string;
+  /** Canonical serialization of each member, in order (`html` is their
+   * concatenation). TS-side convenience for run-aware consumers (an editor
+   * rebasing one member of a run); not part of the Python read surface. */
+  readonly memberHtmls: readonly string[];
   readonly text: string;
   readonly tag: string;
   readonly isRun: boolean;
@@ -56,6 +55,11 @@ export interface Container {
   readonly container: string;
   /** Attributes as written (bare attributes read as `""`). */
   readonly attrs: Readonly<Record<string, string>>;
+  /** Canonical serialization of the container element, subtree included.
+   * TS-side convenience mirroring `Chunk.html` (a viewer rendering a slide
+   * verbatim); not part of the Python read surface. Computed on first
+   * access and memoized — parsing never serializes container subtrees. */
+  readonly html: string;
   /** Ordered members: item chunks and nested containers (recursive). */
   readonly members: readonly AimNode[];
 }
@@ -530,12 +534,16 @@ export class AimDocument {
     container: string,
     members: Element[],
   ): Chunk {
+    // Serialize each member once; html is their concatenation (exactly what
+    // serializeRun did) so readers don't pay double serialization CPU.
+    const memberHtmls = members.map((m) => serialize(m));
     return {
       kind: "chunk",
       id: cid,
       container,
       tags: members.map((m) => m.tag),
-      html: serializeRun(members),
+      html: memberHtmls.join(""),
+      memberHtmls,
       text: members.map((m) => m.text()).join(""),
       tag: members[0]?.tag ?? "",
       isRun: members.length > 1,
@@ -623,12 +631,19 @@ export class AimDocument {
       if (!(k in attrs)) attrs[k] = v ?? "";
     }
     const parent = this.parents.get(el);
+    // html is lazy + memoized: each value is the container's full descendant
+    // subtree, so materializing it for every container at parse time costs
+    // O(depth²) bytes on nested outlines even when callers never read it.
+    let html: string | undefined;
     const view: Container = {
       kind: "container",
       id: el.containerId ?? "",
       tag: el.tag,
       container: parent === undefined ? "body" : this.containerOfChunk(parent),
       attrs,
+      get html(): string {
+        return (html ??= serialize(el));
+      },
       members,
     };
     this.containerViews.set(el, view);
