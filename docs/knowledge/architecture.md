@@ -108,7 +108,10 @@ mirrors the Python modules (`dom.ts`/`parser.ts`/`canonical.ts`/
    projection equals the goldens field-for-field (plus `docHash` parity
    over the ok_* conformance kit). Any behavior change on either side
    surfaces as a reviewed golden diff. On divergence, `spec.md` decides
-   which implementation is wrong.
+   which implementation is wrong. The `noncanonical-*` fixture tier
+   (SDK-built + deterministic string edits) pins agreement on *malformed
+   hand-edited* input too — those are exempt from the lint-clean check
+   and asserted to keep lint findings.
 3. **One parser code path.** The TS parser is a strict scanner for the
    canonical subset (no DOMParser, no Node APIs) — trade-offs documented
    in `ts/README.md`.
@@ -120,7 +123,14 @@ mirrors the Python modules (`dom.ts`/`parser.ts`/`canonical.ts`/
    `unicode-attrs` parity fixture); JSON field fallback is `dict.get` —
    default only when *missing*, never on explicit `null` (so no `??`);
    numeric character references go through HTML's replacement table
-   (`html._replace_charref`), not raw `fromCodePoint`.
+   (`html._replace_charref`), not raw `fromCodePoint`. The 2026-07-18
+   PR #17 round added the same class on malformed input: duplicate
+   attributes are FIRST-wins (`setdefault`, matching `Element.get`);
+   self-closed non-void elements serialize open+close (the serializer
+   never echoes the slash); semicolonless character references decode
+   with full `html.unescape` semantics (legacy no-semicolon table +
+   longest-prefix fallback); and a duplicate chunk id reads LOCALLY per
+   container, never as the global first hit.
 
 Fixture regeneration re-mints proposal ids (tool-assigned, like
 `gen_examples.py`): always regenerate fixtures and goldens together.

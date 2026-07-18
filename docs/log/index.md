@@ -9,6 +9,7 @@ required to add entries.)
 
 | Date | Type | Entry | Status | What |
 |---|---|---|---|---|
+| 2026-07-18 02:51 | plan | [pr17-p2-parity-fixes](2026-07-18_0251_plan_pr17-p2-parity-fixes.md) | done | Fix four Codex P2 parity findings on PR #17: first-duplicate-attribute canonical serialization, self-closing non-void normalization, semicolonless character-reference decoding, and local duplicate-id chunks in container members — each pinned by a non-canonical parity fixture |
 | 2026-07-18 01:50 | plan | [pr16-trial-clone-index-refresh](2026-07-18_0150_plan_pr16-trial-clone-index-refresh.md) | done | Refresh amended trial-clone proposal reservations before creation-order replay, with red-first index-parity coverage |
 | 2026-07-18 00:57 | plan | [pr15-superseded-payload-id-reservation](2026-07-18_0057_plan_pr15-superseded-payload-id-reservation.md) | done | Keep superseded proposal payload IDs burned during replacement normalization so displayed and accepted markup agree |
 | 2026-07-18 00:27 | plan | [pr15-pending-projection-dependencies](2026-07-18_0027_plan_pr15-pending-projection-dependencies.md) | done | Close pending-projection dependency gaps for first-position adds and move-to-pending-tail anchors with class-wide property coverage |
