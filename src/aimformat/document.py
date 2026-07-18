@@ -730,10 +730,14 @@ class AimDocument:
         *exclude* names cards the caller is about to supersede (§5.4): they
         will never be applied, so the projection drops them up front —
         otherwise a pending delete would make its own replacement look
-        illegal.
+        illegal. Their payload ids stay burned because supersession records
+        those payloads in history before the replacement can be accepted.
         """
         projection = self._clone()
         for pid in exclude:
+            proposal = projection.proposal(pid)
+            if proposal.payload_html:
+                projection._burned.update(self._PAYLOAD_ID_RE.findall(proposal.payload_html))
             card = projection._card_el(pid)
             sec = projection._state.section("aim-proposals")
             assert sec is not None

@@ -3812,6 +3812,44 @@ class TestSupersedeSurvivesProjection:
         assert not doc._state.exists("c1")
         assert doc.verify() == []
 
+    def test_replacement_reserves_ids_from_superseded_modify(self):
+        doc = aim.new_document(title="T")
+        doc.add_chunk(
+            '<ul data-aim-container="list"><li data-aim="current">Current</li></ul>',
+            author=ME,
+            at=ts(0),
+        )
+        doc.propose_modify(
+            "list",
+            '<ul data-aim-container="list"><li data-aim="retired">First</li></ul>',
+            author=BOT,
+            at=ts(1),
+        )
+
+        replacement = doc.propose_modify(
+            "list",
+            '<ul data-aim-container="list"><li data-aim="retired">Replacement</li></ul>',
+            author=BOT,
+            at=ts(2),
+        )
+        superseded = doc.history[-1]
+        assert superseded.get("decision") == "superseded"
+        assert "retired" in (superseded.get("proposed") or "")
+        assert replacement.payload_html is not None
+        displayed_id = re.search(r'data-aim="([^"]+)"', replacement.payload_html)
+        assert displayed_id is not None
+        assert displayed_id.group(1) != "retired"
+
+        accepted = doc.accept(replacement.id, decided_by=ME, at=ts(3))
+        applied = doc._state.serial("list")
+        assert applied is not None
+        applied_id = re.search(r'data-aim="([^"]+)"', applied)
+        assert applied_id is not None
+        assert applied_id.group(1) == displayed_id.group(1)
+        assert accepted.get("applied") is None
+        assert doc.verify() == []
+        assert aim.lint(doc) == []
+
 
 class TestProposalsTargetOnlyExistingChunks:
     """data-for must name a chunk of the CURRENT document (lint P008): the
