@@ -45,9 +45,10 @@ doc.get("c42a"); // O(1) by-id lookup (chunk or container)
   lists and tables hold item chunks).
 - **`Chunk`** — `id`, the `container` it lives in (`"body"`, a container
   id, or a slide id), member `tags` in order, canonical `html` (run members
-  concatenated), plain `text`, and `isRun`. Runs — sibling `li`/`tr`
-  elements sharing one id — are one chunk with several members, never
-  keyed-by-id-with-overwrites.
+  concatenated) with `memberHtmls` per member, plain `text`, and `isRun`.
+  Runs — sibling `li`/`tr` elements sharing one id — are one chunk with
+  several members, never keyed-by-id-with-overwrites. Containers carry
+  their own canonical `html` too (subtree included).
 - **`proposals`** — the pending lane as read-only cards: action, target,
   author, anchor (`anchorContainer` / `anchorAfter` / `anchorShell`),
   canonical `payloadHtml`, explanation.

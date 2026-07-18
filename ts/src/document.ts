@@ -6,7 +6,7 @@
  * other, with `spec.md` as the ground truth when they disagree.
  */
 
-import { Comment, Element, Fragment, type Nodeish } from "./dom.ts";
+import { Comment, Element, Fragment } from "./dom.ts";
 import {
   canonicalAttrs,
   docHash,
@@ -42,6 +42,10 @@ export interface Chunk {
   readonly tags: readonly string[];
   /** Canonical serialization (run members concatenated). */
   readonly html: string;
+  /** Canonical serialization of each member, in order (`html` is their
+   * concatenation). TS-side convenience for run-aware consumers (an editor
+   * rebasing one member of a run); not part of the Python read surface. */
+  readonly memberHtmls: readonly string[];
   readonly text: string;
   readonly tag: string;
   readonly isRun: boolean;
@@ -56,6 +60,10 @@ export interface Container {
   readonly container: string;
   /** Attributes as written (bare attributes read as `""`). */
   readonly attrs: Readonly<Record<string, string>>;
+  /** Canonical serialization of the container element, subtree included.
+   * TS-side convenience mirroring `Chunk.html` (a viewer rendering a slide
+   * verbatim); not part of the Python read surface. */
+  readonly html: string;
   /** Ordered members: item chunks and nested containers (recursive). */
   readonly members: readonly AimNode[];
 }
@@ -536,6 +544,7 @@ export class AimDocument {
       container,
       tags: members.map((m) => m.tag),
       html: serializeRun(members),
+      memberHtmls: members.map((m) => serialize(m)),
       text: members.map((m) => m.text()).join(""),
       tag: members[0]?.tag ?? "",
       isRun: members.length > 1,
@@ -629,6 +638,7 @@ export class AimDocument {
       tag: el.tag,
       container: parent === undefined ? "body" : this.containerOfChunk(parent),
       attrs,
+      html: serialize(el),
       members,
     };
     this.containerViews.set(el, view);

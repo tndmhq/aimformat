@@ -76,6 +76,41 @@ describe("AimDocument", () => {
     expect(doc.chunks.find((c) => c.id === "r1")?.container).toBe("p1");
   });
 
+  it("exposes per-member canonical html on chunks (memberHtmls)", () => {
+    const doc = AimDocument.parse(
+      wrap(
+        '<ul data-aim-container="l1"><li data-aim="a">1</li>' +
+          '<li data-aim="b">2</li><li data-aim="b"><em lang="fr">3</em></li></ul>',
+      ),
+    );
+    const single = doc.chunks[0]!;
+    expect(single.memberHtmls).toEqual(['<li data-aim="a">1</li>']);
+    const run = doc.chunks[1]!;
+    expect(run.memberHtmls).toEqual([
+      '<li data-aim="b">2</li>',
+      '<li data-aim="b"><em lang="fr">3</em></li>',
+    ]);
+    // html is exactly the members concatenated
+    expect(run.memberHtmls.join("")).toBe(run.html);
+  });
+
+  it("exposes the container's own canonical html, subtree included", () => {
+    const slideHtml =
+      '<aim-slide data-aim-container="s1" style="width:960px">' +
+      '<h2 data-aim="t1">T</h2>' +
+      '<ul data-aim-container="l1"><li data-aim="i1">one</li></ul>' +
+      "</aim-slide>";
+    const doc = AimDocument.parse(wrap(slideHtml));
+    const slide = doc.nodes[0]!;
+    if (slide.kind !== "container") throw new Error("expected container");
+    expect(slide.html).toBe(slideHtml);
+    const list = slide.members[1]!;
+    if (list.kind !== "container") throw new Error("expected nested container");
+    expect(list.html).toBe(
+      '<ul data-aim-container="l1"><li data-aim="i1">one</li></ul>',
+    );
+  });
+
   it("indexes ids as a multimap and never overwrites repeats", () => {
     // one id under two parents is invalid (S016), but the reader must not
     // silently drop either occurrence — each parent group is an entry
