@@ -304,8 +304,7 @@ aim-assets{display:none}
 <body>
 <p data-aim="p1">No assets are packed.</p>
 <aim-assets>
-<svg aria-hidden="true" height="0" width="0">
-</svg>
+<svg aria-hidden="true" height="0" width="0"/>
 </aim-assets>
 <script type="application/aim-history+jsonl">
 {"action":"add","after":"<p data-aim=\"p1\">No assets are packed.<\/p>","anchor":{"after":null,"container":"body"},"author":{"model":"model-x","type":"agent"},"batch":"b1","kind":"direct_edit","seq":1,"t":"2026-07-17T10:00:00Z","target":"p1"}

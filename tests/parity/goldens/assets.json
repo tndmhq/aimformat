@@ -10,7 +10,7 @@
   "chunks": [
     {
       "container": "body",
-      "html": "<figure data-aim=\"fig1\"><svg aria-label=\"A dot — été 🎨\" role=\"img\"><use href=\"#asset-497790947d46\"/></svg><figcaption>Packed into the registry.</figcaption></figure>",
+      "html": "<figure data-aim=\"fig1\"><svg aria-label=\"A dot — été 🎨\" height=\"1\" role=\"img\" viewBox=\"0 0 1 1\" width=\"1\"><use href=\"#asset-497790947d46\"/></svg><figcaption>Packed into the registry.</figcaption></figure>",
       "id": "fig1",
       "isRun": false,
       "kind": "chunk",
@@ -22,7 +22,7 @@
     },
     {
       "container": "body",
-      "html": "<p data-aim=\"p1\">Same blob again: <svg aria-label=\"dot twice\" role=\"img\"><use href=\"#asset-497790947d46\"/></svg> deduplicated.</p>",
+      "html": "<p data-aim=\"p1\">Same blob again: <svg aria-label=\"dot twice\" height=\"1\" role=\"img\" viewBox=\"0 0 1 1\" width=\"1\"><use href=\"#asset-497790947d46\"/></svg> deduplicated.</p>",
       "id": "p1",
       "isRun": false,
       "kind": "chunk",
@@ -46,20 +46,20 @@
     }
   ],
   "containers": [],
-  "docHash": "sha256:e3ab308fd2f26f0fbd1ac9787296faf0efa9974bbf55e3d5e79211cb89a62d70",
+  "docHash": "sha256:8149f847151a818f82a9d9a260e0b8c43b072d3dd25c42039b6be8798846f577",
   "docSettings": {},
   "embeddings": null,
   "hasCanonicalNote": true,
   "history": {
     "lines": 5,
-    "sha256": "sha256:bf8f1c607e6573db6b34e992a573bd38e6cbdd41fcaa0f917f6e546a24bc46a2"
+    "sha256": "sha256:0d949c0389424e4f021ba69eb96c3fa13072c53389c184327496b7f8ae348381"
   },
   "lang": "en",
   "meta": null,
   "nodes": [
     {
       "container": "body",
-      "html": "<figure data-aim=\"fig1\"><svg aria-label=\"A dot — été 🎨\" role=\"img\"><use href=\"#asset-497790947d46\"/></svg><figcaption>Packed into the registry.</figcaption></figure>",
+      "html": "<figure data-aim=\"fig1\"><svg aria-label=\"A dot — été 🎨\" height=\"1\" role=\"img\" viewBox=\"0 0 1 1\" width=\"1\"><use href=\"#asset-497790947d46\"/></svg><figcaption>Packed into the registry.</figcaption></figure>",
       "id": "fig1",
       "isRun": false,
       "kind": "chunk",
@@ -71,7 +71,7 @@
     },
     {
       "container": "body",
-      "html": "<p data-aim=\"p1\">Same blob again: <svg aria-label=\"dot twice\" role=\"img\"><use href=\"#asset-497790947d46\"/></svg> deduplicated.</p>",
+      "html": "<p data-aim=\"p1\">Same blob again: <svg aria-label=\"dot twice\" height=\"1\" role=\"img\" viewBox=\"0 0 1 1\" width=\"1\"><use href=\"#asset-497790947d46\"/></svg> deduplicated.</p>",
       "id": "p1",
       "isRun": false,
       "kind": "chunk",

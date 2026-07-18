@@ -302,12 +302,12 @@ aim-assets{display:none}
 </style>
 </head>
 <body>
-<figure data-aim="fig1"><svg aria-label="A dot — été 🎨" role="img"><use href="#asset-497790947d46"/></svg><figcaption>Packed into the registry.</figcaption></figure>
-<p data-aim="p1">Same blob again: <svg aria-label="dot twice" role="img"><use href="#asset-497790947d46"/></svg> deduplicated.</p>
+<figure data-aim="fig1"><svg aria-label="A dot — été 🎨" height="1" role="img" viewBox="0 0 1 1" width="1"><use href="#asset-497790947d46"/></svg><figcaption>Packed into the registry.</figcaption></figure>
+<p data-aim="p1">Same blob again: <svg aria-label="dot twice" height="1" role="img" viewBox="0 0 1 1" width="1"><use href="#asset-497790947d46"/></svg> deduplicated.</p>
 <figure data-aim="fig2"><img alt="External, authoring form" src="https://example.com/chart.png"></figure>
 <aim-assets>
 <svg aria-hidden="true" height="0" width="0">
-<symbol id="asset-497790947d46" viewBox="0 0 100 100"><image height="100" width="100" href="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=="/></symbol>
+<symbol id="asset-497790947d46" viewBox="0 0 1 1"><image height="1" width="1" href="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=="/></symbol>
 </svg>
 </aim-assets>
 <script type="application/aim-history+jsonl">
@@ -318,8 +318,8 @@ aim-assets{display:none}
 {"action":"add","after":"<figure data-aim=\"fig1\"><img alt=\"A dot — été 🎨\" src=\"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==\"><figcaption>Packed into the registry.<\/figcaption><\/figure>","anchor":{"after":null,"container":"body"},"author":{"model":"model-x","type":"agent"},"batch":"b1","kind":"direct_edit","seq":1,"t":"2026-07-17T10:00:00Z","target":"fig1"}
 {"action":"add","after":"<p data-aim=\"p1\">Same blob again: <img alt=\"dot twice\" src=\"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==\"> deduplicated.<\/p>","anchor":{"after":"fig1","container":"body"},"author":{"model":"model-x","type":"agent"},"batch":"b1","kind":"direct_edit","seq":2,"t":"2026-07-17T10:00:01Z","target":"p1"}
 {"action":"add","after":"<figure data-aim=\"fig2\"><img alt=\"External, authoring form\" src=\"https://example.com/chart.png\"><\/figure>","anchor":{"after":"p1","container":"body"},"author":{"model":"model-x","type":"agent"},"batch":"b1","kind":"direct_edit","seq":3,"t":"2026-07-17T10:00:02Z","target":"fig2"}
-{"action":"modify","after":"<figure data-aim=\"fig1\"><svg aria-label=\"A dot — été 🎨\" role=\"img\"><use href=\"#asset-497790947d46\"/><\/svg><figcaption>Packed into the registry.<\/figcaption><\/figure>","author":{"id":"ada","type":"human"},"batch":"b2","before":"<figure data-aim=\"fig1\"><img alt=\"A dot — été 🎨\" src=\"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==\"><figcaption>Packed into the registry.<\/figcaption><\/figure>","explanation":"aim pack --inline: hoist embedded images into the asset registry","kind":"direct_edit","seq":4,"t":"2026-07-17T10:00:03Z","target":"fig1"}
-{"action":"modify","after":"<p data-aim=\"p1\">Same blob again: <svg aria-label=\"dot twice\" role=\"img\"><use href=\"#asset-497790947d46\"/><\/svg> deduplicated.<\/p>","author":{"id":"ada","type":"human"},"batch":"b2","before":"<p data-aim=\"p1\">Same blob again: <img alt=\"dot twice\" src=\"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==\"> deduplicated.<\/p>","explanation":"aim pack --inline: hoist embedded images into the asset registry","kind":"direct_edit","seq":5,"t":"2026-07-17T10:00:03Z","target":"p1"}
+{"action":"modify","after":"<figure data-aim=\"fig1\"><svg aria-label=\"A dot — été 🎨\" height=\"1\" role=\"img\" viewBox=\"0 0 1 1\" width=\"1\"><use href=\"#asset-497790947d46\"/><\/svg><figcaption>Packed into the registry.<\/figcaption><\/figure>","author":{"id":"ada","type":"human"},"batch":"b2","before":"<figure data-aim=\"fig1\"><img alt=\"A dot — été 🎨\" src=\"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==\"><figcaption>Packed into the registry.<\/figcaption><\/figure>","explanation":"aim pack: hoist embedded images into the asset registry","kind":"direct_edit","seq":4,"t":"2026-07-17T10:00:03Z","target":"fig1"}
+{"action":"modify","after":"<p data-aim=\"p1\">Same blob again: <svg aria-label=\"dot twice\" height=\"1\" role=\"img\" viewBox=\"0 0 1 1\" width=\"1\"><use href=\"#asset-497790947d46\"/><\/svg> deduplicated.<\/p>","author":{"id":"ada","type":"human"},"batch":"b2","before":"<p data-aim=\"p1\">Same blob again: <img alt=\"dot twice\" src=\"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==\"> deduplicated.<\/p>","explanation":"aim pack: hoist embedded images into the asset registry","kind":"direct_edit","seq":5,"t":"2026-07-17T10:00:03Z","target":"p1"}
 </script>
 </body>
 </html>
