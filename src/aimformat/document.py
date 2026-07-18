@@ -15,16 +15,16 @@ import contextlib
 import datetime as _dt
 import hashlib
 import re
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, TypeVar
 
 from . import canonical, ids
 from .canonical import canonical_json, serialize, serialize_run
 from .css import generate_aim_css
 from .dom import Comment, Element, Fragment, Text, parse_fragment, parse_html
-from .errors import HistoryError, InvalidOperation, ParseError, TargetNotFound
+from .errors import AimError, HistoryError, InvalidOperation, ParseError, TargetNotFound
 from .events import Actor, Event
 from .note import find_note, is_canonical, render_note
 from .pagesetup import (
@@ -55,6 +55,17 @@ _BODY_SECTIONS = ("aim-proposals", "aim-assets", "script")
 #: Reserved singleton targets (spec §3.5/§3.6): they can be modified but
 #: never deleted or moved — they have no body anchor to restore them at.
 _RESERVED_TARGETS = ("aim:theme", "aim:doc")
+_T = TypeVar("_T")
+
+
+class _NoOpEdit(InvalidOperation):
+    """A direct edit that would leave the document unchanged.
+
+    Distinct from structural illegality: propose-time validation judges
+    meaningfulness against the CURRENT document only, while the pending
+    projection answers structural questions. A proposal that becomes a
+    no-op once earlier pendings resolve stays legal — accepting a no-op
+    modify/move is harmless."""
 
 
 def _no_delete_move(target: str, action: str) -> None:
@@ -144,78 +155,104 @@ class Proposal:
     anchor_shell: str | None = None  # thead/tbody/tfoot for table rows
 
 
-def _payload_ids(payload_html: str) -> set[str]:
-    """Every chunk/container id a proposal payload carries."""
-    out: set[str] = set()
-    for node in parse_fragment(payload_html):
-        if isinstance(node, Element):
-            for el in node.iter():
-                if el.chunk_id:
-                    out.add(el.chunk_id)
-                if el.container_id:
-                    out.add(el.container_id)
-    return out
+class _ChainedAddCycle(InvalidOperation):
+    """An unorderable pending-add cycle, with its actual participants."""
+
+    def __init__(self, proposal_ids: Sequence[str]):
+        self.proposal_ids = tuple(proposal_ids)
+        super().__init__(
+            "pending adds anchor on each other in a cycle — the file is "
+            "corrupt (aim lint reports P015)"
+        )
 
 
-def resolution_order(
-    proposals: Sequence[Proposal], doc: AimDocument | None = None
-) -> list[Proposal]:
-    """A dependency-safe order for resolving a whole pending lane.
+def _chained_add_cycle_ids(proposals: Sequence[Proposal]) -> tuple[str, ...]:
+    """Return cycle members, excluding non-cyclic paths that lead into one."""
+    proposal_ids = {proposal.id for proposal in proposals}
+    dependencies: dict[str, str] = {}
+    for proposal in proposals:
+        after = proposal.anchor_after
+        if proposal.action == "add" and after is not None and after in proposal_ids:
+            dependencies[proposal.id] = after
 
-    Card order in the file carries no dependency meaning (a manual reorder
-    is legal), so resolve in rounds: an add anchored on another pending add
-    waits for its anchor; within each round adds/modifies go first, then
-    moves, then deletes — an add anchored on a chunk that a sibling card
-    moves away or deletes lands while the anchor is still in place, and a
-    move whose destination anchors on a to-be-deleted chunk resolves before
-    the delete. When *doc* is given, a container modify whose payload drops
-    a member that a sibling card moves away waits for that move — the move
-    rescues the member before its container is replaced, exactly as a
-    delete would wait; the same delay applies when the payload drops a
-    move's destination anchor or destination container (resolving the
-    modify first would strip the move's landing point and fail the lane).
-    A modify whose payload keeps the member stays ahead of the move
-    (relocating first would make the payload re-introduce a duplicate id).
-    Shared by ``aim accept/reject --all`` and the exporters'
-    resolve-a-copy paths.
+    cycle_ids: set[str] = set()
+    finished: set[str] = set()
+    for start in dependencies:
+        path: list[str] = []
+        positions: dict[str, int] = {}
+        current = start
+        while current in dependencies and current not in finished:
+            if current in positions:
+                cycle_ids.update(path[positions[current] :])
+                break
+            positions[current] = len(path)
+            path.append(current)
+            current = dependencies[current]
+        finished.update(path)
+    return tuple(proposal.id for proposal in proposals if proposal.id in cycle_ids)
+
+
+def _creation_order(proposals: Sequence[Proposal]) -> list[Proposal]:
+    """Return card creation order, moving only chained adds behind anchors.
+
+    SDK-created cards are appended, so their file order is their creation
+    order. A foreign-authored file may place a chained add before the pending
+    add it names; resolve that one format-level dependency without otherwise
+    reordering the lane.
     """
-    rank = {"move": 2, "delete": 4}
-    after_moves: set[str] = set()  # modify card ids that must trail the moves
-    if doc is not None:
-        moves = [p for p in proposals if p.action == "move" and p.target]
-        for p in proposals:
-            if p.action != "modify" or not p.target or not moves:
-                continue
-            node = doc._state.container_node(p.target)
-            if node is None:
-                continue
-            kept = _payload_ids(p.payload_html or "")
-            inside = {i for e in node.iter() for i in (e.chunk_id, e.container_id) if i}
-            # a move needs its target rescued AND its landing point intact:
-            # the modify waits when its payload drops the moved chunk, the
-            # move's destination anchor, or the destination container
-            if any(
-                affected in inside and affected not in kept
-                for mv in moves
-                for affected in (mv.target, mv.anchor_after, mv.anchor_container)
-                if affected
-            ):
-                after_moves.add(p.id)
     pending = list(proposals)
     order: list[Proposal] = []
     while pending:
-        pending_ids = {p.id for p in pending}
-        ready = [p for p in pending if not (p.action == "add" and p.anchor_after in pending_ids)]
-        if not ready:
-            raise InvalidOperation(
-                "pending adds anchor on each other in a cycle — the file is "
-                "corrupt (aim lint reports P015)"
-            )
-        ready.sort(key=lambda p: 3 if p.id in after_moves else rank.get(p.action, 0))
-        order.extend(ready)
-        done = {p.id for p in ready}
-        pending = [p for p in pending if p.id not in done]
+        pending_ids = {proposal.id for proposal in pending}
+        ready_index = next(
+            (
+                index
+                for index, proposal in enumerate(pending)
+                if not (
+                    proposal.action == "add"
+                    and proposal.anchor_after is not None
+                    and proposal.anchor_after in pending_ids
+                )
+            ),
+            None,
+        )
+        if ready_index is None:
+            raise _ChainedAddCycle(_chained_add_cycle_ids(pending))
+        order.append(pending.pop(ready_index))
     return order
+
+
+def _apply_move_data(state: DocState, data: dict) -> None:
+    """Apply a spec move using only its recorded destination anchor."""
+    state.move(data["target"], Anchor.from_obj(data["to"]))
+
+
+def _set_card_payload(card: Element, payload: str) -> None:
+    """Swap a proposal card's <template> payload in place."""
+    tmpl = next((c for c in card.elements() if c.tag == "template"), None)
+    if tmpl is None:  # defensive: modify/add cards always carry one
+        tmpl = Element("template")
+        card.children.append(tmpl)
+    tmpl.children = list(parse_fragment(payload))
+
+
+def resolution_order(
+    proposals: Sequence[Proposal],
+    doc: AimDocument | None = None,
+    *,
+    accepting: bool = True,
+) -> list[Proposal]:
+    """Return pending cards in creation order.
+
+    The only ordering exception is the format-level chained-add dependency:
+    an add anchored on another pending add resolves after its anchor so normal
+    accept/reject rebinding can make the concrete position available. The
+    *doc* and *accepting* parameters remain for API compatibility; acceptance
+    safety is enforced by projected proposal validation and the accept-all
+    clone replay, never by reordering interacting proposals.
+    """
+    del doc, accepting
+    return _creation_order(proposals)
 
 
 # ===========================================================================
@@ -668,6 +705,93 @@ class AimDocument:
 
     def save(self, path: str | Path) -> None:
         Path(path).write_text(self.dumps(), "utf-8")
+
+    def _clone(self) -> AimDocument:
+        """A structural copy suitable for validation and replay."""
+        clone = AimDocument(parse_html(canonical.document_text(self._fragment)))
+        clone._burned = set(self._burned)
+        return clone
+
+    def _projected_operation(
+        self,
+        label: str,
+        operation: Callable[[AimDocument], _T],
+        *,
+        exclude: Sequence[str] = (),
+    ) -> _T:
+        """Run *operation* against current state plus the pending lane.
+
+        Proposals created by the SDK must be legal in the state in which they
+        will be accepted: every earlier pending card has been applied in
+        creation order. Validation happens only on clones. If a previously
+        valid operation becomes invalid after one card, name that conflicting
+        proposal so an agent can repair its sequencing immediately.
+
+        *exclude* names cards the caller is about to supersede (§5.4): they
+        will never be applied, so the projection drops them up front —
+        otherwise a pending delete would make its own replacement look
+        illegal. Their payload ids stay burned because supersession records
+        those payloads in history before the replacement can be accepted.
+        """
+        projection = self._clone()
+        for pid in exclude:
+            proposal = projection.proposal(pid)
+            if proposal.payload_html:
+                projection._burned.update(self._PAYLOAD_ID_RE.findall(proposal.payload_html))
+            card = projection._card_el(pid)
+            sec = projection._state.section("aim-proposals")
+            assert sec is not None
+            sec.children.remove(card)
+        order = _creation_order(projection.proposals)
+        decider = Actor("external", id="pending-projection")
+
+        try:
+            operation(projection._clone())
+            was_valid = True
+        except AimError:
+            was_valid = False
+        conflict: str | None = None
+
+        for proposal in order:
+            try:
+                projection.accept(proposal.id, decided_by=decider, at=proposal.at)
+            except AimError as exc:
+                raise InvalidOperation(
+                    f"pending proposal {proposal.id!r} cannot be projected: {exc}"
+                ) from exc
+            try:
+                operation(projection._clone())
+            except AimError:
+                if was_valid:
+                    conflict = proposal.id
+                was_valid = False
+            else:
+                conflict = None
+                was_valid = True
+
+        try:
+            return operation(projection._clone())
+        except AimError as exc:
+            if conflict is not None:
+                raise InvalidOperation(
+                    f"pending proposal {conflict!r} conflicts with {label}: {exc}"
+                ) from exc
+            raise
+
+    def _noop_guard(self, operation: Callable[[AimDocument], object]) -> None:
+        """Reject a proposal that is a no-op against the CURRENT document.
+
+        Meaningfulness is not the projection's question: a card that only
+        becomes a no-op after earlier pendings resolve stays legal (accepting
+        it is harmless), but one that changes nothing right now is an
+        authoring error. Structural failures here are ignored — legality is
+        judged by :meth:`_projected_operation`."""
+        try:
+            operation(self._clone())
+        except _NoOpEdit:
+            raise
+        except AimError:
+            pass
 
     # -- basic accessors ------------------------------------------------------------
     @property
@@ -1232,7 +1356,7 @@ class AimDocument:
         else:
             _, payload = self._normalize_payload(markup, expect_id=cid)
         if payload == before:
-            raise InvalidOperation("modify with identical content")
+            raise _NoOpEdit("modify with identical content")
         self._state.replace(cid, payload)
         data = {
             "seq": self.seq + 1,
@@ -1310,10 +1434,16 @@ class AimDocument:
         _no_delete_move(cid, "move")
         if not self._state.exists(cid):
             raise TargetNotFound(f"no chunk {cid!r}")
+        nested_parent = self._nested_move_parent(cid)
+        if nested_parent is not None:
+            raise InvalidOperation(
+                f"cannot move {cid!r} out of nested markup in {nested_parent!r}; "
+                "modify the enclosing target instead"
+            )
         src = self._anchor_of(cid)
         dst = self._resolve_end_anchor(container, after, exclude=cid, shell=shell)
         if src == dst:  # full anchors: first-of-thead ≠ first-of-tbody
-            raise InvalidOperation(f"move of {cid!r} is a no-op (already at that position)")
+            raise _NoOpEdit(f"move of {cid!r} is a no-op (already at that position)")
         self._state.move(cid, dst)
         data = {
             "seq": self.seq + 1,
@@ -1481,6 +1611,29 @@ class AimDocument:
             walk = self._state._parent_of(walk)
         return Anchor(container, prev_id, shell=shell)
 
+    def _nested_move_parent(self, target: str) -> str | None:
+        """Addressable parent payload needed to invert a nested extraction.
+
+        Direct body/container/table-shell members have a normal ``Anchor``.
+        Anything deeper is private chunk/container markup, so the smallest
+        enclosing addressable payload must be retained for exact replay.
+        """
+        pairs = self._state._target_elements(target)
+        parent = pairs[0][0]
+        if (
+            parent is self._state.body
+            or parent.container_id is not None
+            or parent.tag in REGISTRY.table_shells
+        ):
+            return None
+        walk: Element | None = parent
+        while walk is not None and walk is not self._state.body:
+            parent_id = walk.chunk_id or walk.container_id
+            if parent_id is not None and parent_id != target:
+                return parent_id
+            walk = self._state._parent_of(walk)
+        return None
+
     # -- checkpoints / undo ----------------------------------------------------------------
     def checkpoint(self, label: str, *, at: str | None = None) -> str:
         h = self.doc_hash
@@ -1604,7 +1757,12 @@ class AimDocument:
                 "anchor": ev.get("anchor"),
             }
         if action == "move":
-            return {"target": target, "action": "move", "from": ev.get("to"), "to": ev.get("from")}
+            return {
+                "target": target,
+                "action": "move",
+                "from": ev.get("to"),
+                "to": ev.get("from"),
+            }
         raise HistoryError(f"cannot invert action {action!r}")
 
     def _apply_data(self, data: dict) -> None:
@@ -1629,7 +1787,7 @@ class AimDocument:
         elif action == "delete":
             self._state.remove(target)
         elif action == "move":
-            self._state.move(target, Anchor.from_obj(data["to"]))
+            _apply_move_data(self._state, data)
 
     # -- proposals (the pending lane) --------------------------------------------------------
     @property
@@ -1749,11 +1907,23 @@ class AimDocument:
     def _supersede_if_pending(
         self, target: str, new_pid: str, author: Actor, at: str | None
     ) -> None:
-        for p in self.proposals:
-            if p.target == target and p.action in ("modify", "delete"):
-                self._resolve(
-                    p, decision="superseded", decided_by=author, superseded_by=new_pid, at=at
-                )
+        for p in self._superseded_by_new(target):
+            self._resolve(p, decision="superseded", decided_by=author, superseded_by=new_pid, at=at)
+
+    def _superseded_by_new(self, target: str) -> list[Proposal]:
+        """The pending cards a new modify/delete proposal on *target* replaces."""
+        return [
+            p for p in self.proposals if p.target == target and p.action in ("modify", "delete")
+        ]
+
+    def _require_current_target(self, target: str) -> None:
+        """Proposal targets must exist in the CURRENT document (lint P008).
+
+        The projection answers how the pending lane composes; it cannot
+        mint targets. A card aimed at a chunk only a pending add would
+        create lints P008 and cannot reliably resolve."""
+        if not self._state.exists(target):
+            raise TargetNotFound(f"no chunk {target!r}")
 
     def propose_modify(
         self,
@@ -1765,14 +1935,22 @@ class AimDocument:
         depends_on: str | None = None,
         at: str | None = None,
     ) -> Proposal:
-        if not self._state.exists(target):
-            raise TargetNotFound(f"no chunk {target!r}")
-        if target == "aim:theme":
-            payload = self._validated_theme_markup(markup)
-        elif target == "aim:doc":
-            payload = self._validated_doc_markup(markup)
-        else:
-            _, payload = self._normalize_payload(markup, expect_id=target)
+        def validate(projected: AimDocument) -> str:
+            try:
+                projected.modify_chunk(target, markup, author=author, at=at)
+            except _NoOpEdit:
+                pass  # no-op only after earlier pendings resolve — harmless
+            payload = projected._state.serial(target)
+            assert payload is not None
+            return payload
+
+        self._require_current_target(target)
+        self._noop_guard(lambda current: current.modify_chunk(target, markup, author=author, at=at))
+        payload = self._projected_operation(
+            f"new modify of {target!r}",
+            validate,
+            exclude=[p.id for p in self._superseded_by_new(target)],
+        )
         pid = self._new_proposal_id()
         with self.batch():  # the supersede + the new card are one intention
             self._supersede_if_pending(target, pid, author, at)
@@ -1826,14 +2004,7 @@ class AimDocument:
         depends_on: str | None = None,
         at: str | None = None,
     ) -> Proposal:
-        _, payload = self._normalize_payload(markup)
-        # container-membership check at creation time, so the card is not
-        # doomed to fail at accept (same contract as the direct add)
-        cont_el = self._state.container_node(container)
-        if cont_el is not None:
-            self._state._guard_item_members(
-                cont_el, [n for n in parse_fragment(payload) if isinstance(n, Element)]
-            )
+        concrete_after = after
         if isinstance(after, str) and ids.is_valid_proposal_id(after):
             pending = {p.id: p for p in self.proposals if p.action == "add"}
             if after not in pending:
@@ -1846,13 +2017,24 @@ class AimDocument:
                     f"add into {container!r} cannot anchor on pending proposal "
                     f"{after!r} in {anchored!r}"
                 )
-            anchor = Anchor(container, after)
-        else:
-            anchor = self._resolve_end_anchor(container, after)
-            # container-scoped validation, exactly like the direct add: the
-            # anchor must be a legal insertion point in `container`, not merely
-            # exist somewhere in the document (AIM-03)
-            self._state.resolve_insert_point(anchor)
+            concrete_after = self._payload_root_id(pending[after].payload_html or "")
+
+        def validate(projected: AimDocument) -> tuple[str, Anchor]:
+            chunk = projected.add_chunk(
+                markup,
+                author=author,
+                container=container,
+                after=concrete_after,
+                at=at,
+            )
+            anchor_obj = projected.history[-1].get("anchor")
+            assert anchor_obj is not None
+            return chunk.html, Anchor.from_obj(anchor_obj)
+
+        payload, projected_anchor = self._projected_operation(
+            f"new add into {container!r}", validate
+        )
+        anchor = self._card_position_anchor("add", projected_anchor)
         return self._new_card(
             action="add",
             author=author,
@@ -1863,6 +2045,48 @@ class AimDocument:
             depends_on=depends_on,
             at=at,
         )
+
+    def _card_position_anchor(self, action: str, projected: Anchor) -> Anchor:
+        """Record a position that remains valid without pending projection.
+
+        The destination container (and table shell) must exist in the CURRENT
+        body. A projected anchor on a pending add's payload root is encoded as
+        the proposal-id chain so normal rejection rebinding keeps the dependent
+        card viable; every other projected-only position is refused.
+        """
+        try:
+            self._state.resolve_insert_point(
+                Anchor(projected.container, None, shell=projected.shell)
+            )
+        except AimError as exc:
+            raise InvalidOperation(
+                f"{action} would use container {projected.container!r} (or its "
+                "table shell), which is not a valid position in the current document"
+            ) from exc
+
+        if projected.after is None:
+            return projected
+        owner = next(
+            (
+                p
+                for p in self.proposals
+                if p.action == "add"
+                and (p.anchor_container or "body") == projected.container
+                and self._payload_root_id(p.payload_html or "") == projected.after
+            ),
+            None,
+        )
+        if owner is not None:
+            return Anchor(projected.container, owner.id, projected.shell)
+        try:
+            self._state.resolve_insert_point(projected)
+        except AimError as exc:
+            raise InvalidOperation(
+                f"{action} would anchor on {projected.after!r}, which is not a valid "
+                f"position in {projected.container!r} until the pending lane resolves — "
+                "anchor on a pending add's proposal id or on a current chunk"
+            ) from exc
+        return projected
 
     def propose_delete(
         self,
@@ -1875,8 +2099,12 @@ class AimDocument:
         # reject reserved targets at propose time: the card would lint clean
         # but explode at accept (reserved heads have no body anchor)
         _no_delete_move(target, "delete proposal")
-        if not self._state.exists(target):
-            raise TargetNotFound(f"no chunk {target!r}")
+        self._require_current_target(target)
+        self._projected_operation(
+            f"new delete of {target!r}",
+            lambda projected: projected.delete_chunk(target, author=author, at=at),
+            exclude=[p.id for p in self._superseded_by_new(target)],
+        )
         pid = self._new_proposal_id()
         with self.batch():
             self._supersede_if_pending(target, pid, author, at)
@@ -1904,21 +2132,33 @@ class AimDocument:
         at: str | None = None,
     ) -> Proposal:
         _no_delete_move(target, "move proposal")
-        if not self._state.exists(target):
-            raise TargetNotFound(f"no chunk {target!r}")
-        src = self._anchor_of(target)
-        anchor = self._resolve_end_anchor(container, after, exclude=target, shell=shell)
-        # mirror the direct move: reject no-ops (AIM-08) and validate the
-        # destination container-scoped so the proposal can actually be
-        # accepted (AIM-03)
-        if src == anchor:  # full anchors: first-of-thead ≠ first-of-tbody
-            raise InvalidOperation(f"move of {target!r} is a no-op (already at that position)")
-        self._state.resolve_insert_point(anchor)
-        cont_el = self._state.container_node(anchor.container)
-        if cont_el is not None:
-            self._state._guard_item_members(
-                cont_el, [el for _, el in self._state._target_elements(target)]
+
+        def validate(projected: AimDocument) -> Anchor:
+            try:
+                projected.move_chunk(
+                    target,
+                    author=author,
+                    container=container,
+                    after=after,
+                    shell=shell,
+                    at=at,
+                )
+            except _NoOpEdit:
+                # no-op only after earlier pendings resolve — harmless at
+                # accept; record the anchor the move would have used
+                return projected._resolve_end_anchor(container, after, exclude=target, shell=shell)
+            to = projected.history[-1].get("to")
+            assert to is not None
+            return Anchor.from_obj(to)
+
+        self._require_current_target(target)
+        self._noop_guard(
+            lambda current: current.move_chunk(
+                target, author=author, container=container, after=after, shell=shell, at=at
             )
+        )
+        projected_anchor = self._projected_operation(f"new move of {target!r}", validate)
+        anchor = self._card_position_anchor("move", projected_anchor)
         return self._new_card(
             action="move",
             author=author,
@@ -1976,11 +2216,21 @@ class AimDocument:
                 )
             else:
                 raise InvalidOperation(f"a {prop.action} proposal carries no payload to amend")
-            tmpl = next((c for c in card.elements() if c.tag == "template"), None)
-            if tmpl is None:  # defensive: modify/add cards always carry one
-                tmpl = Element("template")
-                card.children.append(tmpl)
-            tmpl.children = list(parse_fragment(payload))
+            # the amended lane must keep the creation-order invariant: a
+            # payload that breaks a later pending card fails HERE, not as a
+            # whole-lane rejection at accept-all
+            trial = self._clone()
+            _set_card_payload(trial._card_el(pid), payload)
+            decider = Actor("external", id="pending-projection")
+            for proposal in resolution_order(trial.proposals):
+                try:
+                    trial.accept(proposal.id, decided_by=decider, at=proposal.at)
+                except AimError as exc:
+                    raise InvalidOperation(
+                        f"amended payload for {pid!r} breaks the pending lane at "
+                        f"proposal {proposal.id!r}: {exc}"
+                    ) from exc
+            _set_card_payload(card, payload)
         if explanation is not None:
             if explanation:
                 card.set("data-explanation", explanation)
@@ -1991,6 +2241,67 @@ class AimDocument:
         return self.proposal(pid)
 
     # -- resolution ---------------------------------------------------------------------------
+    def accept_all(
+        self,
+        *,
+        decided_by: Actor,
+        explanation: str | None = None,
+        at: str | None = None,
+    ) -> list[Event]:
+        """Atomically accept the pending lane in creation order.
+
+        Invariant: a lane whose every card passed projected validation at
+        creation applies cleanly in creation order. The clone replay is the
+        universal gate for foreign-authored cards, out-of-band edits, and
+        partial manual resolutions that broke that projection. A failing dry
+        run never mutates this document.
+        """
+        pids = [proposal.id for proposal in resolution_order(self.proposals)]
+        dry_run = self._clone()
+        for pid in pids:
+            try:
+                dry_run.accept(
+                    pid,
+                    decided_by=decided_by,
+                    explanation=explanation,
+                    at=at,
+                )
+            except Exception as exc:  # foreign cards may fail outside AimError
+                raise InvalidOperation(
+                    f"cannot accept all: proposal {pid!r} failed: {exc}; "
+                    "the document is unchanged. Accept remaining proposals "
+                    "individually to repair the lane"
+                ) from exc
+
+        return [
+            self.accept(
+                pid,
+                decided_by=decided_by,
+                explanation=explanation,
+                at=at,
+            )
+            for pid in pids
+        ]
+
+    def reject_all(
+        self,
+        *,
+        decided_by: Actor,
+        explanation: str | None = None,
+        at: str | None = None,
+    ) -> list[Event]:
+        """Reject the pending lane, preserving chained-add rebinding."""
+        pids = [proposal.id for proposal in resolution_order(self.proposals)]
+        return [
+            self.reject(
+                pid,
+                decided_by=decided_by,
+                explanation=explanation,
+                at=at,
+            )
+            for pid in pids
+        ]
+
     def accept(
         self,
         pid: str,
@@ -2217,12 +2528,19 @@ class AimDocument:
                 data["to"] = dst.to_obj()
                 if decision == "accepted":
                     _no_delete_move(prop.target or "", "move proposal")
+                    nested_parent = self._nested_move_parent(prop.target or "")
+                    if nested_parent is not None:
+                        raise InvalidOperation(
+                            f"cannot move {prop.target!r} out of nested markup in "
+                            f"{nested_parent!r}; reject the proposal or modify the "
+                            "enclosing target instead"
+                        )
                     src = self._anchor_of(prop.target or "")
                     data["anchor"] = dst.to_obj()
                     data["from"] = src.to_obj()
                     self._state.move(prop.target or "", dst)
 
-        # drop the card; rebind chained adds that anchored on this proposal
+        # drop the card; rebind dependent position cards anchored on this proposal
         sec = self._state.section("aim-proposals")
         assert sec is not None
         sec.children.remove(card)
@@ -2236,6 +2554,7 @@ class AimDocument:
         return (nodes[0].chunk_id or nodes[0].container_id or "") if nodes else ""
 
     def _rebind_chained(self, resolved: Proposal, decision: str) -> None:
+        """Materialize or bypass a pending-add position dependency."""
         sec = self._state.section("aim-proposals")
         if sec is None:
             return
@@ -2425,8 +2744,8 @@ class AimDocument:
         ``origin: "reconcile"`` (*author* defaults to ``{type: external}``),
         declaring the current body truth going forward. Unmarked or
         conflicting ids are fixed up first (ids are tooling's job), and
-        pending proposals whose target vanished are rejected. Also the
-        adoption path for hand-written files with no history at all.
+        pending proposals that no longer apply in creation order are rejected.
+        Also the adoption path for hand-written files with no history at all.
 
         With ``dry_run=True`` nothing is mutated — the returned
         :class:`ReconcileReport` describes what *would* be done. Raises

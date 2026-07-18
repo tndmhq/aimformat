@@ -50,6 +50,7 @@ class _SelfClosingSourceNormalizer(HTMLParser):
         self.line_offsets.extend(match.end() for match in re.finditer("\n", text))
         self.stack: list[str] = []
         self.replacements: list[tuple[int, int, str]] = []
+        self.unsafe_tags: list[str] = []
 
     def handle_starttag(self, tag: str, attrs: list) -> None:
         if tag not in REGISTRY.void_elements:
@@ -66,6 +67,7 @@ class _SelfClosingSourceNormalizer(HTMLParser):
         opening = raw[:-2].rstrip() + ">"
         separator = "\n" if tag in LINE_CONTAINERS else ""
         self.replacements.append((start, start + len(raw), opening + separator + f"</{tag}>"))
+        self.unsafe_tags.append(tag)
 
     def handle_endtag(self, tag: str) -> None:
         for i in range(len(self.stack) - 1, -1, -1):
@@ -88,6 +90,13 @@ def _without_c002_differences(text: str) -> str:
     normalizer.feed(text)
     normalizer.close()
     return normalizer.normalized()
+
+
+def _unsafe_self_closing_tags(text: str) -> list[str]:
+    detector = _SelfClosingSourceNormalizer(text)
+    detector.feed(text)
+    detector.close()
+    return detector.unsafe_tags
 
 
 @dataclass(frozen=True)
@@ -954,17 +963,20 @@ class _Linter:
         non-void case where ``/>`` is canonical.
         """
 
+        def report(tag: str, where: str) -> None:
+            self.add(
+                "C002",
+                ERROR,
+                f"non-void HTML element <{tag}> must use explicit open+close "
+                "tags (self-closing breaks HTML parsing)",
+                where,
+            )
+
         def visit(el: Element, *, in_svg: bool, where: str = "") -> None:
             svg_here = in_svg or el.tag == "svg"
             loc = el.chunk_id or el.container_id or el.get("id") or where
             if el.self_closing and el.tag not in REGISTRY.void_elements and not svg_here:
-                self.add(
-                    "C002",
-                    ERROR,
-                    f"non-void HTML element <{el.tag}> must use explicit open+close "
-                    "tags (self-closing breaks HTML parsing)",
-                    loc,
-                )
+                report(el.tag, loc)
             for child in el.elements():
                 visit(child, in_svg=svg_here, where=loc)
 
@@ -980,10 +992,14 @@ class _Linter:
                 markup = ev.get(field)
                 if not isinstance(markup, str):
                     continue
+                unsafe_tags = _unsafe_self_closing_tags(markup)
                 try:
                     nodes = parse_fragment(markup)
                 except ParseError:
-                    continue  # replay/history validation reports malformed payloads
+                    where = f"seq {ev.data.get('seq')} {field}"
+                    for tag in unsafe_tags:
+                        report(tag, where)
+                    continue  # keep lexical C002 independent of DOM parseability
                 where = f"seq {ev.data.get('seq')} {field}"
                 for node in nodes:
                     if isinstance(node, Element):

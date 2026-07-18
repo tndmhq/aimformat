@@ -31,7 +31,7 @@ from pathlib import Path
 
 from . import __version__
 from .css import css_stats, generate_aim_css
-from .document import LAST, AimDocument, AnchorAfter, new_document, resolution_order
+from .document import LAST, AimDocument, AnchorAfter, new_document
 from .errors import AimError
 from .lint import lint_path
 from .registry import REGISTRY
@@ -215,23 +215,26 @@ def _cmd_resolve(args: argparse.Namespace, decision: str) -> int:
     doc = AimDocument.load(args.file)
     decided_by = parse_actor(args.author)
     if args.all:
-        # dependency-safe order shared with the exporters: chained adds
-        # resolve after the add they anchor on; per round adds/modifies go
-        # first, then moves, then deletes, so nothing pulls an anchor out
-        # from under a card that still needs it (and a container modify
-        # waits for a move that rescues a member its payload drops)
-        pids = [p.id for p in resolution_order(doc.proposals, doc)]
+        pids = [proposal.id for proposal in doc.proposals]
     else:
         pids = args.pids
     if not pids:
         print("[]" if args.format == "json" else "no pending proposals")
         return 0
-    events = []
-    for pid in pids:
-        if decision == "accept":
-            events.append(doc.accept(pid, decided_by=decided_by, explanation=args.explanation))
-        else:
-            events.append(doc.reject(pid, decided_by=decided_by, explanation=args.explanation))
+    if args.all:
+        events = (
+            doc.accept_all(decided_by=decided_by, explanation=args.explanation)
+            if decision == "accept"
+            else doc.reject_all(decided_by=decided_by, explanation=args.explanation)
+        )
+        pids = [event.get("proposal") for event in events]
+    else:
+        events = []
+        for pid in pids:
+            if decision == "accept":
+                events.append(doc.accept(pid, decided_by=decided_by, explanation=args.explanation))
+            else:
+                events.append(doc.reject(pid, decided_by=decided_by, explanation=args.explanation))
     out = Path(args.output or args.file)
     doc.save(out)
     if args.format == "json":

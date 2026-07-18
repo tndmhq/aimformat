@@ -202,11 +202,9 @@ class TestProposalVerbs:
         assert [d["decision"] for d in decisions] == ["reject"]
         assert not aim.load(saved).proposals
 
-    def test_accept_all_resolves_deletes_last(self, saved, capsys):
-        # a pending add anchored on a chunk a sibling card deletes: raw card
-        # order would kill the anchor first (mirrors the exporters' rule)
-        main(["propose", "delete", str(saved), "p1"])
+    def test_accept_all_preserves_add_then_delete_creation_order(self, saved, capsys):
         main(["propose", "add", str(saved), "--html", "<p>after p1</p>", "--after", "p1"])
+        main(["propose", "delete", str(saved), "p1"])
         capsys.readouterr()
         assert main(["accept", str(saved), "--all", "--author", "human:ada"]) == 0
         doc = aim.load(saved)

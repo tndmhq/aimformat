@@ -125,6 +125,19 @@ def _neutralize_critic(text: str) -> str:
     return text
 
 
+def _proposal_row_width(proposal: Proposal) -> int:
+    if not proposal.payload_html:
+        return 0
+    fragment = parse_html(proposal.payload_html)
+    # outer payload rows only: a table nested inside a cell has its own
+    # grid and must not widen the table this proposal lands in
+    rows = [root for root in fragment.elements() if root.tag == "tr"]
+    return max(
+        (sum(cell.tag in ("td", "th") for cell in row.elements()) for row in rows),
+        default=0,
+    )
+
+
 def _inline(el: Element, *, in_table: bool = False) -> str:
     return _inline_nodes(el.children, in_table=in_table)
 
@@ -347,6 +360,17 @@ class _Renderer:
             body = head[1:] + body
             head = head[:1]
         width = max((len(r) for _, r in head + body), default=0)
+        if self.critic and container_id:
+            pending_rows = [
+                proposal
+                for (container, _), proposals in self.adds.items()
+                if container == container_id
+                for proposal in proposals
+            ]
+            pending_rows.extend(
+                self.mods[cid] for cid, _ in head + body if cid is not None and cid in self.mods
+            )
+            width = max([width, *(_proposal_row_width(p) for p in pending_rows)])
         if not width:
             return ""
 

@@ -49,6 +49,32 @@ codes bidirectionally in sync with what `lint.py` can actually emit.
   if a test fails with C001, fix the producer, don't post-process.
 - **Ids are never reused** (deleted ids stay burned; `_taken_ids()` scans
   body + history + pending payloads).
+- **Pending lanes are creation-order programs.** Every SDK proposal is
+  validated against a clone containing all earlier pending cards applied in
+  creation order. The projection answers *structural* legality only: no-op
+  guards (identical content, no-op move) judge against the current document,
+  cards the new proposal supersedes (§5.4) are excluded from structural replay
+  while their payload ids stay reserved for replacement normalization, and
+  proposal targets plus add/move destination containers must exist in the
+  current body. Recorded add/move anchors must also resolve there; the one
+  sanctioned exception is a position on a pending add's payload root, which is
+  written as the proposal-id chain so accepting or rejecting that add rebinds
+  every dependent position (lint P008/P011 parity for the linted target/add
+  cases). Amending a payload replays the whole lane on a clone first and fails
+  closed if the amendment would break a later card.
+  `resolution_order()` preserves creation order one ready card at a time; its
+  only exception is moving a foreign-reordered chained add behind the pending
+  add it names, without letting later cards overtake either one. A lane whose
+  cards passed projected validation applies cleanly in creation order.
+  Accept-all first replays the whole lane on a clone and refuses with zero live
+  mutation if a foreign-authored card, out-of-band edit, or partial manual
+  resolution broke the projection. Reconcile uses the same replay as a
+  fail-closed fixpoint and records rejections for cards that no longer apply;
+  it never searches for a rescuing order. An unorderable foreign chained-add
+  cycle surfaces its actual cycle members so reconcile rejects only cycle
+  participants, never unrelated valid cards earlier in the lane. The property
+  oracle in `tests/test_resolution_order_properties.py` is exactly this
+  creation-order clone replay.
 - **Payload equality is the verification primitive.** If you change
   canonical form in any way, every stored payload in every fixture/example
   changes meaning — regenerate fixtures and examples, and expect checkpoint

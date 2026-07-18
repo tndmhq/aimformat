@@ -983,16 +983,12 @@ class TestMoveStaysOutOfItsOwnSubtree:
         assert nested_doc.dumps() == before
         assert nested_doc.verify() == []
 
-    def test_accepting_a_self_move_proposal_fails_closed(self, nested_doc):
-        # an aim-slide destination passes the item-carrier guard (slides
-        # take any member), so this reaches the accept-time self-move check
-        p = nested_doc.propose_move("s1", author=BOT, container="s1", at=ts(2))
+    def test_self_move_proposal_fails_at_creation(self, nested_doc):
         before = nested_doc.dumps()
         with pytest.raises(InvalidOperation):
-            nested_doc.accept(p.id, decided_by=ME, at=ts(3))
-        # fail closed: nothing mutated, the card is still pending
+            nested_doc.propose_move("s1", author=BOT, container="s1", at=ts(2))
         assert nested_doc.dumps() == before
-        assert [q.id for q in nested_doc.proposals] == [p.id]
+        assert nested_doc.proposals == []
         assert nested_doc.verify() == []
 
     def test_low_level_move_rejects_descendant_after_anchor(self, nested_doc):
@@ -1218,14 +1214,11 @@ class TestShellChildrenAreItemCarriers:
         assert not [f for f in aim.lint_text(self._table_text(self.ROW)) if f.level == "error"]
 
 
-class TestResolutionOrderProtectsAnchors:
-    """AF-04: resolution_order sorted ready cards only delete-last, so a
-    pending MOVE of an existing chunk that a sibling add anchors on could
-    resolve first — the add then failed TargetNotFound, aborting
-    `accept --all` and `to_docx(pending="accept-all")` on card order alone."""
+class TestProjectionProtectsAnchors:
+    """A later card cannot name an anchor moved away by an earlier card."""
 
-    @pytest.fixture
-    def doc_with_lane(self):
+    @staticmethod
+    def _doc():
         doc = aim.new_document(title="T")
         doc.add_chunk('<p data-aim="x1">anchor chunk</p>', author=BOT, at=ts(0))
         doc.add_chunk(
@@ -1233,57 +1226,81 @@ class TestResolutionOrderProtectsAnchors:
             author=BOT,
             at=ts(1),
         )
-        # move card BEFORE the add that anchors on its target
-        doc.propose_move("x1", author=BOT, container="s1", at=ts(2))
-        doc.propose_add(
-            '<p data-aim="n1">new</p>', author=BOT, container="body", after="x1", at=ts(3)
-        )
         return doc
 
-    def test_add_orders_before_the_move_of_its_anchor(self, doc_with_lane):
-        from aimformat.document import resolution_order
+    def test_move_then_add_on_old_anchor_fails_at_propose_time(self):
+        doc = self._doc()
+        move = doc.propose_move("x1", author=BOT, container="s1", at=ts(2))
+        before = doc.dumps()
 
-        actions = [p.action for p in resolution_order(doc_with_lane.proposals)]
-        assert actions == ["add", "move"]
+        with pytest.raises(aim.InvalidOperation, match=move.id):
+            doc.propose_add(
+                '<p data-aim="n1">new</p>',
+                author=BOT,
+                container="body",
+                after="x1",
+                at=ts(3),
+            )
 
-    def test_accept_all_resolves_the_whole_lane(self, doc_with_lane):
-        from aimformat.document import resolution_order
+        assert doc.dumps() == before
 
-        for p in resolution_order(doc_with_lane.proposals):
-            doc_with_lane.accept(p.id, decided_by=ME, at=ts(4))
-        assert doc_with_lane.proposals == []
-        assert doc_with_lane.body_ids == ["n1", "s1"]
-        assert doc_with_lane.verify() == []
-
-    def test_docx_accept_all_export_succeeds(self, doc_with_lane, tmp_path):
-        pytest.importorskip("docx")
-        out = aim.to_docx(doc_with_lane, tmp_path / "t.docx", pending="accept-all")
-        assert out.exists()
-
-    def test_delete_still_goes_after_the_anchored_add(self):
-        doc = aim.new_document(title="T")
-        doc.add_chunk('<p data-aim="x1">anchor</p>', author=BOT, at=ts(0))
-        doc.propose_delete("x1", author=BOT, at=ts(1))
-        doc.propose_add(
-            '<p data-aim="n1">new</p>', author=BOT, container="body", after="x1", at=ts(2)
+    def test_add_before_moving_its_anchor_resolves_cleanly(self):
+        doc = self._doc()
+        add = doc.propose_add(
+            '<p data-aim="n1">new</p>',
+            author=BOT,
+            container="body",
+            after="x1",
+            at=ts(2),
         )
-        from aimformat.document import resolution_order
+        move = doc.propose_move("x1", author=BOT, container="s1", at=ts(3))
 
-        for p in resolution_order(doc.proposals):
-            doc.accept(p.id, decided_by=ME, at=ts(3))
-        assert doc.body_ids == ["n1"]
+        doc.accept_all(decided_by=ME, at=ts(4))
+
+        assert [event.get("proposal") for event in doc.history[-2:]] == [add.id, move.id]
+        assert doc.body_ids == ["n1", "s1"]
         assert doc.verify() == []
 
 
+class TestMoveThenDeleteResolution:
+    """codex-pr15-r5: terminal move validation must treat an accepted
+    delete as intentional final absence, not as a failed move plan."""
+
+    @staticmethod
+    def _lane(*, delete_ancestor: bool):
+        doc = aim.new_document(title="T")
+        doc.add_chunk(
+            '<ul data-aim-container="l1"><li data-aim="x">X</li></ul>',
+            author=ME,
+            at=ts(0),
+        )
+        doc.add_chunk(
+            '<ul data-aim-container="l2"><li data-aim="a">A</li></ul>',
+            author=ME,
+            at=ts(1),
+        )
+        doc.propose_move("x", author=BOT, container="l2", after="a", at=ts(2))
+        doc.propose_delete("l2" if delete_ancestor else "x", author=BOT, at=ts(3))
+        return doc
+
+    @pytest.mark.parametrize("delete_ancestor", [False, True])
+    def test_accept_all_allows_move_then_delete(self, delete_ancestor):
+        from aimformat.document import resolution_order
+
+        doc = self._lane(delete_ancestor=delete_ancestor)
+        order = resolution_order(doc.proposals, doc)
+
+        assert [proposal.action for proposal in order] == ["move", "delete"]
+        for proposal in order:
+            doc.accept(proposal.id, decided_by=ME, at=ts(4))
+
+        assert not doc._state.exists("x")
+        assert doc.verify() == []
+        assert not [finding for finding in aim.lint(doc) if finding.level == "error"]
+
+
 class TestMovesStayAheadOfAncestorReplacements:
-    """codex-r2-5 (refines AF-04): ranking every modify below every move
-    broke lanes where a move rescues a descendant before its container is
-    replaced — ``accept --all`` resolved the container modify first,
-    deleting the member, and the move then raised TargetNotFound after
-    partially resolving the document. A container modify whose payload
-    drops a pending move's target now waits for that move; a payload that
-    keeps the member stays ahead of the move (relocating first would make
-    the payload re-introduce a duplicate id)."""
+    """A correctly sequenced rescue remains valid in creation order."""
 
     @pytest.fixture
     def rescue_lane(self):
@@ -1324,32 +1341,6 @@ class TestMovesStayAheadOfAncestorReplacements:
         pytest.importorskip("docx")
         out = aim.to_docx(rescue_lane, tmp_path / "t.docx", pending="accept-all")
         assert out.exists()
-
-    def test_payload_keeping_the_member_stays_ahead_of_the_move(self):
-        doc = aim.new_document(title="T")
-        doc.add_chunk(
-            '<ul data-aim-container="lst"><li data-aim="x">keep</li></ul>', author=ME, at=ts(0)
-        )
-        doc.propose_move("x", author=BOT, container="body", at=ts(1))
-        doc.propose_modify(
-            "lst",
-            '<ul data-aim-container="lst"><li data-aim="x">keep!</li></ul>',
-            author=BOT,
-            at=ts(2),
-        )
-        from aimformat.document import resolution_order
-
-        assert [p.action for p in resolution_order(doc.proposals, doc)] == ["modify", "move"]
-        for p in resolution_order(doc.proposals, doc):
-            doc.accept(p.id, decided_by=ME, at=ts(3))
-        assert doc.body_ids == ["lst", "x"]
-        assert doc.verify() == []
-
-    def test_without_the_doc_the_static_order_is_unchanged(self, rescue_lane):
-        from aimformat.document import resolution_order
-
-        actions = [p.action for p in resolution_order(rescue_lane.proposals)]
-        assert actions == ["modify", "move"]
 
 
 class TestPruneFlattenKeepBurnedIds:
@@ -1485,6 +1476,25 @@ class TestCanonicalSelfClosingNormalization:
         errors = {f.code for f in aim.lint_text(broken) if f.level == "error"}
         assert errors == {"C002"}
 
+    def test_C002_survives_an_independently_malformed_history_payload(self, basic_doc):
+        proposal = basic_doc.propose_modify(
+            "intro",
+            '<p data-aim="intro"><span></span></p>',
+            author=BOT,
+            at=ts(5),
+        )
+        basic_doc.reject(proposal.id, decided_by=ME, at=ts(6))
+        canonical = basic_doc.dumps()
+        broken = canonical.replace(
+            '<span><\\/span><\\/p>"',
+            '<span/><\\/bogus><\\/p>"',
+            1,
+        )
+
+        assert broken != canonical
+        assert aim.loads(broken).verify() == []
+        assert "C002" in {f.code for f in aim.lint_text(broken) if f.level == "error"}
+
     def test_C002_suppression_preserves_block_container_layout(self):
         canonical = aim.new_document(title="T").dumps()
         broken = canonical.replace(
@@ -1574,6 +1584,325 @@ class TestReconcileHandlesWrappingContainers:
         assert report.residual == []
         assert d.verify() == []
         assert d.body_ids == ["ws"]
+
+    @pytest.mark.parametrize("action", ["add", "move"])
+    def test_wrapping_an_anchor_rejects_the_now_cross_container_proposal(self, action):
+        doc = aim.new_document(title="T")
+        doc.add_chunk('<h1 data-aim="h1">Title</h1>', author=BOT, at=ts(0))
+        doc.add_chunk('<p data-aim="c1">alpha</p>', author=BOT, at=ts(1))
+        if action == "add":
+            proposal = doc.propose_add(
+                '<p data-aim="new">new</p>',
+                author=BOT,
+                container="body",
+                after="c1",
+                at=ts(2),
+            )
+        else:
+            proposal = doc.propose_move("h1", author=BOT, container="body", after="c1", at=ts(2))
+
+        wrapped = doc.dumps().replace(
+            '<p data-aim="c1">alpha</p>',
+            '<aim-slide data-aim-container="wrap"><p data-aim="c1">alpha</p></aim-slide>',
+        )
+        repaired = aim.loads(wrapped)
+        report = repaired.reconcile(at=ts(3))
+
+        assert report.rejected_proposals == [proposal.id]
+        assert repaired.proposals == []
+        assert repaired.verify() == []
+        assert not [finding for finding in aim.lint(repaired) if finding.level == "error"]
+
+    def test_rebound_chained_add_anchor_is_revalidated(self):
+        doc = aim.new_document(title="T")
+        doc.add_chunk('<p data-aim="c1">alpha</p>', author=BOT, at=ts(0))
+        first = doc.propose_add(
+            '<p data-aim="a">A</p>', author=BOT, container="body", after="c1", at=ts(1)
+        )
+        second = doc.propose_add(
+            '<p data-aim="b">B</p>',
+            author=BOT,
+            container="body",
+            after=first.id,
+            at=ts(2),
+        )
+
+        wrapped = doc.dumps().replace(
+            '<p data-aim="c1">alpha</p>',
+            '<aim-slide data-aim-container="wrap"><p data-aim="c1">alpha</p></aim-slide>',
+        )
+        repaired = aim.loads(wrapped)
+        report = repaired.reconcile(at=ts(3))
+
+        assert report.rejected_proposals == [first.id, second.id]
+        assert repaired.proposals == []
+        assert repaired.verify() == []
+        assert "P016" not in {finding.code for finding in aim.lint(repaired)}
+
+    def test_chained_add_ordered_before_its_anchor_is_revalidated(self):
+        """codex-pr15-p2-1: with the cards manually reordered dependent-first
+        (legal — card order carries no dependency meaning), the single
+        forward pass validated B while A was still pending, then rejected A
+        and rebound B to A's invalid concrete anchor AFTER B's own check had
+        run — reconcile returned with B carrying P016. The pass now iterates
+        to a fixpoint so no card order can leave a rebound anchor unchecked."""
+        doc = aim.new_document(title="T")
+        doc.add_chunk('<p data-aim="c1">alpha</p>', author=BOT, at=ts(0))
+        first = doc.propose_add(
+            '<p data-aim="a">A</p>', author=BOT, container="body", after="c1", at=ts(1)
+        )
+        second = doc.propose_add(
+            '<p data-aim="b">B</p>',
+            author=BOT,
+            container="body",
+            after=first.id,
+            at=ts(2),
+        )
+        sec = doc._state.section("aim-proposals")
+        sec.children = list(reversed(sec.children))
+        assert [p.id for p in doc.proposals] == [second.id, first.id]
+
+        wrapped = doc.dumps().replace(
+            '<p data-aim="c1">alpha</p>',
+            '<aim-slide data-aim-container="wrap"><p data-aim="c1">alpha</p></aim-slide>',
+        )
+        repaired = aim.loads(wrapped)
+        report = repaired.reconcile(at=ts(3))
+
+        assert sorted(report.rejected_proposals) == sorted([first.id, second.id])
+        assert repaired.proposals == []
+        assert repaired.verify() == []
+        assert "P016" not in {finding.code for finding in aim.lint(repaired)}
+
+
+class TestReconcileValidatesMoveMembership:
+    """codex-pr15-p2-4: _reject_dangling only resolved a move's destination
+    anchor, not whether the moved element is still a LEGAL member of that
+    container after the out-of-band edit. Turning a <ul> into a <table>
+    that keeps its container id let the anchor resolve, so reconcile kept
+    the pending move with no lint error — and accepting it later exploded
+    with \"<li> cannot be a direct member of <table>\". The destination is
+    now re-checked with the same member guard propose_move applies."""
+
+    def _reconciled_kind_flip(self, after):
+        doc = aim.new_document(title="T")
+        doc.add_chunk(
+            '<ul data-aim-container="l1"><li data-aim="x">X</li></ul>', author=ME, at=ts(0)
+        )
+        doc.add_chunk(
+            '<ul data-aim-container="l2"><li data-aim="m">M</li></ul>', author=ME, at=ts(1)
+        )
+        proposal = doc.propose_move("x", author=BOT, container="l2", after=after, at=ts(2))
+        edited = doc.dumps().replace(
+            '<ul data-aim-container="l2"><li data-aim="m">M</li></ul>',
+            '<table data-aim-container="l2"><tbody>'
+            '<tr data-aim="m"><td>M</td></tr></tbody></table>',
+        )
+        repaired = aim.loads(edited)
+        report = repaired.reconcile(at=ts(3))
+        return repaired, report, proposal
+
+    @pytest.mark.parametrize("after", ["m", None])
+    def test_move_into_a_kind_flipped_container_is_rejected(self, after):
+        repaired, report, proposal = self._reconciled_kind_flip(after)
+        assert report.rejected_proposals == [proposal.id]
+        assert repaired.proposals == []
+        assert repaired.verify() == []
+        assert not [finding for finding in aim.lint(repaired) if finding.level == "error"]
+
+    def test_move_whose_membership_survives_is_kept(self):
+        doc = aim.new_document(title="T")
+        doc.add_chunk(
+            '<ul data-aim-container="l1"><li data-aim="x">X</li></ul>', author=ME, at=ts(0)
+        )
+        doc.add_chunk(
+            '<ul data-aim-container="l2"><li data-aim="m">M</li></ul>', author=ME, at=ts(1)
+        )
+        proposal = doc.propose_move("x", author=BOT, container="l2", after="m", at=ts(2))
+        edited = doc.dumps().replace('<li data-aim="m">M</li>', '<li data-aim="m">M!</li>')
+        repaired = aim.loads(edited)
+        report = repaired.reconcile(at=ts(3))
+        assert report.rejected_proposals == []
+        assert [p.id for p in repaired.proposals] == [proposal.id]
+        repaired.accept(proposal.id, decided_by=ME, at=ts(4))
+        assert repaired.chunk("x").container == "l2"
+        assert repaired.verify() == []
+
+    def test_later_modify_does_not_rescue_an_invalid_move_destination(self):
+        doc = aim.new_document(title="T")
+        doc.add_chunk(
+            '<ul data-aim-container="l1"><li data-aim="x">X</li></ul>',
+            author=ME,
+            at=ts(0),
+        )
+        doc.add_chunk(
+            '<ul data-aim-container="l2"><li data-aim="a">A</li></ul>',
+            author=ME,
+            at=ts(1),
+        )
+        move = doc.propose_move("x", author=BOT, container="l2", after=None, at=ts(2))
+        modify = doc.propose_modify(
+            "l2",
+            '<ul data-aim-container="l2"><li data-aim="a">A restored</li></ul>',
+            author=BOT,
+            at=ts(3),
+        )
+        edited = doc.dumps().replace(
+            '<ul data-aim-container="l2"><li data-aim="a">A</li></ul>',
+            '<table data-aim-container="l2"><tbody>'
+            '<tr data-aim="a"><td>A out of band</td></tr></tbody></table>',
+            1,
+        )
+        repaired = aim.loads(edited)
+
+        report = repaired.reconcile(at=ts(4))
+
+        assert report.rejected_proposals == [move.id]
+        assert [proposal.id for proposal in repaired.proposals] == [modify.id]
+        assert repaired.verify() == []
+
+    def test_pending_modify_that_removes_the_move_anchor_is_not_viable(self):
+        doc = aim.new_document(title="T")
+        doc.add_chunk(
+            '<ul data-aim-container="l1"><li data-aim="x">X</li></ul>',
+            author=ME,
+            at=ts(0),
+        )
+        doc.add_chunk(
+            '<ul data-aim-container="l2"><li data-aim="a">A</li><li data-aim="b">B</li></ul>',
+            author=ME,
+            at=ts(1),
+        )
+        move = doc.propose_move("x", author=BOT, container="l2", after="a", at=ts(2))
+        modify = doc.propose_modify(
+            "l2",
+            '<ul data-aim-container="l2"><li data-aim="b">B restored</li></ul>',
+            author=BOT,
+            at=ts(3),
+        )
+        edited = doc.dumps().replace(
+            '<ul data-aim-container="l2"><li data-aim="a">A</li><li data-aim="b">B</li></ul>',
+            '<table data-aim-container="l2"><tbody>'
+            '<tr data-aim="a"><td>A out of band</td></tr></tbody></table>',
+            1,
+        )
+        repaired = aim.loads(edited)
+
+        report = repaired.reconcile(at=ts(4))
+
+        assert report.rejected_proposals == [move.id]
+        assert [p.id for p in repaired.proposals] == [modify.id]
+        assert repaired.verify() == []
+        assert not [finding for finding in aim.lint(repaired) if finding.level == "error"]
+
+    def test_pending_modify_without_the_recorded_table_shell_is_not_viable(self):
+        doc = aim.new_document(title="T")
+        doc.add_chunk(
+            '<table data-aim-container="t1"><tbody>'
+            '<tr data-aim="x"><td>X</td></tr></tbody></table>',
+            author=ME,
+            at=ts(0),
+        )
+        doc.add_chunk(
+            '<table data-aim-container="t2"><tbody>'
+            '<tr data-aim="a"><td>A</td></tr></tbody></table>',
+            author=ME,
+            at=ts(1),
+        )
+        move = doc.propose_move(
+            "x", author=BOT, container="t2", after=None, shell="tbody", at=ts(2)
+        )
+        modify = doc.propose_modify(
+            "t2",
+            '<table data-aim-container="t2"><thead>'
+            '<tr data-aim="a"><th>A</th></tr></thead></table>',
+            author=BOT,
+            at=ts(3),
+        )
+        # Reconcile records invalid out-of-band structure honestly. Keeping a
+        # tbody under the adopted list makes the current anchor resolve while
+        # its member guard fails, exercising candidate-payload shell viability.
+        edited = doc.dumps().replace(
+            '<table data-aim-container="t2"><tbody>'
+            '<tr data-aim="a"><td>A</td></tr></tbody></table>',
+            '<ul data-aim-container="t2"><tbody><tr data-aim="a"><td>A</td></tr></tbody></ul>',
+            1,
+        )
+        repaired = aim.loads(edited)
+
+        report = repaired.reconcile(at=ts(4))
+
+        assert report.rejected_proposals == [move.id]
+        assert [p.id for p in repaired.proposals] == [modify.id]
+        assert repaired.verify() == []
+        assert not [finding for finding in aim.lint(repaired) if finding.code.startswith("P")]
+
+
+class TestReconcileRejectsMovesIntoOwnSubtree:
+    """codex-pr15-r3 (refines codex-pr15-p2-4): the move-viability check at
+    reconcile validated anchor resolution and member legality but not the
+    cycle guard. An out-of-band edit nesting the destination container
+    INSIDE the moved subtree (c2 wrapped into c1) left the pending move in
+    a clean-verifying document — a time bomb that only exploded at accept
+    with \"cannot move c1 into itself or its own subtree\". Reconcile now
+    re-runs the same self-subtree guard DocState.move applies."""
+
+    def _reconciled_nesting(self, after):
+        doc = aim.new_document(title="T")
+        doc.add_chunk(
+            '<aim-slide data-aim-container="c1"><p data-aim="p1">P</p></aim-slide>',
+            author=ME,
+            at=ts(0),
+        )
+        doc.add_chunk(
+            '<aim-slide data-aim-container="c2"><p data-aim="p2">Q</p></aim-slide>',
+            author=ME,
+            at=ts(1),
+        )
+        proposal = doc.propose_move("c1", author=BOT, container="c2", after=after, at=ts(2))
+        c2 = '<aim-slide data-aim-container="c2"><p data-aim="p2">Q</p></aim-slide>'
+        edited = (
+            doc.dumps()
+            .replace(c2, "", 1)
+            .replace('<p data-aim="p1">P</p>', '<p data-aim="p1">P</p>' + c2)
+        )
+        repaired = aim.loads(edited)
+        report = repaired.reconcile(at=ts(3))
+        return repaired, report, proposal
+
+    @pytest.mark.parametrize("after", [None, "p2"])
+    def test_move_into_the_now_nested_destination_is_rejected(self, after):
+        repaired, report, proposal = self._reconciled_nesting(after)
+        assert report.rejected_proposals == [proposal.id]
+        assert repaired.proposals == []
+        assert repaired.verify() == []
+        # the out-of-band slide nesting itself still lints (S026) — that is
+        # the edit's own structural problem; the point here is that no
+        # retained proposal is left to explode at a later accept
+        assert [f.code for f in aim.lint(repaired) if f.level == "error"] == ["S026"]
+
+    def test_move_whose_destination_stays_outside_is_kept(self):
+        doc = aim.new_document(title="T")
+        doc.add_chunk(
+            '<aim-slide data-aim-container="c1"><p data-aim="p1">P</p></aim-slide>',
+            author=ME,
+            at=ts(0),
+        )
+        doc.add_chunk(
+            '<aim-slide data-aim-container="c2"><p data-aim="p2">Q</p></aim-slide>',
+            author=ME,
+            at=ts(1),
+        )
+        proposal = doc.propose_move("c1", author=BOT, container="c2", after="p2", at=ts(2))
+        edited = doc.dumps().replace('<p data-aim="p2">Q</p>', '<p data-aim="p2">Q!</p>')
+        repaired = aim.loads(edited)
+        report = repaired.reconcile(at=ts(3))
+        assert report.rejected_proposals == []
+        assert [p.id for p in repaired.proposals] == [proposal.id]
+        repaired.accept(proposal.id, decided_by=ME, at=ts(4))
+        assert repaired.body_ids == ["c2"]
+        assert "c1" in repaired.containers
+        assert repaired.verify() == []
 
 
 class TestEveryAimCssBlockIsVerified:
@@ -1808,6 +2137,54 @@ class TestCriticMarkupKeepsHeaderAnchoredRowAdds:
         assert added == sep + 1
 
 
+class TestCriticMarkupWidensForProposedRows:
+    @pytest.fixture
+    def two_col_doc(self):
+        doc = aim.new_document(title="T")
+        doc.add_chunk(
+            '<table data-aim-container="tbl"><thead>'
+            '<tr data-aim="h"><th>H1</th><th>H2</th></tr></thead><tbody>'
+            '<tr data-aim="r1"><td>A</td><td>B</td></tr></tbody></table>',
+            author=ME,
+            at=ts(0),
+        )
+        return doc
+
+    @pytest.mark.parametrize("action", ["add", "modify"])
+    def test_wider_pending_row_widens_the_table_delimiter(self, two_col_doc, action):
+        payload = '<tr data-aim="wide"><td>X</td><td>Y</td><td>Z</td></tr>'
+        if action == "add":
+            two_col_doc.propose_add(payload, author=BOT, container="tbl", after="r1", at=ts(1))
+        else:
+            two_col_doc.propose_modify(
+                "r1", payload.replace('data-aim="wide"', 'data-aim="r1"'), author=BOT, at=ts(1)
+            )
+
+        lines = aim.to_markdown(two_col_doc, pending="criticmarkup").splitlines()
+        assert "| --- | --- | --- |" in lines
+        assert "| H1 | H2 |  |" in lines
+
+    def test_nested_table_in_a_proposed_row_does_not_inflate_the_width(self, two_col_doc):
+        """codex-pr15-p2-3: ``root.iter()`` counted every descendant
+        ``<tr>``, so an unmarked table nested inside a proposed row's cell
+        inflated the OUTER table to the nested row's width (a 2-cell row
+        with a 4-cell nested table exported as 4 outer columns). Only the
+        payload's outer ``<tr>`` roots count."""
+        two_col_doc.propose_add(
+            '<tr data-aim="nr"><td>C'
+            "<table><tr><td>1</td><td>2</td><td>3</td><td>4</td></tr></table>"
+            "</td><td>D</td></tr>",
+            author=BOT,
+            container="tbl",
+            after="r1",
+            at=ts(1),
+        )
+        lines = aim.to_markdown(two_col_doc, pending="criticmarkup").splitlines()
+        assert "| --- | --- |" in lines
+        assert "| H1 | H2 |" in lines
+        assert "| A | B |" in lines  # no phantom empty cells
+
+
 class TestTrackedStructuralRowModify:
     """AF-39: a row modify that changes the grid shape was forced into the
     old row's cells — surplus replacement cells fused into the last cell
@@ -1929,6 +2306,21 @@ class TestTrackedStructuralRowModify:
         ins_rows = self._ins_cells_per_row(out)
         first = ins_rows.index(["X", "Y"])
         assert ins_rows[first + 1] == ["P", "Q"]  # both rows, in payload order
+
+    def test_shape_changing_header_cells_are_bold(self, two_col_doc, tmp_path):
+        pytest.importorskip("docx")
+        import docx
+        from docx.oxml.ns import qn
+
+        two_col_doc.propose_modify(
+            "r1", '<tr data-aim="r1"><th>Heading</th></tr>', author=BOT, at=ts(1)
+        )
+        out = aim.to_docx(two_col_doc, tmp_path / "header.docx")
+        rows = docx.Document(str(out)).tables[0]._tbl.findall(qn("w:tr"))
+        inserted = next(row for row in rows if "Heading" in [t.text for t in row.iter(qn("w:t"))])
+        run = next(inserted.iter(qn("w:r")))
+        props = run.find(qn("w:rPr"))
+        assert props is not None and props.find(qn("w:b")) is not None
 
 
 class TestStructuralReplacementRecreatesSpans:
@@ -3231,91 +3623,540 @@ class TestRecordedShellsBindReplay:
         assert any("not the recorded <thead>" in p for p in problems)
 
 
-class TestMovesStayAheadOfAnchorDroppingModifies:
-    """codex-r3-4 (refines codex-r2-5 / AF-04): the round-2 ordering only
-    delayed a container modify when a sibling move's TARGET was dropped by
-    the payload. A modify that instead drops the move's DESTINATION anchor
-    ordered first, stripped the landing point, and ``accept --all`` failed
-    on the move with TargetNotFound after partially resolving the lane. A
-    container modify now also waits for moves whose destination anchor (or
-    destination container) its payload removes; one keeping the anchor
-    stays ahead of the move, as before."""
+class TestPendingLaneCreationOrder:
+    """Pending interactions are validated when the later card is proposed."""
 
-    @pytest.fixture
-    def anchor_drop_lane(self):
+    @staticmethod
+    def _base():
         doc = aim.new_document(title="T")
         doc.add_chunk(
-            '<ul data-aim-container="l1"><li data-aim="x">X</li></ul>', author=ME, at=ts(0)
-        )
-        doc.add_chunk(
-            '<ul data-aim-container="l2"><li data-aim="a">A</li><li data-aim="b">B</li></ul>',
+            '<ul data-aim-container="l2"><li data-aim="z">Z</li><li data-aim="a">A</li></ul>',
             author=ME,
-            at=ts(1),
-        )
-        doc.propose_move("x", author=BOT, container="l2", after="b", at=ts(2))
-        doc.propose_modify(
-            "l2", '<ul data-aim-container="l2"><li data-aim="a">A</li></ul>', author=BOT, at=ts(3)
+            at=ts(0),
         )
         return doc
 
-    def test_move_orders_before_the_anchor_dropping_modify(self, anchor_drop_lane):
-        from aimformat.document import resolution_order
-
-        actions = [p.action for p in resolution_order(anchor_drop_lane.proposals, anchor_drop_lane)]
-        assert actions == ["move", "modify"]
-
-    def test_accept_all_resolves_the_whole_lane(self, anchor_drop_lane):
-        from aimformat.document import resolution_order
-
-        for p in resolution_order(anchor_drop_lane.proposals, anchor_drop_lane):
-            anchor_drop_lane.accept(p.id, decided_by=ME, at=ts(4))
-        assert anchor_drop_lane.proposals == []
-        assert anchor_drop_lane.verify() == []
-
-    def test_dropped_destination_container_also_delays(self):
-        doc = aim.new_document(title="T")
-        doc.add_chunk(
-            '<ul data-aim-container="l1"><li data-aim="x">X</li></ul>', author=ME, at=ts(0)
-        )
-        doc.add_chunk(
-            '<ul data-aim-container="l2"><li data-aim="a">A'
-            '<ul data-aim-container="l3"><li data-aim="c">C</li></ul></li></ul>',
-            author=ME,
-            at=ts(1),
-        )
-        doc.propose_move("x", author=BOT, container="l3", at=ts(2))
-        doc.propose_modify(
-            "l2", '<ul data-aim-container="l2"><li data-aim="a">A</li></ul>', author=BOT, at=ts(3)
-        )
-        from aimformat.document import resolution_order
-
-        assert [p.action for p in resolution_order(doc.proposals, doc)] == ["move", "modify"]
-
-    def test_modify_keeping_the_anchor_stays_ahead(self):
-        doc = aim.new_document(title="T")
-        doc.add_chunk(
-            '<ul data-aim-container="l1"><li data-aim="x">X</li></ul>', author=ME, at=ts(0)
-        )
-        doc.add_chunk(
-            '<ul data-aim-container="l2"><li data-aim="a">A</li><li data-aim="b">B</li></ul>',
-            author=ME,
-            at=ts(1),
-        )
-        doc.propose_move("x", author=BOT, container="l2", after="b", at=ts(2))
-        doc.propose_modify(
+    def test_modify_dropping_z_then_move_z_fails_at_propose_time(self):
+        doc = self._base()
+        modify = doc.propose_modify(
             "l2",
-            '<ul data-aim-container="l2"><li data-aim="a">A!</li><li data-aim="b">B</li></ul>',
+            '<ul data-aim-container="l2"><li data-aim="a">A changed</li></ul>',
             author=BOT,
+            at=ts(1),
+        )
+        before = doc.dumps()
+
+        with pytest.raises(aim.InvalidOperation, match=modify.id):
+            doc.propose_move("z", author=BOT, container="body", at=ts(2))
+
+        assert doc.dumps() == before
+        assert [proposal.id for proposal in doc.proposals] == [modify.id]
+
+    def test_move_z_before_modify_dropping_z_applies_in_creation_order(self):
+        doc = self._base()
+        move = doc.propose_move("z", author=BOT, container="body", at=ts(1))
+        modify = doc.propose_modify(
+            "l2",
+            '<ul data-aim-container="l2"><li data-aim="a">A changed</li></ul>',
+            author=BOT,
+            at=ts(2),
+        )
+        from aimformat.document import resolution_order
+
+        assert [proposal.id for proposal in resolution_order(doc.proposals, doc)] == [
+            move.id,
+            modify.id,
+        ]
+        doc.accept_all(decided_by=ME, at=ts(3))
+
+        assert doc.body_ids == ["l2", "z"]
+        assert [chunk.text for chunk in doc.chunks].count("Z") == 1
+        assert doc.verify() == []
+        assert aim.lint(doc) == []
+
+    def test_accept_all_dry_run_rejects_foreign_reordered_lane_atomically(self):
+        doc = self._base()
+        move = doc.propose_move("z", author=BOT, container="body", at=ts(1))
+        modify = doc.propose_modify(
+            "l2",
+            '<ul data-aim-container="l2"><li data-aim="a">A changed</li></ul>',
+            author=BOT,
+            at=ts(2),
+        )
+        section = doc._state.section("aim-proposals")
+        assert section is not None
+        section.children = list(reversed(section.children))
+        before = doc.dumps()
+
+        with pytest.raises(aim.InvalidOperation, match=rf"{move.id}.*individually"):
+            doc.accept_all(decided_by=ME, at=ts(3))
+
+        assert doc.dumps() == before
+        assert [proposal.id for proposal in doc.proposals] == [modify.id, move.id]
+        assert doc.verify() == []
+
+
+class TestNoOpGuardsJudgeTheCurrentDocument:
+    """Meaningfulness (no-op) guards compare against the CURRENT document.
+
+    The projection exists for structural legality only. A proposal that
+    becomes a no-op once earlier pendings resolve is fine — accepting a
+    no-op modify/move is harmless — but the legal move-then-modify order
+    must not be rejected as "identical content" just because the
+    projection already moved the chunk out.
+    """
+
+    @staticmethod
+    def _base():
+        doc = aim.new_document(title="T")
+        doc.add_chunk(
+            '<ul data-aim-container="l2"><li data-aim="a">A</li><li data-aim="z">Z</li></ul>',
+            author=ME,
+            at=ts(0),
+        )
+        doc.add_chunk(
+            '<ul data-aim-container="l3"><li data-aim="b">B</li></ul>',
+            author=ME,
+            at=ts(1),
+        )
+        return doc
+
+    L2_WITHOUT_Z = '<ul data-aim-container="l2"><li data-aim="a">A</li></ul>'
+
+    def test_legal_order_move_then_modify_accepts_cleanly(self):
+        doc = self._base()
+        doc.propose_move("z", author=BOT, container="l3", at=ts(2))
+        doc.propose_modify("l2", self.L2_WITHOUT_Z, author=BOT, at=ts(3))
+
+        doc.accept_all(decided_by=ME, at=ts(4))
+
+        assert doc._state.serial("l2") == self.L2_WITHOUT_Z
+        assert [chunk.id for chunk in doc.chunks if chunk.container == "l3"] == ["b", "z"]
+        assert doc.verify() == []
+        assert aim.lint(doc) == []
+
+    def test_illegal_order_modify_then_move_fails_at_propose_time(self):
+        doc = self._base()
+        modify = doc.propose_modify("l2", self.L2_WITHOUT_Z, author=BOT, at=ts(2))
+        before = doc.dumps()
+
+        with pytest.raises(InvalidOperation, match=modify.id):
+            doc.propose_move("z", author=BOT, container="l3", at=ts(3))
+
+        assert doc.dumps() == before
+
+    def test_modify_identical_to_current_is_still_rejected(self):
+        doc = self._base()
+        doc.propose_move("z", author=BOT, container="l3", at=ts(2))
+        with pytest.raises(InvalidOperation, match="identical content"):
+            doc.propose_modify(
+                "l2",
+                '<ul data-aim-container="l2"><li data-aim="a">A</li><li data-aim="z">Z</li></ul>',
+                author=BOT,
+                at=ts(3),
+            )
+
+    def test_move_that_projects_to_a_noop_is_proposable(self):
+        doc = self._base()
+        doc.propose_delete("a", author=BOT, at=ts(2))
+        # meaningful now (z is second in l2), a no-op once the delete lands
+        doc.propose_move("z", author=BOT, container="l2", after=None, at=ts(3))
+
+        doc.accept_all(decided_by=ME, at=ts(4))
+
+        assert doc._state.serial("l2") == '<ul data-aim-container="l2"><li data-aim="z">Z</li></ul>'
+        assert doc.verify() == []
+        assert aim.lint(doc) == []
+
+    def test_move_noop_against_current_is_still_rejected(self):
+        doc = self._base()
+        doc.propose_delete("b", author=BOT, at=ts(2))
+        with pytest.raises(InvalidOperation, match="no-op"):
+            doc.propose_move("z", author=BOT, container="l2", after="a", at=ts(3))
+
+
+class TestSupersedeSurvivesProjection:
+    """Re-proposing on a target with a pending modify/delete supersedes the
+    old card (§5.4): the projection must exclude the cards the new proposal
+    replaces, or the superseded delete makes the new card look illegal."""
+
+    @staticmethod
+    def _base():
+        doc = aim.new_document(title="T")
+        doc.add_chunk('<p data-aim="c1">Hello</p>', author=ME, at=ts(0))
+        return doc
+
+    def test_modify_supersedes_pending_delete(self):
+        doc = self._base()
+        delete = doc.propose_delete("c1", author=BOT, at=ts(1))
+
+        modify = doc.propose_modify("c1", '<p data-aim="c1">Hello v2</p>', author=BOT, at=ts(2))
+
+        assert [proposal.id for proposal in doc.proposals] == [modify.id]
+        resolution = doc.history[-1]
+        assert resolution.get("proposal") == delete.id
+        assert resolution.get("decision") == "superseded"
+        assert resolution.get("superseded_by") == modify.id
+        doc.accept_all(decided_by=ME, at=ts(3))
+        assert doc._state.serial("c1") == '<p data-aim="c1">Hello v2</p>'
+        assert doc.verify() == []
+
+    def test_delete_supersedes_pending_delete(self):
+        doc = self._base()
+        doc.propose_delete("c1", author=BOT, at=ts(1))
+
+        second = doc.propose_delete("c1", author=BOT, at=ts(2))
+
+        assert [proposal.id for proposal in doc.proposals] == [second.id]
+        doc.accept_all(decided_by=ME, at=ts(3))
+        assert not doc._state.exists("c1")
+        assert doc.verify() == []
+
+    def test_replacement_reserves_ids_from_superseded_modify(self):
+        doc = aim.new_document(title="T")
+        doc.add_chunk(
+            '<ul data-aim-container="list"><li data-aim="current">Current</li></ul>',
+            author=ME,
+            at=ts(0),
+        )
+        doc.propose_modify(
+            "list",
+            '<ul data-aim-container="list"><li data-aim="retired">First</li></ul>',
+            author=BOT,
+            at=ts(1),
+        )
+
+        replacement = doc.propose_modify(
+            "list",
+            '<ul data-aim-container="list"><li data-aim="retired">Replacement</li></ul>',
+            author=BOT,
+            at=ts(2),
+        )
+        superseded = doc.history[-1]
+        assert superseded.get("decision") == "superseded"
+        assert "retired" in (superseded.get("proposed") or "")
+        assert replacement.payload_html is not None
+        displayed_id = re.search(r'data-aim="([^"]+)"', replacement.payload_html)
+        assert displayed_id is not None
+        assert displayed_id.group(1) != "retired"
+
+        accepted = doc.accept(replacement.id, decided_by=ME, at=ts(3))
+        applied = doc._state.serial("list")
+        assert applied is not None
+        applied_id = re.search(r'data-aim="([^"]+)"', applied)
+        assert applied_id is not None
+        assert applied_id.group(1) == displayed_id.group(1)
+        assert accepted.get("applied") is None
+        assert doc.verify() == []
+        assert aim.lint(doc) == []
+
+
+class TestProposalsTargetOnlyExistingChunks:
+    """data-for must name a chunk of the CURRENT document (lint P008): the
+    projection answers how a lane composes, it cannot mint targets. A
+    modify card aimed at a pending add's chunk lints P008 and — because
+    its payload reserves the add's root id — makes accept-all reject the
+    whole lane the propose call itself validated."""
+
+    @staticmethod
+    def _base():
+        doc = aim.new_document(title="T")
+        doc.add_chunk('<p data-aim="c1">Hello</p>', author=ME, at=ts(0))
+        doc.propose_add('<p data-aim="new1">New</p>', author=BOT, at=ts(1))
+        return doc
+
+    def test_modify_of_pending_add_chunk_is_rejected(self):
+        doc = self._base()
+        before = doc.dumps()
+        with pytest.raises(aim.TargetNotFound, match="new1"):
+            doc.propose_modify("new1", '<p data-aim="new1">New v2</p>', author=BOT, at=ts(2))
+        assert doc.dumps() == before
+        assert aim.lint(doc) == []
+
+    def test_delete_of_pending_add_chunk_is_rejected(self):
+        doc = self._base()
+        with pytest.raises(aim.TargetNotFound, match="new1"):
+            doc.propose_delete("new1", author=BOT, at=ts(2))
+        assert aim.lint(doc) == []
+
+    def test_move_of_pending_add_chunk_is_rejected(self):
+        doc = self._base()
+        with pytest.raises(aim.TargetNotFound, match="new1"):
+            doc.propose_move("new1", author=BOT, container="body", after=None, at=ts(2))
+        assert aim.lint(doc) == []
+
+
+class TestAddAnchorsLintCleanAgainstTheCurrentBody:
+    """An add card's recorded anchor must satisfy P011/P016 against the
+    CURRENT body: an existing chunk at a valid insertion point, or a
+    pending-proposal-id chain. The projection resolves positions through
+    pending adds, so a projected-only chunk id must be written as the
+    sanctioned chain (AIM-03, with rejection rebinding) — or refused."""
+
+    @staticmethod
+    def _base():
+        doc = aim.new_document(title="T")
+        doc.add_chunk('<p data-aim="c1">One</p>', author=ME, at=ts(0))
+        return doc
+
+    def test_explicit_anchor_on_pending_add_root_records_the_chain(self):
+        doc = self._base()
+        a1 = doc.propose_add('<p data-aim="n1">N1</p>', author=BOT, after="c1", at=ts(1))
+
+        a2 = doc.propose_add('<p data-aim="n2">N2</p>', author=BOT, after="n1", at=ts(2))
+
+        assert a2.anchor_after == a1.id
+        assert aim.lint(doc) == []
+        doc.accept_all(decided_by=ME, at=ts(3))
+        assert doc.body_ids == ["c1", "n1", "n2"]
+        assert doc.verify() == []
+
+    def test_last_position_behind_pending_tail_add_records_the_chain(self):
+        doc = self._base()
+        a1 = doc.propose_add('<p data-aim="n1">N1</p>', author=BOT, at=ts(1))
+
+        a2 = doc.propose_add('<p data-aim="n2">N2</p>', author=BOT, at=ts(2))
+
+        assert a2.anchor_after == a1.id
+        assert aim.lint(doc) == []
+        # the chain rebinds on rejection like any chained add
+        doc.reject(a1.id, decided_by=ME, at=ts(3))
+        doc.accept_all(decided_by=ME, at=ts(4))
+        assert doc.body_ids == ["c1", "n2"]
+        assert doc.verify() == []
+
+    def test_add_into_a_pending_container_with_members_is_refused(self):
+        doc = self._base()
+        doc.propose_add(
+            '<ul data-aim-container="lc"><li data-aim="i1">I1</li></ul>', author=BOT, at=ts(1)
+        )
+        before = doc.dumps()
+
+        with pytest.raises(InvalidOperation):
+            doc.propose_add('<li data-aim="i2">I2</li>', author=BOT, container="lc", at=ts(2))
+
+        assert doc.dumps() == before
+        assert aim.lint(doc) == []
+
+    @pytest.mark.parametrize("after", [None, aim.LAST], ids=["explicit-first", "last-in-empty"])
+    def test_add_into_an_empty_pending_container_is_refused(self, after):
+        doc = self._base()
+        doc.propose_add('<ul data-aim-container="lc"></ul>', author=BOT, at=ts(1))
+        before = doc.dumps()
+
+        with pytest.raises(InvalidOperation, match="container.*current document"):
+            doc.propose_add(
+                '<li data-aim="i2">I2</li>',
+                author=BOT,
+                container="lc",
+                after=after,
+                at=ts(2),
+            )
+
+        assert doc.dumps() == before
+        assert aim.lint(doc) == []
+
+    def test_anchor_behind_a_pending_move_in_is_refused(self):
+        doc = self._base()
+        doc.add_chunk(
+            '<ul data-aim-container="l2"><li data-aim="z">Z</li></ul>', author=ME, at=ts(1)
+        )
+        doc.add_chunk(
+            '<ul data-aim-container="l3"><li data-aim="b">B</li></ul>', author=ME, at=ts(2)
+        )
+        doc.propose_move("z", author=BOT, container="l3", at=ts(3))
+
+        with pytest.raises(InvalidOperation):
+            doc.propose_add('<li data-aim="i2">I2</li>', author=BOT, container="l3", at=ts(4))
+
+        assert aim.lint(doc) == []
+
+
+class TestMoveAnchorsSurvivePendingDependencyRejection:
+    """Move destinations follow the same current-body rule as add anchors.
+
+    A projected pending-add root is recorded as the proposal-id chain so
+    rejection can rebind it. Pending-only containers and positions introduced
+    by other pending actions cannot be encoded and must be refused.
+    """
+
+    @staticmethod
+    def _base():
+        doc = aim.new_document(title="T")
+        doc.add_chunk('<p data-aim="x">X</p>', author=ME, at=ts(0))
+        doc.add_chunk('<p data-aim="c1">One</p>', author=ME, at=ts(1))
+        return doc
+
+    @pytest.mark.parametrize("after", [aim.LAST, "n1"], ids=["last", "explicit-root"])
+    def test_pending_add_destination_records_rebindable_chain(self, after):
+        doc = self._base()
+        add = doc.propose_add('<p data-aim="n1">N1</p>', author=BOT, at=ts(2))
+
+        move = doc.propose_move("x", author=BOT, container="body", after=after, at=ts(3))
+
+        assert move.anchor_after == add.id
+        assert aim.lint(doc) == []
+        doc.reject(add.id, decided_by=ME, at=ts(4))
+        assert doc.proposal(move.id).anchor_after == "c1"
+        doc.accept(move.id, decided_by=ME, at=ts(5))
+        assert doc.body_ids == ["c1", "x"]
+        assert doc.verify() == []
+
+    @pytest.mark.parametrize("after", [None, aim.LAST], ids=["explicit-first", "last-in-empty"])
+    def test_move_into_an_empty_pending_container_is_refused(self, after):
+        doc = self._base()
+        doc.add_chunk(
+            '<ul data-aim-container="source"><li data-aim="item">Item</li></ul>',
+            author=ME,
+            at=ts(2),
+        )
+        doc.propose_add('<ul data-aim-container="lc"></ul>', author=BOT, at=ts(2))
+        before = doc.dumps()
+
+        with pytest.raises(InvalidOperation, match="container.*current document"):
+            doc.propose_move("item", author=BOT, container="lc", after=after, at=ts(3))
+
+        assert doc.dumps() == before
+        assert aim.lint(doc) == []
+
+    def test_move_behind_a_pending_move_in_is_refused(self):
+        doc = self._base()
+        doc.add_chunk(
+            '<ul data-aim-container="source"><li data-aim="item">Item</li></ul>',
+            author=ME,
+            at=ts(2),
+        )
+        doc.add_chunk(
+            '<ul data-aim-container="l2"><li data-aim="a">A</li></ul>',
+            author=ME,
             at=ts(3),
         )
-        from aimformat.document import resolution_order
+        doc.add_chunk(
+            '<ul data-aim-container="l3"><li data-aim="z">Z</li></ul>',
+            author=ME,
+            at=ts(4),
+        )
+        doc.propose_move("z", author=BOT, container="l2", at=ts(5))
+        before = doc.dumps()
 
-        assert [p.action for p in resolution_order(doc.proposals, doc)] == ["modify", "move"]
-        for p in resolution_order(doc.proposals, doc):
-            doc.accept(p.id, decided_by=ME, at=ts(4))
-        written = doc._state.serial("l2") or ""
-        assert 'data-aim="x"' in written  # the move landed after the modify
+        with pytest.raises(InvalidOperation, match="until the pending lane resolves"):
+            doc.propose_move("item", author=BOT, container="l2", at=ts(6))
+
+        assert doc.dumps() == before
+        assert aim.lint(doc) == []
+
+
+class TestAmendKeepsTheLaneAppliable:
+    """Amend validates like the original propose call (§5.4 docstring): an
+    amended payload that breaks a later pending card must be rejected at
+    amend time, not surface as a whole-lane rejection at accept-all."""
+
+    @staticmethod
+    def _lane():
+        doc = aim.new_document(title="T")
+        doc.add_chunk(
+            '<ul data-aim-container="l"><li data-aim="x">X</li><li data-aim="y">Y</li></ul>',
+            author=ME,
+            at=ts(0),
+        )
+        doc.add_chunk(
+            '<ul data-aim-container="l0"><li data-aim="m">M</li></ul>', author=ME, at=ts(1)
+        )
+        modify = doc.propose_modify(
+            "l",
+            '<ul data-aim-container="l"><li data-aim="x">X!</li><li data-aim="y">Y</li></ul>',
+            author=BOT,
+            at=ts(2),
+        )
+        move = doc.propose_move("m", author=BOT, container="l", after="y", at=ts(3))
+        return doc, modify, move
+
+    def test_amend_that_breaks_a_pending_move_anchor_is_rejected(self):
+        doc, modify, move = self._lane()
+        before = doc.dumps()
+
+        with pytest.raises(InvalidOperation, match=move.id):
+            doc.amend_proposal(
+                modify.id, '<ul data-aim-container="l"><li data-aim="x">X!</li></ul>', at=ts(4)
+            )
+
+        assert doc.dumps() == before
+        doc.accept_all(decided_by=ME, at=ts(5))
         assert doc.verify() == []
+
+    def test_lane_preserving_amend_still_applies(self):
+        doc, modify, _ = self._lane()
+        doc.amend_proposal(
+            modify.id,
+            '<ul data-aim-container="l"><li data-aim="x">X!!</li><li data-aim="y">Y</li></ul>',
+            at=ts(4),
+        )
+
+        doc.accept_all(decided_by=ME, at=ts(5))
+
+        members = [chunk.id for chunk in doc.chunks if chunk.container == "l"]
+        assert members == ["x", "y", "m"]
+        assert doc.verify() == []
+        assert aim.lint(doc) == []
+
+
+class TestReconcileRejectsRescuableMoves:
+    """Reconcile fails closed instead of solving transient nested rescues."""
+
+    def test_nested_destination_rescue_lane_is_rejected(self):
+        doc = aim.new_document(title="T")
+        doc.add_chunk(
+            '<ul data-aim-container="l1"><li data-aim="x">X</li></ul>',
+            author=ME,
+            at=ts(0),
+        )
+        l2 = '<ul data-aim-container="l2"><li data-aim="y">Y</li></ul>'
+        doc.add_chunk(l2, author=ME, at=ts(1))
+        rescue = doc.propose_move("l2", author=BOT, container="body", after=None, at=ts(2))
+        inbound = doc.propose_move("x", author=BOT, container="l2", after="y", at=ts(3))
+        edited = (
+            doc.dumps()
+            .replace(l2, "", 1)
+            .replace(
+                '<li data-aim="x">X</li>',
+                f'<li data-aim="x">X{l2}</li>',
+                1,
+            )
+        )
+        repaired = aim.loads(edited)
+
+        report = repaired.reconcile(at=ts(4))
+
+        assert report.rejected_proposals == [rescue.id, inbound.id]
+        assert repaired.proposals == []
+        assert repaired.verify() == []
+
+
+class TestMoveEventsUseOnlySpecFields:
+    @staticmethod
+    def _allowed(event):
+        from aimformat.registry import REGISTRY
+
+        schema = REGISTRY.event_fields[event.kind]
+        return set(schema["required"]) | set(schema["optional"])
+
+    def test_direct_and_resolution_move_events_have_no_vendor_metadata(self):
+        direct = aim.new_document(title="T")
+        direct.add_chunk('<p data-aim="a">A</p>', author=ME, at=ts(0))
+        direct.add_chunk('<p data-aim="b">B</p>', author=ME, at=ts(1))
+        direct.move_chunk("a", author=ME, container="body", after="b", at=ts(2))
+        direct_event = direct.history[-1]
+
+        proposed = aim.new_document(title="T")
+        proposed.add_chunk('<p data-aim="a">A</p>', author=ME, at=ts(0))
+        proposed.add_chunk('<p data-aim="b">B</p>', author=ME, at=ts(1))
+        card = proposed.propose_move("a", author=BOT, container="body", after="b", at=ts(2))
+        resolution_event = proposed.accept(card.id, decided_by=ME, at=ts(3))
+
+        for event in (direct_event, resolution_event):
+            assert set(event.data) <= self._allowed(event)
+            assert not any(field.startswith("x_") for field in event.data)
+            assert event.validate() == []
 
 
 class TestOrderedMarkersInListItemModifications:

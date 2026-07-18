@@ -39,7 +39,15 @@ from dataclasses import dataclass, field
 
 from . import ids
 from .canonical import document_text, serialize
-from .document import AimDocument, Anchor, DocState, _now_iso
+from .document import (
+    AimDocument,
+    Anchor,
+    DocState,
+    _apply_move_data,
+    _ChainedAddCycle,
+    _now_iso,
+    resolution_order,
+)
 from .dom import Element, parse_fragment, parse_html
 from .errors import AimError, HistoryError
 from .events import Actor, Event, external
@@ -142,7 +150,7 @@ def _apply_event(state: DocState, ev: Event) -> None:
         to = ev.get("to")
         if to is None:
             raise HistoryError("move event carries no destination")
-        state.move(target, Anchor.from_obj(to))
+        _apply_move_data(state, ev.data)
     else:
         raise HistoryError(f"unknown action {action!r}")
 
@@ -539,33 +547,47 @@ def _drive(S: AimDocument, work: AimDocument, author: Actor, at: str | None) -> 
 def _reject_dangling(
     S: AimDocument, author: Actor, at: str | None, report: ReconcileReport
 ) -> None:
-    """Pending proposals whose target or anchor vanished can never resolve;
-    reject them so the reconciled document lints clean."""
-    pending_adds = {p.id for p in S.proposals if p.action == "add"}
-    for p in list(S.proposals):
-        dangling = False
-        if (
-            p.action in ("modify", "delete", "move")
-            and p.target
-            and p.target not in ("aim:theme", "aim:doc")
-        ):
-            dangling = not S._state.exists(p.target)
-        if not dangling and p.action in ("add", "move"):
-            cont = p.anchor_container
-            if cont and cont != "body" and S._state.container_node(cont) is None:
-                dangling = True
-            after = p.anchor_after
-            if after and not S._state.exists(after) and after not in pending_adds:
-                dangling = True
-        if dangling:
-            S.reject(
-                p.id,
-                decided_by=author,
-                at=at,
-                explanation="reconcile: the proposal's target or anchor "
-                "was removed by an out-of-band edit",
-            )
-            report.rejected_proposals.append(p.id)
+    """Reject pending cards that fail against the reconciled projection.
+
+    Reconcile is deliberately fail-closed. Replay survivors in creation order
+    on a clone of the adopted body; the first target, anchor, self-subtree, or
+    destination-member failure rejects that card on the real reconcile state.
+    Rejection can rebind chained adds, so restart until every survivor replays
+    cleanly.
+    """
+    while S.proposals:
+        projection = S._clone()
+        try:
+            order = resolution_order(projection.proposals)
+        except _ChainedAddCycle as exc:
+            # A foreign-authored chained-add cycle has no valid first card.
+            # Reject a participant, not an unrelated earlier valid card; the
+            # fixpoint then revalidates every survivor after normal rebinding.
+            proposal = S.proposal(exc.proposal_ids[0])
+            reason = str(exc)
+        else:
+            proposal = None
+            reason = ""
+            for candidate in order:
+                try:
+                    projection.accept(candidate.id, decided_by=author, at=at)
+                except Exception as exc:  # foreign cards can fail outside AimError
+                    proposal = S.proposal(candidate.id)
+                    reason = str(exc) or type(exc).__name__
+                    break
+
+        if proposal is None:
+            return
+        S.reject(
+            proposal.id,
+            decided_by=author,
+            at=at,
+            explanation=(
+                "reconcile: the proposal no longer applies in creation order "
+                f"after an out-of-band edit: {reason}"
+            ),
+        )
+        report.rejected_proposals.append(proposal.id)
 
 
 # ===========================================================================
