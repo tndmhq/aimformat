@@ -7,12 +7,7 @@
  */
 
 import { Comment, Element, Fragment } from "./dom.ts";
-import {
-  canonicalAttrs,
-  docHash,
-  serialize,
-  serializeRun,
-} from "./canonical.ts";
+import { canonicalAttrs, docHash, serialize } from "./canonical.ts";
 import { AimError, AimParseError } from "./errors.ts";
 import { parseHtml } from "./parser.ts";
 import {
@@ -538,13 +533,16 @@ export class AimDocument {
     container: string,
     members: Element[],
   ): Chunk {
+    // Serialize each member once; html is their concatenation (exactly what
+    // serializeRun did) so readers don't pay double serialization CPU.
+    const memberHtmls = members.map((m) => serialize(m));
     return {
       kind: "chunk",
       id: cid,
       container,
       tags: members.map((m) => m.tag),
-      html: serializeRun(members),
-      memberHtmls: members.map((m) => serialize(m)),
+      html: memberHtmls.join(""),
+      memberHtmls,
       text: members.map((m) => m.text()).join(""),
       tag: members[0]?.tag ?? "",
       isRun: members.length > 1,
