@@ -482,6 +482,33 @@ def noncanonical_dup_ids_text() -> str:
     )
 
 
+def noncanonical_rawtext_closes_text() -> str:
+    """Hand-edited raw-text end tags, the version-STABLE cases only:
+    ``</SCRIPT>``/``</STYLE >`` close on every CPython (the CDATA scan is
+    case-insensitive) and a close-like run whose tag name continues
+    (``</styleq>``) is data on every CPython. The version-dependent forms
+    (``</ script>``, ``</script/>``) are pinned by TS unit tests instead —
+    a golden for them could not stay byte-identical across 3.10-3.13."""
+    doc = aim.new_document(title="Non-canonical — raw-text end tags")
+    with doc.batch():
+        doc.add_chunk('<p data-aim="r1">Raw-text close spellings.</p>', author=BOT, at=t(0))
+    doc.set_page_setup(
+        {
+            "size": "A4",
+            "orientation": "portrait",
+            "margins": {"top": "20mm", "right": "20mm", "bottom": "20mm", "left": "20mm"},
+        },
+        author=ME,
+        at=t(1),
+    )
+    doc.flatten()
+    return _edited(
+        doc,
+        ("</style>", "/* a fake close </styleq> stays raw */</STYLE >"),
+        ("</script>", "</SCRIPT>"),
+    )
+
+
 FIXTURES = {
     "runs": runs_doc,
     "nested-slides": nested_slides_doc,
@@ -501,6 +528,7 @@ NONCANONICAL = {
     "noncanonical-charrefs": noncanonical_charrefs_text,
     "noncanonical-unicode-margins": noncanonical_unicode_margins_text,
     "noncanonical-dup-ids": noncanonical_dup_ids_text,
+    "noncanonical-rawtext-closes": noncanonical_rawtext_closes_text,
 }
 
 

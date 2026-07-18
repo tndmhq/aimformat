@@ -335,16 +335,22 @@ class Scanner {
    * raw data — never entity-decoded, never treated as markup. */
   private rawText(): void {
     const el = this.rawEl!;
-    const close = `</${el.tag}`;
-    const at = this.text.indexOf(close, this.pos);
-    if (at < 0) this.fail(`unterminated <${el.tag}> block`);
-    const tail = /^\s*>/.exec(this.text.slice(at + close.length));
-    if (tail === null) {
-      this.pos = at;
-      this.fail(`raw <${el.tag}> content contains a stray "${close}"`);
-    }
-    el.raw = (el.raw ?? "") + this.text.slice(this.pos, at);
-    this.pos = at + close.length + tail[0].length;
+    // Python 3.13+ / HTML5 script-data scanning: the block ends at the first
+    // case-insensitive `</tag` whose next character is a tag boundary
+    // ([\t\n\r\f />]); anything else — `</scriptx`, `</ script` — is data.
+    // (Python ≤3.12 also accepted `</ script`; that laxness is the
+    // version-fragile side and is deliberately not matched.)
+    const close = new RegExp(`</${el.tag}[\\t\\n\\r\\f />]`, "gi");
+    close.lastIndex = this.pos;
+    const m = close.exec(this.text);
+    if (m === null) this.fail(`unterminated <${el.tag}> block`);
+    // the end tag then consumes through its closing ">" (html.parser's
+    // tolerant end-tag scan), so `</SCRIPT >` and `</script/>` both close
+    const bound = m.index + m[0].length - 1;
+    const gt = this.text[bound] === ">" ? bound : this.text.indexOf(">", bound);
+    if (gt < 0) this.fail(`unterminated <${el.tag}> block`);
+    el.raw = (el.raw ?? "") + this.text.slice(this.pos, m.index);
+    this.pos = gt + 1;
     this.rawEl = null;
     this.stack.pop();
   }

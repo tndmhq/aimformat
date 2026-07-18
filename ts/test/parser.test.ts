@@ -149,6 +149,33 @@ describe("parser", () => {
     expect(s.children).toHaveLength(0);
   });
 
+  it("scans raw end tags case-insensitively with a proper boundary", () => {
+    // pinned against Python html.parser: `</SCRIPT>` closes on every
+    // version (the CDATA scan is case-insensitive), and a close-like run
+    // whose tag name continues (`</scriptx>`) is data on every version
+    expect(el(parseFragment('<script type="t">var a;</SCRIPT>')).raw).toBe(
+      "var a;",
+    );
+    expect(el(parseFragment("<style>s</STYLE >")).raw).toBe("s");
+    expect(
+      el(parseFragment('<script type="t">a </scriptx> b</script>')).raw,
+    ).toBe("a </scriptx> b");
+    // version-dependent cases pin the spec-correct (HTML5 / Python 3.13+)
+    // side: no boundary after `</` means data (≤3.12 closed on
+    // `</ script>`), and the end tag consumes junk through its ">" (≤3.12
+    // treated `</script/>` as data)
+    expect(
+      el(parseFragment('<script type="t">a </ script> b</script>')).raw,
+    ).toBe("a </ script> b");
+    expect(el(parseFragment('<script type="t">a</script/>')).raw).toBe("a");
+    expect(el(parseFragment('<script type="t">a</script foo="b">')).raw).toBe(
+      "a",
+    );
+    expect(el(parseFragment("<style>c</ScRiPt x>d</StYlE\t>")).raw).toBe(
+      "c</ScRiPt x>d",
+    );
+  });
+
   it("parses bare attributes", () => {
     const s = el(parseFragment("<style data-aim-theme>:root{}</style>"));
     expect(s.get("data-aim-theme")).toBe("");
