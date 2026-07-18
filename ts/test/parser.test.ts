@@ -56,6 +56,38 @@ describe("parser", () => {
     expect(() => parseFragment("<p>caf&eacute;</p>")).toThrow(AimParseError);
   });
 
+  it("decodes semicolonless references like html.unescape", () => {
+    // pinned against Python: the charref regex stops at the first invalid
+    // character and the rest stays literal
+    expect(el(parseFragment("<p>A&#65b, hex &#x41z</p>")).text()).toBe(
+      "AAb, hex Az",
+    );
+    // core names bare; the HTML4 legacy set; longest-prefix fallback
+    expect(el(parseFragment("<p>&amp b &lt c &gt d &quot e</p>")).text()).toBe(
+      '& b < c > d " e',
+    );
+    expect(el(parseFragment("<p>&copy 2026, &AMP x</p>")).text()).toBe(
+      "© 2026, & x",
+    );
+    expect(el(parseFragment("<p>prefix &ampx and &quothi</p>")).text()).toBe(
+      'prefix &x and "hi',
+    );
+    // &apos has no bare legacy form — literal, like Python
+    expect(el(parseFragment("<p>&apos b</p>")).text()).toBe("&apos b");
+    // dropped control code point, then literal remainder
+    expect(el(parseFragment("<p>x&#6a;y</p>")).text()).toBe("xa;y");
+    // attribute values decode identically
+    expect(
+      el(parseFragment('<p data-x-note="1 &lt 2 &amp 3">t</p>')).get(
+        "data-x-note",
+      ),
+    ).toBe("1 < 2 & 3");
+  });
+
+  it("decodes the legacy uppercase core spellings with semicolons", () => {
+    expect(el(parseFragment("<p>&AMP;&LT;&GT;&QUOT;</p>")).text()).toBe('&<>"');
+  });
+
   it("keeps a bare ampersand literal, like html.parser", () => {
     expect(el(parseFragment("<p>fish & chips</p>")).text()).toBe(
       "fish & chips",

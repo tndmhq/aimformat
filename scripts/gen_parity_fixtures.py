@@ -386,6 +386,29 @@ def noncanonical_self_closing_text() -> str:
     )
 
 
+def noncanonical_charrefs_text() -> str:
+    """Semicolonless character references, decoded like ``html.unescape``:
+    numeric with trailing garbage, bare core names, the HTML4 legacy set,
+    and longest-prefix matching — plus ``&apos`` which HTML never resolves
+    bare and so stays literal."""
+    doc = aim.new_document(title="Non-canonical — semicolonless references")
+    with doc.batch():
+        doc.add_chunk('<p data-aim="c1">TEXT_REFS</p>', author=BOT, at=t(0))
+        doc.add_chunk(
+            '<p data-aim="c2" title="ATTR_REFS">Attribute references.</p>', author=BOT, at=t(1)
+        )
+    doc.flatten()
+    return _edited(
+        doc,
+        (
+            "TEXT_REFS",
+            "A&#65b, amp &amp b, &copy 2026, hex &#x41z, "
+            "prefix &ampx, dropped &#6a;, literal &apos b",
+        ),
+        ("ATTR_REFS", "1 &lt 2 &amp 3, say &quothi&quot"),
+    )
+
+
 FIXTURES = {
     "runs": runs_doc,
     "nested-slides": nested_slides_doc,
@@ -402,6 +425,7 @@ FIXTURES = {
 NONCANONICAL = {
     "noncanonical-dup-attrs": noncanonical_dup_attrs_text,
     "noncanonical-self-closing": noncanonical_self_closing_text,
+    "noncanonical-charrefs": noncanonical_charrefs_text,
 }
 
 

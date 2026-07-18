@@ -17,12 +17,134 @@ import { Comment, Element, Fragment, Text, type Nodeish } from "./dom.ts";
 import { AimParseError } from "./errors.ts";
 import { VOID_ELEMENTS } from "./registry.data.ts";
 
+/** The core named references, keyed exactly as they appear in Python's
+ * `html.entities.html5` (trailing semicolon included): the five canonical
+ * .aim escapes plus their HTML-legacy uppercase spellings (`&APOS;` does
+ * not exist in HTML and is not here). */
 const NAMED_REFS: Readonly<Record<string, string>> = {
+  "amp;": "&",
+  "AMP;": "&",
+  "lt;": "<",
+  "LT;": "<",
+  "gt;": ">",
+  "GT;": ">",
+  "quot;": '"',
+  "QUOT;": '"',
+  "apos;": "'",
+};
+
+/** The named references HTML resolves *without* a trailing semicolon: the
+ * no-semicolon keys of Python's `html.entities.html5` (the HTML4 legacy
+ * set). `html.unescape` — and so the Python reader — decodes these bare and
+ * as the longest matching prefix of a longer name, so byte parity on
+ * hand-edited input requires the same table here. */
+const SEMICOLON_OPTIONAL_REFS: Readonly<Record<string, string>> = {
+  AElig: "Æ",
+  AMP: "&",
+  Aacute: "Á",
+  Acirc: "Â",
+  Agrave: "À",
+  Aring: "Å",
+  Atilde: "Ã",
+  Auml: "Ä",
+  COPY: "©",
+  Ccedil: "Ç",
+  ETH: "Ð",
+  Eacute: "É",
+  Ecirc: "Ê",
+  Egrave: "È",
+  Euml: "Ë",
+  GT: ">",
+  Iacute: "Í",
+  Icirc: "Î",
+  Igrave: "Ì",
+  Iuml: "Ï",
+  LT: "<",
+  Ntilde: "Ñ",
+  Oacute: "Ó",
+  Ocirc: "Ô",
+  Ograve: "Ò",
+  Oslash: "Ø",
+  Otilde: "Õ",
+  Ouml: "Ö",
+  QUOT: '"',
+  REG: "®",
+  THORN: "Þ",
+  Uacute: "Ú",
+  Ucirc: "Û",
+  Ugrave: "Ù",
+  Uuml: "Ü",
+  Yacute: "Ý",
+  aacute: "á",
+  acirc: "â",
+  acute: "´",
+  aelig: "æ",
+  agrave: "à",
   amp: "&",
-  lt: "<",
+  aring: "å",
+  atilde: "ã",
+  auml: "ä",
+  brvbar: "¦",
+  ccedil: "ç",
+  cedil: "¸",
+  cent: "¢",
+  copy: "©",
+  curren: "¤",
+  deg: "°",
+  divide: "÷",
+  eacute: "é",
+  ecirc: "ê",
+  egrave: "è",
+  eth: "ð",
+  euml: "ë",
+  frac12: "½",
+  frac14: "¼",
+  frac34: "¾",
   gt: ">",
+  iacute: "í",
+  icirc: "î",
+  iexcl: "¡",
+  igrave: "ì",
+  iquest: "¿",
+  iuml: "ï",
+  laquo: "«",
+  lt: "<",
+  macr: "¯",
+  micro: "µ",
+  middot: "·",
+  nbsp: "\u00a0",
+  not: "¬",
+  ntilde: "ñ",
+  oacute: "ó",
+  ocirc: "ô",
+  ograve: "ò",
+  ordf: "ª",
+  ordm: "º",
+  oslash: "ø",
+  otilde: "õ",
+  ouml: "ö",
+  para: "¶",
+  plusmn: "±",
+  pound: "£",
   quot: '"',
-  apos: "'",
+  raquo: "»",
+  reg: "®",
+  sect: "§",
+  shy: "\u00ad",
+  sup1: "¹",
+  sup2: "²",
+  sup3: "³",
+  szlig: "ß",
+  thorn: "þ",
+  times: "×",
+  uacute: "ú",
+  ucirc: "û",
+  ugrave: "ù",
+  uml: "¨",
+  uuml: "ü",
+  yacute: "ý",
+  yen: "¥",
+  yuml: "ÿ",
 };
 
 /** HTML's numeric-reference replacement table (the windows-1252 remapping
@@ -87,31 +209,47 @@ function decodeNumericRef(cp: number): string {
   return String.fromCodePoint(cp);
 }
 
-/** Decode character references the way canonical .aim spells text: the five
- * core named references plus numeric forms. Any other named reference is a
- * parse error — canonical form writes non-ASCII as raw UTF-8, so `&eacute;`
- * and friends never appear in a conforming file. */
+/** Python's `html._charref` regex: what `html.unescape` — and therefore the
+ * Python reader, for text and attribute values alike — treats as one
+ * character reference, semicolon optional. */
+const CHARREF_RE = /&(#[0-9]+;?|#[xX][0-9a-fA-F]+;?|[^\t\n\f <&#;]{1,32};?)/g;
+
+/** Decode character references the way the Python reader does
+ * (`html.unescape` semantics), restricted to what canonical .aim can spell:
+ * numeric forms plus the core named references, with the HTML legacy
+ * semicolon-optional set for hand-edited input (`&#65b` → `Ab`,
+ * `&amp b` → `& b`, `&copy 1` → `© 1`, longest-prefix `&ampx` → `&x`).
+ *
+ * The one deliberate divergence stays: an unknown *name-shaped* `&name;`
+ * (e.g. `&eacute;`) is a parse error, not a full-table lookup — canonical
+ * form writes non-ASCII as raw UTF-8, and silently guessing against a table
+ * this library does not ship could contradict Python (`&ltcc;` is `⪦`,
+ * not `<cc;`). */
 function decodeRefs(s: string): string {
   if (!s.includes("&")) return s;
-  return s.replace(
-    /&(#[xX]?[0-9a-fA-F]*|[a-zA-Z][a-zA-Z0-9]*);?/g,
-    (match, body: string) => {
-      if (!match.endsWith(";")) return match; // bare "&": literal, like html.parser
-      if (body.startsWith("#")) {
-        const hex = body[1] === "x" || body[1] === "X";
-        const digits = body.slice(hex ? 2 : 1);
-        if (!digits || (!hex && /[^0-9]/.test(digits))) return match;
-        return decodeNumericRef(parseInt(digits, hex ? 16 : 10));
-      }
-      const named = NAMED_REFS[body];
-      if (named === undefined) {
-        throw new AimParseError(
-          `unsupported character reference ${match} — canonical .aim uses raw UTF-8`,
-        );
-      }
-      return named;
-    },
-  );
+  return s.replace(CHARREF_RE, (match, body: string) => {
+    if (body.startsWith("#")) {
+      const hex = body[1] === "x" || body[1] === "X";
+      const end = body.endsWith(";") ? -1 : body.length;
+      return decodeNumericRef(
+        parseInt(body.slice(hex ? 2 : 1, end), hex ? 16 : 10),
+      );
+    }
+    const named = NAMED_REFS[body] ?? SEMICOLON_OPTIONAL_REFS[body];
+    if (named !== undefined) return named;
+    if (/^[a-zA-Z][a-zA-Z0-9]*;$/.test(body)) {
+      throw new AimParseError(
+        `unsupported character reference ${match} — canonical .aim uses raw UTF-8`,
+      );
+    }
+    // no exact hit: longest legacy-name prefix decodes, the rest stays
+    // literal (html._replace_charref's fallback loop)
+    for (let cut = body.length - 1; cut >= 2; cut -= 1) {
+      const prefix = SEMICOLON_OPTIONAL_REFS[body.slice(0, cut)];
+      if (prefix !== undefined) return prefix + body.slice(cut);
+    }
+    return match;
+  });
 }
 
 const TAG_NAME_RE = /[a-zA-Z][^\s/>]*/y;
