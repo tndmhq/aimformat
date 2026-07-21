@@ -856,3 +856,16 @@ class TestDocxTextColour:
     def test_a_text_size_utility_is_not_treated_as_a_colour(self, tmp_path):
         out = self._export('<p class="text-xl">Plain</p>', tmp_path)
         assert self._colours(out) == []
+
+    def test_text_white_resolves(self, tmp_path):
+        """text-white lives in classes.singles, not classes.palette, so an
+        enumeration of brand slots plus palette families missed it (Codex
+        aimformat#19). Colours are read from the generated declarations now."""
+        out = self._export('<p class="text-white">On dark</p>', tmp_path)
+        assert self._colours(out) == ["FFFFFF"]
+
+    def test_a_code_block_carries_its_own_colour(self, tmp_path):
+        """emit_pre builds mono runs directly, bypassing the colour path, so a
+        class applied straight to the <pre> was ignored (Codex aimformat#19)."""
+        out = self._export('<pre class="text-red-600">Error</pre>', tmp_path)
+        assert "DC2626" in self._colours(out)

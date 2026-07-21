@@ -92,6 +92,8 @@ def _require_docx():
 # vocabulary — registry.json is what the linter validates against, so anything
 # else here would either miss valid documents or bless invalid ones.
 _COLOR_UTILITY = re.compile(r"^(text|bg|border)-(.+)$")
+_COLOR_DECL = re.compile(r"(?:^|;)\s*color\s*:\s*([^;]+)")
+_VAR_REF = re.compile(r"^var\(\s*(--[a-z0-9-]+)\s*\)$", re.I)
 _HEX6 = re.compile(r"^#?([0-9a-fA-F]{6})$")
 _HEX3 = re.compile(r"^#?([0-9a-fA-F]{3})$")
 _RGB_FUNC = re.compile(r"^rgb\(\s*(\d{1,3})\s*,\s*(\d{1,3})\s*,\s*(\d{1,3})\s*\)$", re.I)
@@ -135,37 +137,36 @@ def _rgb_of(value: str) -> str | None:
 
 
 def _text_colour_class(cls: str, palette: dict[str, str]) -> str | None:
-    """Resolve one registered `text-*` utility to hex, or None.
+    """Resolve one registered text-colour utility to hex, or None.
 
-    Two vocabularies, both from the registry: the brand slots (text-brand-N,
-    resolved through the document's theme) and the fixed palette
-    (text-red-600 and friends).
+    The declaration is the source of truth: a brand utility resolves through
+    the document's theme, everything else carries its literal colour.
     """
-    m = _COLOR_UTILITY.match(cls)
-    if m is None or m.group(1) != "text":
+    decl = REGISTRY.class_declarations.get(cls)
+    if not decl:
         return None
-    rest = m.group(2)
-    if rest.startswith("brand-"):
-        return _rgb_of(palette.get(f"--aim-{rest}", ""))
-    family, _, shade = rest.rpartition("-")
-    table = REGISTRY.raw["classes"]["palette"].get(family)
-    if table and shade in table:
-        return _rgb_of(table[shade])
-    return None
+    m = _COLOR_DECL.search(decl)
+    if not m:
+        return None
+    value = m.group(1).strip()
+    var = _VAR_REF.match(value)
+    if var:
+        return _rgb_of(palette.get(var.group(1), ""))
+    return _rgb_of(value)
 
 
 def _is_text_colour(cls: str) -> bool:
-    """True for a registered text-COLOUR utility, false for text-xl/text-right
-    and other text-* that do not set a colour."""
-    m = _COLOR_UTILITY.match(cls)
-    if m is None or m.group(1) != "text":
-        return False
-    rest = m.group(2)
-    if rest.startswith("brand-"):
-        return rest[len("brand-") :] in ("1", "2", "3", "4")
-    family, _, shade = rest.rpartition("-")
-    table = REGISTRY.raw["classes"]["palette"].get(family)
-    return bool(table and shade in table)
+    """True for any registered utility that sets `color:`.
+
+    Read from the generated class declarations rather than a hand-listed set of
+    families, so every colour utility the stylesheet defines is covered —
+    including the ones in `classes.singles` such as text-white, which an
+    enumeration of brand slots and `classes.palette` missed (Codex
+    aimformat#19). text-xl and text-right declare no colour and are excluded by
+    construction.
+    """
+    decl = REGISTRY.class_declarations.get(cls)
+    return bool(decl and _COLOR_DECL.search(decl))
 
 
 def _color_for(el: Element, palette: dict[str, str]) -> str | None:
@@ -706,11 +707,20 @@ class _Exporter:
     def emit_pre(self, el: Element) -> None:
         text = el.text()
         para = self.out.add_paragraph()
+        # emit_pre builds its runs directly rather than through _runs_of, so the
+        # colour has to be applied here too — a <pre class="text-red-600"> has
+        # the class applied DIRECTLY and still exported in default ink
+        # (Codex aimformat#19).
+        colour = _color_for(el, self.palette)
         for i, line in enumerate(text.split("\n")):
             if i:
                 para.add_run().add_break()
             run = para.add_run(line)
             run.font.name = _MONO
+            if colour:
+                from docx.shared import RGBColor
+
+                run.font.color.rgb = RGBColor.from_string(colour)
 
     def emit_slide(self, el: Element) -> None:
         """Linearize a fixed-canvas page: a page break, then the slide's
