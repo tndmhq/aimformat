@@ -126,9 +126,11 @@ def _rgb_of(value: str) -> str | None:
         return "".join(c * 2 for c in m.group(1)).upper()
     m = _RGB_FUNC.match(value)
     if m:
-        parts = [int(g) for g in m.groups()]
-        if all(0 <= n <= 255 for n in parts):
-            return "".join(f"{n:02X}" for n in parts)
+        # registry.json's colour pattern accepts any 1-3 digit component, so a
+        # lint-clean theme can carry rgb(999,0,0). The browser CLAMPS to 0-255;
+        # match it rather than dropping the colour (Codex aimformat#19).
+        parts = [min(255, int(g)) for g in m.groups()]
+        return "".join(f"{n:02X}" for n in parts)
     return None
 
 
@@ -152,6 +154,20 @@ def _text_colour_class(cls: str, palette: dict[str, str]) -> str | None:
     return None
 
 
+def _is_text_colour(cls: str) -> bool:
+    """True for a registered text-COLOUR utility, false for text-xl/text-right
+    and other text-* that do not set a colour."""
+    m = _COLOR_UTILITY.match(cls)
+    if m is None or m.group(1) != "text":
+        return False
+    rest = m.group(2)
+    if rest.startswith("brand-"):
+        return rest[len("brand-") :] in ("1", "2", "3", "4")
+    family, _, shade = rest.rpartition("-")
+    table = REGISTRY.raw["classes"]["palette"].get(family)
+    return bool(table and shade in table)
+
+
 def _color_for(el: Element, palette: dict[str, str]) -> str | None:
     """The text colour this element asks for.
 
@@ -160,11 +176,11 @@ def _color_for(el: Element, palette: dict[str, str]) -> str | None:
     exporter that honoured it would render documents the format does not
     accept (Codex aimformat#19).
     """
-    for cls in (el.get("class") or "").split():
-        hit = _text_colour_class(cls, palette)
-        if hit:
-            return hit
-    return None
+    # generate_aim_css emits class rules sorted by NAME and CSS is last-wins,
+    # so among competing colours the winner is the one whose class sorts last —
+    # not the one written first in the markup (Codex aimformat#19).
+    hits = sorted(c for c in (el.get("class") or "").split() if _is_text_colour(c))
+    return _text_colour_class(hits[-1], palette) if hits else None
 
 
 def _runs_of(
@@ -426,28 +442,7 @@ def _unpack_group(el: Element, wrap_tag: str) -> list[Element]:
         else:
             run.append(child)
     flush()
-    _inherit_colour(el, out)
     return out
-
-
-def _inherit_colour(parent: Element, blocks: list[Element]) -> None:
-    """Push a grouping element's text colour onto the blocks it unpacks into.
-
-    Colour inherits in CSS, so `<div class="text-brand-1"><p>Child</p></div>`
-    renders branded in the browser and the PDF. Unpacking drops the parent
-    before the runs are built, so DOCX exported the same content in Word's
-    default ink (Codex aimformat#19). Only applied where the child does not
-    state a colour of its own — a child's own utility still wins, as it would
-    in the cascade.
-    """
-    inherited = [c for c in (parent.get("class") or "").split() if c.startswith("text-")]
-    if not inherited:
-        return
-    for block in blocks:
-        own = (block.get("class") or "").split()
-        if any(c.startswith("text-") for c in own):
-            continue
-        block.set("class", " ".join(own + inherited))
 
 
 def _wrapped(tag: str, children: list) -> Element:

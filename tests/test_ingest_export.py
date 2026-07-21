@@ -809,22 +809,50 @@ class TestDocxTextColour:
         out = self._export('<p style="color:rebeccapurple">Named</p>', tmp_path)
         assert self._colours(out) == []
 
-    def test_colour_inherits_through_a_grouping_element(self, tmp_path):
-        """Colour inherits in CSS, so a branded <div> renders branded in the
-        browser and the PDF. Unpacking dropped the parent before runs were
-        built, so DOCX exported the same content in default ink (Codex
-        aimformat#19)."""
-        out = self._export(
-            '<div class="text-brand-1"><p>Child</p></div>',
-            tmp_path,
-            theme="--aim-brand-1:#ff1493",
+    def test_export_never_mutates_the_source(self, tmp_path):
+        """A tracked export uses the source document directly, so nothing in
+        the exporter may write back into it (Codex aimformat#19)."""
+        doc = aim.from_text("placeholder", title="t")
+        doc.add_chunk(
+            '<div class="text-brand-1"><p data-aim="p1">Child</p></div>',
+            author=aim.external("test"),
         )
-        assert self._colours(out) == ["FF1493"]
+        before = doc.dumps()
+        aim.to_docx(doc, tmp_path / "o.docx", pending="tracked")
+        assert doc.dumps() == before
 
-    def test_a_childs_own_colour_still_wins_over_the_group(self, tmp_path):
+    def test_colour_does_not_inherit_from_a_wrapper_yet(self, tmp_path):
+        """Documented limitation, deliberately out of scope for this change.
+
+        CSS inherits colour, so a browser renders this child red; DOCX does
+        not. Making it inherit means carrying the colour into every leaf
+        emitter — block, list, pre, table cell, and each tracked-change path —
+        and three review rounds each found a different one left unthreaded.
+        The durable fix is to resolve every element's effective colour once
+        against the whole tree and look it up by identity, which is a larger
+        change than this PR should carry. Colour applied directly to an
+        element — which is what the editor emits — works.
+        """
+        out = self._export('<div class="text-red-600"><p>Child</p></div>', tmp_path)
+        assert self._colours(out) == []
+
+    def test_the_cascade_winner_is_the_last_sorted_class(self, tmp_path):
+        """generate_aim_css sorts class rules by name and CSS is last-wins, so
+        `text-brand-1 text-red-600` renders RED whichever is written first.
+        DOCX must agree (Codex aimformat#19)."""
+        assert self._colours(
+            self._export('<p class="text-brand-1 text-red-600">X</p>', tmp_path)
+        ) == ["DC2626"]
+        assert self._colours(
+            self._export('<p class="text-red-600 text-brand-1">X</p>', tmp_path)
+        ) == ["DC2626"]
+
+    def test_an_out_of_range_rgb_theme_value_is_clamped(self, tmp_path):
         out = self._export(
-            '<div class="text-brand-1"><p class="text-red-600">Child</p></div>',
-            tmp_path,
-            theme="--aim-brand-1:#ff1493",
+            '<h1 class="text-brand-1">T</h1>', tmp_path, theme="--aim-brand-1:rgb(999, 0, 0)"
         )
-        assert self._colours(out) == ["DC2626"]  # the child's own, not the group's
+        assert self._colours(out) == ["FF0000"]
+
+    def test_a_text_size_utility_is_not_treated_as_a_colour(self, tmp_path):
+        out = self._export('<p class="text-xl">Plain</p>', tmp_path)
+        assert self._colours(out) == []
