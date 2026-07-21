@@ -86,8 +86,68 @@ def _require_docx():
 
 # --------------------------------------------------------------------------
 # inline content -> (text, formatting) run specs
-def _runs_of(el: Element, fmt: dict | None = None) -> list[dict]:
+
+# Brand palette defaults, mirroring css.py's :root block. A document theme
+# overrides any slot it sets.
+_BRAND_DEFAULTS = {
+    "--aim-brand-1": "#1d4ed8",
+    "--aim-brand-2": "#0f766e",
+    "--aim-brand-3": "#b45309",
+    "--aim-brand-4": "#6d28d9",
+}
+_BRAND_TEXT_CLASS = re.compile(r"^text-brand-([1-4])$")
+_INLINE_COLOR = re.compile(r"(?:^|;)\s*color\s*:\s*([^;]+)", re.I)
+_HEX6 = re.compile(r"^#?([0-9a-fA-F]{6})$")
+_HEX3 = re.compile(r"^#?([0-9a-fA-F]{3})$")
+
+
+def _palette_of(doc: AimDocument) -> dict[str, str]:
+    """The document's brand slots, over the stylesheet defaults."""
+    theme = dict(getattr(doc, "theme", None) or {})
+    return {**_BRAND_DEFAULTS, **{k: v for k, v in theme.items() if k in _BRAND_DEFAULTS}}
+
+
+def _rgb_of(value: str) -> str | None:
+    """A CSS colour as 6 hex digits, or None when we cannot be sure.
+
+    Deliberately narrow: Word wants a concrete RRGGBB, and guessing at
+    rgb()/hsl()/named colours would put the wrong colour in the file, which is
+    worse than leaving it at the default.
+    """
+    value = value.strip()
+    m = _HEX6.match(value)
+    if m:
+        return m.group(1).upper()
+    m = _HEX3.match(value)
+    if m:
+        return "".join(c * 2 for c in m.group(1)).upper()
+    return None
+
+
+def _color_for(el: Element, palette: dict[str, str]) -> str | None:
+    """Text colour this element asks for: a brand utility, or an inline
+    `color:` declaration. Inline wins, being the more specific request."""
+    style = el.get("style") or ""
+    m = _INLINE_COLOR.search(style)
+    if m:
+        rgb = _rgb_of(m.group(1))
+        if rgb:
+            return rgb
+    for cls in (el.get("class") or "").split():
+        cm = _BRAND_TEXT_CLASS.match(cls)
+        if cm:
+            return _rgb_of(palette.get(f"--aim-brand-{cm.group(1)}", ""))
+    return None
+
+
+def _runs_of(
+    el: Element, fmt: dict | None = None, palette: dict[str, str] | None = None
+) -> list[dict]:
     fmt = dict(fmt or {})
+    palette = palette if palette is not None else _BRAND_DEFAULTS
+    colour = _color_for(el, palette)
+    if colour:
+        fmt["color"] = colour
     tag = el.tag
     if tag in _BOLD_TAGS:
         fmt["bold"] = True
@@ -115,7 +175,7 @@ def _runs_of(el: Element, fmt: dict | None = None) -> list[dict]:
             if child.tag == "br":
                 runs.append({"break": True, **fmt})
             elif child.tag == "a":
-                runs += _runs_of(child, {**fmt, "underline": True})
+                runs += _runs_of(child, {**fmt, "underline": True}, palette)
                 href = child.get("href") or ""
                 if href and not href.startswith("#"):
                     runs.append({"text": f" ({href})", **fmt})
@@ -128,17 +188,17 @@ def _runs_of(el: Element, fmt: dict | None = None) -> list[dict]:
                     label += f" ({src})"
                 runs.append({"text": label, **fmt, "italic": True})
             else:
-                runs += _runs_of(child, fmt)
+                runs += _runs_of(child, fmt, palette)
     return runs
 
 
-def _block_runs(el: Element) -> list[dict]:
+def _block_runs(el: Element, palette: dict[str, str] | None = None) -> list[dict]:
     """Run specs for one block: a page-break chunk is a single page-break
     run (it has no text runs — without this, the tracked lane would emit a
     pending break as an empty revision paragraph)."""
     if el.tag == "aim-page-break":
         return [{"page_break": True}]
-    return _runs_of(el)
+    return _runs_of(el, None, palette)
 
 
 def _apply_runs(paragraph, runs: list[dict]) -> None:
@@ -172,6 +232,10 @@ def _format_run(run, spec: dict) -> None:
         from docx.enum.text import WD_COLOR_INDEX
 
         run.font.highlight_color = WD_COLOR_INDEX.YELLOW
+    if spec.get("color"):
+        from docx.shared import RGBColor
+
+        run.font.color.rgb = RGBColor.from_string(spec["color"])
 
 
 # --------------------------------------------------------------------------
@@ -373,6 +437,11 @@ class _Exporter:
     def __init__(self, doc: AimDocument, docx_mod):
         self.aim = doc
         self.docx = docx_mod
+        # Resolved once per export. Held on the instance, not module state:
+        # exports run in worker threads (the backend calls to_docx via
+        # asyncio.to_thread), so a shared global would race between documents
+        # with different themes.
+        self.palette = _palette_of(doc)
         self.out = docx_mod.Document()
         self.rev = _Revisions()
         # Set after a slide: True means accepted structure owns the next
@@ -467,7 +536,9 @@ class _Exporter:
                 para = self.out.add_paragraph(
                     style=style or self._safe_style(_style_for(block.tag))
                 )
-                self.rev.ins(para, _block_runs(block), _actor_label(prop.author), prop.at)
+                self.rev.ins(
+                    para, _block_runs(block, self.palette), _actor_label(prop.author), prop.at
+                )
         if slide_payload:
             # When an accepted slide already required a page boundary, move
             # that plain break past this insertion. Otherwise the trailing
@@ -483,7 +554,7 @@ class _Exporter:
         label, date = _actor_label(prop.author), prop.at
         for li in el.elements():
             para = self.out.add_paragraph(style=style)
-            self.rev.ins(para, _runs_of(li), label, date)
+            self.rev.ins(para, _runs_of(li, None, self.palette), label, date)
 
     def _payload_elements(self, prop: Proposal) -> list[Element]:
         return [n for n in parse_fragment(prop.payload_html or "") if isinstance(n, Element)]
@@ -542,26 +613,26 @@ class _Exporter:
         label, date = _actor_label(prop.author), prop.at
         for block in _block_children(el):
             para = self.out.add_paragraph(style=style or self._safe_style(_style_for(block.tag)))
-            self.rev.dele(para, _block_runs(block), label, date)
+            self.rev.dele(para, _block_runs(block, self.palette), label, date)
         if payload and prop.action == "modify":
             for new_el in self._payload_elements(prop):
                 for block in _block_children(new_el):
                     para = self.out.add_paragraph(
                         style=style or self._safe_style(_style_for(block.tag))
                     )
-                    self.rev.ins(para, _block_runs(block), label, date)
+                    self.rev.ins(para, _block_runs(block, self.palette), label, date)
 
     def emit_tracked_list_container(self, el: Element, prop: Proposal) -> None:
         label, date = _actor_label(prop.author), prop.at
         style = self._safe_style("List Bullet" if el.tag == "ul" else "List Number")
         for li in el.elements():
             para = self.out.add_paragraph(style=style)
-            self.rev.dele(para, _runs_of(li), label, date)
+            self.rev.dele(para, _runs_of(li, None, self.palette), label, date)
         if prop.action == "modify":
             for new_el in self._payload_elements(prop):
                 for li in new_el.elements():
                     para = self.out.add_paragraph(style=style)
-                    self.rev.ins(para, _runs_of(li), label, date)
+                    self.rev.ins(para, _runs_of(li, None, self.palette), label, date)
 
     # -- plain blocks -----------------------------------------------------------
     def emit_block(self, el: Element, cid: str, style: str | None = None) -> None:
@@ -587,7 +658,7 @@ class _Exporter:
             self.emit_list(el)
             return
         para = self.out.add_paragraph(style=style or self._safe_style(_style_for(el.tag)))
-        _apply_runs(para, _runs_of(el))
+        _apply_runs(para, _runs_of(el, None, self.palette))
 
     def emit_pre(self, el: Element) -> None:
         text = el.text()
@@ -833,7 +904,7 @@ class _Exporter:
                         for dc in range(colspan):
                             occupied.add((ri + dr, ci + dc))
                 para = cell.paragraphs[0]
-                runs = _runs_of(cell_el)
+                runs = _runs_of(cell_el, None, self.palette)
                 if cell_el.tag == "th":
                     runs = [{**r, "bold": True} for r in runs]
                 if force == "ins" and prop is not None:
@@ -845,7 +916,7 @@ class _Exporter:
                     if new_cells is not None:  # cellwise: shapes match 1:1
                         self.rev.ins(
                             para,
-                            _runs_of(new_cells[orig_idx]),
+                            _runs_of(new_cells[orig_idx], None, self.palette),
                             _actor_label(prop_mod.author),
                             prop_mod.at,
                         )
@@ -899,7 +970,7 @@ class _Exporter:
                     para = self._new_span_cell(
                         table, tr, colspan=cs, vmerge="restart" if rs > 1 else None
                     )
-                    runs = _runs_of(c)
+                    runs = _runs_of(c, None, self.palette)
                     if c.tag == "th":
                         runs = [{**run, "bold": True} for run in runs]
                     self.rev.ins(para, runs, label, date)
@@ -972,7 +1043,12 @@ class _Exporter:
             ]
             for idx in range(min(len(payload_cells), ncols)):
                 para = new_row.cells[idx].paragraphs[0]
-                self.rev.ins(para, _runs_of(payload_cells[idx]), _actor_label(prop.author), prop.at)
+                self.rev.ins(
+                    para,
+                    _runs_of(payload_cells[idx], None, self.palette),
+                    _actor_label(prop.author),
+                    prop.at,
+                )
             if first:
                 table.rows[0]._tr.addprevious(new_row._tr)
             else:

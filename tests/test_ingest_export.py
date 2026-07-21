@@ -728,3 +728,66 @@ class TestExportDocxFigureWidth:
         out = aim.to_docx(self._fig_doc("width:2000px"), tmp_path / "f.docx")
         # A4 portrait, 15mm margins → 180mm content ≈ 7.09in
         assert self._picture_width_emu(out) <= int(7.1 * 914400)
+
+
+class TestDocxTextColour:
+    """DOCX dropped text colour entirely — export_docx emitted no w:color at
+    all, so a document whose title had been branded (or given an inline colour)
+    exported in Word's default ink.
+
+    Reported from production: "the title is not in pink when downloaded in
+    docx" (2026-07-21).
+    """
+
+    @staticmethod
+    def _colours(path):
+        import re
+        import zipfile
+
+        xml = zipfile.ZipFile(str(path)).read("word/document.xml").decode()
+        return sorted(set(re.findall(r'<w:color w:val="([0-9A-Fa-f]{6})"', xml)))
+
+    def _export(self, markup, tmp_path, theme=None):
+        doc = aim.from_text("placeholder", title="t")
+        doc.add_chunk(markup, author=aim.external("test"))
+        text = doc.dumps()
+        if theme:
+            text = text.replace("</head>", f"<style data-aim-theme>:root{{{theme}}}</style></head>")
+        out = tmp_path / "out.docx"
+        aim.to_docx(aim.loads(text), out, pending="accept-all")
+        return out
+
+    def test_a_brand_class_reaches_word_as_a_run_colour(self, tmp_path):
+        out = self._export('<h1 class="text-brand-1">Title</h1>', tmp_path)
+        assert "1D4ED8" in self._colours(out)  # the default brand-1
+
+    def test_the_documents_theme_wins_over_the_default(self, tmp_path):
+        """The reported case end to end: the model sets the brand slot to pink
+        and puts the class on the heading. Word must get the pink, not the
+        stylesheet default."""
+        out = self._export(
+            '<h1 class="text-brand-1">Quarterly Review</h1>',
+            tmp_path,
+            theme="--aim-brand-1:#ff1493",
+        )
+        assert self._colours(out) == ["FF1493"]
+
+    def test_an_inline_colour_is_honoured(self, tmp_path):
+        out = self._export('<p style="color:#ff69b4">Pink</p>', tmp_path)
+        assert "FF69B4" in self._colours(out)
+
+    def test_a_three_digit_hex_expands(self, tmp_path):
+        out = self._export('<p style="color:#f0a">Short</p>', tmp_path)
+        assert "FF00AA" in self._colours(out)
+
+    def test_an_uncoloured_document_gains_no_colour_runs(self, tmp_path):
+        """No colour must mean no w:color — writing a default would override
+        the Word theme the user's template supplies."""
+        out = self._export("<p>Plain</p>", tmp_path)
+        assert self._colours(out) == []
+
+    def test_a_colour_we_cannot_resolve_is_left_alone(self, tmp_path):
+        """rgb()/hsl()/named colours are not guessed at: putting the WRONG
+        colour in the file is worse than leaving Word's default."""
+        out = self._export('<p style="color:rebeccapurple">Named</p>', tmp_path)
+        assert self._colours(out) == []
