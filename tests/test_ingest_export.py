@@ -772,13 +772,30 @@ class TestDocxTextColour:
         )
         assert self._colours(out) == ["FF1493"]
 
-    def test_an_inline_colour_is_honoured(self, tmp_path):
-        out = self._export('<p style="color:#ff69b4">Pink</p>', tmp_path)
-        assert "FF69B4" in self._colours(out)
+    def test_a_registered_palette_class_resolves(self, tmp_path):
+        out = self._export('<p class="text-red-600">Red</p>', tmp_path)
+        assert "DC2626" in self._colours(out)  # registry palette red-600
 
-    def test_a_three_digit_hex_expands(self, tmp_path):
-        out = self._export('<p style="color:#f0a">Short</p>', tmp_path)
-        assert "FF00AA" in self._colours(out)
+    def test_an_rgb_theme_value_resolves(self, tmp_path):
+        """registry.json permits rgb() for a colour slot, so the exporter must
+        convert it rather than silently drop the colour (Codex aimformat#19)."""
+        out = self._export(
+            '<h1 class="text-brand-1">Title</h1>',
+            tmp_path,
+            theme="--aim-brand-1:rgb(255, 20, 147)",
+        )
+        assert self._colours(out) == ["FF1493"]
+
+    def test_inline_colour_is_ignored_because_the_format_rejects_it(self, tmp_path):
+        """registry.json's style whitelist is geometry-only, so `style="color:…"`
+        fails lint with V007. Honouring it in the exporter would render markup
+        the format does not accept (Codex aimformat#19)."""
+        markup = '<p style="color:#ff69b4">Pink</p>'
+        doc = aim.from_text("placeholder", title="t")
+        doc.add_chunk(markup, author=aim.external("test"))
+        assert any("V007" in str(f) for f in aim.lint_text(doc.dumps()))
+        out = self._export(markup, tmp_path)
+        assert self._colours(out) == []
 
     def test_an_uncoloured_document_gains_no_colour_runs(self, tmp_path):
         """No colour must mean no w:color — writing a default would override
@@ -791,3 +808,23 @@ class TestDocxTextColour:
         colour in the file is worse than leaving Word's default."""
         out = self._export('<p style="color:rebeccapurple">Named</p>', tmp_path)
         assert self._colours(out) == []
+
+    def test_colour_inherits_through_a_grouping_element(self, tmp_path):
+        """Colour inherits in CSS, so a branded <div> renders branded in the
+        browser and the PDF. Unpacking dropped the parent before runs were
+        built, so DOCX exported the same content in default ink (Codex
+        aimformat#19)."""
+        out = self._export(
+            '<div class="text-brand-1"><p>Child</p></div>',
+            tmp_path,
+            theme="--aim-brand-1:#ff1493",
+        )
+        assert self._colours(out) == ["FF1493"]
+
+    def test_a_childs_own_colour_still_wins_over_the_group(self, tmp_path):
+        out = self._export(
+            '<div class="text-brand-1"><p class="text-red-600">Child</p></div>',
+            tmp_path,
+            theme="--aim-brand-1:#ff1493",
+        )
+        assert self._colours(out) == ["DC2626"]  # the child's own, not the group's

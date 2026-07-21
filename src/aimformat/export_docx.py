@@ -42,6 +42,7 @@ from .document import AimDocument, Proposal
 from .dom import Element, Text, parse_fragment
 from .errors import InvalidOperation
 from .events import external
+from .registry import REGISTRY
 
 if TYPE_CHECKING:  # pragma: no cover
     pass
@@ -87,32 +88,34 @@ def _require_docx():
 # --------------------------------------------------------------------------
 # inline content -> (text, formatting) run specs
 
-# Brand palette defaults, mirroring css.py's :root block. A document theme
-# overrides any slot it sets.
-_BRAND_DEFAULTS = {
-    "--aim-brand-1": "#1d4ed8",
-    "--aim-brand-2": "#0f766e",
-    "--aim-brand-3": "#b45309",
-    "--aim-brand-4": "#6d28d9",
-}
-_BRAND_TEXT_CLASS = re.compile(r"^text-brand-([1-4])$")
-_INLINE_COLOR = re.compile(r"(?:^|;)\s*color\s*:\s*([^;]+)", re.I)
+# Colour resolution, driven by the registry rather than a local copy of the
+# vocabulary — registry.json is what the linter validates against, so anything
+# else here would either miss valid documents or bless invalid ones.
+_COLOR_UTILITY = re.compile(r"^(text|bg|border)-(.+)$")
 _HEX6 = re.compile(r"^#?([0-9a-fA-F]{6})$")
 _HEX3 = re.compile(r"^#?([0-9a-fA-F]{3})$")
+_RGB_FUNC = re.compile(r"^rgb\(\s*(\d{1,3})\s*,\s*(\d{1,3})\s*,\s*(\d{1,3})\s*\)$", re.I)
+
+
+def _brand_defaults() -> dict[str, str]:
+    slots = REGISTRY.raw["theme_slots"]
+    return {k: v["default"] for k, v in slots.items() if v.get("type") == "color"}
 
 
 def _palette_of(doc: AimDocument) -> dict[str, str]:
-    """The document's brand slots, over the stylesheet defaults."""
+    """The document's brand slots over the registry defaults."""
     theme = dict(getattr(doc, "theme", None) or {})
-    return {**_BRAND_DEFAULTS, **{k: v for k, v in theme.items() if k in _BRAND_DEFAULTS}}
+    defaults = _brand_defaults()
+    return {**defaults, **{k: v for k, v in theme.items() if k in defaults}}
 
 
 def _rgb_of(value: str) -> str | None:
-    """A CSS colour as 6 hex digits, or None when we cannot be sure.
+    """A CSS colour as six hex digits, or None when we cannot be sure.
 
-    Deliberately narrow: Word wants a concrete RRGGBB, and guessing at
-    rgb()/hsl()/named colours would put the wrong colour in the file, which is
-    worse than leaving it at the default.
+    Covers exactly what registry.json's `theme_value_patterns.color` permits:
+    #rgb, #rrggbb and rgb(r, g, b). Anything else returns None — Word wants a
+    concrete RRGGBB, and writing a guessed colour into the file is worse than
+    leaving the user's template default.
     """
     value = value.strip()
     m = _HEX6.match(value)
@@ -121,22 +124,46 @@ def _rgb_of(value: str) -> str | None:
     m = _HEX3.match(value)
     if m:
         return "".join(c * 2 for c in m.group(1)).upper()
+    m = _RGB_FUNC.match(value)
+    if m:
+        parts = [int(g) for g in m.groups()]
+        if all(0 <= n <= 255 for n in parts):
+            return "".join(f"{n:02X}" for n in parts)
+    return None
+
+
+def _text_colour_class(cls: str, palette: dict[str, str]) -> str | None:
+    """Resolve one registered `text-*` utility to hex, or None.
+
+    Two vocabularies, both from the registry: the brand slots (text-brand-N,
+    resolved through the document's theme) and the fixed palette
+    (text-red-600 and friends).
+    """
+    m = _COLOR_UTILITY.match(cls)
+    if m is None or m.group(1) != "text":
+        return None
+    rest = m.group(2)
+    if rest.startswith("brand-"):
+        return _rgb_of(palette.get(f"--aim-{rest}", ""))
+    family, _, shade = rest.rpartition("-")
+    table = REGISTRY.raw["classes"]["palette"].get(family)
+    if table and shade in table:
+        return _rgb_of(table[shade])
     return None
 
 
 def _color_for(el: Element, palette: dict[str, str]) -> str | None:
-    """Text colour this element asks for: a brand utility, or an inline
-    `color:` declaration. Inline wins, being the more specific request."""
-    style = el.get("style") or ""
-    m = _INLINE_COLOR.search(style)
-    if m:
-        rgb = _rgb_of(m.group(1))
-        if rgb:
-            return rgb
+    """The text colour this element asks for.
+
+    Class only. An inline `color:` declaration is NOT read: registry.json's
+    style whitelist is geometry-only, so the linter rejects it (V007) — an
+    exporter that honoured it would render documents the format does not
+    accept (Codex aimformat#19).
+    """
     for cls in (el.get("class") or "").split():
-        cm = _BRAND_TEXT_CLASS.match(cls)
-        if cm:
-            return _rgb_of(palette.get(f"--aim-brand-{cm.group(1)}", ""))
+        hit = _text_colour_class(cls, palette)
+        if hit:
+            return hit
     return None
 
 
@@ -144,7 +171,7 @@ def _runs_of(
     el: Element, fmt: dict | None = None, palette: dict[str, str] | None = None
 ) -> list[dict]:
     fmt = dict(fmt or {})
-    palette = palette if palette is not None else _BRAND_DEFAULTS
+    palette = palette if palette is not None else _brand_defaults()
     colour = _color_for(el, palette)
     if colour:
         fmt["color"] = colour
@@ -399,7 +426,28 @@ def _unpack_group(el: Element, wrap_tag: str) -> list[Element]:
         else:
             run.append(child)
     flush()
+    _inherit_colour(el, out)
     return out
+
+
+def _inherit_colour(parent: Element, blocks: list[Element]) -> None:
+    """Push a grouping element's text colour onto the blocks it unpacks into.
+
+    Colour inherits in CSS, so `<div class="text-brand-1"><p>Child</p></div>`
+    renders branded in the browser and the PDF. Unpacking drops the parent
+    before the runs are built, so DOCX exported the same content in Word's
+    default ink (Codex aimformat#19). Only applied where the child does not
+    state a colour of its own — a child's own utility still wins, as it would
+    in the cascade.
+    """
+    inherited = [c for c in (parent.get("class") or "").split() if c.startswith("text-")]
+    if not inherited:
+        return
+    for block in blocks:
+        own = (block.get("class") or "").split()
+        if any(c.startswith("text-") for c in own):
+            continue
+        block.set("class", " ".join(own + inherited))
 
 
 def _wrapped(tag: str, children: list) -> Element:
