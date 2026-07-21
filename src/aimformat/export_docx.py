@@ -430,14 +430,14 @@ def _unpack_group(el: Element, wrap_tag: str) -> list[Element]:
     def flush() -> None:
         if run:
             if any(isinstance(n, Element) or (isinstance(n, Text) and n.data.strip()) for n in run):
-                out.append(_wrapped(wrap_tag, run))
+                out.append(_wrapped(wrap_tag, run, el))
             run.clear()
 
     for child in el.children:
         if isinstance(child, Element) and child.tag not in _INLINE_TAGS:
             flush()
             if child.tag == "p" and wrap_tag != "p":
-                out.append(_wrapped(wrap_tag, child.children))
+                out.append(_wrapped(wrap_tag, child.children, child))
             else:
                 out.extend(_block_children(child))
         else:
@@ -446,9 +446,21 @@ def _unpack_group(el: Element, wrap_tag: str) -> list[Element]:
     return out
 
 
-def _wrapped(tag: str, children: list) -> Element:
+def _wrapped(tag: str, children: list, source: Element | None = None) -> Element:
+    """A synthetic block wrapping loose inline content from a grouping element.
+
+    ``source`` is that grouping element, if any. The wrapper starts bare, so a
+    text colour declared directly on the group — `<blockquote
+    class="text-red-600">Quote</blockquote>` — would be lost before runs are
+    built (Codex aimformat#19). Only colour classes are carried across; the
+    wrapper is not a copy of the source.
+    """
     wrap = Element(tag)
     wrap.children = list(children)
+    if source is not None:
+        kept = " ".join(c for c in (source.get("class") or "").split() if _is_text_colour(c))
+        if kept:
+            wrap.set("class", kept)
     return wrap
 
 
@@ -715,11 +727,14 @@ class _Exporter:
         # from it, so check the nested element when the <pre> states none
         colour = _color_for(el, self.palette)
         if not colour:
-            for child in el.elements():
-                if child.tag == "code":
-                    colour = _color_for(child, self.palette)
-                    if colour:
-                        break
+            # `<pre><code class="…">` is the canonical shape and its colour
+            # belongs to the whole block. But emit_pre flattens el.text() into
+            # one run, so lifting a code child's colour when the <pre> ALSO has
+            # sibling text would paint that text too (Codex aimformat#19).
+            # Only adopt it when the code element is the pre's entire content.
+            kids = [c for c in el.children if not (isinstance(c, Text) and not c.data.strip())]
+            if len(kids) == 1 and isinstance(kids[0], Element) and kids[0].tag == "code":
+                colour = _color_for(kids[0], self.palette)
         for i, line in enumerate(text.split("\n")):
             if i:
                 para.add_run().add_break()

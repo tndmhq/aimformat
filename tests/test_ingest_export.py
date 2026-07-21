@@ -891,3 +891,19 @@ class TestDocxTextColour:
             tmp_path,
         )
         assert "DC2626" in self._colours(out)
+
+    def test_a_grouping_elements_direct_colour_survives(self, tmp_path):
+        """_block_children rewraps a group's loose text into a fresh, bare
+        element, dropping a colour declared on the group (Codex #19)."""
+        out = self._export('<blockquote class="text-red-600">Quoted</blockquote>', tmp_path)
+        assert "DC2626" in self._colours(out)
+
+    def test_a_pres_sibling_text_is_not_painted_by_a_nested_code(self, tmp_path):
+        """emit_pre flattens to one run, so adopting a code child's colour when
+        the <pre> also holds sibling text would paint that text too — a
+        regression my own nested-code fix introduced (Codex #19)."""
+        out = self._export('<pre>plain <code class="text-red-600">x</code></pre>', tmp_path)
+        assert self._colours(out) == []  # ambiguous: colour nothing rather than all
+        # the canonical shape still works
+        only = self._export('<pre><code class="text-red-600">x</code></pre>', tmp_path)
+        assert "DC2626" in self._colours(only)
