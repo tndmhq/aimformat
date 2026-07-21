@@ -711,7 +711,15 @@ class _Exporter:
         # colour has to be applied here too — a <pre class="text-red-600"> has
         # the class applied DIRECTLY and still exported in default ink
         # (Codex aimformat#19).
+        # the class is legal on <code> too, and browsers colour the code text
+        # from it, so check the nested element when the <pre> states none
         colour = _color_for(el, self.palette)
+        if not colour:
+            for child in el.elements():
+                if child.tag == "code":
+                    colour = _color_for(child, self.palette)
+                    if colour:
+                        break
         for i, line in enumerate(text.split("\n")):
             if i:
                 para.add_run().add_break()
@@ -819,7 +827,11 @@ class _Exporter:
                 self.emit_block(child, el.chunk_id or "")
         for cap in el.elements():
             if cap.tag == "figcaption":
-                self.out.add_paragraph(cap.text(), style=self._safe_style("Caption"))
+                # built through _runs_of rather than add_paragraph(text) so a
+                # caption's own formatting — including colour — survives
+                # (Codex aimformat#19)
+                para = self.out.add_paragraph(style=self._safe_style("Caption"))
+                _apply_runs(para, _runs_of(cap, None, self.palette))
 
     def _figure_width(self, fig: Element, img: Element):
         """The authored image width (inline style, CSS px at 96 dpi — the
@@ -861,6 +873,11 @@ class _Exporter:
                 content.children = [
                     c for c in li.children if not (isinstance(c, Element) and c.tag in ("ul", "ol"))
                 ]
+                # the copy is synthetic, so it starts with no attributes — carry
+                # the item's own class or a coloured <li> exports in default ink
+                # (Codex aimformat#19)
+                if li.get("class") is not None:
+                    content.set("class", li.get("class"))
                 if prop is not None:
                     self.emit_tracked_chunk(content, prop, style=style, payload=li is group[-1])
                 else:

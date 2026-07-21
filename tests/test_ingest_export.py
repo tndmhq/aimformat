@@ -869,3 +869,25 @@ class TestDocxTextColour:
         class applied straight to the <pre> was ignored (Codex aimformat#19)."""
         out = self._export('<pre class="text-red-600">Error</pre>', tmp_path)
         assert "DC2626" in self._colours(out)
+
+    def test_a_list_items_own_colour_survives(self, tmp_path):
+        """emit_list rebuilds each item as a synthetic <li> carrying only its
+        children, which dropped the item's own class (Codex aimformat#19)."""
+        out = self._export('<ul><li class="text-red-600">Red</li></ul>', tmp_path)
+        assert "DC2626" in self._colours(out)
+
+    def test_colour_on_nested_code_in_a_pre(self, tmp_path):
+        """class is legal on <code> and browsers colour the code text from it,
+        but emit_pre only checked the outer <pre> (Codex aimformat#19)."""
+        out = self._export('<pre><code class="text-red-600">Error</code></pre>', tmp_path)
+        assert "DC2626" in self._colours(out)
+
+    def test_a_figure_caption_keeps_its_colour(self, tmp_path):
+        """Captions were written with add_paragraph(text), bypassing runs
+        entirely, so no formatting reached them (Codex aimformat#19)."""
+        out = self._export(
+            '<figure><img src="https://e.example/i.png" alt="x">'
+            '<figcaption class="text-red-600">Cap</figcaption></figure>',
+            tmp_path,
+        )
+        assert "DC2626" in self._colours(out)
