@@ -42,6 +42,7 @@ from .document import AimDocument, Proposal
 from .dom import Element, Text, parse_fragment
 from .errors import InvalidOperation
 from .events import external
+from .registry import REGISTRY
 
 if TYPE_CHECKING:  # pragma: no cover
     pass
@@ -86,8 +87,111 @@ def _require_docx():
 
 # --------------------------------------------------------------------------
 # inline content -> (text, formatting) run specs
-def _runs_of(el: Element, fmt: dict | None = None) -> list[dict]:
+
+# Colour resolution, driven by the registry rather than a local copy of the
+# vocabulary — registry.json is what the linter validates against, so anything
+# else here would either miss valid documents or bless invalid ones.
+_COLOR_UTILITY = re.compile(r"^(text|bg|border)-(.+)$")
+_COLOR_DECL = re.compile(r"(?:^|;)\s*color\s*:\s*([^;]+)")
+_VAR_REF = re.compile(r"^var\(\s*(--[a-z0-9-]+)\s*\)$", re.I)
+_HEX6 = re.compile(r"^#?([0-9a-fA-F]{6})$")
+_HEX3 = re.compile(r"^#?([0-9a-fA-F]{3})$")
+_RGB_FUNC = re.compile(r"^rgb\(\s*(\d{1,3})\s*,\s*(\d{1,3})\s*,\s*(\d{1,3})\s*\)$", re.I)
+
+
+def _brand_defaults() -> dict[str, str]:
+    slots = REGISTRY.raw["theme_slots"]
+    return {k: v["default"] for k, v in slots.items() if v.get("type") == "color"}
+
+
+def _palette_of(doc: AimDocument) -> dict[str, str]:
+    """The document's brand slots over the registry defaults."""
+    theme = dict(getattr(doc, "theme", None) or {})
+    defaults = _brand_defaults()
+    return {**defaults, **{k: v for k, v in theme.items() if k in defaults}}
+
+
+def _rgb_of(value: str) -> str | None:
+    """A CSS colour as six hex digits, or None when we cannot be sure.
+
+    Covers exactly what registry.json's `theme_value_patterns.color` permits:
+    #rgb, #rrggbb and rgb(r, g, b). Anything else returns None — Word wants a
+    concrete RRGGBB, and writing a guessed colour into the file is worse than
+    leaving the user's template default.
+    """
+    value = value.strip()
+    m = _HEX6.match(value)
+    if m:
+        return m.group(1).upper()
+    m = _HEX3.match(value)
+    if m:
+        return "".join(c * 2 for c in m.group(1)).upper()
+    m = _RGB_FUNC.match(value)
+    if m:
+        # registry.json's colour pattern accepts any 1-3 digit component, so a
+        # lint-clean theme can carry rgb(999,0,0). The browser CLAMPS to 0-255;
+        # match it rather than dropping the colour (Codex aimformat#19).
+        parts = [min(255, int(g)) for g in m.groups()]
+        return "".join(f"{n:02X}" for n in parts)
+    return None
+
+
+def _text_colour_class(cls: str, palette: dict[str, str]) -> str | None:
+    """Resolve one registered text-colour utility to hex, or None.
+
+    The declaration is the source of truth: a brand utility resolves through
+    the document's theme, everything else carries its literal colour.
+    """
+    decl = REGISTRY.class_declarations.get(cls)
+    if not decl:
+        return None
+    m = _COLOR_DECL.search(decl)
+    if not m:
+        return None
+    value = m.group(1).strip()
+    var = _VAR_REF.match(value)
+    if var:
+        return _rgb_of(palette.get(var.group(1), ""))
+    return _rgb_of(value)
+
+
+def _is_text_colour(cls: str) -> bool:
+    """True for any registered utility that sets `color:`.
+
+    Read from the generated class declarations rather than a hand-listed set of
+    families, so every colour utility the stylesheet defines is covered —
+    including the ones in `classes.singles` such as text-white, which an
+    enumeration of brand slots and `classes.palette` missed (Codex
+    aimformat#19). text-xl and text-right declare no colour and are excluded by
+    construction.
+    """
+    decl = REGISTRY.class_declarations.get(cls)
+    return bool(decl and _COLOR_DECL.search(decl))
+
+
+def _color_for(el: Element, palette: dict[str, str]) -> str | None:
+    """The text colour this element asks for.
+
+    Class only. An inline `color:` declaration is NOT read: registry.json's
+    style whitelist is geometry-only, so the linter rejects it (V007) — an
+    exporter that honoured it would render documents the format does not
+    accept (Codex aimformat#19).
+    """
+    # generate_aim_css emits class rules sorted by NAME and CSS is last-wins,
+    # so among competing colours the winner is the one whose class sorts last —
+    # not the one written first in the markup (Codex aimformat#19).
+    hits = sorted(c for c in (el.get("class") or "").split() if _is_text_colour(c))
+    return _text_colour_class(hits[-1], palette) if hits else None
+
+
+def _runs_of(
+    el: Element, fmt: dict | None = None, palette: dict[str, str] | None = None
+) -> list[dict]:
     fmt = dict(fmt or {})
+    palette = palette if palette is not None else _brand_defaults()
+    colour = _color_for(el, palette)
+    if colour:
+        fmt["color"] = colour
     tag = el.tag
     if tag in _BOLD_TAGS:
         fmt["bold"] = True
@@ -115,7 +219,7 @@ def _runs_of(el: Element, fmt: dict | None = None) -> list[dict]:
             if child.tag == "br":
                 runs.append({"break": True, **fmt})
             elif child.tag == "a":
-                runs += _runs_of(child, {**fmt, "underline": True})
+                runs += _runs_of(child, {**fmt, "underline": True}, palette)
                 href = child.get("href") or ""
                 if href and not href.startswith("#"):
                     runs.append({"text": f" ({href})", **fmt})
@@ -128,17 +232,17 @@ def _runs_of(el: Element, fmt: dict | None = None) -> list[dict]:
                     label += f" ({src})"
                 runs.append({"text": label, **fmt, "italic": True})
             else:
-                runs += _runs_of(child, fmt)
+                runs += _runs_of(child, fmt, palette)
     return runs
 
 
-def _block_runs(el: Element) -> list[dict]:
+def _block_runs(el: Element, palette: dict[str, str] | None = None) -> list[dict]:
     """Run specs for one block: a page-break chunk is a single page-break
     run (it has no text runs — without this, the tracked lane would emit a
     pending break as an empty revision paragraph)."""
     if el.tag == "aim-page-break":
         return [{"page_break": True}]
-    return _runs_of(el)
+    return _runs_of(el, None, palette)
 
 
 def _apply_runs(paragraph, runs: list[dict]) -> None:
@@ -172,6 +276,10 @@ def _format_run(run, spec: dict) -> None:
         from docx.enum.text import WD_COLOR_INDEX
 
         run.font.highlight_color = WD_COLOR_INDEX.YELLOW
+    if spec.get("color"):
+        from docx.shared import RGBColor
+
+        run.font.color.rgb = RGBColor.from_string(spec["color"])
 
 
 # --------------------------------------------------------------------------
@@ -322,14 +430,14 @@ def _unpack_group(el: Element, wrap_tag: str) -> list[Element]:
     def flush() -> None:
         if run:
             if any(isinstance(n, Element) or (isinstance(n, Text) and n.data.strip()) for n in run):
-                out.append(_wrapped(wrap_tag, run))
+                out.append(_wrapped(wrap_tag, run, el))
             run.clear()
 
     for child in el.children:
         if isinstance(child, Element) and child.tag not in _INLINE_TAGS:
             flush()
             if child.tag == "p" and wrap_tag != "p":
-                out.append(_wrapped(wrap_tag, child.children))
+                out.append(_wrapped(wrap_tag, child.children, child))
             else:
                 out.extend(_block_children(child))
         else:
@@ -338,9 +446,21 @@ def _unpack_group(el: Element, wrap_tag: str) -> list[Element]:
     return out
 
 
-def _wrapped(tag: str, children: list) -> Element:
+def _wrapped(tag: str, children: list, source: Element | None = None) -> Element:
+    """A synthetic block wrapping loose inline content from a grouping element.
+
+    ``source`` is that grouping element, if any. The wrapper starts bare, so a
+    text colour declared directly on the group — `<blockquote
+    class="text-red-600">Quote</blockquote>` — would be lost before runs are
+    built (Codex aimformat#19). Only colour classes are carried across; the
+    wrapper is not a copy of the source.
+    """
     wrap = Element(tag)
     wrap.children = list(children)
+    if source is not None:
+        kept = " ".join(c for c in (source.get("class") or "").split() if _is_text_colour(c))
+        if kept:
+            wrap.set("class", kept)
     return wrap
 
 
@@ -373,6 +493,11 @@ class _Exporter:
     def __init__(self, doc: AimDocument, docx_mod):
         self.aim = doc
         self.docx = docx_mod
+        # Resolved once per export. Held on the instance, not module state:
+        # exports run in worker threads (the backend calls to_docx via
+        # asyncio.to_thread), so a shared global would race between documents
+        # with different themes.
+        self.palette = _palette_of(doc)
         self.out = docx_mod.Document()
         self.rev = _Revisions()
         # Set after a slide: True means accepted structure owns the next
@@ -467,7 +592,9 @@ class _Exporter:
                 para = self.out.add_paragraph(
                     style=style or self._safe_style(_style_for(block.tag))
                 )
-                self.rev.ins(para, _block_runs(block), _actor_label(prop.author), prop.at)
+                self.rev.ins(
+                    para, _block_runs(block, self.palette), _actor_label(prop.author), prop.at
+                )
         if slide_payload:
             # When an accepted slide already required a page boundary, move
             # that plain break past this insertion. Otherwise the trailing
@@ -483,7 +610,7 @@ class _Exporter:
         label, date = _actor_label(prop.author), prop.at
         for li in el.elements():
             para = self.out.add_paragraph(style=style)
-            self.rev.ins(para, _runs_of(li), label, date)
+            self.rev.ins(para, _runs_of(li, None, self.palette), label, date)
 
     def _payload_elements(self, prop: Proposal) -> list[Element]:
         return [n for n in parse_fragment(prop.payload_html or "") if isinstance(n, Element)]
@@ -542,26 +669,26 @@ class _Exporter:
         label, date = _actor_label(prop.author), prop.at
         for block in _block_children(el):
             para = self.out.add_paragraph(style=style or self._safe_style(_style_for(block.tag)))
-            self.rev.dele(para, _block_runs(block), label, date)
+            self.rev.dele(para, _block_runs(block, self.palette), label, date)
         if payload and prop.action == "modify":
             for new_el in self._payload_elements(prop):
                 for block in _block_children(new_el):
                     para = self.out.add_paragraph(
                         style=style or self._safe_style(_style_for(block.tag))
                     )
-                    self.rev.ins(para, _block_runs(block), label, date)
+                    self.rev.ins(para, _block_runs(block, self.palette), label, date)
 
     def emit_tracked_list_container(self, el: Element, prop: Proposal) -> None:
         label, date = _actor_label(prop.author), prop.at
         style = self._safe_style("List Bullet" if el.tag == "ul" else "List Number")
         for li in el.elements():
             para = self.out.add_paragraph(style=style)
-            self.rev.dele(para, _runs_of(li), label, date)
+            self.rev.dele(para, _runs_of(li, None, self.palette), label, date)
         if prop.action == "modify":
             for new_el in self._payload_elements(prop):
                 for li in new_el.elements():
                     para = self.out.add_paragraph(style=style)
-                    self.rev.ins(para, _runs_of(li), label, date)
+                    self.rev.ins(para, _runs_of(li, None, self.palette), label, date)
 
     # -- plain blocks -----------------------------------------------------------
     def emit_block(self, el: Element, cid: str, style: str | None = None) -> None:
@@ -587,16 +714,36 @@ class _Exporter:
             self.emit_list(el)
             return
         para = self.out.add_paragraph(style=style or self._safe_style(_style_for(el.tag)))
-        _apply_runs(para, _runs_of(el))
+        _apply_runs(para, _runs_of(el, None, self.palette))
 
     def emit_pre(self, el: Element) -> None:
         text = el.text()
         para = self.out.add_paragraph()
+        # emit_pre builds its runs directly rather than through _runs_of, so the
+        # colour has to be applied here too — a <pre class="text-red-600"> has
+        # the class applied DIRECTLY and still exported in default ink
+        # (Codex aimformat#19).
+        # the class is legal on <code> too, and browsers colour the code text
+        # from it, so check the nested element when the <pre> states none
+        colour = _color_for(el, self.palette)
+        if not colour:
+            # `<pre><code class="…">` is the canonical shape and its colour
+            # belongs to the whole block. But emit_pre flattens el.text() into
+            # one run, so lifting a code child's colour when the <pre> ALSO has
+            # sibling text would paint that text too (Codex aimformat#19).
+            # Only adopt it when the code element is the pre's entire content.
+            kids = [c for c in el.children if not (isinstance(c, Text) and not c.data.strip())]
+            if len(kids) == 1 and isinstance(kids[0], Element) and kids[0].tag == "code":
+                colour = _color_for(kids[0], self.palette)
         for i, line in enumerate(text.split("\n")):
             if i:
                 para.add_run().add_break()
             run = para.add_run(line)
             run.font.name = _MONO
+            if colour:
+                from docx.shared import RGBColor
+
+                run.font.color.rgb = RGBColor.from_string(colour)
 
     def emit_slide(self, el: Element) -> None:
         """Linearize a fixed-canvas page: a page break, then the slide's
@@ -695,7 +842,11 @@ class _Exporter:
                 self.emit_block(child, el.chunk_id or "")
         for cap in el.elements():
             if cap.tag == "figcaption":
-                self.out.add_paragraph(cap.text(), style=self._safe_style("Caption"))
+                # built through _runs_of rather than add_paragraph(text) so a
+                # caption's own formatting — including colour — survives
+                # (Codex aimformat#19)
+                para = self.out.add_paragraph(style=self._safe_style("Caption"))
+                _apply_runs(para, _runs_of(cap, None, self.palette))
 
     def _figure_width(self, fig: Element, img: Element):
         """The authored image width (inline style, CSS px at 96 dpi — the
@@ -737,6 +888,11 @@ class _Exporter:
                 content.children = [
                     c for c in li.children if not (isinstance(c, Element) and c.tag in ("ul", "ol"))
                 ]
+                # the copy is synthetic, so it starts with no attributes — carry
+                # the item's own class or a coloured <li> exports in default ink
+                # (Codex aimformat#19)
+                if li.get("class") is not None:
+                    content.set("class", li.get("class"))
                 if prop is not None:
                     self.emit_tracked_chunk(content, prop, style=style, payload=li is group[-1])
                 else:
@@ -833,7 +989,7 @@ class _Exporter:
                         for dc in range(colspan):
                             occupied.add((ri + dr, ci + dc))
                 para = cell.paragraphs[0]
-                runs = _runs_of(cell_el)
+                runs = _runs_of(cell_el, None, self.palette)
                 if cell_el.tag == "th":
                     runs = [{**r, "bold": True} for r in runs]
                 if force == "ins" and prop is not None:
@@ -845,7 +1001,7 @@ class _Exporter:
                     if new_cells is not None:  # cellwise: shapes match 1:1
                         self.rev.ins(
                             para,
-                            _runs_of(new_cells[orig_idx]),
+                            _runs_of(new_cells[orig_idx], None, self.palette),
                             _actor_label(prop_mod.author),
                             prop_mod.at,
                         )
@@ -899,7 +1055,7 @@ class _Exporter:
                     para = self._new_span_cell(
                         table, tr, colspan=cs, vmerge="restart" if rs > 1 else None
                     )
-                    runs = _runs_of(c)
+                    runs = _runs_of(c, None, self.palette)
                     if c.tag == "th":
                         runs = [{**run, "bold": True} for run in runs]
                     self.rev.ins(para, runs, label, date)
@@ -972,7 +1128,12 @@ class _Exporter:
             ]
             for idx in range(min(len(payload_cells), ncols)):
                 para = new_row.cells[idx].paragraphs[0]
-                self.rev.ins(para, _runs_of(payload_cells[idx]), _actor_label(prop.author), prop.at)
+                self.rev.ins(
+                    para,
+                    _runs_of(payload_cells[idx], None, self.palette),
+                    _actor_label(prop.author),
+                    prop.at,
+                )
             if first:
                 table.rows[0]._tr.addprevious(new_row._tr)
             else:

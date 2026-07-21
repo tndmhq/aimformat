@@ -728,3 +728,182 @@ class TestExportDocxFigureWidth:
         out = aim.to_docx(self._fig_doc("width:2000px"), tmp_path / "f.docx")
         # A4 portrait, 15mm margins → 180mm content ≈ 7.09in
         assert self._picture_width_emu(out) <= int(7.1 * 914400)
+
+
+class TestDocxTextColour:
+    """DOCX dropped text colour entirely — export_docx emitted no w:color at
+    all, so a document whose title had been branded (or given an inline colour)
+    exported in Word's default ink.
+
+    Reported from production: "the title is not in pink when downloaded in
+    docx" (2026-07-21).
+    """
+
+    @staticmethod
+    def _colours(path):
+        import re
+        import zipfile
+
+        xml = zipfile.ZipFile(str(path)).read("word/document.xml").decode()
+        return sorted(set(re.findall(r'<w:color w:val="([0-9A-Fa-f]{6})"', xml)))
+
+    def _export(self, markup, tmp_path, theme=None):
+        doc = aim.from_text("placeholder", title="t")
+        doc.add_chunk(markup, author=aim.external("test"))
+        text = doc.dumps()
+        if theme:
+            text = text.replace("</head>", f"<style data-aim-theme>:root{{{theme}}}</style></head>")
+        out = tmp_path / "out.docx"
+        aim.to_docx(aim.loads(text), out, pending="accept-all")
+        return out
+
+    def test_a_brand_class_reaches_word_as_a_run_colour(self, tmp_path):
+        out = self._export('<h1 class="text-brand-1">Title</h1>', tmp_path)
+        assert "1D4ED8" in self._colours(out)  # the default brand-1
+
+    def test_the_documents_theme_wins_over_the_default(self, tmp_path):
+        """The reported case end to end: the model sets the brand slot to pink
+        and puts the class on the heading. Word must get the pink, not the
+        stylesheet default."""
+        out = self._export(
+            '<h1 class="text-brand-1">Quarterly Review</h1>',
+            tmp_path,
+            theme="--aim-brand-1:#ff1493",
+        )
+        assert self._colours(out) == ["FF1493"]
+
+    def test_a_registered_palette_class_resolves(self, tmp_path):
+        out = self._export('<p class="text-red-600">Red</p>', tmp_path)
+        assert "DC2626" in self._colours(out)  # registry palette red-600
+
+    def test_an_rgb_theme_value_resolves(self, tmp_path):
+        """registry.json permits rgb() for a colour slot, so the exporter must
+        convert it rather than silently drop the colour (Codex aimformat#19)."""
+        out = self._export(
+            '<h1 class="text-brand-1">Title</h1>',
+            tmp_path,
+            theme="--aim-brand-1:rgb(255, 20, 147)",
+        )
+        assert self._colours(out) == ["FF1493"]
+
+    def test_inline_colour_is_ignored_because_the_format_rejects_it(self, tmp_path):
+        """registry.json's style whitelist is geometry-only, so `style="color:…"`
+        fails lint with V007. Honouring it in the exporter would render markup
+        the format does not accept (Codex aimformat#19)."""
+        markup = '<p style="color:#ff69b4">Pink</p>'
+        doc = aim.from_text("placeholder", title="t")
+        doc.add_chunk(markup, author=aim.external("test"))
+        assert any("V007" in str(f) for f in aim.lint_text(doc.dumps()))
+        out = self._export(markup, tmp_path)
+        assert self._colours(out) == []
+
+    def test_an_uncoloured_document_gains_no_colour_runs(self, tmp_path):
+        """No colour must mean no w:color — writing a default would override
+        the Word theme the user's template supplies."""
+        out = self._export("<p>Plain</p>", tmp_path)
+        assert self._colours(out) == []
+
+    def test_a_colour_we_cannot_resolve_is_left_alone(self, tmp_path):
+        """rgb()/hsl()/named colours are not guessed at: putting the WRONG
+        colour in the file is worse than leaving Word's default."""
+        out = self._export('<p style="color:rebeccapurple">Named</p>', tmp_path)
+        assert self._colours(out) == []
+
+    def test_export_never_mutates_the_source(self, tmp_path):
+        """A tracked export uses the source document directly, so nothing in
+        the exporter may write back into it (Codex aimformat#19)."""
+        doc = aim.from_text("placeholder", title="t")
+        doc.add_chunk(
+            '<div class="text-brand-1"><p data-aim="p1">Child</p></div>',
+            author=aim.external("test"),
+        )
+        before = doc.dumps()
+        aim.to_docx(doc, tmp_path / "o.docx", pending="tracked")
+        assert doc.dumps() == before
+
+    def test_colour_does_not_inherit_from_a_wrapper_yet(self, tmp_path):
+        """Documented limitation, deliberately out of scope for this change.
+
+        CSS inherits colour, so a browser renders this child red; DOCX does
+        not. Making it inherit means carrying the colour into every leaf
+        emitter — block, list, pre, table cell, and each tracked-change path —
+        and three review rounds each found a different one left unthreaded.
+        The durable fix is to resolve every element's effective colour once
+        against the whole tree and look it up by identity, which is a larger
+        change than this PR should carry. Colour applied directly to an
+        element — which is what the editor emits — works.
+        """
+        out = self._export('<div class="text-red-600"><p>Child</p></div>', tmp_path)
+        assert self._colours(out) == []
+
+    def test_the_cascade_winner_is_the_last_sorted_class(self, tmp_path):
+        """generate_aim_css sorts class rules by name and CSS is last-wins, so
+        `text-brand-1 text-red-600` renders RED whichever is written first.
+        DOCX must agree (Codex aimformat#19)."""
+        assert self._colours(
+            self._export('<p class="text-brand-1 text-red-600">X</p>', tmp_path)
+        ) == ["DC2626"]
+        assert self._colours(
+            self._export('<p class="text-red-600 text-brand-1">X</p>', tmp_path)
+        ) == ["DC2626"]
+
+    def test_an_out_of_range_rgb_theme_value_is_clamped(self, tmp_path):
+        out = self._export(
+            '<h1 class="text-brand-1">T</h1>', tmp_path, theme="--aim-brand-1:rgb(999, 0, 0)"
+        )
+        assert self._colours(out) == ["FF0000"]
+
+    def test_a_text_size_utility_is_not_treated_as_a_colour(self, tmp_path):
+        out = self._export('<p class="text-xl">Plain</p>', tmp_path)
+        assert self._colours(out) == []
+
+    def test_text_white_resolves(self, tmp_path):
+        """text-white lives in classes.singles, not classes.palette, so an
+        enumeration of brand slots plus palette families missed it (Codex
+        aimformat#19). Colours are read from the generated declarations now."""
+        out = self._export('<p class="text-white">On dark</p>', tmp_path)
+        assert self._colours(out) == ["FFFFFF"]
+
+    def test_a_code_block_carries_its_own_colour(self, tmp_path):
+        """emit_pre builds mono runs directly, bypassing the colour path, so a
+        class applied straight to the <pre> was ignored (Codex aimformat#19)."""
+        out = self._export('<pre class="text-red-600">Error</pre>', tmp_path)
+        assert "DC2626" in self._colours(out)
+
+    def test_a_list_items_own_colour_survives(self, tmp_path):
+        """emit_list rebuilds each item as a synthetic <li> carrying only its
+        children, which dropped the item's own class (Codex aimformat#19)."""
+        out = self._export('<ul><li class="text-red-600">Red</li></ul>', tmp_path)
+        assert "DC2626" in self._colours(out)
+
+    def test_colour_on_nested_code_in_a_pre(self, tmp_path):
+        """class is legal on <code> and browsers colour the code text from it,
+        but emit_pre only checked the outer <pre> (Codex aimformat#19)."""
+        out = self._export('<pre><code class="text-red-600">Error</code></pre>', tmp_path)
+        assert "DC2626" in self._colours(out)
+
+    def test_a_figure_caption_keeps_its_colour(self, tmp_path):
+        """Captions were written with add_paragraph(text), bypassing runs
+        entirely, so no formatting reached them (Codex aimformat#19)."""
+        out = self._export(
+            '<figure><img src="https://e.example/i.png" alt="x">'
+            '<figcaption class="text-red-600">Cap</figcaption></figure>',
+            tmp_path,
+        )
+        assert "DC2626" in self._colours(out)
+
+    def test_a_grouping_elements_direct_colour_survives(self, tmp_path):
+        """_block_children rewraps a group's loose text into a fresh, bare
+        element, dropping a colour declared on the group (Codex #19)."""
+        out = self._export('<blockquote class="text-red-600">Quoted</blockquote>', tmp_path)
+        assert "DC2626" in self._colours(out)
+
+    def test_a_pres_sibling_text_is_not_painted_by_a_nested_code(self, tmp_path):
+        """emit_pre flattens to one run, so adopting a code child's colour when
+        the <pre> also holds sibling text would paint that text too — a
+        regression my own nested-code fix introduced (Codex #19)."""
+        out = self._export('<pre>plain <code class="text-red-600">x</code></pre>', tmp_path)
+        assert self._colours(out) == []  # ambiguous: colour nothing rather than all
+        # the canonical shape still works
+        only = self._export('<pre><code class="text-red-600">x</code></pre>', tmp_path)
+        assert "DC2626" in self._colours(only)
