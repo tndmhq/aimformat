@@ -96,7 +96,9 @@ Excluded:
   that project starts from fact rather than a survey: a DOCX round trip keeps
   **bold and italic** (they ride markup) and loses **colour, paragraph
   alignment, and font size** — a centred, red, 24 pt paragraph comes back
-  bare. The loss is upstream of us: docling's `formatting` model carries only
+  bare. Word's Quote style flattens to `<p>` too. Structure, by contrast,
+  survives: headings, ordered vs unordered lists, tables and page breaks all
+  round-trip cleanly on a realistic business document, with no lint findings. The loss is upstream of us: docling's `formatting` model carries only
   `bold`/`italic`/`underline`/`strikethrough`/`script`, so those properties
   never reach `ingest.py`. Recovering them means a python-docx side pass over
   the original file, as `convert/_docx_pages.py` already does for pagination
