@@ -92,7 +92,16 @@ Excluded:
 - redesigning the theme slots, link colour, proposal chrome, or fixed palette;
 - preserving source colour during DOCX/PDF/Markdown ingestion. Current
   ingestors drop presentation generally; this change creates the correct
-  target representation for a later import project;
+  target representation for a later import project. Measured 2026-07-22, so
+  that project starts from fact rather than a survey: a DOCX round trip keeps
+  **bold and italic** (they ride markup) and loses **colour, paragraph
+  alignment, and font size** — a centred, red, 24 pt paragraph comes back
+  bare. The loss is upstream of us: docling's `formatting` model carries only
+  `bold`/`italic`/`underline`/`strikethrough`/`script`, so those properties
+  never reach `ingest.py`. Recovering them means a python-docx side pass over
+  the original file, as `convert/_docx_pages.py` already does for pagination
+  — not a mapping fix. Recorded in
+  [`docs/knowledge/architecture.md`](../knowledge/architecture.md);
 - exact background/border fidelity for every possible grouping box in Word;
 - PPTX export (none exists) and Markdown colour extensions.
 
