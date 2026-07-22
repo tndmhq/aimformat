@@ -108,6 +108,29 @@ technical content only (see Governance below).
    compatibility requirement, and redesigning it is a deliberate, versioned
    step rather than a free hand.
 
+7. **Review your own diff before asking a reviewer to.** Every automated
+   review round costs real credit, and the rounds are not independent: on
+   tndm#28 (2026-07-22, 6 rounds / 21 findings / 12 pushes) at least half the
+   late findings were defects in the *fix for the previous round*, not in the
+   original PR. So:
+
+   - **Run [`REVIEW.md`](REVIEW.md) against your own diff** before opening a
+     PR or requesting a re-review. It is already the binding contract for
+     reviewers; apply it to yourself. Same bar — real defects with a concrete
+     failure scenario, no nits.
+   - **When the diff is a FIX for review findings, the question that pays is
+     "what does this break that used to work?"** — not "is this correct?".
+     That is where the repeat rounds came from, every time.
+   - **One review trigger per BATCH of fixes, never per fix.** Fix everything
+     a round raised, self-review the combined diff, then trigger once.
+   - **Never request a review on a commit whose own gates you have not run**
+     (lint, format, types, tests — by exit code, not by eyeballing output).
+     Burning a review round on a commit CI would reject is pure waste.
+
+   This reduces rounds; it does not replace the reviewer. Reviewers routinely
+   catch defects in code its author has read many times — that is the point of
+   having one.
+
 ## Governance (public repo)
 
 - **Reviewing a PR (human or bot)?** Follow [`REVIEW.md`](REVIEW.md) — ≤5
