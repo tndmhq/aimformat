@@ -747,6 +747,14 @@ class TestDocxTextColour:
         xml = zipfile.ZipFile(str(path)).read("word/document.xml").decode()
         return sorted(set(re.findall(r'<w:color w:val="([0-9A-Fa-f]{6})"', xml)))
 
+    @staticmethod
+    def _colour_count(path):
+        import re
+        import zipfile
+
+        xml = zipfile.ZipFile(str(path)).read("word/document.xml").decode()
+        return len(re.findall(r'<w:color w:val="[0-9A-Fa-f]{6}"', xml))
+
     def _export(self, markup, tmp_path, theme=None):
         doc = aim.from_text("placeholder", title="t")
         doc.add_chunk(markup, author=aim.external("test"))
@@ -786,16 +794,21 @@ class TestDocxTextColour:
         )
         assert self._colours(out) == ["FF1493"]
 
-    def test_inline_colour_is_ignored_because_the_format_rejects_it(self, tmp_path):
-        """registry.json's style whitelist is geometry-only, so `style="color:…"`
-        fails lint with V007. Honouring it in the exporter would render markup
-        the format does not accept (Codex aimformat#19)."""
+    def test_inline_paint_reaches_word(self, tmp_path):
+        """The literal is a first-class value since 0.3 — the point of the
+        change. It also has to be lint-clean, or the exporter would render
+        markup the format does not accept."""
         markup = '<p style="color:#ff69b4">Pink</p>'
         doc = aim.from_text("placeholder", title="t")
         doc.add_chunk(markup, author=aim.external("test"))
-        assert any("V007" in str(f) for f in aim.lint_text(doc.dumps()))
-        out = self._export(markup, tmp_path)
-        assert self._colours(out) == []
+        assert [f for f in aim.lint_text(doc.dumps()) if f.level == "error"] == []
+        assert self._colours(self._export(markup, tmp_path)) == ["FF69B4"]
+
+    def test_inline_paint_outranks_a_conflicting_class(self, tmp_path):
+        out = self._export(
+            '<p class="text-brand-1 text-red-600" style="color:#ff69b4">Pink</p>', tmp_path
+        )
+        assert self._colours(out) == ["FF69B4"]
 
     def test_an_uncoloured_document_gains_no_colour_runs(self, tmp_path):
         """No colour must mean no w:color — writing a default would override
@@ -804,10 +817,14 @@ class TestDocxTextColour:
         assert self._colours(out) == []
 
     def test_a_colour_we_cannot_resolve_is_left_alone(self, tmp_path):
-        """rgb()/hsl()/named colours are not guessed at: putting the WRONG
-        colour in the file is worse than leaving Word's default."""
-        out = self._export('<p style="color:rebeccapurple">Named</p>', tmp_path)
-        assert self._colours(out) == []
+        """Named colours are outside the paint grammar (V008) and are not
+        guessed at either: putting the WRONG colour in the file is worse than
+        leaving Word's default."""
+        markup = '<p style="color:rebeccapurple">Named</p>'
+        doc = aim.from_text("placeholder", title="t")
+        doc.add_chunk(markup, author=aim.external("test"))
+        assert "V008" in {f.code for f in aim.lint_text(doc.dumps())}
+        assert self._colours(self._export(markup, tmp_path)) == []
 
     def test_export_never_mutates_the_source(self, tmp_path):
         """A tracked export uses the source document directly, so nothing in
@@ -821,20 +838,55 @@ class TestDocxTextColour:
         aim.to_docx(doc, tmp_path / "o.docx", pending="tracked")
         assert doc.dumps() == before
 
-    def test_colour_does_not_inherit_from_a_wrapper_yet(self, tmp_path):
-        """Documented limitation, deliberately out of scope for this change.
-
-        CSS inherits colour, so a browser renders this child red; DOCX does
-        not. Making it inherit means carrying the colour into every leaf
-        emitter — block, list, pre, table cell, and each tracked-change path —
-        and three review rounds each found a different one left unthreaded.
-        The durable fix is to resolve every element's effective colour once
-        against the whole tree and look it up by identity, which is a larger
-        change than this PR should carry. Colour applied directly to an
-        element — which is what the editor emits — works.
-        """
+    def test_colour_inherits_from_a_wrapper(self, tmp_path):
+        """CSS inherits colour, so a browser renders this child red and DOCX
+        must agree. Every leaf emitter reads one resolver rather than each
+        re-deriving the colour from its own element (the previous shape, where
+        three review rounds each found a different leaf unthreaded)."""
         out = self._export('<div class="text-red-600"><p>Child</p></div>', tmp_path)
-        assert self._colours(out) == []
+        assert self._colours(out) == ["DC2626"]
+
+    def test_inherited_colour_reaches_every_leaf_family(self, tmp_path):
+        out = self._export(
+            '<section style="color:#ff69b4">'
+            "<p>Block</p>"
+            "<ul><li>Item</li></ul>"
+            "<pre><code>code</code></pre>"
+            "<table><tbody><tr><td>Cell</td></tr></tbody></table>"
+            "</section>",
+            tmp_path,
+        )
+        assert self._colours(out) == ["FF69B4"]
+        assert self._colour_count(out) == 4  # one per leaf run, none skipped
+
+    def test_a_leaf_whose_base_layer_sets_its_own_colour_does_not_inherit(self, tmp_path):
+        """`blockquote{color:#4b5563}` and `figcaption{color:#6b7280}` beat an
+        inherited value in a browser too, so neither is pink there. We paint
+        nothing and Word's Quote/Caption styles keep their own ink."""
+        out = self._export(
+            '<section style="color:#ff69b4">'
+            "<blockquote>Quoted</blockquote>"
+            '<figure><img src="https://e.example/i.png" alt="x">'
+            "<figcaption>Cap</figcaption></figure>"
+            "</section>",
+            tmp_path,
+        )
+        assert self._colour_count(out) == 1  # the image placeholder only
+
+    def test_a_group_paints_its_own_blockquote_when_asked_directly(self, tmp_path):
+        out = self._export(
+            '<section><blockquote style="color:#ff69b4">Quoted</blockquote></section>', tmp_path
+        )
+        assert self._colours(out) == ["FF69B4"]
+
+    def test_a_links_own_base_layer_colour_is_left_to_word(self, tmp_path):
+        """`a{color:var(--aim-brand-1)}` is a base-layer rule: the link is not
+        red in a browser either, and Word's template owns hyperlink ink. A
+        fragment href emits no trailing URL run, so the count is exactly the
+        surrounding text."""
+        out = self._export('<p class="text-red-600">see <a href="#x">link</a></p>', tmp_path)
+        assert self._colours(out) == ["DC2626"]
+        assert self._colour_count(out) == 1
 
     def test_the_cascade_winner_is_the_last_sorted_class(self, tmp_path):
         """generate_aim_css sorts class rules by name and CSS is last-wins, so
@@ -898,12 +950,281 @@ class TestDocxTextColour:
         out = self._export('<blockquote class="text-red-600">Quoted</blockquote>', tmp_path)
         assert "DC2626" in self._colours(out)
 
-    def test_a_pres_sibling_text_is_not_painted_by_a_nested_code(self, tmp_path):
-        """emit_pre flattens to one run, so adopting a code child's colour when
-        the <pre> also holds sibling text would paint that text too — a
-        regression my own nested-code fix introduced (Codex #19)."""
+    def test_a_mixed_pre_paints_only_the_coloured_child(self, tmp_path):
+        """emit_pre used to flatten the whole block to one run, so it could
+        either paint the sibling text too or paint nothing; it chose nothing
+        (Codex #19). Per-element paint closes that hole: the run carries its
+        own colour and the block guesses nothing."""
         out = self._export('<pre>plain <code class="text-red-600">x</code></pre>', tmp_path)
-        assert self._colours(out) == []  # ambiguous: colour nothing rather than all
-        # the canonical shape still works
+        assert self._colours(out) == ["DC2626"]
+        assert self._colour_count(out) == 1  # the <code> run, not the sibling text
         only = self._export('<pre><code class="text-red-600">x</code></pre>', tmp_path)
         assert "DC2626" in self._colours(only)
+
+    def test_a_nested_span_paints_only_its_own_run(self, tmp_path):
+        out = self._export('<p>plain <span style="color:#ff69b4">pink</span> tail</p>', tmp_path)
+        assert self._colours(out) == ["FF69B4"]
+        assert self._colour_count(out) == 1
+
+    def test_a_slide_child_keeps_its_paint_after_linearization(self, tmp_path):
+        out = self._export(
+            '<aim-slide style="width:960px; height:540px">'
+            '<h2 style="left:48px; top:32px; width:450px; color:#ff69b4">Slide title</h2>'
+            "</aim-slide>",
+            tmp_path,
+        )
+        assert self._colours(out) == ["FF69B4"]
+
+    def test_a_table_cells_own_paint_survives(self, tmp_path):
+        out = self._export(
+            "<table><tbody><tr>"
+            '<td style="color:#ff69b4">Pink</td><td>Plain</td>'
+            "</tr></tbody></table>",
+            tmp_path,
+        )
+        assert self._colours(out) == ["FF69B4"]
+        assert self._colour_count(out) == 1
+
+
+class TestDocxPaintBoxes:
+    """Backgrounds and borders. Word has no CSS box, so these are honest
+    approximations with a documented degradation contract — asserted on the
+    OOXML, not on python-docx's high-level view."""
+
+    @staticmethod
+    def _xml(path) -> str:
+        import zipfile
+
+        return zipfile.ZipFile(str(path)).read("word/document.xml").decode()
+
+    def _export(self, markup, tmp_path, *, pending="accept-all"):
+        doc = aim.from_text("placeholder", title="t")
+        doc.add_chunk(markup, author=aim.external("test"))
+        out = tmp_path / "out.docx"
+        aim.to_docx(doc, out, pending=pending)
+        return out
+
+    def _fills(self, path) -> list[str]:
+        import re
+
+        return sorted(set(re.findall(r'<w:shd [^>]*w:fill="([0-9A-Fa-f]{6})"', self._xml(path))))
+
+    def _borders(self, path, kind: str) -> dict[str, str]:
+        """{side: RRGGBB} for one border container (pBdr / tcBorders / bdr)."""
+        import re
+
+        xml = self._xml(path)
+        if kind == "bdr":  # run border: one element, no sides
+            hits = re.findall(r'<w:bdr [^>]*w:color="([0-9A-Fa-f]{6})"', xml)
+            return {"run": hits[0]} if hits else {}
+        block = re.search(rf"<w:{kind}>(.*?)</w:{kind}>", xml, re.S)
+        if block is None:
+            return {}
+        return {
+            side: colour
+            for side, colour in re.findall(
+                r'<w:(top|left|bottom|right) [^>]*w:color="([0-9A-Fa-f]{6})"', block.group(1)
+            )
+        }
+
+    # -- backgrounds ---------------------------------------------------------
+    def test_a_block_background_becomes_paragraph_shading(self, tmp_path):
+        out = self._export('<p style="background-color:#fff1f7">Tinted</p>', tmp_path)
+        assert self._fills(out) == ["FFF1F7"]
+        assert "<w:pPr>" in self._xml(out) and "w:shd" in self._xml(out)
+
+    def test_an_inline_background_becomes_run_shading_not_a_highlight(self, tmp_path):
+        """Word's highlight is a 16-value enum; shading takes the real RGB."""
+        out = self._export('<p>a <span style="background-color:#fff1f7">b</span></p>', tmp_path)
+        assert self._fills(out) == ["FFF1F7"]
+        assert "w:highlight" not in self._xml(out)
+
+    def test_a_list_items_background_shades_its_paragraph(self, tmp_path):
+        out = self._export('<ul><li style="background-color:#fff1f7">Item</li></ul>', tmp_path)
+        assert self._fills(out) == ["FFF1F7"]
+
+    def test_a_cell_background_becomes_cell_shading(self, tmp_path):
+        out = self._export(
+            '<table><tbody><tr><td style="background-color:#fff1f7">c</td></tr></tbody></table>',
+            tmp_path,
+        )
+        assert self._fills(out) == ["FFF1F7"]
+        assert "w:tcPr" in self._xml(out)
+
+    def test_a_grouping_background_shades_its_descendant_paragraphs(self, tmp_path):
+        """Degradation contract: Word gets no single contiguous box, so every
+        emitted descendant whose own background is transparent is shaded."""
+        out = self._export(
+            '<section style="background-color:#fff1f7"><p>one</p><p>two</p></section>', tmp_path
+        )
+        import re
+
+        assert self._fills(out) == ["FFF1F7"]
+        assert len(re.findall(r'<w:shd [^>]*w:fill="FFF1F7"', self._xml(out))) == 2
+
+    def test_a_descendants_own_background_wins_over_the_group(self, tmp_path):
+        out = self._export(
+            '<section style="background-color:#fff1f7">'
+            '<p style="background-color:#eeeeee">own</p></section>',
+            tmp_path,
+        )
+        assert self._fills(out) == ["EEEEEE"]
+
+    def test_an_unpainted_document_gains_no_shading(self, tmp_path):
+        assert self._fills(self._export("<p>Plain</p>", tmp_path)) == []
+
+    # -- borders -------------------------------------------------------------
+    def test_colour_without_a_border_emits_nothing(self, tmp_path):
+        out = self._export('<p style="border-color:#ff69b4">x</p>', tmp_path)
+        assert self._borders(out, "pBdr") == {}
+
+    def test_a_full_border_recolours_every_side(self, tmp_path):
+        out = self._export('<p class="border" style="border-color:#ff69b4">x</p>', tmp_path)
+        assert self._borders(out, "pBdr") == {
+            "top": "FF69B4",
+            "left": "FF69B4",
+            "bottom": "FF69B4",
+            "right": "FF69B4",
+        }
+
+    def test_a_top_only_border_recolours_only_the_top(self, tmp_path):
+        out = self._export('<p class="border-t" style="border-color:#ff69b4">x</p>', tmp_path)
+        assert self._borders(out, "pBdr") == {"top": "FF69B4"}
+
+    def test_a_bottom_only_border_recolours_only_the_bottom(self, tmp_path):
+        out = self._export('<p class="border-b" style="border-color:#ff69b4">x</p>', tmp_path)
+        assert self._borders(out, "pBdr") == {"bottom": "FF69B4"}
+
+    def test_a_blockquotes_base_stylesheet_border_is_recoloured(self, tmp_path):
+        out = self._export('<blockquote style="border-color:#ff69b4">q</blockquote>', tmp_path)
+        assert self._borders(out, "pBdr") == {"left": "FF69B4"}
+
+    def test_a_class_border_colour_matches_the_browsers_shorthand_reset(self, tmp_path):
+        """`.border-t` sorts AFTER `.border-red-600` in the generated
+        stylesheet, so its `border-top:1px solid #e5e7eb` shorthand resets the
+        colour and a browser renders GREY. DOCX must not emit red."""
+        out = self._export('<p class="border-t border-red-600">x</p>', tmp_path)
+        assert self._borders(out, "pBdr") == {}
+
+    def test_a_cell_border_colour_reaches_the_cell(self, tmp_path):
+        out = self._export(
+            '<table><tbody><tr><td class="border" style="border-color:#ff69b4">c</td>'
+            "</tr></tbody></table>",
+            tmp_path,
+        )
+        assert self._borders(out, "tcBorders") == {
+            "top": "FF69B4",
+            "left": "FF69B4",
+            "bottom": "FF69B4",
+            "right": "FF69B4",
+        }
+
+    def test_an_inline_border_is_a_whole_run_border(self, tmp_path):
+        """Documented degradation: `w:rPr/w:bdr` is ONE border for the whole
+        run — Word has no per-side border on a run — so a side utility on an
+        inline element colours the whole box."""
+        out = self._export(
+            '<p>a <span class="border-t" style="border-color:#ff69b4">b</span></p>', tmp_path
+        )
+        assert self._borders(out, "bdr") == {"run": "FF69B4"}
+
+    def test_word_property_children_stay_in_schema_order(self, tmp_path):
+        """WordprocessingML property children are a SEQUENCE. python-docx only
+        knows the positions of the elements it models, so an appended
+        `w:shd`/`w:pBdr` would land after siblings that must follow it and
+        make the file invalid."""
+        import re
+
+        out = self._export(
+            '<p class="border" style="background-color:#fff1f7; border-color:#ff69b4">Boxed '
+            '<span class="border-t" style="background-color:#eeeeee; '
+            'border-color:#0f766e">run</span></p>',
+            tmp_path,
+        )
+        xml = self._xml(out)
+        for tag, want in (("w:pPr", ["w:pBdr", "w:shd"]), ("w:rPr", ["w:bdr", "w:shd"])):
+            blocks = re.findall(rf"<{tag}>(.*?)</{tag}>", xml, re.S)
+            painted = [[k for k in re.findall(r"<(w:[a-zA-Z]+)", b) if k in want] for b in blocks]
+            assert want in painted, f"{tag}: {painted}"
+
+    def test_a_cells_property_order_survives_the_span_structure(self, tmp_path):
+        import re
+
+        out = self._export(
+            '<table><tbody><tr><td class="border" '
+            'style="background-color:#fff1f7; border-color:#ff69b4">c</td></tr></tbody></table>',
+            tmp_path,
+        )
+        block = re.search(r"<w:tcPr>(.*?)</w:tcPr>", self._xml(out), re.S)
+        assert block is not None
+        want = ("w:tcBorders", "w:shd")
+        kids = [k for k in re.findall(r"<(w:[a-zA-Z]+)", block.group(1)) if k in want]
+        assert kids == list(want)
+
+    def test_an_unpainted_document_gains_no_borders(self, tmp_path):
+        xml = self._xml(self._export('<p class="border">x</p>', tmp_path))
+        assert "w:pBdr" not in xml
+
+
+class TestDocxPaintPendingModes:
+    """Paint has to survive the pending lane: tracked revisions carry it in
+    the revision run properties, and the resolved exports carry exactly the
+    chosen paint."""
+
+    @staticmethod
+    def _xml(path) -> str:
+        import zipfile
+
+        return zipfile.ZipFile(str(path)).read("word/document.xml").decode()
+
+    def _doc(self):
+        doc = aim.from_text("placeholder", title="t")
+        doc.add_chunk('<p data-aim="p1">Plain</p>', author=BOT, at=ts(0))
+        doc.propose_modify(
+            "p1",
+            '<p data-aim="p1" style="color:#ff69b4; background-color:#fff1f7">Pink</p>',
+            author=BOT,
+            explanation="Recolour.",
+            at=ts(1),
+        )
+        return doc
+
+    def _out(self, tmp_path, pending):
+        out = tmp_path / f"{pending}.docx"
+        aim.to_docx(self._doc(), out, pending=pending)
+        return out
+
+    def test_tracked_insertions_carry_the_proposed_paint(self, tmp_path):
+        """Text colour rides the inserted RUN properties, so old and new ink
+        are both reviewable. The block box is a paragraph property and Word
+        has only one per paragraph — which is exact here because the delete
+        and the insert are separate paragraphs."""
+        import re
+
+        xml = self._xml(self._out(tmp_path, "tracked"))
+        inserted = next(p for p in re.findall(r"<w:p>.*?</w:p>", xml, re.S) if "<w:ins " in p)
+        ins = re.search(r"<w:ins .*?</w:ins>", inserted, re.S)
+        assert ins is not None and 'w:val="FF69B4"' in ins.group(0)
+        assert 'w:fill="FFF1F7"' in inserted.split("<w:ins ")[0]  # the paragraph's own box
+
+    def test_a_tracked_deletion_keeps_the_paint_it_is_removing(self, tmp_path):
+        import re
+
+        xml = self._xml(self._out(tmp_path, "tracked"))
+        deleted = next(p for p in re.findall(r"<w:p>.*?</w:p>", xml, re.S) if "<w:del " in p)
+        assert "FF69B4" not in deleted and "FFF1F7" not in deleted
+
+    def test_accept_all_carries_exactly_the_proposed_paint(self, tmp_path):
+        xml = self._xml(self._out(tmp_path, "accept-all"))
+        assert 'w:val="FF69B4"' in xml and "w:ins" not in xml
+
+    def test_reject_all_carries_no_paint(self, tmp_path):
+        xml = self._xml(self._out(tmp_path, "reject-all"))
+        assert "FF69B4" not in xml and "FFF1F7" not in xml
+
+    @pytest.mark.parametrize("pending", ["tracked", "accept-all", "reject-all"])
+    def test_no_pending_mode_mutates_the_source(self, tmp_path, pending):
+        doc = self._doc()
+        before = doc.dumps()
+        aim.to_docx(doc, tmp_path / f"{pending}.docx", pending=pending)
+        assert doc.dumps() == before

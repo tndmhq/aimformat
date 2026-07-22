@@ -1,7 +1,7 @@
 ---
 date: 2026-07-22 08:44
 type: plan
-status: active
+status: done
 related:
   - 2026-07-22_0814_report_colour-model-problem.md
 ---

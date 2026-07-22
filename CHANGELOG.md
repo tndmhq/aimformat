@@ -3,7 +3,68 @@
 All notable changes to the spec and the reference toolkit. The package
 version tracks the spec version it implements (0.x minors may break).
 
-## 0.2.1 — unreleased
+## 0.3.0 — unreleased
+
+Everything below shipped as 0.3.0; the 0.2.1 line was never released, and
+the paint work moves the spec version, so the whole unreleased set carries
+the new number.
+
+- **Literal per-element paint (spec §3.3)** — `style` now carries
+  `color`, `background-color` and `border-color` alongside slide geometry,
+  on a closed grammar: lowercase six-digit sRGB (`^#[0-9a-f]{6}$`) and
+  nothing else. Named colours, `#rgb`, `rgb()`, `transparent`,
+  `currentColor`, `var()` and `!important` all fail V008; unregistered
+  properties still fail V007. Canonical order appends paint after geometry,
+  so a document that uses none serializes unchanged.
+
+  This is what "make only this heading pink" needed. Before it, the only
+  way to spell an arbitrary colour was to repaint one of four
+  document-global brand slots — which also recolours every link and every
+  other element using that slot, and which an agent seeing part of a
+  document cannot choose safely. Brand classes stay, and keep their own
+  meaning: a class says *follow this document's token*, a literal says
+  *use this exact paint, here*. Neither is canonicalized into the other.
+
+  Cascade is native CSS and normative: inline paint outranks every class,
+  `color` inherits, `background-color` and `border-color` do not, and
+  `border-color` recolours an existing border rather than creating one.
+
+- **`aimformat.paint`** — computed paint for a whole tree, resolved once
+  against the generated stylesheet and stored by object identity. It
+  implements the real cascade, shorthand resets included: because
+  `.border-t{border-top:1px solid #e5e7eb}` is emitted after
+  `.border-red-600{border-color:#dc2626}`, `class="border-t border-red-600"`
+  renders GREY, and a converter matching `border-color` declarations alone
+  would disagree with every browser.
+
+- **DOCX paint** — text colour now **inherits** through every leaf emitter
+  (blocks, list items, `pre`/`code`, table cells, figure captions, slides
+  after linearization, and each tracked-change path), closing the
+  documented gap where `<div class="text-red-600"><p>Child</p></div>`
+  exported in default ink, and the mixed-`pre` hole where a block holding
+  both loose text and a coloured `<code>` painted nothing. Backgrounds map
+  to run/paragraph/cell shading (`w:shd`, real RGB — not Word's 16-value
+  highlight enum) and border colour to `w:bdr`/`w:pBdr`/`w:tcBorders`.
+  Word degradations, deliberate and tested: a grouping background is
+  approximated by shading the emitted descendants rather than one
+  contiguous box; a run has one border, not four sides; and `hr` keeps its
+  em-dash rule, painted in the authored border colour. An unpainted
+  document still gains no explicit Word colour, shading or border, so it
+  follows the recipient's template as before.
+
+- **Version marker semantics.** `data-aim-version` is authored state that
+  writers never rewrite, and a tool now warns (S002/S006) only for a
+  version it does **not** implement — a 0.3 toolkit reads every 0.2
+  document without complaint. Adding paint to a 0.2 document is a recorded
+  upgrade: the SDK bumps the attribute AND appends a `modify` event on the
+  new reserved target `aim:version`, so replay restores the old value and
+  every earlier checkpoint still verifies. A document whose history cannot
+  record that event refuses paint instead.
+
+  Migration: none. Existing 0.2 documents stay 0.2, serialize with an
+  unchanged body, and lint clean.
+
+## 0.2.1 — unreleased (folded into 0.3.0)
 
 - **Canonical self-closing normalization (AF-06)**: non-void elements outside
   foreign/SVG context now always serialize with explicit open and close tags;

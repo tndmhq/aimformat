@@ -67,6 +67,32 @@ class TestAttributeOrder:
         assert serialize(el("<span/>")) == "<span></span>"
 
 
+class TestStyleNormalForm:
+    """Paint appends to the geometry order (spec §3.3): geometry first, then
+    color, background-color, border-color."""
+
+    def test_paint_follows_geometry_in_registry_order(self):
+        e = el(
+            '<h2 style="border-color:#ff69b4; color:#ff69b4; top:32px; '
+            'background-color:#fff1f7; left:48px">T</h2>'
+        )
+        assert serialize(e) == (
+            '<h2 style="left:48px; top:32px; color:#ff69b4; '
+            'background-color:#fff1f7; border-color:#ff69b4">T</h2>'
+        )
+
+    def test_a_duplicate_paint_declaration_keeps_the_last(self):
+        e = el('<p style="color:#111111; left:2px; color:#ff69b4">x</p>')
+        assert serialize(e) == '<p style="left:2px; color:#ff69b4">x</p>'
+
+    def test_a_style_that_normalizes_to_nothing_is_dropped(self):
+        assert serialize(el('<p style="  ;  ">x</p>')) == "<p>x</p>"
+
+    def test_a_geometry_only_document_serializes_unchanged(self):
+        e = el('<h2 style="left:48px; top:32px">T</h2>')
+        assert serialize(e) == '<h2 style="left:48px; top:32px">T</h2>'
+
+
 class TestJson:
     def test_sorted_keys_compact(self):
         assert canonical_json({"b": 1, "a": [1, 2]}) == '{"a":[1,2],"b":1}'
@@ -140,6 +166,20 @@ class TestRoundTrip:
             doc2.chunk("code").html == '<pre data-aim="code"><code>line one\nline two</code></pre>'
         )
         assert doc2.dumps() == text
+
+    def test_paint_survives_a_full_round_trip(self):
+        doc = aim.new_document(title="T")
+        doc.add_chunk('<h1 data-aim="t" style="color:#ff69b4">Pink</h1>', author=BOT, at=ts(0))
+        doc.add_chunk(
+            '<p data-aim="b" class="border" style="background-color:#fff1f7; '
+            'border-color:#ff69b4">Tinted</p>',
+            author=BOT,
+            at=ts(1),
+        )
+        text = doc.dumps()
+        again = aim.loads(text)
+        assert again.dumps() == text
+        assert again.chunk("t").html == '<h1 data-aim="t" style="color:#ff69b4">Pink</h1>'
 
     def test_constructs_never_share_a_line(self):
         doc = aim.new_document(title="T")

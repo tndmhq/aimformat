@@ -382,6 +382,7 @@ def _base(S: AimDocument, author: Actor, at: str | None) -> dict:
 
 def _ev_modify(S: AimDocument, target: str, after: str, author: Actor, at: str | None) -> None:
     before = S._state.serial(target)
+    S._ensure_paint_version(after, author=author, at=at)
     S._state.replace(target, after)
     data = _base(S, author, at)
     data.update({"target": target, "action": "modify", "before": before, "after": after})
@@ -400,6 +401,7 @@ def _ev_delete(S: AimDocument, target: str, author: Actor, at: str | None) -> No
 def _ev_add(S: AimDocument, serial: str, anchor: Anchor, author: Actor, at: str | None) -> None:
     nodes = [n for n in parse_fragment(serial) if isinstance(n, Element)]
     target = nodes[0].chunk_id or nodes[0].container_id or ""
+    S._ensure_paint_version(serial, author=author, at=at)
     S._state.insert(serial, anchor)
     data = _base(S, author, at)
     data.update({"target": target, "action": "add", "anchor": anchor.to_obj(), "after": serial})

@@ -1,11 +1,18 @@
 ---
 date: 2026-07-22 08:14
 type: report
-status: active
-related: []
+status: superseded
+related:
+  - 2026-07-22_0844_plan_literal-element-paint.md
 ---
 
 # Report: how colour works in v0.1, and why it does not
+
+> **Superseded 2026-07-22** by
+> [`2026-07-22_0844_plan_literal-element-paint.md`](2026-07-22_0844_plan_literal-element-paint.md),
+> which shipped as spec v0.3. §2 (the design problem), §4a and §4c (the DOCX
+> inheritance and mixed-`pre` gaps) are all closed. Kept for the reasoning
+> that led there.
 
 A brief for redesigning colour. Written to be read on its own — everything
 needed to reason about the problem is below, including the parts that work and

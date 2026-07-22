@@ -15,6 +15,14 @@ from functools import cached_property
 from importlib import resources
 
 
+def version_key(value: str) -> tuple[int, ...] | None:
+    """A dotted numeric spec version as a comparable tuple, or None."""
+    parts = value.split(".")
+    if not all(p.isdigit() for p in parts) or not parts:
+        return None
+    return tuple(int(p) for p in parts)
+
+
 class Registry:
     """Typed accessors over the raw registry tables."""
 
@@ -25,6 +33,22 @@ class Registry:
     @property
     def spec_version(self) -> str:
         return self.raw["spec_version"]
+
+    def implements(self, declared: str | None) -> bool:
+        """Whether this build understands a document declaring *declared*.
+
+        Spec versions are backward-compatible in one direction only: a 0.3
+        tool reads every 0.2 document, but a 0.2 tool rejects 0.3 markup it
+        has no rule for. So "same or older" is understood and only a NEWER
+        version is a finding — the alternative (any difference warns) fires
+        on every existing valid file the moment the toolkit moves on. An
+        unparseable version is treated as not understood.
+        """
+        if declared is None:
+            return False
+        mine = version_key(self.spec_version)
+        theirs = version_key(declared)
+        return theirs is not None and mine is not None and theirs <= mine
 
     # -- elements ------------------------------------------------------------
     @cached_property
@@ -144,6 +168,15 @@ class Registry:
     @cached_property
     def style_patterns(self) -> dict[str, re.Pattern]:
         return {k: re.compile(v) for k, v in self.raw["style_props"]["patterns"].items()}
+
+    @cached_property
+    def paint_props(self) -> frozenset[str]:
+        """The inline-style properties that carry literal paint (spec §3.3).
+
+        Named in the registry rather than derived, so a consumer asking "is
+        this declaration geometry or paint?" reads one table instead of
+        re-deriving the split from property names."""
+        return frozenset(self.raw["style_props"]["paint"])
 
     # -- page setup --------------------------------------------------------------
     @cached_property

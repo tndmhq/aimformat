@@ -101,6 +101,31 @@ def main() -> None:
     self_closing_exceptions.flatten()
     files["ok_self_closing_exceptions.aim"] = self_closing_exceptions.dumps()
 
+    painted = aim.new_document(title="Literal paint fixture")
+    painted.add_chunk(
+        '<h1 data-aim="ttl" style="color:#ff69b4">Pink title</h1>', author=BOT, at=t(0)
+    )
+    painted.add_chunk(
+        '<p data-aim="tint" style="background-color:#fff1f7">Tinted.</p>', author=BOT, at=t(1)
+    )
+    painted.add_chunk(
+        '<p data-aim="callout" class="border" style="border-color:#ff69b4">'
+        'Callout with <span style="color:#ff69b4">one painted run</span>.</p>',
+        author=BOT,
+        at=t(2),
+    )
+    files["ok_paint.aim"] = painted.dumps()
+
+    # A previous-version document, still conforming under this toolkit: a
+    # 0.3 tool understands 0.2, so neither the version marker nor the
+    # stylesheet stamp is a finding (S002/S006 accept older).
+    files["ok_prior_version.aim"] = (
+        base_doc()
+        .dumps()
+        .replace(f'data-aim-version="{aim.SPEC_VERSION}"', 'data-aim-version="0.2"')
+        .replace(f'data-aim-css="{aim.SPEC_VERSION}"', 'data-aim-css="0.2"')
+    )
+
     paginated = base_doc()
     paginated.set_page_setup(
         {
@@ -180,8 +205,11 @@ def main() -> None:
         "nok_V004_arbitrary_value_class.aim": flat.replace(
             'class="font-bold text-3xl"', 'class="w-[347px]"'
         ),
+        # `opacity` is genuinely outside the whitelist. `color:red` would fire
+        # V008 instead since 0.3 registered the paint properties, so the
+        # fixture would stop testing V007 at all.
         "nok_V007_style_outside_whitelist.aim": flat.replace(
-            '<p data-aim="p1">', '<p data-aim="p1" style="color:red">'
+            '<p data-aim="p1">', '<p data-aim="p1" style="opacity:.5">'
         ),
         "nok_V011_unknown_theme_slot.aim": flat.replace(
             "--aim-brand-1:#1a73e8", "--aim-accent:#1a73e8"

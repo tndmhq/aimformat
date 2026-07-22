@@ -1,9 +1,9 @@
 <!doctype html>
-<html data-aim-version="0.2" lang="en">
+<html data-aim-version="0.3" lang="en">
 <head>
 <meta charset="utf-8">
 <!--
-aim-note: This file is an AIM document (open format, v0.2) — valid HTML plus
+aim-note: This file is an AIM document (open format, v0.3) — valid HTML plus
 chunk identity, a pending-suggestions lane, and an edit history.
 Agent docs: https://aimformat.com/llms.txt
 The reliable way to edit this file is the `aimformat` tooling, which manages
@@ -17,7 +17,7 @@ validate with `aim lint`. Humans review in AIM editors:
 https://aimformat.com/editors
 -->
 <title>Empty asset registry</title>
-<style data-aim-css="0.2">
+<style data-aim-css="0.3">
 :root{--aim-brand-1:#1d4ed8;--aim-brand-2:#0f766e;--aim-brand-3:#b45309;--aim-brand-4:#6d28d9;--aim-font-heading:system-ui, -apple-system, 'Segoe UI', sans-serif;--aim-font-body:system-ui, -apple-system, 'Segoe UI', sans-serif;--aim-font-mono:ui-monospace, 'SF Mono', Menlo, Consolas, monospace}
 html{-webkit-text-size-adjust:100%}
 body{margin:2rem auto;padding:0 1.5rem;max-width:52rem;font-family:var(--aim-font-body);font-size:1rem;line-height:1.6;color:#1f2937;background:#fff}

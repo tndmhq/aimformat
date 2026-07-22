@@ -144,11 +144,12 @@ class _Linter:
         version = html.get("data-aim-version")
         if version is None:
             self.add("S001", ERROR, "<html> is missing data-aim-version")
-        elif version != REGISTRY.spec_version:
+        elif not REGISTRY.implements(version):
             self.add(
                 "S002",
                 WARNING,
-                f"document targets spec {version}, this tool implements {REGISTRY.spec_version}",
+                f"document targets spec {version}, this tool implements "
+                f"{REGISTRY.spec_version} — rules it does not know are unchecked",
             )
         head = self.state.head
         if not head.find(lambda e: e.tag == "meta" and e.get("charset") == "utf-8"):
@@ -162,12 +163,12 @@ class _Linter:
                 WARNING,
                 "no embedded aim.css (<style data-aim-css>) — raw-tier rendering degrades",
             )
-        elif css.get("data-aim-css") != REGISTRY.spec_version:
+        elif not REGISTRY.implements(css.get("data-aim-css")):
             self.add(
                 "S006",
                 WARNING,
-                f"embedded aim.css targets {css.get('data-aim-css')!r}, "
-                f"expected {REGISTRY.spec_version!r}",
+                f"embedded aim.css targets {css.get('data-aim-css')!r}, newer than the "
+                f"{REGISTRY.spec_version!r} this tool implements",
             )
         metas = [
             e
@@ -539,7 +540,7 @@ class _Linter:
                 self.add(
                     "V007",
                     ERROR,
-                    f"style property {prop!r} is outside the geometry "
+                    f"style property {prop!r} is outside the inline-style "
                     f"whitelist {REGISTRY.style_prop_order}",
                     loc,
                 )

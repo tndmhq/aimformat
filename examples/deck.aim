@@ -1,9 +1,9 @@
 <!doctype html>
-<html data-aim-version="0.2" lang="en">
+<html data-aim-version="0.3" lang="en">
 <head>
 <meta charset="utf-8">
 <!--
-aim-note: This file is an AIM document (open format, v0.2) — valid HTML plus
+aim-note: This file is an AIM document (open format, v0.3) — valid HTML plus
 chunk identity, a pending-suggestions lane, and an edit history.
 Agent docs: https://aimformat.com/llms.txt
 The reliable way to edit this file is the `aimformat` tooling, which manages
@@ -17,7 +17,7 @@ validate with `aim lint`. Humans review in AIM editors:
 https://aimformat.com/editors
 -->
 <title>Pilot read-out</title>
-<style data-aim-css="0.2">
+<style data-aim-css="0.3">
 :root{--aim-brand-1:#1d4ed8;--aim-brand-2:#0f766e;--aim-brand-3:#b45309;--aim-brand-4:#6d28d9;--aim-font-heading:system-ui, -apple-system, 'Segoe UI', sans-serif;--aim-font-body:system-ui, -apple-system, 'Segoe UI', sans-serif;--aim-font-mono:ui-monospace, 'SF Mono', Menlo, Consolas, monospace}
 html{-webkit-text-size-adjust:100%}
 body{margin:2rem auto;padding:0 1.5rem;max-width:52rem;font-family:var(--aim-font-body);font-size:1rem;line-height:1.6;color:#1f2937;background:#fff}
@@ -306,14 +306,14 @@ aim-assets{display:none}
 <aim-slide data-aim-container="s1" style="width:960px; height:540px"><div data-aim="band" class="bg-brand-1" style="left:0px; top:440px; width:960px; height:100px; z-index:1"></div><h2 data-aim="t1" class="font-bold text-6xl" style="left:60px; top:170px; width:700px; z-index:2">Documents that review themselves</h2><p data-aim="st1" class="text-2xl text-gray-600" style="left:60px; top:260px; width:600px; z-index:2">Pilot read-out — July 2026</p></aim-slide>
 <aim-slide data-aim-container="s2" style="width:960px; height:540px"><h2 data-aim="t2" class="font-bold text-5xl" style="left:60px; top:50px; width:500px">Next steps</h2><p data-aim="b2" class="text-3xl" style="left:60px; top:150px; width:700px">Extend the pilot to the briefs team for Q4.</p></aim-slide>
 <aim-proposals>
-<aim-proposal id="p-k0vldasi" data-action="modify" data-at="2026-07-07T14:00:05Z" data-author="agent" data-author-model="claude-opus-4-8" data-batch="b3" data-explanation="Name the date." data-for="b2"><template><p data-aim="b2" class="text-3xl" style="left:60px; top:150px; width:700px">Extend the pilot to the briefs team for Q4; decision review on 15 August.</p></template></aim-proposal>
+<aim-proposal id="p-r309qtpa" data-action="modify" data-at="2026-07-07T14:00:05Z" data-author="agent" data-author-model="claude-opus-4-8" data-batch="b3" data-explanation="Name the date." data-for="b2"><template><p data-aim="b2" class="text-3xl" style="left:60px; top:150px; width:700px">Extend the pilot to the briefs team for Q4; decision review on 15 August.</p></template></aim-proposal>
 </aim-proposals>
 <script type="application/aim-history+jsonl">
 
 
 {"action":"add","after":"<aim-slide data-aim-container=\"s1\" style=\"width:960px; height:540px\"><div data-aim=\"band\" class=\"bg-brand-1\" style=\"left:0px; top:440px; width:960px; height:100px; z-index:1\"><\/div><h2 data-aim=\"t1\" class=\"font-bold text-6xl\" style=\"left:60px; top:170px; width:700px; z-index:2\">Documents that review themselves<\/h2><p data-aim=\"st1\" class=\"text-2xl text-gray-600\" style=\"left:60px; top:260px; width:600px; z-index:2\">Pilot read-out — July 2026<\/p><\/aim-slide>","anchor":{"after":null,"container":"body"},"author":{"model":"claude-opus-4-8","type":"agent"},"batch":"b1","explanation":"Deck scaffold.","kind":"direct_edit","seq":1,"t":"2026-07-07T14:00:00Z","target":"s1"}
 {"action":"add","after":"<aim-slide data-aim-container=\"s2\" style=\"width:960px; height:540px\"><h2 data-aim=\"t2\" class=\"font-bold text-5xl\" style=\"left:60px; top:50px; width:500px\">Next steps<\/h2><p data-aim=\"b2\" class=\"text-3xl\" style=\"left:60px; top:150px; width:700px\">Extend the pilot to the briefs team for Q4.<\/p><\/aim-slide>","anchor":{"after":"s1","container":"body"},"author":{"model":"claude-opus-4-8","type":"agent"},"batch":"b2","kind":"direct_edit","seq":2,"t":"2026-07-07T14:00:01Z","target":"s2"}
-{"doc_hash":"sha256:579f1f8fc69adaa7d4e9a556e81a38944f7a9fb269cc0f16f2a5533711c79fdf","kind":"checkpoint","label":"design-review","seq":3,"t":"2026-07-07T14:00:06Z"}
+{"doc_hash":"sha256:8eea979573a18434869672640b876dbff5ce677e0d2dd99059b27e9dd8adffd6","kind":"checkpoint","label":"design-review","seq":3,"t":"2026-07-07T14:00:06Z"}
 </script>
 </body>
 </html>

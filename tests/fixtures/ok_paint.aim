@@ -16,7 +16,7 @@ aim-proposals appendix and the history script as append-only tool lanes, and
 validate with `aim lint`. Humans review in AIM editors:
 https://aimformat.com/editors
 -->
-<title>Conformance fixture</title>
+<title>Literal paint fixture</title>
 <style data-aim-css="0.3">
 :root{--aim-brand-1:#1d4ed8;--aim-brand-2:#0f766e;--aim-brand-3:#b45309;--aim-brand-4:#6d28d9;--aim-font-heading:system-ui, -apple-system, 'Segoe UI', sans-serif;--aim-font-body:system-ui, -apple-system, 'Segoe UI', sans-serif;--aim-font-mono:ui-monospace, 'SF Mono', Menlo, Consolas, monospace}
 html{-webkit-text-size-adjust:100%}
@@ -300,11 +300,17 @@ aim-proposal[data-action=add]{border-left-color:#16a34a}
 aim-proposal[data-action=move]{border-left-color:#d97706}
 aim-assets{display:none}
 </style>
-<style data-aim-theme>:root{--aim-brand-1:#1a73e8}</style>
 </head>
 <body>
-<h1 data-aim="h1" class="font-bold text-3xl">Fixture</h1>
-<section data-aim="p1"><p data-aim="p9">nested</p></section>
-<ul data-aim-container="l1"><li data-aim="i1">First</li><li data-aim="i2">Run…</li><li data-aim="i2">…run</li></ul>
+<h1 data-aim="ttl" style="color:#ff69b4">Pink title</h1>
+<p data-aim="tint" style="background-color:#fff1f7">Tinted.</p>
+<p data-aim="callout" class="border" style="border-color:#ff69b4">Callout with <span style="color:#ff69b4">one painted run</span>.</p>
+<script type="application/aim-history+jsonl">
+
+
+{"action":"add","after":"<h1 data-aim=\"ttl\" style=\"color:#ff69b4\">Pink title<\/h1>","anchor":{"after":null,"container":"body"},"author":{"model":"claude-opus-4-8","type":"agent"},"batch":"b1","kind":"direct_edit","seq":1,"t":"2026-07-07T12:00:00Z","target":"ttl"}
+{"action":"add","after":"<p data-aim=\"tint\" style=\"background-color:#fff1f7\">Tinted.<\/p>","anchor":{"after":"ttl","container":"body"},"author":{"model":"claude-opus-4-8","type":"agent"},"batch":"b2","kind":"direct_edit","seq":2,"t":"2026-07-07T12:00:01Z","target":"tint"}
+{"action":"add","after":"<p data-aim=\"callout\" class=\"border\" style=\"border-color:#ff69b4\">Callout with <span style=\"color:#ff69b4\">one painted run<\/span>.<\/p>","anchor":{"after":"tint","container":"body"},"author":{"model":"claude-opus-4-8","type":"agent"},"batch":"b3","kind":"direct_edit","seq":3,"t":"2026-07-07T12:00:02Z","target":"callout"}
+</script>
 </body>
 </html>

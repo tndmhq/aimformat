@@ -31,4 +31,9 @@ export {
   sortClassTokens,
 } from "./canonical.ts";
 export { sha256Hex, sha256Prefixed } from "./sha256.ts";
-export { SPEC_VERSION } from "./registry.data.ts";
+export {
+  SPEC_VERSION,
+  STYLE_PROP_ORDER,
+  STYLE_PROP_PAINT,
+  STYLE_PROP_PATTERNS,
+} from "./registry.data.ts";

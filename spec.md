@@ -1,7 +1,8 @@
-# The `.aim` document format — specification v0.2
+# The `.aim` document format — specification v0.3
 
-**Status: v0.2 (draft; v0.1 plus pagination — page setup and hard page
-breaks, §3.6).** This is the normative specification
+**Status: v0.3 (draft; v0.2 plus literal per-element paint — validated
+inline `color`, `background-color` and `border-color`, §3.3).** This is the
+normative specification
 for `.aim`, an AI-native document format in which AI proposals and human
 accept/reject decisions are first-class file primitives. The reference
 toolkit in this repository (`aimformat` on PyPI, the `aim` CLI) implements
@@ -12,11 +13,11 @@ Maintained by the aimformat project. Licensed MIT, like everything in this
 repository. Contributions: see [`CONTRIBUTING.md`](CONTRIBUTING.md).
 
 **Versioning.** A document declares the spec version it targets in
-`<html data-aim-version="0.2">`. The spec follows SemVer with the 0.x
+`<html data-aim-version="0.3">`. The spec follows SemVer with the 0.x
 caveat: **every 0.x minor may break**; parsers MUST ignore unknown JSON
 fields (with `x_*` reserved for vendor extensions) and MUST treat unknown
 event kinds or elements as errors within the same minor version. The
-embedded stylesheet is versioned with the spec (`data-aim-css="0.2"`).
+embedded stylesheet is versioned with the spec (`data-aim-css="0.3"`).
 
 The key words MUST, MUST NOT, SHOULD, SHOULD NOT, and MAY are to be
 interpreted as described in RFC 2119. Sections marked *informative* define
@@ -100,7 +101,7 @@ see §4.4 for id rules):
 
 ```html
 <!doctype html>
-<html data-aim-version="0.2" lang="en">
+<html data-aim-version="0.3" lang="en">
 <head>
 <meta charset="utf-8">
 <title>Q3 Proposal — Acme GmbH</title>
@@ -110,7 +111,7 @@ see §4.4 for id rules):
 <script type="application/aim-doc+json">
 {"page":{"margins":{"bottom":"15mm","left":"15mm","right":"15mm","top":"15mm"},"orientation":"portrait","size":"A4"}}
 </script>
-<style data-aim-css="0.2">/* machine-managed stylesheet, §3.4 */</style>
+<style data-aim-css="0.3">/* machine-managed stylesheet, §3.4 */</style>
 <style data-aim-theme>:root{--aim-brand-1:#1a73e8}</style>
 </head>
 <body>
@@ -207,7 +208,7 @@ The canonical note for this spec version:
 
 ```html
 <!--
-aim-note: This file is an AIM document (open format, v0.2) — valid HTML plus
+aim-note: This file is an AIM document (open format, v0.3) — valid HTML plus
 chunk identity, a pending-suggestions lane, and an edit history.
 Agent docs: https://aimformat.com/llms.txt
 The reliable way to edit this file is the `aimformat` tooling, which manages
@@ -263,14 +264,57 @@ utilities. Arbitrary-value classes (`w-[347px]`) are invalid. Rationale:
 finiteness makes one static stylesheet possible and eliminates cross-model
 drift.
 
-### 3.3 Geometry: inline styles
+### 3.3 Validated inline styles: geometry and paint
 
-Continuous values go in `style=""`, restricted to the whitelist
-`left, top, width, height, transform, z-index` with per-property value
-grammars (Appendix A.3). Discrete design choices are classes; measurements
-are inline styles; document-wide constants are theme slots. Slide canvas
-size is expressed the same way (`<aim-slide style="width:960px;
-height:540px">`).
+`style=""` carries values that are **continuous or local to one element**,
+restricted to a closed registry of properties *and* per-property value
+grammars (Appendix A.3). The three-way rule:
+
+- **registered continuous or local values** → inline `style`;
+- **discrete, reusable choices** → classes (§3.2);
+- **document-wide constants** → theme slots (§3.5).
+
+The whitelist is `left, top, width, height, transform, z-index` (geometry)
+plus `color, background-color, border-color` (paint), in that canonical
+order. Slide canvas size is expressed the same way
+(`<aim-slide style="width:960px; height:540px">`).
+
+**Paint values are literal sRGB, spelled `#rrggbb` in lowercase** — nothing
+else. Named colours, `#rgb`, uppercase, `rgb()`, HSL, alpha, `transparent`,
+`currentColor`, `var()`, `url()` and `!important` are all invalid (V008).
+Clearing an override means removing the declaration, not spelling a
+neutral one.
+
+```html
+<h1 style="color:#ff69b4">Pink title</h1>
+<p style="background-color:#fff1f7">Tinted paragraph</p>
+<p class="border" style="border-color:#ff69b4">Pink border</p>
+<p><span style="color:#ff69b4">one run</span> only</p>
+```
+
+**Literal paint and theme paint are different meanings, not two spellings.**
+A brand class (`text-brand-1`) says *follow this document's token*; an inline
+value says *use this exact paint, here*. Neither is canonicalized into the
+other, and colouring one element never requires touching a theme slot:
+
+```html
+<h2 class="text-brand-2">Follows the document's second brand colour</h2>
+<h2 style="color:#ff69b4">This heading, this colour, nothing else</h2>
+```
+
+**Cascade is native CSS, and normative.** Inline paint outranks every class.
+`color` inherits; `background-color` and `border-color` do not.
+`border-color` never *creates* a border — it recolours one supplied by a
+border utility or by the stylesheet's own element layer (`hr`,
+`blockquote`, `th`/`td`), and paints nothing on an element that has none.
+Renderers and exporters MUST compute what a browser computes, shorthand
+resets included.
+
+**This is not arbitrary CSS.** Both halves stay closed: an unregistered
+property is invalid (V007) and a registered property with an unregistered
+value is invalid (V008). No functions, no URLs, no `!important`, no
+`expression`-style escape hatch — the sanitising surface the class
+whitelist closes stays closed.
 
 Canvas numbers are **point-equivalent** by convention (informative): one
 canvas px prints as one typographic point, so `960×540` is the native 16:9
@@ -286,7 +330,7 @@ remains valid; renderers and exporters read each slide's own declared size.
 One static stylesheet per spec minor version — an element base layer,
 every registered utility, theme-slot defaults, and the `aim-*` chrome
 (slide canvas framing/scaling, proposal cards). It is embedded by default
-(`<style data-aim-css="0.2">`) so documents are self-contained, offline,
+(`<style data-aim-css="0.3">`) so documents are self-contained, offline,
 and archival; it is **machine-managed and derived**: tools regenerate it
 freely, and it is excluded from content hashing. Documents SHOULD embed it;
 a document without it still conforms but degrades at the raw tier.
@@ -338,6 +382,36 @@ decisions happen **between** chunks and a block-granular preview (an
 editor's page view) agrees with the print engine by construction. An
 element taller than one page still fragments (`avoid` is a request, not a
 guarantee). On screen, the break renders as a subtle dashed marker.
+
+### 3.7 The declared version, and upgrading it
+
+`html@data-aim-version` is **authored state, not a tool stamp**: a writer
+MUST NOT rewrite it just because it implements a newer version. A document
+carries the version it was born at, and the embedded stylesheet
+(machine-managed, §3.4) refreshes independently.
+
+A tool MUST accept a document declaring the same or an **older** version; it
+SHOULD warn only for a version it does not implement (S002, S006). A newer
+tool understands an older document; the reverse is what the version number
+exists to signal.
+
+Introducing markup a document's declared version does not define — as of
+v0.3, adding paint to a v0.2 document — is a **state change and MUST be
+recorded**. `data-aim-version` sits on the `<html>` open tag, which
+`doc_hash` covers (§11.4), so bumping it silently would invalidate every
+checkpoint recorded under the old line, while leaving it would declare a
+version the document no longer conforms to. Writers therefore mutate the
+attribute AND append the matching event, addressed to the reserved target
+`aim:version` (§6.5), with the old and new versions as `before`/`after`.
+Replay restores the old value and the old hashes verify again. A document
+whose history cannot record that event MUST refuse the markup rather than
+produce an unverifiable history; historical checkpoint hashes are never
+rewritten, and a document that never uses the new markup is never migrated.
+
+`aim:version` is a reserved singleton like `aim:theme` and `aim:doc`: it can
+be modified but never deleted or moved. It is **not** a proposal target —
+the upgrade rides the edit that needs it, and a pending card aimed at it is
+invalid (P008).
 
 ---
 
@@ -538,7 +612,7 @@ whole theme block as before/after; introducing the block is a `modify` with
 no `before`) and `aim:doc` (the head settings
 block, §3.6, as whole-block before/after serializations — introducing the
 block is a `modify` with no `before`, exactly like `aim:theme`; v0.2
-defines its `page` field).
+defines its `page` field), and `aim:version` (§3.7).
 
 ### 6.6 Invertibility
 
@@ -774,11 +848,11 @@ embed the generated one):
 
 ```aim
 <!doctype html>
-<html data-aim-version="0.2" lang="en">
+<html data-aim-version="0.3" lang="en">
 <head>
 <meta charset="utf-8">
 <title>Minimal</title>
-<style data-aim-css="0.2">
+<style data-aim-css="0.3">
 </style>
 </head>
 <body>
@@ -797,11 +871,11 @@ resolution and a checkpoint in the log:
 
 ```aim
 <!doctype html>
-<html data-aim-version="0.2" lang="en">
+<html data-aim-version="0.3" lang="en">
 <head>
 <meta charset="utf-8">
 <title>Pending lane</title>
-<style data-aim-css="0.2">
+<style data-aim-css="0.3">
 </style>
 </head>
 <body>
@@ -812,7 +886,7 @@ resolution and a checkpoint in the log:
 <script type="application/aim-history+jsonl">
 {"action":"add","after":"<p data-aim=\"c1\">The first wording.<\/p>","anchor":{"after":null,"container":"body"},"author":{"id":"ada","type":"human"},"batch":"b1","kind":"direct_edit","seq":1,"t":"2026-07-07T12:00:00Z","target":"c1"}
 {"action":"modify","applied":"<p data-aim=\"c1\">The accepted wording.<\/p>","batch":"b2","before":"<p data-aim=\"c1\">The first wording.<\/p>","decided_by":{"id":"ada","type":"human"},"decision":"accepted","kind":"resolution","proposal":"p-0","proposed":"<p data-aim=\"c1\">The acceptable wording.<\/p>","proposed_at":"2026-07-07T12:01:00Z","proposed_by":{"model":"model-id","type":"agent"},"seq":2,"t":"2026-07-07T12:02:00Z","target":"c1"}
-{"doc_hash":"sha256:bd679de3e34ae7cc8e2e6ac2c82e84c29429aab3675ae24d3d68f2a244d65be2","kind":"checkpoint","label":"reviewed","seq":3,"t":"2026-07-07T12:03:00Z"}
+{"doc_hash":"sha256:18d14bde6f9731906d08448e755af6ec09914a11614fa7b8b334e094c8fe8bf3","kind":"checkpoint","label":"reviewed","seq":3,"t":"2026-07-07T12:03:00Z"}
 </script>
 </body>
 </html>
@@ -823,11 +897,11 @@ chunks:
 
 ```aim
 <!doctype html>
-<html data-aim-version="0.2" lang="en">
+<html data-aim-version="0.3" lang="en">
 <head>
 <meta charset="utf-8">
 <title>One slide</title>
-<style data-aim-css="0.2">
+<style data-aim-css="0.3">
 </style>
 </head>
 <body>
@@ -903,6 +977,9 @@ Total registered utilities: **243**.
 | `height` | `^\d+(\.\d+)?px$` |
 | `transform` | `^(rotate\(-?\d+(\.\d+)?deg\)|translate\(-?\d+(\.\d+)?px, ?-?\d+(\.\d+)?px\)|scale\(\d+(\.\d+)?\))( (rotate\(-?\d+(\.\d+)?deg\)|translate\(-?\d+(\.\d+)?px, ?-?\d+(\.\d+)?px\)|scale\(\d+(\.\d+)?\)))*$` |
 | `z-index` | `^-?\d+$` |
+| `color` | `^#[0-9a-f]{6}$` |
+| `background-color` | `^#[0-9a-f]{6}$` |
+| `border-color` | `^#[0-9a-f]{6}$` |
 
 ### A.4 Theme slots
 
@@ -949,11 +1026,11 @@ Total registered utilities: **243**.
 |---|---|---|
 | S000 | error | document does not parse as HTML |
 | S001 | error | <html> missing data-aim-version |
-| S002 | warning | document targets a different spec version |
+| S002 | warning | document targets a spec version this tool does not implement |
 | S003 | error | head missing <meta charset="utf-8"> |
 | S004 | error | head missing <title> |
 | S005 | warning | no embedded aim.css stylesheet |
-| S006 | warning | embedded aim.css targets a different spec version |
+| S006 | warning | embedded aim.css targets a spec version this tool does not implement |
 | S007 | error | comment in <body> (head-only) |
 | S008 | error | stray text as a <body> child |
 | S010 | error | unexpected script type in <body> |
@@ -984,7 +1061,7 @@ Total registered utilities: **243**.
 | V004 | error | arbitrary-value class |
 | V005 | error | unknown class |
 | V006 | error | malformed style declaration |
-| V007 | error | style property outside the geometry whitelist |
+| V007 | error | style property outside the inline-style whitelist |
 | V008 | error | style value does not match the property grammar |
 | V009 | error | URL scheme not allowed for this attribute |
 | V010 | error | theme block is not a single :root rule |
@@ -1055,11 +1132,11 @@ Total registered utilities: **243**.
 
 ## Appendix C. Future extensions (informative)
 
-Planned but deliberately outside v0.2: cell-level table addressing and
+Planned but deliberately outside v0.3: cell-level table addressing and
 column operations; pagination furniture (headers/footers, page-number
 fields, per-section page setups carried on the break); slide
 masters/layouts and transitions; an `.aimx` ZIP container for asset-heavy
-documents; multi-writer merge semantics (v0.2 is single-writer; divergence
+documents; multi-writer merge semantics (v0.3 is single-writer; divergence
 is detectable via payload equality and checkpoint hashes); signing on top
 of the hash-anchored history; media-type registration; fonts as assets; an
 `aim open` reference implementation.

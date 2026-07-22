@@ -32,6 +32,7 @@ codes bidirectionally in sync with what `lint.py` can actually emit.
 | `lint.py` | the verifier; stable codes S/V/X/P/H/M/C | collects all findings in one run; `C001` byte-compares the source against the canonical serialization |
 | `reconcile.py` | repair out-of-band edits; adoption path for hand-written files | edit script from expected state E (forward replay of the FULL log) to actual body A, appended as `origin:"reconcile"` events — so `verify()` passes by construction; refuses pruned/damaged logs; never rewrites body content (only ids) |
 | `css.py` | deterministic stylesheet | budget guarded by tests (<40 KB raw) |
+| `paint.py` | computed paint (text colour, background, per-side borders) for a whole tree | runs the real cascade against the GENERATED stylesheet, not a second copy of the vocabulary; resolves once per export into immutable records keyed by object identity, and never writes to the tree |
 | `pagesetup.py` | `aim:doc` page validation, resolved geometry, and print CSS | the registry defines sizes, margins, and defaults; PDF, DOCX, and editors consume the same `PageSetup` |
 | `ingest.py` | DoclingDocument dict → chunks | dict-shaped input only — docling never becomes a dependency; run `formatting`/`hyperlink` and `inline` groups map to strong/em/u/s/sub/sup/a (safe schemes only). **Presentation is lost UPSTREAM, not here:** docling's `formatting` model carries only `bold`/`italic`/`underline`/`strikethrough`/`script`, so colour, paragraph alignment, and font size never reach this mapping at all (measured 2026-07-22 — a centred, red, 24 pt DOCX paragraph arrives as a bare `<p>`). Word's **Quote** style is flattened the same way: docling labels it plain `text`, so it lands as `<p>`, not `<blockquote>`. STRUCTURE otherwise survives well — headings, ordered vs unordered lists, tables, and hard page breaks all round-trip. Recovering any of them needs a python-docx side pass over the original file, the way `convert/_docx_pages.py` already does for pagination — there is nothing to fix in `ingest.py` |
 | `convert/` | text/Markdown/DOCX/PDF import and Markdown/HTML/PDF export | stdlib directions stay dependency-free; Markdown, Docling, and Playwright imports remain lazy behind extras |
@@ -87,6 +88,36 @@ codes bidirectionally in sync with what `lint.py` can actually emit.
 - **The agent note is informative-only by spec (§2.5).** Tooling must never
   execute, install, or fetch anything based on header content — the
   vim-modeline lesson, written into the format.
+- **Styling is a three-tier system, and the tier follows SCOPE.** One
+  element's own value → inline `style` (closed properties, closed grammar per
+  property); a reusable role → a class; a document-wide constant → a theme
+  slot. The reason literal paint exists at all is that an editing agent sees
+  part of a document: a theme slot is global, so satisfying a local request
+  through one repaints elements nobody looked at. Any agent-facing text here
+  must carry that reason, not just the rule — a rule survives paraphrase into
+  someone else's prompt only when it explains itself.
+- **A colour question is always "what does the browser compute?"** Never
+  "which declaration mentions this property". `generate_aim_css()` emits
+  class rules sorted by NAME and CSS is last-wins, so `.border-t{border-top:
+  1px solid #e5e7eb}` lands after `.border-red-600{border-color:#dc2626}` and
+  `class="border-t border-red-600"` renders GREY. Shorthands reset the
+  longhands they omit; matching `border-color` declarations alone produces
+  red and disagrees with every renderer. `paint.py` exists so exactly one
+  place has to get this right.
+- **Only what the author declared crosses into another format.** A value the
+  base element layer supplies (`a{color:…}`, `blockquote{color:…}`,
+  `code{background:…}`, a border's default ink inside `border:1px solid …`)
+  participates in the cascade — it is what STOPS inheritance — but it is
+  never emitted: the recipient's Word template owns those defaults, and an
+  unpainted document must gain no explicit colour, shading or border. The
+  same rule one level down makes a border shorthand's colour component not a
+  colour *choice*: the author asked for a border, not for grey.
+- **The declared version is authored state.** `dumps()` never rewrites
+  `data-aim-version`, S002/S006 warn only for a version the tool does NOT
+  implement, and introducing markup an older version lacks records an
+  `aim:version` modify event (spec §3.7) so earlier checkpoints keep
+  verifying. The `<html>` open tag is inside `doc_hash`; anything that
+  touches it needs an event, exactly like the body.
 
 ## The TypeScript reader (`ts/`)
 

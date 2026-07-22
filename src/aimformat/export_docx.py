@@ -42,7 +42,7 @@ from .document import AimDocument, Proposal
 from .dom import Element, Text, parse_fragment
 from .errors import InvalidOperation
 from .events import external
-from .registry import REGISTRY
+from .paint import BorderSide, Paint, PaintResolver, brand_defaults
 
 if TYPE_CHECKING:  # pragma: no cover
     pass
@@ -87,111 +87,60 @@ def _require_docx():
 
 # --------------------------------------------------------------------------
 # inline content -> (text, formatting) run specs
-
-# Colour resolution, driven by the registry rather than a local copy of the
-# vocabulary — registry.json is what the linter validates against, so anything
-# else here would either miss valid documents or bless invalid ones.
-_COLOR_UTILITY = re.compile(r"^(text|bg|border)-(.+)$")
-_COLOR_DECL = re.compile(r"(?:^|;)\s*color\s*:\s*([^;]+)")
-_VAR_REF = re.compile(r"^var\(\s*(--[a-z0-9-]+)\s*\)$", re.I)
-_HEX6 = re.compile(r"^#?([0-9a-fA-F]{6})$")
-_HEX3 = re.compile(r"^#?([0-9a-fA-F]{3})$")
-_RGB_FUNC = re.compile(r"^rgb\(\s*(\d{1,3})\s*,\s*(\d{1,3})\s*,\s*(\d{1,3})\s*\)$", re.I)
-
-
-def _brand_defaults() -> dict[str, str]:
-    slots = REGISTRY.raw["theme_slots"]
-    return {k: v["default"] for k, v in slots.items() if v.get("type") == "color"}
+#
+# Paint is not read off the element here: `aimformat.paint` has already
+# resolved the whole tree against the generated stylesheet, so a leaf emitter
+# looks its element up instead of re-deriving a cascade it would get subtly
+# wrong (and each of ~40 leaves would get wrong differently).
 
 
 def _palette_of(doc: AimDocument) -> dict[str, str]:
     """The document's brand slots over the registry defaults."""
     theme = dict(getattr(doc, "theme", None) or {})
-    defaults = _brand_defaults()
+    defaults = brand_defaults()
     return {**defaults, **{k: v for k, v in theme.items() if k in defaults}}
 
 
-def _rgb_of(value: str) -> str | None:
-    """A CSS colour as six hex digits, or None when we cannot be sure.
+def _paint_fmt(paint: Paint, fmt: dict, *, inline: bool) -> dict:
+    """*fmt* with this element's run-level paint folded in.
 
-    Covers exactly what registry.json's `theme_value_patterns.color` permits:
-    #rgb, #rrggbb and rgb(r, g, b). Anything else returns None — Word wants a
-    concrete RRGGBB, and writing a guessed colour into the file is worse than
-    leaving the user's template default.
+    ``inline`` distinguishes an inline element inside a block (whose own
+    background and border become RUN properties) from the block itself
+    (whose box becomes paragraph or cell properties) — otherwise a tinted
+    paragraph would shade its own paragraph AND every run inside it.
     """
-    value = value.strip()
-    m = _HEX6.match(value)
-    if m:
-        return m.group(1).upper()
-    m = _HEX3.match(value)
-    if m:
-        return "".join(c * 2 for c in m.group(1)).upper()
-    m = _RGB_FUNC.match(value)
-    if m:
-        # registry.json's colour pattern accepts any 1-3 digit component, so a
-        # lint-clean theme can carry rgb(999,0,0). The browser CLAMPS to 0-255;
-        # match it rather than dropping the colour (Codex aimformat#19).
-        parts = [min(255, int(g)) for g in m.groups()]
-        return "".join(f"{n:02X}" for n in parts)
-    return None
-
-
-def _text_colour_class(cls: str, palette: dict[str, str]) -> str | None:
-    """Resolve one registered text-colour utility to hex, or None.
-
-    The declaration is the source of truth: a brand utility resolves through
-    the document's theme, everything else carries its literal colour.
-    """
-    decl = REGISTRY.class_declarations.get(cls)
-    if not decl:
-        return None
-    m = _COLOR_DECL.search(decl)
-    if not m:
-        return None
-    value = m.group(1).strip()
-    var = _VAR_REF.match(value)
-    if var:
-        return _rgb_of(palette.get(var.group(1), ""))
-    return _rgb_of(value)
-
-
-def _is_text_colour(cls: str) -> bool:
-    """True for any registered utility that sets `color:`.
-
-    Read from the generated class declarations rather than a hand-listed set of
-    families, so every colour utility the stylesheet defines is covered —
-    including the ones in `classes.singles` such as text-white, which an
-    enumeration of brand slots and `classes.palette` missed (Codex
-    aimformat#19). text-xl and text-right declare no colour and are excluded by
-    construction.
-    """
-    decl = REGISTRY.class_declarations.get(cls)
-    return bool(decl and _COLOR_DECL.search(decl))
-
-
-def _color_for(el: Element, palette: dict[str, str]) -> str | None:
-    """The text colour this element asks for.
-
-    Class only. An inline `color:` declaration is NOT read: registry.json's
-    style whitelist is geometry-only, so the linter rejects it (V007) — an
-    exporter that honoured it would render documents the format does not
-    accept (Codex aimformat#19).
-    """
-    # generate_aim_css emits class rules sorted by NAME and CSS is last-wins,
-    # so among competing colours the winner is the one whose class sorts last —
-    # not the one written first in the markup (Codex aimformat#19).
-    hits = sorted(c for c in (el.get("class") or "").split() if _is_text_colour(c))
-    return _text_colour_class(hits[-1], palette) if hits else None
+    out = dict(fmt)
+    # colour inherits, so the record already carries the effective value —
+    # including "nothing", which must CLEAR an inherited fmt colour (a link's
+    # own base-layer colour beats the red it sits in)
+    if paint.color:
+        out["color"] = paint.color
+    else:
+        out.pop("color", None)
+    if inline:
+        if paint.own_background:
+            out["shade"] = paint.own_background
+        border = paint.any_border
+        if border is not None:
+            out["border"] = border
+    return out
 
 
 def _runs_of(
-    el: Element, fmt: dict | None = None, palette: dict[str, str] | None = None
+    el: Element,
+    fmt: dict | None,
+    paint: PaintResolver,
+    *,
+    inline: bool = False,
 ) -> list[dict]:
-    fmt = dict(fmt or {})
-    palette = palette if palette is not None else _brand_defaults()
-    colour = _color_for(el, palette)
-    if colour:
-        fmt["color"] = colour
+    """Run specs for *el*'s content.
+
+    *paint* is required rather than defaulted: a resolver is the only thing
+    that knows this element's computed colour, and an omitted one would
+    silently export an unpainted document. ``inline`` is False for the block
+    whose paragraph carries the box, True for everything nested inside it.
+    """
+    fmt = _paint_fmt(paint.of(el), dict(fmt or {}), inline=inline)
     tag = el.tag
     if tag in _BOLD_TAGS:
         fmt["bold"] = True
@@ -219,7 +168,7 @@ def _runs_of(
             if child.tag == "br":
                 runs.append({"break": True, **fmt})
             elif child.tag == "a":
-                runs += _runs_of(child, {**fmt, "underline": True}, palette)
+                runs += _runs_of(child, {**fmt, "underline": True}, paint, inline=True)
                 href = child.get("href") or ""
                 if href and not href.startswith("#"):
                     runs.append({"text": f" ({href})", **fmt})
@@ -232,17 +181,17 @@ def _runs_of(
                     label += f" ({src})"
                 runs.append({"text": label, **fmt, "italic": True})
             else:
-                runs += _runs_of(child, fmt, palette)
+                runs += _runs_of(child, fmt, paint, inline=True)
     return runs
 
 
-def _block_runs(el: Element, palette: dict[str, str] | None = None) -> list[dict]:
+def _block_runs(el: Element, paint: PaintResolver) -> list[dict]:
     """Run specs for one block: a page-break chunk is a single page-break
     run (it has no text runs — without this, the tracked lane would emit a
     pending break as an empty revision paragraph)."""
     if el.tag == "aim-page-break":
         return [{"page_break": True}]
-    return _runs_of(el, None, palette)
+    return _runs_of(el, None, paint)
 
 
 def _apply_runs(paragraph, runs: list[dict]) -> None:
@@ -280,6 +229,121 @@ def _format_run(run, spec: dict) -> None:
         from docx.shared import RGBColor
 
         run.font.color.rgb = RGBColor.from_string(spec["color"])
+    if spec.get("shade"):
+        # real shading, not Word's 16-value highlight enum — the format's
+        # background is an arbitrary RGB and the enum would round it
+        _set_shading(run._r.get_or_add_rPr(), spec["shade"], ordered_in="w:rPr")
+    if spec.get("border"):
+        _set_run_border(run._r.get_or_add_rPr(), spec["border"])
+
+
+# --------------------------------------------------------------------------
+# paint -> OOXML properties
+#
+# Every helper is idempotent (it replaces its own element rather than
+# appending a second one), because tracked runs are built, formatted, and
+# then detached — and a paragraph can be reached twice through a grouping
+# element.
+
+_EIGHTHS_PER_PX = 6  # 1 px = 0.75 pt = 6 eighths of a point
+
+# WordprocessingML property children are a SEQUENCE, not a set: an element
+# appended out of order makes the file invalid. python-docx only knows the
+# positions of the children it models itself, so the ones added here name
+# their own successors and slot in ahead of the first present.
+_SUCCESSORS = {
+    "w:rPr": {
+        "w:bdr": ("w:shd", "w:fitText", "w:vertAlign", "w:rtl", "w:cs", "w:em", "w:lang"),
+        "w:shd": ("w:fitText", "w:vertAlign", "w:rtl", "w:cs", "w:em", "w:lang"),
+    },
+    "w:pPr": {
+        "w:pBdr": ("w:shd", "w:tabs", "w:spacing", "w:ind", "w:jc", "w:rPr", "w:sectPr"),
+        "w:shd": ("w:tabs", "w:spacing", "w:ind", "w:jc", "w:rPr", "w:sectPr"),
+    },
+    "w:tcPr": {
+        "w:tcBorders": ("w:shd", "w:noWrap", "w:tcMar", "w:textDirection", "w:vAlign"),
+        "w:shd": ("w:noWrap", "w:tcMar", "w:textDirection", "w:vAlign"),
+    },
+}
+
+
+def _border_size(width_px: float) -> int:
+    return max(2, min(96, round(width_px * _EIGHTHS_PER_PX)))
+
+
+def _fresh_child(props, tag: str, *, ordered_in: str | None = None):
+    """An empty *tag* child of *props*, replacing any existing one.
+
+    Replacing rather than appending keeps every helper idempotent: tracked
+    runs are formatted, detached and re-formatted, and a grouping element can
+    reach the same paragraph twice.
+    """
+    from docx.oxml import OxmlElement
+    from docx.oxml.ns import qn
+
+    for existing in props.findall(qn(tag)):
+        props.remove(existing)
+    el = OxmlElement(tag)
+    successors = _SUCCESSORS.get(ordered_in or "", {}).get(tag)
+    if successors:
+        props.insert_element_before(el, *successors)
+    else:
+        props.append(el)
+    return el
+
+
+def _set_shading(props, fill: str, *, ordered_in: str) -> None:
+    from docx.oxml.ns import qn
+
+    shd = _fresh_child(props, "w:shd", ordered_in=ordered_in)
+    shd.set(qn("w:val"), "clear")
+    shd.set(qn("w:color"), "auto")
+    shd.set(qn("w:fill"), fill)
+
+
+def _set_border(parent, tag: str, side: BorderSide, *, ordered_in: str | None = None) -> None:
+    from docx.oxml.ns import qn
+
+    el = _fresh_child(parent, tag, ordered_in=ordered_in)
+    el.set(qn("w:val"), "single")
+    el.set(qn("w:sz"), str(_border_size(side.width_px)))
+    el.set(qn("w:space"), "0")
+    el.set(qn("w:color"), side.color)
+
+
+def _set_run_border(rpr, side: BorderSide) -> None:
+    """Word has ONE border for a whole run (`w:rPr/w:bdr`) — per-side borders
+    exist only on paragraphs and cells. A side utility on an inline element
+    therefore colours the whole box; documented degradation, not a bug."""
+    _set_border(rpr, "w:bdr", side, ordered_in="w:rPr")
+
+
+def _set_box(props, paint: Paint, *, props_tag: str, borders_tag: str) -> None:
+    """Background and per-side borders onto a paragraph's `w:pPr` or a
+    cell's `w:tcPr`."""
+    if paint.borders:
+        container = _fresh_child(props, borders_tag, ordered_in=props_tag)
+        for name in ("top", "left", "bottom", "right"):  # schema order
+            side = paint.borders.get(name)
+            if side is not None:
+                _set_border(container, f"w:{name}", side)
+    if paint.background:
+        _set_shading(props, paint.background, ordered_in=props_tag)
+
+
+def _ink(paint: Paint) -> dict:
+    """The run-spec fields for a leaf built without ``_runs_of``."""
+    return {"color": paint.color} if paint.color else {}
+
+
+def _paint_paragraph(paragraph, paint: Paint) -> None:
+    if paint.background or paint.borders:
+        _set_box(paragraph._p.get_or_add_pPr(), paint, props_tag="w:pPr", borders_tag="w:pBdr")
+
+
+def _paint_cell(cell, paint: Paint) -> None:
+    if paint.background or paint.borders:
+        _set_box(cell._tc.get_or_add_tcPr(), paint, props_tag="w:tcPr", borders_tag="w:tcBorders")
 
 
 # --------------------------------------------------------------------------
@@ -399,7 +463,7 @@ def _style_for(tag: str) -> str | None:
     return None
 
 
-def _block_children(el: Element) -> list[Element]:
+def _block_children(el: Element, paint: PaintResolver) -> list[Element]:
     """The block-level pieces of one chunk (a grouping block's children,
     recursively; a slide's children recursively, so a pending whole-slide
     add linearizes per block like an accepted slide; the element itself
@@ -408,18 +472,18 @@ def _block_children(el: Element) -> list[Element]:
     one paragraph — and direct inline content wraps in a synthetic block
     so it is never dropped."""
     if el.tag in ("section", "div"):
-        return _unpack_group(el, "p")
+        return _unpack_group(el, "p", paint)
     if el.tag == "blockquote":
-        return _unpack_group(el, "blockquote")
+        return _unpack_group(el, "blockquote", paint)
     if el.tag == "aim-slide":
         out: list[Element] = []
         for child in el.elements():
-            out.extend(_block_children(child))
+            out.extend(_block_children(child, paint))
         return out
     return [el]
 
 
-def _unpack_group(el: Element, wrap_tag: str) -> list[Element]:
+def _unpack_group(el: Element, wrap_tag: str, paint: PaintResolver) -> list[Element]:
     """One block per block child of a grouping element; runs of direct
     inline content wrap in a synthetic *wrap_tag* element. Paragraphs
     inside a blockquote re-wrap as *wrap_tag* so they keep the Quote
@@ -430,37 +494,36 @@ def _unpack_group(el: Element, wrap_tag: str) -> list[Element]:
     def flush() -> None:
         if run:
             if any(isinstance(n, Element) or (isinstance(n, Text) and n.data.strip()) for n in run):
-                out.append(_wrapped(wrap_tag, run, el))
+                out.append(_wrapped(wrap_tag, run, el, paint))
             run.clear()
 
     for child in el.children:
         if isinstance(child, Element) and child.tag not in _INLINE_TAGS:
             flush()
             if child.tag == "p" and wrap_tag != "p":
-                out.append(_wrapped(wrap_tag, child.children, child))
+                out.append(_wrapped(wrap_tag, child.children, child, paint))
             else:
-                out.extend(_block_children(child))
+                out.extend(_block_children(child, paint))
         else:
             run.append(child)
     flush()
     return out
 
 
-def _wrapped(tag: str, children: list, source: Element | None = None) -> Element:
+def _wrapped(tag: str, children: list, source: Element, paint: PaintResolver) -> Element:
     """A synthetic block wrapping loose inline content from a grouping element.
 
-    ``source`` is that grouping element, if any. The wrapper starts bare, so a
-    text colour declared directly on the group — `<blockquote
-    class="text-red-600">Quote</blockquote>` — would be lost before runs are
-    built (Codex aimformat#19). Only colour classes are carried across; the
-    wrapper is not a copy of the source.
+    ``source`` is the element the wrapper stands in for: the group itself for
+    loose content, or the ``<p>`` being re-tagged. The wrapper adopts that
+    element's computed paint, so paint declared on a group —
+    ``<blockquote style="color:#ff69b4">Quote</blockquote>`` — is not lost
+    before runs are built. Nothing is copied onto the SOURCE, and no attribute
+    is copied onto the wrapper: an earlier version wrote resolved classes back
+    into the tree and corrupted a document mid-export.
     """
     wrap = Element(tag)
     wrap.children = list(children)
-    if source is not None:
-        kept = " ".join(c for c in (source.get("class") or "").split() if _is_text_colour(c))
-        if kept:
-            wrap.set("class", kept)
+    paint.adopt(wrap, source)
     return wrap
 
 
@@ -498,6 +561,13 @@ class _Exporter:
         # asyncio.to_thread), so a shared global would race between documents
         # with different themes.
         self.palette = _palette_of(doc)
+        # Computed paint for the whole live tree, once. Every emitter reads
+        # this instead of deriving colour from its own element — and it holds
+        # records by object identity, so nothing is ever written back into the
+        # document being exported.
+        self.paint = PaintResolver(self.palette)
+        for construct in doc._state.constructs():
+            self.paint.resolve(construct)
         self.out = docx_mod.Document()
         self.rev = _Revisions()
         # Set after a slide: True means accepted structure owns the next
@@ -582,7 +652,7 @@ class _Exporter:
                 owner = prop if slide_payload else prior_break
                 self._page_break(owner if isinstance(owner, Proposal) else None)
         for el in els:
-            for block in _block_children(el):
+            for block in _block_children(el, self.paint):
                 if block.tag in ("ul", "ol"):
                     self._emit_added_list(block, prop)
                     continue
@@ -593,8 +663,9 @@ class _Exporter:
                     style=style or self._safe_style(_style_for(block.tag))
                 )
                 self.rev.ins(
-                    para, _block_runs(block, self.palette), _actor_label(prop.author), prop.at
+                    para, _block_runs(block, self.paint), _actor_label(prop.author), prop.at
                 )
+                _paint_paragraph(para, self.paint.of(block))
         if slide_payload:
             # When an accepted slide already required a page boundary, move
             # that plain break past this insertion. Otherwise the trailing
@@ -610,10 +681,33 @@ class _Exporter:
         label, date = _actor_label(prop.author), prop.at
         for li in el.elements():
             para = self.out.add_paragraph(style=style)
-            self.rev.ins(para, _runs_of(li, None, self.palette), label, date)
+            self.rev.ins(para, _runs_of(li, None, self.paint), label, date)
+            _paint_paragraph(para, self.paint.of(li))
 
     def _payload_elements(self, prop: Proposal) -> list[Element]:
-        return [n for n in parse_fragment(prop.payload_html or "") if isinstance(n, Element)]
+        """A proposal's payload roots, with their paint already resolved.
+
+        A payload is a separately parsed tree, so it has no ancestors to
+        inherit from — it gets the context of the container it will land in,
+        which is what its future siblings inherit today."""
+        els = [n for n in parse_fragment(prop.payload_html or "") if isinstance(n, Element)]
+        context = self.paint.context_of(self._anchor_node(prop))
+        for el in els:
+            self.paint.resolve(el, inherited=context)
+        return els
+
+    def _anchor_node(self, prop: Proposal) -> Element | None:
+        """The container element a proposal's payload lands inside, if it is
+        a real element (``body`` and unknown containers inherit nothing)."""
+        container = prop.anchor_container if prop.action == "add" else None
+        if container is None and prop.target:
+            try:
+                container = self.aim._state.container_of_chunk(prop.target)
+            except Exception:  # a container target, or one already gone
+                container = None
+        if not container or container == "body":
+            return None
+        return self.aim._state.container_node(container)
 
     def _safe_style(self, name: str | None) -> str | None:
         if name is None:
@@ -656,7 +750,7 @@ class _Exporter:
         elif prop is not None:
             self.emit_tracked_chunk(el, prop)
         else:
-            for block in _block_children(el):
+            for block in _block_children(el, self.paint):
                 self.emit_block(block, cid)
 
     # -- tracked replacements (exactly once per chunk, never per child) -------
@@ -667,28 +761,34 @@ class _Exporter:
         payload — used for all but the last member of a run chunk, so the
         replacement lands exactly once per chunk id."""
         label, date = _actor_label(prop.author), prop.at
-        for block in _block_children(el):
+        for block in _block_children(el, self.paint):
             para = self.out.add_paragraph(style=style or self._safe_style(_style_for(block.tag)))
-            self.rev.dele(para, _block_runs(block, self.palette), label, date)
+            self.rev.dele(para, _block_runs(block, self.paint), label, date)
+            # a deleted paragraph keeps the box it currently has: the reviewer
+            # is looking at what accepting the change would REMOVE
+            _paint_paragraph(para, self.paint.of(block))
         if payload and prop.action == "modify":
             for new_el in self._payload_elements(prop):
-                for block in _block_children(new_el):
+                for block in _block_children(new_el, self.paint):
                     para = self.out.add_paragraph(
                         style=style or self._safe_style(_style_for(block.tag))
                     )
-                    self.rev.ins(para, _block_runs(block, self.palette), label, date)
+                    self.rev.ins(para, _block_runs(block, self.paint), label, date)
+                    _paint_paragraph(para, self.paint.of(block))
 
     def emit_tracked_list_container(self, el: Element, prop: Proposal) -> None:
         label, date = _actor_label(prop.author), prop.at
         style = self._safe_style("List Bullet" if el.tag == "ul" else "List Number")
         for li in el.elements():
             para = self.out.add_paragraph(style=style)
-            self.rev.dele(para, _runs_of(li, None, self.palette), label, date)
+            self.rev.dele(para, _runs_of(li, None, self.paint), label, date)
+            _paint_paragraph(para, self.paint.of(li))
         if prop.action == "modify":
             for new_el in self._payload_elements(prop):
                 for li in new_el.elements():
                     para = self.out.add_paragraph(style=style)
-                    self.rev.ins(para, _runs_of(li, None, self.palette), label, date)
+                    self.rev.ins(para, _runs_of(li, None, self.paint), label, date)
+                    _paint_paragraph(para, self.paint.of(li))
 
     # -- plain blocks -----------------------------------------------------------
     def emit_block(self, el: Element, cid: str, style: str | None = None) -> None:
@@ -702,7 +802,17 @@ class _Exporter:
             self.emit_table(el)
             return
         if el.tag == "hr":
-            self.out.add_paragraph("—" * 12)
+            # Word's own rule is a paragraph border, but an UNPAINTED document
+            # must gain no explicit border at all (the recipient's template
+            # owns that), and an empty bordered paragraph is invisible without
+            # one. So the em-dash rule stays and an authored border colour
+            # paints its ink — a documented approximation.
+            para = self.out.add_paragraph()
+            runs = [{"text": "—" * 12}]
+            border = self.paint.of(el).any_border
+            if border is not None:
+                runs = [{**runs[0], "color": border.color}]
+            _apply_runs(para, runs)
             return
         if el.tag == "aim-page-break":
             from docx.enum.text import WD_BREAK
@@ -714,36 +824,26 @@ class _Exporter:
             self.emit_list(el)
             return
         para = self.out.add_paragraph(style=style or self._safe_style(_style_for(el.tag)))
-        _apply_runs(para, _runs_of(el, None, self.palette))
+        _apply_runs(para, _runs_of(el, None, self.paint))
+        _paint_paragraph(para, self.paint.of(el))
 
     def emit_pre(self, el: Element) -> None:
-        text = el.text()
-        para = self.out.add_paragraph()
-        # emit_pre builds its runs directly rather than through _runs_of, so the
-        # colour has to be applied here too — a <pre class="text-red-600"> has
-        # the class applied DIRECTLY and still exported in default ink
-        # (Codex aimformat#19).
-        # the class is legal on <code> too, and browsers colour the code text
-        # from it, so check the nested element when the <pre> states none
-        colour = _color_for(el, self.palette)
-        if not colour:
-            # `<pre><code class="…">` is the canonical shape and its colour
-            # belongs to the whole block. But emit_pre flattens el.text() into
-            # one run, so lifting a code child's colour when the <pre> ALSO has
-            # sibling text would paint that text too (Codex aimformat#19).
-            # Only adopt it when the code element is the pre's entire content.
-            kids = [c for c in el.children if not (isinstance(c, Text) and not c.data.strip())]
-            if len(kids) == 1 and isinstance(kids[0], Element) and kids[0].tag == "code":
-                colour = _color_for(kids[0], self.palette)
-        for i, line in enumerate(text.split("\n")):
-            if i:
-                para.add_run().add_break()
-            run = para.add_run(line)
-            run.font.name = _MONO
-            if colour:
-                from docx.shared import RGBColor
+        """A code block, one run per (paint, line) segment.
 
-                run.font.color.rgb = RGBColor.from_string(colour)
+        Flattening the whole block to a single run was what forced the old
+        exporter to choose between painting a nested `<code>`'s sibling text
+        and painting nothing at all; per-element paint removes the choice."""
+        para = self.out.add_paragraph()
+        for segment in _runs_of(el, None, self.paint):
+            if segment.get("break"):
+                para.add_run().add_break()
+                continue
+            for i, line in enumerate(segment.get("text", "").split("\n")):
+                if i:  # a newline inside the source text is a Word line break
+                    para.add_run().add_break()
+                if line:
+                    _format_run(para.add_run(line), {**segment, "mono": True})
+        _paint_paragraph(para, self.paint.of(el))
 
     def emit_slide(self, el: Element) -> None:
         """Linearize a fixed-canvas page: a page break, then the slide's
@@ -834,8 +934,8 @@ class _Exporter:
             if not emitted:
                 alt = img.get("alt") or "image"
                 para = self.out.add_paragraph()
-                run = para.add_run(f"[image: {alt}]")
-                run.italic = True
+                spec = {"text": f"[image: {alt}]", "italic": True, **_ink(self.paint.of(img))}
+                _apply_runs(para, [spec])
                 emitted = True
         for child in el.elements():  # non-caption content first, then captions
             if child.tag not in ("figcaption", "img", "svg"):
@@ -846,7 +946,8 @@ class _Exporter:
                 # caption's own formatting — including colour — survives
                 # (Codex aimformat#19)
                 para = self.out.add_paragraph(style=self._safe_style("Caption"))
-                _apply_runs(para, _runs_of(cap, None, self.palette))
+                _apply_runs(para, _runs_of(cap, None, self.paint))
+                _paint_paragraph(para, self.paint.of(cap))
 
     def _figure_width(self, fig: Element, img: Element):
         """The authored image width (inline style, CSS px at 96 dpi — the
@@ -888,11 +989,9 @@ class _Exporter:
                 content.children = [
                     c for c in li.children if not (isinstance(c, Element) and c.tag in ("ul", "ol"))
                 ]
-                # the copy is synthetic, so it starts with no attributes — carry
-                # the item's own class or a coloured <li> exports in default ink
-                # (Codex aimformat#19)
-                if li.get("class") is not None:
-                    content.set("class", li.get("class"))
+                # the copy is synthetic and carries no attributes, so it adopts
+                # the item's computed paint rather than a subset of its markup
+                self.paint.adopt(content, li)
                 if prop is not None:
                     self.emit_tracked_chunk(content, prop, style=style, payload=li is group[-1])
                 else:
@@ -989,7 +1088,7 @@ class _Exporter:
                         for dc in range(colspan):
                             occupied.add((ri + dr, ci + dc))
                 para = cell.paragraphs[0]
-                runs = _runs_of(cell_el, None, self.palette)
+                runs = _runs_of(cell_el, None, self.paint)
                 if cell_el.tag == "th":
                     runs = [{**r, "bold": True} for r in runs]
                 if force == "ins" and prop is not None:
@@ -1001,12 +1100,17 @@ class _Exporter:
                     if new_cells is not None:  # cellwise: shapes match 1:1
                         self.rev.ins(
                             para,
-                            _runs_of(new_cells[orig_idx], None, self.palette),
+                            _runs_of(new_cells[orig_idx], None, self.paint),
                             _actor_label(prop_mod.author),
                             prop_mod.at,
                         )
                 else:
                     _apply_runs(para, runs)
+                # a cellwise replacement paints the cell with the PROPOSED
+                # box: Word has one shading per cell, and showing the old one
+                # under an inserted run would misreport the pending state
+                painted = new_cells[orig_idx] if new_cells is not None else cell_el
+                _paint_cell(cell, self.paint.of(painted))
                 ci += colspan
         # row-adds only after the content loop: inserting rows mid-loop would
         # shift the (ri, ci) coordinates the loop and the merges rely on
@@ -1053,9 +1157,9 @@ class _Exporter:
                     cs = int(c.get("colspan") or 1)
                     rs = min(int(c.get("rowspan") or 1), len(payload_rows) - pi)
                     para = self._new_span_cell(
-                        table, tr, colspan=cs, vmerge="restart" if rs > 1 else None
+                        table, tr, colspan=cs, vmerge="restart" if rs > 1 else None, source=c
                     )
-                    runs = _runs_of(c, None, self.palette)
+                    runs = _runs_of(c, None, self.paint)
                     if c.tag == "th":
                         runs = [{**run, "bold": True} for run in runs]
                     self.rev.ins(para, runs, label, date)
@@ -1067,9 +1171,12 @@ class _Exporter:
                 cur.addnext(tr)
                 cur = tr
 
-    def _new_span_cell(self, table, tr, *, colspan: int, vmerge: str | None):
+    def _new_span_cell(
+        self, table, tr, *, colspan: int, vmerge: str | None, source: Element | None = None
+    ):
         """Append one cell to a rebuilt payload row, carrying its span
-        structure (w:gridSpan / w:vMerge); returns the cell's paragraph."""
+        structure (w:gridSpan / w:vMerge) and, from *source*, its paint;
+        returns the cell's paragraph."""
         from docx.oxml import OxmlElement
         from docx.oxml.ns import qn
         from docx.table import _Cell
@@ -1084,7 +1191,10 @@ class _Exporter:
             if vmerge == "restart":
                 merge.set(qn("w:val"), "restart")
             tc.get_or_add_tcPr().append(merge)
-        return _Cell(tc, table).paragraphs[0]
+        cell = _Cell(tc, table)
+        if source is not None:
+            _paint_cell(cell, self.paint.of(source))
+        return cell.paragraphs[0]
 
     def _continue_vmerges(
         self, table, tr, ci: int, vmerge: dict[int, tuple[int, int]], *, trailing: bool = False
@@ -1127,13 +1237,14 @@ class _Exporter:
                 if c.tag in ("td", "th")
             ]
             for idx in range(min(len(payload_cells), ncols)):
-                para = new_row.cells[idx].paragraphs[0]
+                cell = new_row.cells[idx]
                 self.rev.ins(
-                    para,
-                    _runs_of(payload_cells[idx], None, self.palette),
+                    cell.paragraphs[0],
+                    _runs_of(payload_cells[idx], None, self.paint),
                     _actor_label(prop.author),
                     prop.at,
                 )
+                _paint_cell(cell, self.paint.of(payload_cells[idx]))
             if first:
                 table.rows[0]._tr.addprevious(new_row._tr)
             else:

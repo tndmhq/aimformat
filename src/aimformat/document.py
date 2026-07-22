@@ -54,9 +54,14 @@ LAST = _Last()
 
 AnchorAfter = str | None | _Last
 _BODY_SECTIONS = ("aim-proposals", "aim-assets", "script")
-#: Reserved singleton targets (spec §3.5/§3.6): they can be modified but
+#: Reserved singleton targets (spec §3.5/§3.6/§3.3): they can be modified but
 #: never deleted or moved — they have no body anchor to restore them at.
-_RESERVED_TARGETS = ("aim:theme", "aim:doc")
+#: ``aim:version`` is toolkit-managed on top of that: it is not a proposal
+#: target and has no direct-edit entry point, only the recorded upgrade the
+#: SDK writes when a feature the document's declared version lacks first
+#: appears in it.
+_RESERVED_TARGETS = ("aim:theme", "aim:doc", "aim:version")
+VERSION_TARGET = "aim:version"
 _PAYLOAD_ID_RE = re.compile(r'data-aim(?:-container)?="([^"]+)"')
 _T = TypeVar("_T")
 
@@ -77,6 +82,26 @@ def _no_delete_move(target: str, action: str) -> None:
             f"{target} is a reserved singleton and cannot be the target of "
             f"a {action} — modify it instead"
         )
+
+
+def _payload_has_paint(markup: str | None) -> bool:
+    """Whether *markup* declares any literal paint property (spec §3.3).
+
+    Parsed rather than pattern-matched: a text node may legitimately contain
+    the characters ``style="color:#ff69b4"`` (a code sample), and a regex
+    over the payload would read that as paint.
+    """
+    if not markup or not any(p in markup for p in REGISTRY.paint_props):
+        return False
+    for node in parse_fragment(markup):
+        if not isinstance(node, Element):
+            continue
+        for el in node.iter():
+            for piece in (el.get("style") or "").split(";"):
+                prop, sep, _ = piece.partition(":")
+                if sep and prop.strip() in REGISTRY.paint_props:
+                    return True
+    return False
 
 
 def _payload_marker(el: Element) -> str:
@@ -549,6 +574,14 @@ class DocState:
             return serialize(cont)
         parent, members = self.find_chunk(target)
         return serialize_run(members) if members else None
+
+    def spec_version(self) -> str | None:
+        return self.html.get("data-aim-version")
+
+    def set_spec_version(self, value: str) -> None:
+        """The declared spec version — hashed state, so every write goes
+        through a recorded event (see ``_record_version_upgrade``)."""
+        self.html.set("data-aim-version", value)
 
     def html_open_line(self) -> str:
         return f"<html{canonical.canonical_attrs(self.html, in_svg=False)}>"
@@ -1196,6 +1229,56 @@ class AimDocument:
         index.append_event(Event(deepcopy(data)), el.raw)
         return Event(data)
 
+    # -- declared spec version ------------------------------------------------
+    def _ensure_paint_version(
+        self, markup: str | None, *, author: Actor, at: str | None = None
+    ) -> None:
+        """Record the version upgrade literal paint requires (spec §3.3).
+
+        Paint is a 0.3 feature, so putting it into an older document changes
+        what version that document conforms to. ``data-aim-version`` rides
+        the ``<html>`` open tag, which ``doc_hash`` covers, so bumping it in
+        place would break every checkpoint recorded under the old line —
+        while leaving it declares a version the document no longer conforms
+        to. Neither is allowed, and this repo already has the third option:
+        every state change mutates the tree AND appends the matching event,
+        so replay restores the old version and the old hashes verify again.
+
+        Call this BEFORE mutating, from every write path that can put a
+        payload into the document; it is a dict lookup for the common case
+        (a document already at this version) and costs a history replay only
+        on the single edit that first paints a legacy document.
+        """
+        declared = self._state.spec_version()
+        if declared == REGISTRY.spec_version or not _payload_has_paint(markup):
+            return
+        if declared is None:
+            raise InvalidOperation("cannot add paint: <html> declares no data-aim-version (S001)")
+        if not REGISTRY.implements(declared):
+            return  # already ahead of this build; its version is not ours to set
+        problems = self.verify()
+        if problems:
+            raise InvalidOperation(
+                "cannot add paint: the version upgrade it requires must be recorded, and "
+                f"this history cannot account for the document as it stands ({problems[0]}). "
+                "Repair or flatten the history first."
+            )
+        self._state.set_spec_version(REGISTRY.spec_version)
+        self._append_event(
+            {
+                "seq": self.seq + 1,
+                "kind": "direct_edit",
+                "t": at or _now_iso(),
+                "target": VERSION_TARGET,
+                "action": "modify",
+                "before": declared,
+                "after": REGISTRY.spec_version,
+                "author": author.to_obj(),
+                "batch": self._batch_id(),
+                "explanation": f"literal paint requires spec {REGISTRY.spec_version}",
+            }
+        )
+
     # -- batching -----------------------------------------------------------------
     def _next_batch(self) -> str:
         return self._get_history_index().next_batch
@@ -1492,6 +1575,7 @@ class AimDocument:
     ) -> Chunk:
         """Add a chunk (direct edit). ``after=None`` inserts at first position."""
         cid, payload = self._normalize_payload(markup)
+        self._ensure_paint_version(payload, author=author, at=at)
         anchor = self._resolve_end_anchor(container, after)
         self._state.insert(payload, anchor)
         data = {
@@ -1543,6 +1627,7 @@ class AimDocument:
             _, payload = self._normalize_payload(markup, expect_id=cid)
         if payload == before:
             raise _NoOpEdit("modify with identical content")
+        self._ensure_paint_version(payload, author=author, at=at)
         self._state.replace(cid, payload)
         data = {
             "seq": self.seq + 1,
@@ -1956,6 +2041,9 @@ class AimDocument:
 
     def _apply_data(self, data: dict) -> None:
         action, target = data["action"], data["target"]
+        if target == VERSION_TARGET:
+            self._state.set_spec_version(data["after"])
+            return
         if target in ("aim:theme", "aim:doc"):
             setter = (
                 self._state.set_theme_markup
@@ -2063,6 +2151,10 @@ class AimDocument:
         at: str | None,
         pid: str | None = None,
     ) -> Proposal:
+        # a paint payload sitting in the pending lane is already markup an
+        # older validator rejects, so the proposal — not only its acceptance
+        # — is what needs the version
+        self._ensure_paint_version(payload, author=author, at=at)
         pid = pid or self._new_proposal_id()
         attrs: list[tuple[str, str | None]] = [("id", pid), ("data-action", action)]
         if anchor is not None:
@@ -2422,6 +2514,9 @@ class AimDocument:
                         f"amended payload for {pid!r} breaks the pending lane at "
                         f"proposal {proposal.id!r}: {exc}"
                     ) from exc
+            # §5.4 makes the amend itself unrecorded, but the version the
+            # document conforms to is not the amend's to change silently
+            self._ensure_paint_version(payload, author=prop.author, at=at)
             _set_card_payload(card, payload)
         if explanation is not None:
             if explanation:
@@ -2527,6 +2622,7 @@ class AimDocument:
                     )
             else:
                 applied_payload = prop.payload_html
+            self._ensure_paint_version(applied_payload, author=decided_by, at=at)
         return self._resolve(
             prop,
             decision="accepted",
@@ -2807,6 +2903,19 @@ class AimDocument:
     def _invert_on(self, state: DocState, ev: Event, problems: list[str]) -> None:
         action, target = ev.action, ev.target or ""
         applied = ev.applied_payload
+        if target == VERSION_TARGET:
+            # the declared version is a scalar on the <html> open tag, not a
+            # construct the generic target machinery can address
+            current = state.spec_version()
+            if current != applied:
+                problems.append(
+                    f"seq {ev.seq}: version mismatch — recorded {applied!r}, found {current!r}"
+                )
+            before = ev.get("before")
+            if before is None:
+                raise HistoryError("version event carries no 'before' — not invertible")
+            state.set_spec_version(before)
+            return
         if action == "modify":
             current = state.serial(target)
             if current != applied:

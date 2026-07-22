@@ -39,6 +39,22 @@ class TestStructureRules:
         )
         assert "S002" in warn_codes(broken)
 
+    def test_S002_older_version_does_not_warn(self, good_text):
+        """A tool implementing 0.3 understands 0.2, so an older document is
+        not a finding — warning on it would fire on every existing file."""
+        older = good_text.replace(
+            f'data-aim-version="{aim.SPEC_VERSION}"', 'data-aim-version="0.1"'
+        )
+        assert "S002" not in warn_codes(older)
+
+    def test_S006_older_stylesheet_does_not_warn(self, good_text):
+        older = good_text.replace(f'data-aim-css="{aim.SPEC_VERSION}"', 'data-aim-css="0.1"')
+        assert "S006" not in warn_codes(older)
+
+    def test_S006_future_stylesheet_warns(self, good_text):
+        ahead = good_text.replace(f'data-aim-css="{aim.SPEC_VERSION}"', 'data-aim-css="9.9"')
+        assert "S006" in warn_codes(ahead)
+
     def test_S003_missing_charset(self, good_text):
         broken = good_text.replace('<meta charset="utf-8">\n', "")
         assert "S003" in codes(broken)
@@ -140,8 +156,11 @@ class TestVocabularyRules:
         assert "V005" in codes(broken)
 
     def test_V007_style_prop_outside_whitelist(self, good_text):
+        # `opacity` is genuinely unregistered. `color:red` would NOT do: colour
+        # is a registered paint property since 0.3, so it fires V008 (bad
+        # value) rather than V007 (unknown property).
         broken = good_text.replace(
-            'style="left:120px; top:100px; width:1000px"', 'style="left:120px; color:red"'
+            'style="left:120px; top:100px; width:1000px"', 'style="left:120px; opacity:.5"'
         )
         assert "V007" in codes(broken)
 
@@ -170,6 +189,76 @@ class TestVocabularyRules:
     def test_V012_theme_value_grammar(self, good_text):
         broken = good_text.replace("--aim-brand-1:#1a73e8", "--aim-brand-1:url(javascript:x)")
         assert "V012" in codes(broken)
+
+
+PAINT_PROPS = ("color", "background-color", "border-color")
+
+
+class TestInlinePaint:
+    """Literal per-element paint (spec §3.3): `style` carries geometry AND
+    the three paint properties, on a closed six-digit lowercase grammar."""
+
+    @staticmethod
+    def _painted(markup: str) -> list:
+        doc = aim.new_document(title="Paint")
+        doc.add_chunk(markup, author=BOT, at=ts(0))
+        return [f for f in aim.lint(doc) if f.level == "error"]
+
+    @pytest.mark.parametrize("prop", PAINT_PROPS)
+    def test_a_block_may_carry_each_paint_property(self, prop):
+        assert self._painted(f'<p data-aim="p1" style="{prop}:#ff69b4">Painted</p>') == []
+
+    @pytest.mark.parametrize("prop", PAINT_PROPS)
+    def test_an_inline_span_may_carry_each_paint_property(self, prop):
+        assert (
+            self._painted(f'<p data-aim="p1">one <span style="{prop}:#ff69b4">run</span></p>') == []
+        )
+
+    @pytest.mark.parametrize("prop", PAINT_PROPS)
+    def test_a_positioned_slide_child_may_mix_geometry_and_paint(self, prop):
+        assert (
+            self._painted(
+                '<aim-slide data-aim-container="s1" style="width:960px; height:540px">'
+                f'<h2 data-aim="t1" style="left:48px; top:32px; width:450px; {prop}:#ff69b4">'
+                "Slide title</h2></aim-slide>"
+            )
+            == []
+        )
+
+    @pytest.mark.parametrize(
+        "decl",
+        [
+            "color:red",
+            "color:#fff",
+            "color:#FF69B4",
+            "color:rgb(255,105,180)",
+            "color:rgb(255, 105, 180)",
+            "color:#ff69b4ff",
+            "color:currentColor",
+            "color:transparent",
+            "color:var(--aim-brand-1)",
+            "color:#ff69b4 !important",
+            "background-color:transparent",
+            "background-color:url(x.png)",
+            "border-color:var(--aim-brand-1)",
+        ],
+    )
+    def test_every_forbidden_spelling_fails_the_grammar_not_the_whitelist(self, decl):
+        findings = self._painted(f'<p data-aim="p1" style="{decl}">x</p>')
+        assert {f.code for f in findings} == {"V008"}
+
+    def test_an_unregistered_property_still_fails_the_whitelist(self):
+        findings = self._painted('<p data-aim="p1" style="opacity:.5">x</p>')
+        assert {f.code for f in findings} == {"V007"}
+
+    def test_paint_is_legal_in_a_pending_payload(self, basic_doc):
+        basic_doc.propose_modify(
+            "intro",
+            '<p data-aim="intro" style="color:#ff69b4">Pink intro.</p>',
+            author=BOT,
+            at=ts(20),
+        )
+        assert [f for f in aim.lint(basic_doc) if f.level == "error"] == []
 
 
 class TestSecurityRules:
