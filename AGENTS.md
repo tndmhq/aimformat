@@ -115,7 +115,8 @@ technical content only (see Governance below).
    raised, then request ONE re-review for the whole batch — never one per fix.
    Never request it at all on a commit whose gates you have not run to a green
    exit code (lint, format, types, tests); a round CI would have failed anyway
-   is wasted.
+   is wasted. Pure prose needs no round; anything specifying behaviour — spec,
+   plan, contract — always gets one.
 
 ## Governance (public repo)
 
