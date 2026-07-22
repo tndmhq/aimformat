@@ -1,0 +1,444 @@
+---
+date: 2026-07-22 08:44
+type: plan
+status: active
+related:
+  - 2026-07-22_0814_report_colour-model-problem.md
+---
+
+# Plan: canonical per-element paint
+
+## Outcome
+
+Add a first-class, local paint mechanism to `.aim` without opening arbitrary
+CSS. A conforming element may carry these three inline style properties:
+
+```aim
+<h1 style="color:#ff69b4">Pink title</h1>
+<p style="background-color:#fff1f7">Tinted paragraph</p>
+<p class="border" style="border-color:#ff69b4">Pink border</p>
+```
+
+The values are literal sRGB paint. They affect only the element and the
+ordinary CSS painting/inheritance beneath it; they do not consume or mutate a
+document theme slot. Existing palette classes and theme-backed brand classes
+remain useful for reusable design tokens. Literal paint and theme paint are
+different semantics, not two spellings that canonicalization must collapse.
+
+The change is complete only when the Python SDK, official TypeScript reader,
+HTML/PDF path, DOCX exporter, both Tndm AI-edit paths, flow editor, slide
+editor, and proposal preview agree. The reported title case must become one
+chunk proposal, not a coupled theme-plus-chunk proposal.
+
+## Fixed design decisions
+
+These are implementation requirements, not questions for the implementing
+agent.
+
+1. **Syntax:** use native inline CSS properties in `style`, not a new
+   `data-aim-*` attribute and not an arbitrary-value class.
+2. **Properties:** add exactly `color`, `background-color`, and
+   `border-color`. Do not admit any other presentation property in this work.
+3. **Value grammar:** exactly lowercase six-digit sRGB hex,
+   `^#[0-9a-f]{6}$`. No three/eight-digit hex, uppercase, named colours,
+   `rgb()`, HSL, alpha, `transparent`, `currentColor`, `var()`, `url()`,
+   `!important`, or other CSS functions. Removing the declaration is how an
+   override is cleared. Theme values keep their existing grammar in this
+   change.
+4. **Canonical order:** retain the existing geometry order, then append paint
+   in this order:
+   `left, top, width, height, transform, z-index, color, background-color,
+   border-color`. Existing documents therefore keep identical bytes and
+   hashes; a mixed slide title serializes geometry before paint.
+5. **Cascade:** native CSS semantics are normative. Inline paint wins over
+   every class. `color` inherits. `background-color` and `border-color` do not
+   inherit. `border-color` does not create a border; it only recolours a border
+   supplied by `border`, `border-t`, `border-b`, or another rendering default.
+6. **Classes and theme stay:** do not remove the fixed palette, four brand
+   slots, or brand utilities in this implementation. A brand class means
+   “follow this document token”; an inline value means “use this exact paint.”
+7. **Conflicting classes stay as-is:** the existing alphabetic stylesheet
+   cascade for multiple colour utilities is not redesigned here. Inline paint
+   simply outranks it. A separate change may lint mutually exclusive classes.
+8. **Versioning:** treat this as an additive change to the still-draft v0.2
+   registry and bump the toolkit package to the next available `0.2.x`; do not
+   rewrite `data-aim-version` or historical checkpoint hashes. Record in the
+   changelog that older v0.2 validators reject documents using the new
+   properties. Revisit the coarse spec-version policy before 1.0 rather than
+   inventing a history migration inside this feature.
+9. **No source-tree mutation during export:** computed paint is derived once
+   into export-local state. Never copy inherited styles or classes back onto
+   the parsed document.
+
+## Scope boundaries
+
+Included:
+
+- conforming authoring, linting, canonical serialization, hashing, events,
+  proposals, and Python/TypeScript parity for all three properties;
+- exact browser/HTML/PDF rendering through native CSS;
+- DOCX clean export for text colour, run/paragraph/cell backgrounds, and
+  borders where the AIM element has a visible border;
+- DOCX text-colour inheritance across every existing leaf emitter;
+- honest, documented DOCX approximations where Word has no CSS box analogue;
+- Tndm AI creation/review/acceptance and manual round-trip preservation;
+- cross-repo dependency pin bump after the format change reaches
+  `aimformat/main`.
+
+Excluded:
+
+- a colour-picker toolbar or other new manual UI;
+- arbitrary CSS or additional paint syntaxes;
+- redesigning the theme slots, link colour, proposal chrome, or fixed palette;
+- preserving source colour during DOCX/PDF/Markdown ingestion. Current
+  ingestors drop presentation generally; this change creates the correct
+  target representation for a later import project;
+- exact background/border fidelity for every possible grouping box in Word;
+- PPTX export (none exists) and Markdown colour extensions.
+
+## Required behavioural contract
+
+### Conformance and canonical form
+
+The following are lint-clean and byte-stable:
+
+```aim
+<h1 style="color:#ff69b4">Title</h1>
+<p style="background-color:#fff1f7">Body</p>
+<p class="border" style="border-color:#ff69b4">Callout</p>
+<h2 style="left:48px; top:32px; width:450px; color:#ff69b4">Slide title</h2>
+<p><span style="color:#ff69b4">one run</span> only</p>
+```
+
+The following fail V008, not V007: `color:red`, `color:#fff`,
+`color:#FF69B4`, `color:rgb(255,105,180)`, `background-color:transparent`,
+and `border-color:var(--aim-brand-1)`. An unrelated property such as
+`opacity:.5` continues to fail V007.
+
+Canonicalization orders declarations by the registry, removes empty styles,
+and keeps the existing last-duplicate-wins rule. Thus:
+
+```html
+style="color:#111111; left:2px; color:#ff69b4"
+```
+
+serializes as:
+
+```html
+style="left:2px; color:#ff69b4"
+```
+
+### Rendering and conversion
+
+- HTML export preserves the declaration verbatim after canonicalization.
+- PDF uses Chromium and therefore needs no paint translation; add a focused
+  regression proving the generated print HTML retains mixed geometry + paint.
+- Inline paint beats a conflicting palette or brand class in HTML, PDF, and
+  DOCX.
+- DOCX `color` resolves to an RGB run colour and inherits through block and
+  inline wrappers.
+- DOCX inline `background-color` becomes run shading; block/list-item
+  background becomes paragraph shading; cell background becomes cell shading.
+- A grouping background (`section`, `div`, `blockquote`, list/table wrapper)
+  is approximated by shading the emitted descendant paragraphs/cells whose
+  own background is transparent. Document this as the Word degradation
+  contract; do not claim a single contiguous CSS box.
+- DOCX border colour is emitted only when the element also has a border-making
+  utility. Full, top, and bottom borders map to the corresponding run,
+  paragraph, or cell OOXML border. `style="border-color:…"` alone emits no
+  border, matching CSS.
+- In tracked mode, inline paint belongs in the `w:ins`/`w:del` run properties
+  so old and new colours/backgrounds remain reviewable. Block box paint has
+  one paragraph/cell property in Word; prefer an honest run-level tracked
+  approximation over silently showing only the proposed paint, and document
+  that limitation. `accept-all`/`reject-all` clean exports must have the exact
+  chosen block paint.
+
+## Implementation sequence
+
+Work red-first. Do not combine the two repositories in one commit or PR.
+
+### 1. Add failing format and parity tests
+
+In `aimformat`:
+
+1. Extend `tests/test_lint.py` with acceptance for all three properties on a
+   block, inline span, and positioned slide child. Add one parameterized V008
+   test covering every forbidden spelling above.
+2. Change the V007 unit and generated fixture seed from `color:red` to an
+   actually unknown property such as `opacity:.5`; otherwise the fixture stops
+   testing V007 after `color` becomes registered. Update
+   `scripts/gen_fixtures.py` and regenerate, never hand-edit only the fixture.
+3. Extend `tests/test_canonical.py` and the normal-form regression tests with
+   mixed geometry/paint ordering, duplicate paint last-wins, empty style
+   removal, and a `loads(dumps(x)) == x` case.
+4. Add matching `ts/test/canonical.test.ts` cases. Include a parity fixture
+   containing block paint, inline span paint, and mixed slide geometry/paint,
+   then regenerate the Python goldens. This pins `Chunk.html`, proposal
+   payloads, and `docHash` across both implementations.
+5. Add an SDK lifecycle test: add a painted chunk, propose a paint-only
+   modify, accept and reject it on separate clones, verify history, time
+   travel, undo/redo, and end every path with `lint(doc.dumps()) == []`.
+
+Do not change implementation until these tests fail for the expected reason.
+
+### 2. Extend the registry and generated artifacts
+
+1. In `src/aimformat/registry.json`, append the three properties to
+   `style_props.order` and give each the exact six-digit lowercase grammar.
+   Do not reuse the looser theme colour pattern.
+2. Let the existing Python `Registry.style_prop_order/style_patterns`, linter,
+   and canonical serializer consume the registry change; do not add parallel
+   hard-coded Python lists.
+3. Extend `scripts/gen_ts_registry.py` to emit both `STYLE_PROP_ORDER` and
+   `STYLE_PROP_PATTERNS`. Export them from `ts/src/index.ts`. Generate JS
+   regexes from the same registry patterns so Tndm can validate rather than
+   maintaining a third grammar.
+4. Regenerate:
+
+   ```sh
+   python3 scripts/gen_spec_appendix.py
+   python3 scripts/gen_fixtures.py
+   python3 scripts/gen_ts_registry.py
+   python3 scripts/gen_parity_fixtures.py
+   python3 scripts/dump_projection.py
+   ```
+
+5. Review regenerated diffs. Existing fixture/example hashes should change
+   only where regeneration re-mints fixture ids or the new parity fixture is
+   added; the registry change alone must not change old document bytes.
+
+### 3. Update the normative spec and authoring guidance
+
+1. Rename spec §3.3 from geometry-only language to validated inline styles.
+   State the rule as: registered continuous/local values use a closed
+   property-and-grammar registry; discrete/reusable choices use classes;
+   document-wide constants use theme slots.
+2. Explain literal-vs-theme semantics and native precedence with one example
+   of each. State explicitly that a local literal is one chunk edit and never
+   requires a theme proposal.
+3. Update the security rationale: this is not arbitrary CSS because both
+   property names and value grammars remain closed; functions, URLs,
+   `!important`, and unregistered properties remain invalid.
+4. Update `README.md`, `docs/for-agents.md`, the bundled Agent Skill references,
+   and `CHANGELOG.md`. The agent guide should prefer theme classes when the
+   user asks for a reusable document role and literal style when they ask for
+   one exact/local colour.
+5. Run the workspace human-writing checklist over README/spec/guide prose.
+
+### 4. Replace DOCX's colour special case with a computed-paint resolver
+
+Create one small internal module (for example `src/aimformat/paint.py`) rather
+than expanding regexes throughout `export_docx.py`.
+
+The resolver must:
+
+1. Parse registered class declarations from `REGISTRY.class_declarations` and
+   canonical inline declarations from `style`.
+2. Resolve theme-backed `var(--aim-brand-N)` values through the document
+   theme/default palette.
+3. Match the generated stylesheet's class cascade: among class declarations
+   for the same paint property, the alphabetically last registered class
+   wins. Inline style then wins over classes.
+4. Traverse a root once, carrying inherited text colour and visible ancestor
+   background, and store immutable computed records keyed by Python object
+   identity. Border state remains direct/non-inherited. The record should
+   include text RGB, direct/effective background RGB, border RGB, and visible
+   border sides derived from the border-making utilities.
+5. Resolve live document roots and separately parsed pending payload roots.
+   Give synthetic blocks created by `_block_children/_wrapped` an explicit
+   paint context from their source; do not copy attributes into the source
+   DOM. Remove the current `_wrapped` “copy colour classes” workaround once
+   all emitters use the resolver.
+6. Leave browser base-layer colours and Word template defaults alone when the
+   author declared no class/style paint.
+
+Unit-test the resolver independently before wiring it to Word. Include class
+vs inline precedence, brand resolution, inheritance, non-inheritance,
+grouping backgrounds, a border colour without a border, and source-tree
+non-mutation.
+
+### 5. Wire computed paint through every DOCX emitter
+
+Refactor run creation so plain and tracked runs share the same paint
+application helpers.
+
+1. Text colour: replace `_color_for` and leaf-specific patches with the
+   computed resolver. Cover ordinary blocks, nested inline runs, links, lists,
+   `pre/code`, figures/captions, table cells, grouping wrappers, slides after
+   linearization, pending adds, pending modifies/deletes, and structural table
+   replacements.
+2. Run background: add a `w:shd` run property with `w:fill=RRGGBB`; do not use
+   Word's limited highlight enum.
+3. Paragraph/cell background: add idempotent helpers for `w:pPr/w:shd` and
+   `w:tcPr/w:shd`.
+4. Borders: add idempotent helpers for `w:rPr/w:bdr`, `w:pPr/w:pBdr`, and
+   `w:tcPr/w:tcBorders`; use a stable single-line style/size matching AIM's
+   one-pixel border utility. Emit only the sides created by `border`,
+   `border-t`, or `border-b`.
+5. Apply paint before detaching runs into `w:ins`/`w:del`, so revision runs
+   retain `w:rPr` identically to ordinary runs.
+6. Preserve the exporter invariant that an unpainted document gains no
+   explicit Word colour/shading/border and therefore still follows the
+   recipient's Word template.
+
+Expand `TestDocxTextColour` into paint-focused test groups. Assert the OOXML,
+not only `python-docx`'s high-level view. Required cases:
+
+- literal direct and inherited text colour;
+- inline value overriding fixed and brand classes;
+- nested spans and mixed `pre` content (the current documented hole);
+- block, inline, list-item, and table-cell backgrounds;
+- full/top/bottom border recolouring and no border from colour alone;
+- clean, tracked, accept-all, and reject-all paths;
+- every grouping/leaf family named above;
+- no mutation of `doc.dumps()` in any pending mode.
+
+### 6. Verify HTML and PDF paths
+
+`to_html` should require no implementation beyond canonical preservation.
+Add a regression that flattens a painted pending proposal under keep,
+accept-all, and reject-all.
+
+For PDF, test `_print_html` rather than screenshot colour matching in the
+unit suite: assert the canonical mixed geometry/paint style reaches Chromium
+after page CSS injection. Add one browser-backed smoke test if the existing
+Playwright test environment makes computed-style inspection cheap; do not add
+a brittle pixel-golden system for three CSS properties.
+
+### 7. Migrate Tndm's shared style handling
+
+Only start this after the aimformat commit is on `aimformat/main`; development
+may use the sibling editable install, but CI/prod must pin the merged SHA.
+
+Frontend:
+
+1. In `frontend/src/lib/canvas.ts`, replace the geometry-only hard-coded list
+   with registry data imported from `@aimformat/reader`. Split the helpers into:
+   - `filterAimStyle`: all nine legal properties, with value validation;
+   - `filterGeometryStyle`: geometry subset for layout calculations when
+     needed;
+   - `filterPaintStyle`: the three paint properties for proposal cards.
+   `setStyleProp` must use the generated canonical order.
+2. Use `filterAimStyle` in every edit sanitizer for blocks, spans, images,
+   table cells, and nested structures. Keep `parseGeometry` focused on
+   geometry; paint must survive without being interpreted as layout.
+3. The mapper/schema already carry `aimStyle`; add fixed-point tests proving
+   all three paint properties survive on block roots, inline spans, list
+   items, cells, and slide children alongside geometry.
+4. In `SuggestionsPlugin.renderFragment`, retain only validated paint
+   declarations from `style`; continue stripping geometry so a positioned
+   title cannot escape its proposal card. Keep brand classes as today. The
+   style attribute already participates in `structureSignature`, so a
+   paint-only proposal must select the rendered-format preview and visibly
+   show the result.
+5. Add unit tests for invalid value stripping, geometry/paint separation,
+   proposal scoping, and a theme proposal plus unrelated literal-paint
+   proposal in the same turn.
+
+Backend, both the legacy pipeline and agent harness:
+
+1. Update `services/ai/prompts.py` and the `propose_edits` tool description in
+   `services/agent/tools.py`. Permit only the three exact properties and
+   six-digit lowercase values. Allow `span` to carry literal paint. Tell the
+   model:
+   - exact/local request -> one chunk proposal with inline paint;
+   - reusable/global theme request -> theme slot/class;
+   - never change a theme slot merely to colour one element;
+   - re-emit the complete existing paint style when changing one paint
+     property.
+2. Replace the root style restore in `_payload_with_id` with property-aware
+   merging:
+   - if the model omits `style`, preserve the live style unchanged;
+   - if it sends `style`, treat its complete paint subset as authoritative
+     (so omitted live paint is removed), preserve any live geometry property
+     the model omitted, reject/let lint reject everything else, and serialize
+     in registry order;
+   - `style=""` therefore removes all root paint while retaining geometry.
+   Do not use string concatenation or let `style="color:…"` drop a slide's
+   `left/top/width/height/transform/z-index`.
+3. Generalize the existing “pure colour change” metadata restoration from a
+   brand-only class to a payload whose only authored styling change is paint.
+   This keeps root `href`, `title`, `dir`, and `lang` for a colour-only edit
+   without resurrecting attributes during an ordinary rewrite. Preserve the
+   existing conservative rule for nested elements: the model must re-emit
+   nested link/image attributes because positional grafting can corrupt them.
+4. Keep the brand-class merge path for semantic/theme edits; inline paint
+   does not need to delete a conflicting colour class because native inline
+   precedence is intentional.
+5. Add parallel tests for the old pipeline and `propose_edits` agent tool:
+   local title paint yields one proposal and no theme proposal; word-level
+   paint uses a span; background/border survive; invalid values fail closed;
+   geometry survives a slide recolour; clearing paint works; metadata and
+   classes survive a pure paint edit; unrelated edits preserve existing paint.
+
+### 8. Pin, integration-test, and land in dependency order
+
+Aimformat gate:
+
+```sh
+python3 -m pytest
+cd ts && npm test
+```
+
+Also rerun every generator and require a clean generated-artifact diff. Update
+`src/aimformat/__init__.py` and `CHANGELOG.md` to the chosen next `0.2.x`
+version. Land aimformat first.
+
+Tndm then updates the single `ARG AIMFORMAT_REF` in `backend/Dockerfile` to
+the exact merged aimformat SHA and extends
+`backend/tests/test_format_contract.py` to assert that all three literal paint
+properties lint clean at the pin. Do not pin an unmerged feature-branch SHA.
+
+Tndm gate:
+
+```sh
+conda run -n tndm pytest backend/tests
+cd frontend && npm test
+```
+
+Run the targeted Playwright flows for flow editing, slide editing, proposal
+review, and DOCX download. The end-to-end acceptance case is:
+
+1. Start with a positioned, class-styled title and another element using
+   `brand-1`.
+2. Ask “make only this title #ff69b4.”
+3. Observe one paint-only chunk proposal whose preview is pink.
+4. Accept it.
+5. Confirm title geometry/classes remain, the other brand element is
+   unchanged, and the saved `.aim` contains canonical inline paint.
+6. Download HTML, PDF, and DOCX; the title is pink in each.
+7. Undo/redo and reject a second recolour; history verifies throughout.
+
+## Commit and review boundaries
+
+- Never stage or commit from the workspace root.
+- Aimformat: one focused commit/PR for registry + canonical/parity + spec +
+  converters + its tests. The plan/report log can ride that PR.
+- Tndm: one implementation commit/PR after aimformat merges, followed by a
+  separate pin commit if review timing requires it. Reference the aimformat
+  merge SHA in the commit message.
+- Preserve unrelated working-tree changes. At plan creation, `aimformat` had
+  an unrelated modified `AGENTS.md`, and `tndm` had an unrelated modified
+  `frontend/package-lock.json`; do not stage, rewrite, or “clean up” either.
+- Use a deep worktree if those changes overlap or if another agent is active:
+  from the workspace root,
+  `scripts/deep-worktree.sh literal-paint aimformat tndm`.
+
+## Completion checklist
+
+- [ ] All three properties share one registry grammar across Python, TS, and
+      Tndm.
+- [ ] Old documents serialize and hash identically.
+- [ ] Literal local paint needs no theme mutation.
+- [ ] Inline paint wins over classes in every renderer.
+- [ ] DOCX text colour inherits across every leaf emitter.
+- [ ] DOCX background/border mappings and Word-only degradations are tested
+      and documented.
+- [ ] Flow, slide, proposal-preview, legacy-AI, and agent-loop paths preserve
+      paint and geometry.
+- [ ] Aimformat merges before Tndm pins it; one commit boundary per repo.
+- [ ] Full Python/TS/backend/frontend/e2e gates pass.
+- [ ] This entry and its index row are marked `done`; the colour-problem
+      report is marked `superseded` or linked to the shipped decision; durable
+      styling/export facts are promoted into `docs/knowledge/architecture.md`.
