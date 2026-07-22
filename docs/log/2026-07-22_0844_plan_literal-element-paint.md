@@ -31,8 +31,11 @@ chunk proposal, not a coupled theme-plus-chunk proposal.
 
 ## Fixed design decisions
 
-These are implementation requirements, not questions for the implementing
-agent.
+**Decided by the maintainer on 2026-07-22**, not inferred by an agent — this
+repo's open format questions are the maintainer's to settle (AGENTS.md
+§Repository), and Codex was right to ask on #20 that the approval be recorded
+rather than assumed. These are implementation requirements, not questions for
+the implementing agent.
 
 1. **Syntax:** use native inline CSS properties in `style`, not a new
    `data-aim-*` attribute and not an arbitrary-value class.
@@ -59,12 +62,18 @@ agent.
 7. **Conflicting classes stay as-is:** the existing alphabetic stylesheet
    cascade for multiple colour utilities is not redesigned here. Inline paint
    simply outranks it. A separate change may lint mutually exclusive classes.
-8. **Versioning:** treat this as an additive change to the still-draft v0.2
-   registry and bump the toolkit package to the next available `0.2.x`; do not
-   rewrite `data-aim-version` or historical checkpoint hashes. Record in the
-   changelog that older v0.2 validators reject documents using the new
-   properties. Revisit the coarse spec-version policy before 1.0 rather than
-   inventing a history migration inside this feature.
+8. **Versioning: this ships as v0.3.** Maintainer decision, 2026-07-22,
+   reversing the earlier "additive to draft 0.2" line after Codex pointed out
+   what it costs: a document using the new properties is rejected by an older
+   0.2 validator (V007) and accepted by a newer one, so two tools claiming to
+   implement the same spec version would disagree about conformance. The
+   version is the compatibility signal, and it must keep meaning one thing.
+   So bump `data-aim-version` to `0.3`, update the generated `data-aim-css`
+   handling with it, and take the toolkit to the matching version. Do not
+   rewrite historical checkpoint hashes or migrate existing documents: a 0.2
+   document stays a valid 0.2 document, and only a document that actually uses
+   paint is 0.3.
+
 9. **No source-tree mutation during export:** computed paint is derived once
    into export-local state. Never copy inherited styles or classes back onto
    the parsed document.
@@ -154,10 +163,18 @@ style="left:2px; color:#ff69b4"
   is approximated by shading the emitted descendant paragraphs/cells whose
   own background is transparent. Document this as the Word degradation
   contract; do not claim a single contiguous CSS box.
-- DOCX border colour is emitted only when the element also has a border-making
-  utility. Full, top, and bottom borders map to the corresponding run,
-  paragraph, or cell OOXML border. `style="border-color:…"` alone emits no
-  border, matching CSS.
+- DOCX border colour follows the element's border, from a border-making
+  utility OR from a base-stylesheet default — `hr` and `blockquote` carry a
+  border with no utility present, and `border-color` recolours them in
+  HTML/PDF, so their DOCX emitters are in scope too. `style="border-color:…"`
+  on an element with no border at all emits nothing, matching CSS.
+  (Codex on #20.)
+- **Word has no per-side border on a RUN.** `w:rPr/w:bdr` is one border for
+  the whole run; per-side borders exist only for paragraphs and cells. So
+  `border-t`/`border-b` plus `border-color` on an INLINE element cannot map
+  exactly. Documented degradation: colour the whole-run border, and do not
+  write a test that demands side fidelity for inline spans. Block and cell
+  borders keep exact per-side mapping. (Codex on #20.)
 - In tracked mode, inline paint belongs in the `w:ins`/`w:del` run properties
   so old and new colours/backgrounds remain reviewable. Block box paint has
   one paragraph/cell property in Word; prefer an honest run-level tracked
@@ -317,14 +334,10 @@ after page CSS injection. Add one browser-backed smoke test if the existing
 Playwright test environment makes computed-style inspection cheap; do not add
 a brittle pixel-golden system for three CSS properties.
 
-### 7. Consumers migrate separately
+### 7. The contract consumers migrate against
 
-This repo is public and the editor is not. Its migration — which files change,
-which sanitizers and prompts move, which tests gate it — is editor
-implementation detail and lives in the private repo's own log, not here
-(workspace guardrail 5; Codex on #20).
-
-What is public, and all a consumer needs from this plan, is the contract:
+Consumer-side migration is out of scope here; each consumer plans its own. All
+this plan owes them is the contract:
 
 - the three properties, the `^#[0-9a-f]{6}$` grammar, and the canonical order
   are published in `registry.json` and projected to `@aimformat/reader`, so a
@@ -346,7 +359,9 @@ cd ts && npm test
 ```
 
 Rerun every generator and require a clean generated-artifact diff. Update
-`src/aimformat/__init__.py` and `CHANGELOG.md` to the chosen next version.
+`src/aimformat/__init__.py` and `CHANGELOG.md` to the 0.3 line (§Fixed design
+decisions 8), and make sure the spec, Appendix A, and the conformance fixtures
+carry a document at each version — a 0.2 file must still verify.
 
 **This repo lands first.** A consumer pins an exact merged SHA, never an
 unmerged feature branch, and asserts at its pin that all three properties lint
@@ -368,7 +383,9 @@ clean.
 
 - [ ] All three properties share one registry grammar across Python, TS,
       and any consumer.
-- [ ] Old documents serialize and hash identically.
+- [ ] Old documents serialize and hash identically, and stay `0.2`.
+- [ ] Documents using paint declare `0.3`; both versions verify under the
+      new toolkit.
 - [ ] Literal local paint needs no theme mutation.
 - [ ] Inline paint wins over classes in every renderer.
 - [ ] DOCX text colour inherits across every leaf emitter.
