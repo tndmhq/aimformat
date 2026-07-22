@@ -70,9 +70,8 @@ follow — it may repaint chunks it was never shown.
 
 The current mitigation is honesty, not correctness: the model is told slots are
 shared, told it cannot see the whole document, and told to **state the side
-effect in its explanation**. In production it now says things like *"Set brand 2
-to a pink hue; this will recolour any element that uses brand 2 across the
-document."* That is the right behaviour given the format, but it is a warning
+effect in its explanation** — *"set brand 2 to a pink hue; this recolours any
+element using brand 2 across the document."* That is the right behaviour given the format, but it is a warning
 label on a design problem.
 
 ### 2c. Four slots is a hard ceiling
@@ -89,10 +88,10 @@ implement the same rule to agree. A sharp edge a redesign could remove.
 
 ## 3. What shipped, and what it cost
 
-All merged and in production.
+What the format's shape forced, and what each fix cost.
 
-**Consumer side** (an editor built on this format; its own fixes are recorded
-in its own repo, so only the format-relevant shape is here)
+**Consumer side** (an editor built on this format — only the format-relevant
+shape is recorded here)
 
 Four separate defects, none of them format bugs, all downstream of the same
 gap — the only way to express a colour is a shared token, so every layer had

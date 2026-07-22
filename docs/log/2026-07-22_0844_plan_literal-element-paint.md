@@ -92,7 +92,21 @@ the implementing agent.
      noise on files that are perfectly valid. A tool implementing 0.3
      understands 0.2; it should warn only for a version it does NOT implement.
 
-   Do not rewrite historical checkpoint hashes or migrate existing documents.
+   **Adding paint to an existing 0.2 document needs a recorded upgrade, not a
+   silent edit.** Verified rather than assumed: `data-aim-version` lives on the
+   `<html>` open tag, which `doc_hash` covers — flipping it changes the hash,
+   so an in-place bump breaks checkpoint verification, while leaving it at 0.2
+   would declare a version the document no longer conforms to. Neither is
+   allowed, so the toolkit must offer the third option and this repo already
+   has the shape for it: *every state change mutates the tree AND appends the
+   matching event*. The version bump is a state change, so it gets an event,
+   and `verify()` passes by construction the way `reconcile` does.
+
+   Concretely: adding the first paint declaration to a 0.2 document emits an
+   upgrade event alongside the paint proposal/edit, and a document whose
+   history cannot take that event (pruned, damaged) refuses paint rather than
+   producing an unverifiable history. Do not rewrite historical checkpoint
+   hashes or migrate documents that never use paint.
 
 9. **No source-tree mutation during export:** computed paint is derived once
    into export-local state. Never copy inherited styles or classes back onto
@@ -272,7 +286,10 @@ Do not change implementation until these tests fail for the expected reason.
    and `CHANGELOG.md`. The agent guide should prefer theme classes when the
    user asks for a reusable document role and literal style when they ask for
    one exact/local colour.
-5. Run the workspace human-writing checklist over README/spec/guide prose.
+5. Re-read the changed README/spec/guide prose for plain, non-marketing
+   language before landing. (Deliberately not a named checklist: the one this
+   line used to invoke lives outside this repo, so it was a gate no reader
+   here could run.)
 
 ### 4. Replace DOCX's colour special case with a computed-paint resolver
 
@@ -285,9 +302,20 @@ The resolver must:
    canonical inline declarations from `style`.
 2. Resolve theme-backed `var(--aim-brand-N)` values through the document
    theme/default palette.
-3. Match the generated stylesheet's class cascade: among class declarations
-   for the same paint property, the alphabetically last registered class
-   wins. Inline style then wins over classes.
+3. Match the generated stylesheet's class cascade — **including shorthand
+   resets, which same-property matching gets wrong.** Measured in the current
+   stylesheet: `.border-red-600{border-color:#dc2626}` is emitted at byte
+   3353 and `.border-t{border-top:1px solid #e5e7eb}` at 3391, so the
+   shorthand lands LAST and resets the colour. `class="border-t
+   border-red-600"` therefore renders GREY in a browser today. A resolver
+   matching only `border-color` declarations would emit red and disagree with
+   every other renderer (Codex on #20).
+
+   So the rule is: among class declarations affecting the same paint
+   property — longhand or via a shorthand that sets it — the alphabetically
+   last registered class wins, exactly as the browser computes it. Inline
+   style then wins over all classes, which is the point of this change and
+   sidesteps the trap entirely for anyone who uses it.
 4. Traverse a root once, carrying inherited text colour and visible ancestor
    background, and store immutable computed records keyed by Python object
    identity. Border state remains direct/non-inherited. The record should
@@ -409,6 +437,11 @@ planned here.
       refreshes, as it does for any registry change.
 - [ ] Documents using paint declare `0.3`; a 0.2 document verifies under the
       0.3 toolkit with NO version warning (S002/S006 accept older).
+- [ ] Adding paint to an existing 0.2 document records an upgrade event, and
+      `verify()` still passes over the whole history afterwards; a history
+      that cannot take the event refuses paint instead.
+- [ ] A class-based border colour resolves the same in DOCX as in the browser,
+      shorthand resets included (`class="border-t border-red-600"`).
 - [ ] Literal local paint needs no theme mutation.
 - [ ] Inline paint wins over classes in every renderer.
 - [ ] DOCX text colour inherits across every leaf emitter.
