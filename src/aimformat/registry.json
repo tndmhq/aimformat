@@ -311,7 +311,8 @@
       "color",
       "background-color",
       "border-color"
-    ]
+    ],
+    "paint_since": "0.3"
   },
   "page": {
     "sizes_mm": {
@@ -824,6 +825,10 @@
     "S031": [
       "error",
       "aim-slide marked as a chunk (slides are containers)"
+    ],
+    "S032": [
+      "error",
+      "literal paint requires a supporting spec version"
     ],
     "V001": [
       "error",

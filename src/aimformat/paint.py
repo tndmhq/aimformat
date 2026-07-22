@@ -112,14 +112,15 @@ def rgb_of(value: str, palette: Mapping[str, str] | None = None) -> str | None:
 
 @dataclass(frozen=True)
 class _Rule:
-    """One simple rule of the generated stylesheet, in emission order."""
+    """One supported rule of the generated stylesheet, in emission order."""
 
-    kind: str  # "type" | "class"
-    key: str  # tag name or class name
+    kind: str  # "type" | "descendant" | "class"
+    key: str  # tag, "ancestor descendant", or class name
     declarations: tuple[tuple[str, str], ...]
 
 
 _SELECTOR_TYPE = re.compile(r"^[a-z][a-z0-9-]*$")
+_SELECTOR_DESCENDANT = re.compile(r"^([a-z][a-z0-9-]*)\s+([a-z][a-z0-9-]*)$")
 _SELECTOR_CLASS = re.compile(r"^\.([A-Za-z0-9_-]+)$")
 
 
@@ -158,11 +159,11 @@ def _split_declarations(block: str) -> tuple[tuple[str, str], ...]:
 
 @lru_cache(maxsize=1)
 def _stylesheet_rules() -> tuple[_Rule, ...]:
-    """The generated stylesheet reduced to the simple rules we can match.
+    """The generated stylesheet reduced to the selectors paint needs.
 
-    Descendant, attribute and pseudo-element selectors are dropped: none of
-    them carries paint a document converter must reproduce, and matching them
-    properly would mean implementing a selector engine.
+    Besides simple type/class selectors, the base layer has two type-only
+    descendant rules whose backgrounds affect conversion (`thead th` and
+    `pre code`). Attribute and pseudo-element selectors carry no paint.
     """
     rules: list[_Rule] = []
     for selector_list, block in _iter_top_level_rules(generate_aim_css()):
@@ -173,20 +174,22 @@ def _stylesheet_rules() -> tuple[_Rule, ...]:
             if _SELECTOR_TYPE.match(selector):
                 rules.append(_Rule("type", selector, declarations))
             else:
-                m = _SELECTOR_CLASS.match(selector)
-                if m:
-                    rules.append(_Rule("class", m.group(1), declarations))
+                descendant = _SELECTOR_DESCENDANT.match(selector)
+                class_rule = _SELECTOR_CLASS.match(selector)
+                if descendant:
+                    rules.append(_Rule("descendant", selector, declarations))
+                elif class_rule:
+                    rules.append(_Rule("class", class_rule.group(1), declarations))
     return tuple(rules)
 
 
 @lru_cache(maxsize=1)
-def _rules_by_key() -> tuple[dict[str, list[_Rule]], dict[str, list[_Rule]]]:
-    by_tag: dict[str, list[_Rule]] = {}
+def _class_rules_by_key() -> dict[str, list[_Rule]]:
     by_class: dict[str, list[_Rule]] = {}
     for rule in _stylesheet_rules():
-        target = by_tag if rule.kind == "type" else by_class
-        target.setdefault(rule.key, []).append(rule)
-    return by_tag, by_class
+        if rule.kind == "class":
+            by_class.setdefault(rule.key, []).append(rule)
+    return by_class
 
 
 # --------------------------------------------------------------------------
@@ -293,9 +296,9 @@ ROOT_CONTEXT = PaintContext()
 class PaintResolver:
     """Resolve computed paint for whole trees, once, by object identity.
 
-    One instance per export. Elements from different roots (the live body,
-    each parsed pending payload) share it, so a lookup never needs to know
-    which tree an element came from.
+    One instance per export. Elements from different roots (each live
+    construct and parsed pending payload) share it, so a lookup never needs
+    to know which tree an element came from.
     """
 
     def __init__(self, palette: Mapping[str, str] | None = None):
@@ -310,7 +313,7 @@ class PaintResolver:
     # -- public ---------------------------------------------------------------
     def resolve(self, root: Element, *, inherited: PaintContext | None = None) -> None:
         """Compute and store paint for *root* and everything beneath it."""
-        self._walk(root, inherited or ROOT_CONTEXT)
+        self._walk(root, inherited or ROOT_CONTEXT, ())
 
     def of(self, el: Element) -> Paint:
         """The computed record for *el* — unpainted when never resolved."""
@@ -339,9 +342,29 @@ class PaintResolver:
         """
         self._records[id(synthetic)] = (synthetic, self.of(source))
 
+    def overlay_borders(self, el: Element, inherited: Mapping[str, BorderSide]) -> None:
+        """Add a grouping box's borders to one emitted descendant block.
+
+        This is an exporter degradation, not CSS inheritance. Direct borders
+        on the descendant win where Word can represent only one side value.
+        """
+        if not inherited:
+            return
+        current = self.of(el)
+        merged = {**inherited, **current.borders}
+        self._records[id(el)] = (
+            el,
+            Paint(
+                color=current.color,
+                background=current.background,
+                own_background=current.own_background,
+                borders=merged,
+            ),
+        )
+
     # -- internals ------------------------------------------------------------
-    def _walk(self, el: Element, ctx: PaintContext) -> None:
-        computed = self._cascade(el)
+    def _walk(self, el: Element, ctx: PaintContext, ancestors: tuple[str, ...]) -> None:
+        computed = self._cascade(el, ancestors)
         colour, colour_ctx = self._text_colour(computed, ctx)
         own_bg, bg_ctx = self._background(computed, ctx)
         record = Paint(
@@ -353,9 +376,9 @@ class PaintResolver:
         self._records[id(el)] = (el, record)
         child_ctx = PaintContext(color=colour_ctx, background=record.background)
         for child in el.elements():
-            self._walk(child, child_ctx)
+            self._walk(child, child_ctx, (*ancestors, el.tag))
 
-    def _cascade(self, el: Element) -> dict[str, tuple[str, bool]]:
+    def _cascade(self, el: Element, ancestors: tuple[str, ...]) -> dict[str, tuple[str, bool]]:
         """Longhand -> (value, explicit-colour-seen) after the cascade.
 
         Sequential overwrite IS the cascade here: type rules come first in
@@ -363,7 +386,7 @@ class PaintResolver:
         emission order, then the inline style — increasing specificity, so a
         later write always wins.
         """
-        by_tag, by_class = _rules_by_key()
+        by_class = _class_rules_by_key()
         out: dict[str, tuple[str, bool]] = {}
 
         def apply(declarations: tuple[tuple[str, str], ...], *, authored: bool) -> None:
@@ -377,8 +400,14 @@ class PaintResolver:
                     seen = out.get(longhand, ("", False))[1]
                     out[longhand] = (expanded, seen or chosen)
 
-        for rule in by_tag.get(el.tag, ()):
-            apply(rule.declarations, authored=False)
+        ancestor_tags = set(ancestors)
+        for rule in _stylesheet_rules():
+            if rule.kind == "type" and rule.key == el.tag:
+                apply(rule.declarations, authored=False)
+            elif rule.kind == "descendant":
+                ancestor, descendant = rule.key.split()
+                if descendant == el.tag and ancestor in ancestor_tags:
+                    apply(rule.declarations, authored=False)
         for name in sorted(set((el.get("class") or "").split())):
             for rule in by_class.get(name, ()):
                 apply(rule.declarations, authored=True)

@@ -34,6 +34,9 @@ export const STYLE_PROP_PATTERNS: Readonly<Record<string, RegExp>> = {
 // the rest is slide geometry.
 export const STYLE_PROP_PAINT: readonly string[] = ["color", "background-color", "border-color"];
 
+// First spec version whose style grammar includes literal paint.
+export const STYLE_PROP_PAINT_SINCE = "0.3";
+
 export const SCRIPT_TYPES = {"meta": "application/aim-meta+json", "doc": "application/aim-doc+json", "history": "application/aim-history+jsonl", "embeddings": "application/aim-embeddings+jsonl"} as const;
 
 export const PAGE_SIZES_MM: Readonly<Record<string, readonly number[]>> = {"A3": [297, 420], "A4": [210, 297], "A5": [148, 210], "Letter": [215.9, 279.4], "Legal": [215.9, 355.6], "Tabloid": [279.4, 431.8]};

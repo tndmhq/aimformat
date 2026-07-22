@@ -35,5 +35,6 @@ export {
   SPEC_VERSION,
   STYLE_PROP_ORDER,
   STYLE_PROP_PAINT,
+  STYLE_PROP_PAINT_SINCE,
   STYLE_PROP_PATTERNS,
 } from "./registry.data.ts";

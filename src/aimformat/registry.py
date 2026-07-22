@@ -50,6 +50,13 @@ class Registry:
         theirs = version_key(declared)
         return theirs is not None and mine is not None and theirs <= mine
 
+    @staticmethod
+    def version_includes(declared: str | None, introduced: str) -> bool:
+        """Whether *declared* is at least the version that introduced a feature."""
+        theirs = version_key(declared) if declared is not None else None
+        floor = version_key(introduced)
+        return theirs is not None and floor is not None and theirs >= floor
+
     # -- elements ------------------------------------------------------------
     @cached_property
     def block_carriers(self) -> frozenset[str]:
@@ -177,6 +184,11 @@ class Registry:
         this declaration geometry or paint?" reads one table instead of
         re-deriving the split from property names."""
         return frozenset(self.raw["style_props"]["paint"])
+
+    @property
+    def paint_since(self) -> str:
+        """The first spec version whose style grammar includes literal paint."""
+        return self.raw["style_props"]["paint_since"]
 
     # -- page setup --------------------------------------------------------------
     @cached_property

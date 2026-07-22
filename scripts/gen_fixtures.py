@@ -191,6 +191,9 @@ def main() -> None:
             '<aim-slide data-aim="sx" style="width:960px; height:540px">'
             '<h2 style="left:60px; top:50px; width:600px">T</h2></aim-slide>\n</body>',
         ),
+        "nok_S032_paint_under_prior_version.aim": flat.replace(
+            f'data-aim-version="{aim.SPEC_VERSION}"', 'data-aim-version="0.2"'
+        ).replace('<p data-aim="p1">', '<p data-aim="p1" style="color:#ff69b4">'),
         "nok_S016_id_reused_across_parents.aim": flat.replace(
             '<li data-aim="i1">First</li>', '<li data-aim="p1">First</li>'
         ),

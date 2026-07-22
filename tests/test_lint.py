@@ -55,6 +55,34 @@ class TestStructureRules:
         ahead = good_text.replace(f'data-aim-css="{aim.SPEC_VERSION}"', 'data-aim-css="9.9"')
         assert "S006" in warn_codes(ahead)
 
+    def test_S032_prior_version_cannot_contain_live_paint(self):
+        doc = aim.new_document(title="prior version with paint")
+        doc.add_chunk('<p data-aim="p1" style="color:#ff69b4">Painted.</p>', author=BOT, at=ts(0))
+        text = doc.dumps().replace(
+            f'data-aim-version="{aim.SPEC_VERSION}"', 'data-aim-version="0.2"'
+        )
+        assert "S032" in codes(text)
+
+    def test_S032_prior_version_cannot_contain_pending_paint(self):
+        doc = aim.new_document(title="prior version pending paint")
+        doc.add_chunk('<p data-aim="p1">Plain.</p>', author=BOT, at=ts(0))
+        doc.propose_modify(
+            "p1", '<p data-aim="p1" style="color:#ff69b4">Painted.</p>', author=BOT, at=ts(1)
+        )
+        text = doc.dumps().replace(
+            f'data-aim-version="{aim.SPEC_VERSION}"', 'data-aim-version="0.2"'
+        )
+        assert "S032" in codes(text)
+
+    def test_S032_prior_version_cannot_retain_paint_in_history(self):
+        doc = aim.new_document(title="prior version retained paint")
+        doc.add_chunk('<p data-aim="p1" style="color:#ff69b4">Painted.</p>', author=BOT, at=ts(0))
+        doc.modify_chunk("p1", '<p data-aim="p1">Plain.</p>', author=ME, at=ts(1))
+        text = doc.dumps().replace(
+            f'data-aim-version="{aim.SPEC_VERSION}"', 'data-aim-version="0.2"'
+        )
+        assert "S032" in codes(text)
+
     def test_S003_missing_charset(self, good_text):
         broken = good_text.replace('<meta charset="utf-8">\n', "")
         assert "S003" in codes(broken)
@@ -76,6 +104,10 @@ class TestStructureRules:
     def test_S008_stray_body_text(self, good_text):
         broken = good_text.replace("<body>\n", "<body>\nloose words\n")
         assert "S008" in codes(broken)
+
+    def test_V003_body_style_is_not_addressable_document_state(self, good_text):
+        broken = good_text.replace("<body>", '<body style="color:#ff69b4">')
+        assert "V003" in codes(broken)
 
     def test_S011_uncovered_body_child(self, good_text):
         broken = good_text.replace('<p data-aim="intro">', "<p>")

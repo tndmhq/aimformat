@@ -35,6 +35,7 @@ from __future__ import annotations
 import base64
 import io
 import re
+from collections.abc import Mapping
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -520,15 +521,37 @@ def _block_children(el: Element, paint: PaintResolver) -> list[Element]:
     one paragraph — and direct inline content wraps in a synthetic block
     so it is never dropped."""
     if el.tag in ("section", "div"):
-        return _unpack_group(el, "p", paint)
-    if el.tag == "blockquote":
-        return _unpack_group(el, "blockquote", paint)
-    if el.tag == "aim-slide":
-        out: list[Element] = []
+        out = _unpack_group(el, "p", paint)
+    elif el.tag == "blockquote":
+        out = _unpack_group(el, "blockquote", paint)
+    elif el.tag == "aim-slide":
+        out = []
         for child in el.elements():
             out.extend(_block_children(child, paint))
-        return out
-    return [el]
+    else:
+        return [el]
+    _carry_group_borders(out, paint.of(el).borders, paint)
+    return out
+
+
+def _carry_group_borders(
+    blocks: list[Element], borders: Mapping[str, BorderSide], paint: PaintResolver
+) -> None:
+    """Approximate one grouping box on every Word block it emits.
+
+    Lists emit one paragraph per item and tables one box per cell; other
+    block pieces map directly. A descendant's own side wins when Word cannot
+    represent both the group and child border on that side.
+    """
+    for block in blocks:
+        if block.tag in ("ul", "ol"):
+            targets = block.find_all(lambda node: node.tag == "li")
+        elif block.tag == "table":
+            targets = block.find_all(lambda node: node.tag in ("td", "th"))
+        else:
+            targets = [block]
+        for target in targets:
+            paint.overlay_borders(target, borders)
 
 
 def _unpack_group(el: Element, wrap_tag: str, paint: PaintResolver) -> list[Element]:
@@ -609,12 +632,14 @@ class _Exporter:
         # asyncio.to_thread), so a shared global would race between documents
         # with different themes.
         self.palette = _palette_of(doc)
-        # Computed paint for the whole live tree, once. Every emitter reads
+        # Computed paint for each live construct, once. Every emitter reads
         # this instead of deriving colour from its own element — and it holds
         # records by object identity, so nothing is ever written back into the
-        # document being exported.
+        # document being exported. Structural body attributes stay outside
+        # the addressable rendering state.
         self.paint = PaintResolver(self.palette)
-        self.paint.resolve(doc._state.body)
+        for construct in doc._state.constructs():
+            self.paint.resolve(construct)
         self.out = docx_mod.Document()
         self.rev = _Revisions()
         # Set after a slide: True means accepted structure owns the next

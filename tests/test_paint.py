@@ -110,6 +110,18 @@ class TestBackground:
         root, r = resolved('<p style="background-color:#fff1f7">t <code>c</code></p>')
         assert r.of(root.elements()[0]).background is None
 
+    def test_a_descendant_base_rule_hides_an_ancestor_box(self):
+        """`thead th{background:#f3f4f6}` is a real browser rule even though
+        its default grey must not become explicit Word paint."""
+        root, r = resolved(
+            '<table style="background-color:#fff1f7"><thead><tr><th>Head</th></tr></thead>'
+            "<tbody><tr><td>Body</td></tr></tbody></table>"
+        )
+        header = root.find_all(lambda node: node.tag == "th")[0]
+        body = root.find_all(lambda node: node.tag == "td")[0]
+        assert r.of(header).background is None
+        assert r.of(body).background == "FFF1F7"
+
     def test_a_bg_class_resolves(self):
         root, r = resolved('<p class="bg-amber-50">x</p>')
         assert r.of(root).own_background == "FFFBEB"
@@ -324,6 +336,7 @@ class TestVersionUpgrade:
         upgrades = [e for e in older.history if e.target == "aim:version"]
         assert len(upgrades) == 1
         assert (upgrades[0].get("before"), upgrades[0].get("after")) == ("0.2", aim.SPEC_VERSION)
+        assert upgrades[0].batch == older.history[-1].batch
 
     def test_the_earlier_checkpoint_still_verifies_after_the_upgrade(self, older):
         older.modify_chunk(
@@ -344,26 +357,64 @@ class TestVersionUpgrade:
     def test_a_pending_paint_payload_upgrades_too(self, older):
         """A 0.2 validator rejects the payload sitting in the pending lane, so
         the proposal — not only its acceptance — is what needs the version."""
-        older.propose_modify(
+        proposal = older.propose_modify(
             "t", '<h1 data-aim="t" style="color:#ff69b4">Title</h1>', author=BOT, at=ts(2)
         )
         assert older.spec_version == aim.SPEC_VERSION
         assert older.verify() == []
+        upgrade = next(event for event in older.history if event.target == "aim:version")
+        assert upgrade.batch == proposal.batch
+
+    def test_accepting_foreign_paint_groups_the_upgrade_with_the_resolution(self, older):
+        proposal = older.propose_modify("t", '<h1 data-aim="t">Retitled</h1>', author=BOT, at=ts(2))
+        foreign = aim.loads(
+            older.dumps().replace(
+                '<h1 data-aim="t">Retitled</h1>',
+                '<h1 data-aim="t" style="color:#ff69b4">Retitled</h1>',
+                1,
+            )
+        )
+
+        resolution = foreign.accept(proposal.id, decided_by=ME, at=ts(3))
+
+        upgrade = next(event for event in foreign.history if event.target == "aim:version")
+        assert upgrade.batch == resolution.batch
 
     def test_an_unpainted_edit_leaves_the_version_alone(self, older):
         older.modify_chunk("t", '<h1 data-aim="t">Retitled</h1>', author=ME, at=ts(2))
         assert older.spec_version == "0.2"
         assert [e for e in older.history if e.target == "aim:version"] == []
 
-    def test_undoing_the_paint_and_then_the_upgrade_returns_a_02_document(self, older):
+    def test_retained_paint_prevents_undoing_the_upgrade_to_02(self, older):
         older.modify_chunk(
             "t", '<h1 data-aim="t" style="color:#ff69b4">Title</h1>', author=ME, at=ts(2)
         )
         older.undo(author=ME, at=ts(3))
         assert older.chunk("t").html == '<h1 data-aim="t">Title</h1>'
-        older.undo(author=ME, at=ts(4))
-        assert older.spec_version == "0.2"
+        with pytest.raises(
+            aim.InvalidOperation, match="retained document state or history contains literal paint"
+        ):
+            older.undo(author=ME, at=ts(4))
+        assert older.spec_version == aim.SPEC_VERSION
         assert older.verify() == []
+        assert [
+            finding for finding in aim.lint_text(older.dumps()) if finding.level == "error"
+        ] == []
+
+    def test_a_painted_pending_payload_prevents_undoing_the_upgrade(self, older):
+        older.propose_modify(
+            "t", '<h1 data-aim="t" style="color:#ff69b4">Title</h1>', author=BOT, at=ts(2)
+        )
+
+        with pytest.raises(
+            aim.InvalidOperation, match="retained document state or history contains literal paint"
+        ):
+            older.undo(author=ME, at=ts(3))
+
+        assert older.spec_version == aim.SPEC_VERSION
+        assert [
+            finding for finding in aim.lint_text(older.dumps()) if finding.level == "error"
+        ] == []
 
     def test_time_travel_reconstructs_the_declared_version(self, older):
         before = older.seq

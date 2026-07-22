@@ -256,6 +256,11 @@ across models and tools. Attributes are likewise registry-listed per
 element; `data-x-*` is the vendor-extension escape hatch (ignored by
 conformance, mirroring `x_*` in JSON).
 
+The structural `<body>` is not a content element: it is neither addressable
+by an aim id nor included in the hashed body projection. It therefore MUST
+NOT carry rendering attributes such as `class` or `style` (V003). Put paint
+on an addressable content element instead.
+
 ### 3.2 Class vocabulary
 
 `class` attributes MUST use only registered utility names (Appendix A.2) —
@@ -307,8 +312,8 @@ other, and colouring one element never requires touching a theme slot:
 `border-color` never *creates* a border — it recolours one supplied by a
 border utility or by the stylesheet's own element layer (`hr`,
 `blockquote`, `th`/`td`), and paints nothing on an element that has none.
-Renderers and exporters MUST compute what a browser computes, shorthand
-resets included.
+Renderers and exporters MUST compute what a browser computes, including
+element and descendant base rules, class order, and shorthand resets.
 
 **This is not arbitrary CSS.** Both halves stay closed: an unregistered
 property is invalid (V007) and a registered property with an unregistered
@@ -395,6 +400,13 @@ SHOULD warn only for a version it does not implement (S002, S006). A newer
 tool understands an older document; the reverse is what the version number
 exists to signal.
 
+That acceptance does not make newer syntax valid under an older declaration.
+A document declared below v0.3 that retains literal paint in its live body,
+pending payloads, or history payloads fails S032 until it records the upgrade.
+A writer MUST refuse an inverse version edit that would create that state;
+time travel may return a v0.2 document only when it also drops every later
+paint-bearing event.
+
 Introducing markup a document's declared version does not define — as of
 v0.3, adding paint to a v0.2 document — is a **state change and MUST be
 recorded**. `data-aim-version` sits on the `<html>` open tag, which
@@ -403,10 +415,13 @@ checkpoint recorded under the old line, while leaving it would declare a
 version the document no longer conforms to. Writers therefore mutate the
 attribute AND append the matching event, addressed to the reserved target
 `aim:version` (§6.5), with the old and new versions as `before`/`after`.
-Replay restores the old value and the old hashes verify again. A document
-whose history cannot record that event MUST refuse the markup rather than
-produce an unverifiable history; historical checkpoint hashes are never
-rewritten, and a document that never uses the new markup is never migrated.
+The upgrade event and the edit that first needs the newer syntax share one
+batch: they are one editing intention. Replay applies the reserved event to
+the declared version as well as the body, so the old value and old hashes
+verify again. A document whose history cannot record that event MUST refuse
+the markup rather than produce an unverifiable history; historical checkpoint
+hashes are never rewritten, and a document that never uses the new markup is
+never migrated.
 
 `aim:version` is a reserved singleton like `aim:theme` and `aim:doc`: it can
 be modified but never deleted or moved. It is **not** a proposal target —
@@ -1055,6 +1070,7 @@ Total registered utilities: **243**.
 | S029 | error | element not allowed in the head vocabulary |
 | S030 | warning | more than one aim-note comment in the head |
 | S031 | error | aim-slide marked as a chunk (slides are containers) |
+| S032 | error | literal paint requires a supporting spec version |
 | V001 | error | element not allowed in the asset registry |
 | V002 | error | element outside the vocabulary |
 | V003 | error | attribute not allowed on this element |

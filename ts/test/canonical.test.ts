@@ -7,7 +7,11 @@ import {
   sortClassTokens,
 } from "../src/canonical.ts";
 import { parseFragment } from "../src/parser.ts";
-import { STYLE_PROP_ORDER, STYLE_PROP_PATTERNS } from "../src/registry.data.ts";
+import {
+  STYLE_PROP_ORDER,
+  STYLE_PROP_PAINT_SINCE,
+  STYLE_PROP_PATTERNS,
+} from "../src/registry.data.ts";
 
 const first = (markup: string): Element => {
   const el = parseFragment(markup).find(
@@ -52,6 +56,7 @@ describe("canonical serialization", () => {
   });
 
   it("projects the paint grammar so consumers validate against registry data", () => {
+    expect(STYLE_PROP_PAINT_SINCE).toBe("0.3");
     const ok = (prop: string, value: string) => {
       const pattern = STYLE_PROP_PATTERNS[prop];
       if (pattern === undefined) throw new Error(`no grammar for ${prop}`);

@@ -32,11 +32,11 @@ codes bidirectionally in sync with what `lint.py` can actually emit.
 | `lint.py` | the verifier; stable codes S/V/X/P/H/M/C | collects all findings in one run; `C001` byte-compares the source against the canonical serialization |
 | `reconcile.py` | repair out-of-band edits; adoption path for hand-written files | edit script from expected state E (forward replay of the FULL log) to actual body A, appended as `origin:"reconcile"` events — so `verify()` passes by construction; refuses pruned/damaged logs; never rewrites body content (only ids) |
 | `css.py` | deterministic stylesheet | budget guarded by tests (<40 KB raw) |
-| `paint.py` | computed paint (text colour, background, per-side borders) for a whole tree | runs the real cascade against the GENERATED stylesheet, not a second copy of the vocabulary; resolves once per export into immutable records keyed by object identity, and never writes to the tree |
+| `paint.py` | computed paint (text colour, background, per-side borders) for content trees | runs the real cascade against the GENERATED stylesheet, including supported descendant base rules; resolves each live construct once per export into immutable records keyed by object identity, never treats structural `body` chrome as authored state, and never writes to the tree |
 | `pagesetup.py` | `aim:doc` page validation, resolved geometry, and print CSS | the registry defines sizes, margins, and defaults; PDF, DOCX, and editors consume the same `PageSetup` |
 | `ingest.py` | DoclingDocument dict → chunks | dict-shaped input only — docling never becomes a dependency; run `formatting`/`hyperlink` and `inline` groups map to strong/em/u/s/sub/sup/a (safe schemes only). **Presentation is lost UPSTREAM, not here:** docling's `formatting` model carries only `bold`/`italic`/`underline`/`strikethrough`/`script`, so colour, paragraph alignment, and font size never reach this mapping at all (measured 2026-07-22 — a centred, red, 24 pt DOCX paragraph arrives as a bare `<p>`). Word's **Quote** style is flattened the same way: docling labels it plain `text`, so it lands as `<p>`, not `<blockquote>`. STRUCTURE otherwise survives well — headings, ordered vs unordered lists, tables, and hard page breaks all round-trip. Recovering any of them needs a python-docx side pass over the original file, the way `convert/_docx_pages.py` already does for pagination — there is nothing to fix in `ingest.py` |
 | `convert/` | text/Markdown/DOCX/PDF import and Markdown/HTML/PDF export | stdlib directions stay dependency-free; Markdown, Docling, and Playwright imports remain lazy behind extras |
-| `export_docx.py` | .aim → Word incl. `w:ins`/`w:del` tracked changes | `accept-all`/`reject-all` resolve a throwaway copy through the real accept/reject machinery; tracked block/cell box paint rides revision runs as a reviewable approximation because Word keeps paragraph/cell properties outside revisions |
+| `export_docx.py` | .aim → Word incl. `w:ins`/`w:del` tracked changes | `accept-all`/`reject-all` resolve a throwaway copy through the real accept/reject machinery; grouping box paint is carried to emitted descendants, and tracked block/cell box paint rides revision runs as a reviewable approximation because Word keeps paragraph/cell properties outside revisions |
 | `cli.py` | `aim` entry point (also installed as `aimformat`) | exit codes 0/1/2; `--format json` for tooling |
 | `note.py` | canonical agent-note template + helpers (spec §2.5) | the note text contains no markup — structural substring checks must never false-positive on it |
 | `mcp.py` | MCP server (FastMCP, stdio); extra `[mcp]` | six workflow tools, not a 1:1 SDK mirror; lazy-imported by the CLI so core stays stdlib-only |
@@ -103,7 +103,10 @@ codes bidirectionally in sync with what `lint.py` can actually emit.
   `class="border-t border-red-600"` renders GREY. Shorthands reset the
   longhands they omit; matching `border-color` declarations alone produces
   red and disagrees with every renderer. `paint.py` exists so exactly one
-  place has to get this right.
+  place has to get this right. Element base selectors and supported
+  descendants such as `thead th` participate in stylesheet order too: a
+  descendant's own base background stops an ancestor background from crossing
+  into it even though that default paint is not exported.
 - **Only paint the author selected crosses into another format.** A value the
   base element layer supplies (`a{color:…}`, `blockquote{color:…}`,
   `code{background:…}`, a border's default ink inside `border:1px solid …`)
@@ -114,12 +117,27 @@ codes bidirectionally in sync with what `lint.py` can actually emit.
   declaration participates, however, export the final computed value even if
   a later shorthand resets it: the author selected colour, and reporting the
   losing declaration would disagree with the browser.
+- **Structural body chrome is not authored rendering state.** `<body>` has no
+  aim id and is outside the hashed, addressable body projection. Lint rejects
+  `class` or `style` there (V003), paint resolution starts at each live
+  construct, and exporters never let body attributes affect output. Pending
+  payloads still resolve against their exact future content parent so legal
+  ancestor inheritance is preserved.
+- **Grouping borders degrade onto emitted units.** DOCX has no wrapper box for
+  a flattened `section`, `div`, `blockquote`, or slide. Its border is copied to
+  each emitted block, list item, or table cell; an explicit border on that
+  descendant wins side by side. Group backgrounds use the same flattened-box
+  approximation.
 - **The declared version is authored state.** `dumps()` never rewrites
   `data-aim-version`, S002/S006 warn only for a version the tool does NOT
   implement, and introducing markup an older version lacks records an
-  `aim:version` modify event (spec §3.7) so earlier checkpoints keep
-  verifying. The `<html>` open tag is inside `doc_hash`; anything that
-  touches it needs an event, exactly like the body.
+  `aim:version` modify event in the same batch as the first painted edit (spec
+  §3.7) so earlier checkpoints keep verifying and replay restores the declared
+  version. Registry metadata (`paint_since`) drives S032 across live, pending,
+  and retained history payloads, and undo refuses to downgrade while any of
+  those payloads still carries paint. A time-travel copy can be older because
+  it trims the later events too. The `<html>` open tag is inside `doc_hash`;
+  anything that touches it needs an event, exactly like the body.
 
 ## The TypeScript reader (`ts/`)
 

@@ -210,7 +210,7 @@
       "batch": "b2",
       "dependsOn": null,
       "explanation": "Green tint instead.",
-      "id": "p-oarlea6k",
+      "id": "p-gtf5v26b",
       "payloadHtml": "<p data-aim=\"tint\" style=\"background-color:#f0fdf4\">Tinted paragraph.</p>",
       "target": "tint"
     }

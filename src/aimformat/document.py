@@ -1232,7 +1232,7 @@ class AimDocument:
     # -- declared spec version ------------------------------------------------
     def _ensure_paint_version(
         self, markup: str | None, *, author: Actor, at: str | None = None
-    ) -> None:
+    ) -> str | None:
         """Record the version upgrade literal paint requires (spec §3.3).
 
         Paint is a 0.3 feature, so putting it into an older document changes
@@ -1245,17 +1245,19 @@ class AimDocument:
         so replay restores the old version and the old hashes verify again.
 
         Call this BEFORE mutating, from every write path that can put a
-        payload into the document; it is a dict lookup for the common case
-        (a document already at this version) and costs a history replay only
-        on the single edit that first paints a legacy document.
+        payload into the document. It returns the upgrade event's batch so
+        the first painted edit can share that editing intention. The check is
+        a dict lookup for the common case (a document already at this version)
+        and costs a history replay only on the single edit that first paints a
+        legacy document.
         """
         declared = self._state.spec_version()
         if declared == REGISTRY.spec_version or not _payload_has_paint(markup):
-            return
+            return None
         if declared is None:
             raise InvalidOperation("cannot add paint: <html> declares no data-aim-version (S001)")
         if not REGISTRY.implements(declared):
-            return  # already ahead of this build; its version is not ours to set
+            return None  # already ahead of this build; its version is not ours to set
         problems = self.verify()
         if problems:
             raise InvalidOperation(
@@ -1263,6 +1265,7 @@ class AimDocument:
                 f"this history cannot account for the document as it stands ({problems[0]}). "
                 "Repair or flatten the history first."
             )
+        batch = self._batch_id()
         self._state.set_spec_version(REGISTRY.spec_version)
         self._append_event(
             {
@@ -1274,10 +1277,11 @@ class AimDocument:
                 "before": declared,
                 "after": REGISTRY.spec_version,
                 "author": author.to_obj(),
-                "batch": self._batch_id(),
+                "batch": batch,
                 "explanation": f"literal paint requires spec {REGISTRY.spec_version}",
             }
         )
+        return batch
 
     def _preflight_paint_upgrade(
         self, markup: str | None, operation: Callable[[AimDocument], object]
@@ -1296,6 +1300,17 @@ class AimDocument:
             and _payload_has_paint(markup)
         ):
             operation(self._clone())
+
+    def _retains_literal_paint(self) -> bool:
+        """Whether live, pending, or historical state retains paint syntax."""
+        if _payload_has_paint(serialize(self._state.body)):
+            return True
+        return any(
+            _payload_has_paint(value)
+            for event in self.history
+            for key in ("before", "after", "proposed", "applied")
+            if isinstance((value := event.get(key)), str)
+        )
 
     # -- batching -----------------------------------------------------------------
     def _next_batch(self) -> str:
@@ -1595,7 +1610,7 @@ class AimDocument:
         cid, payload = self._normalize_payload(markup)
         anchor = self._resolve_end_anchor(container, after)
         self._preflight_paint_upgrade(payload, lambda trial: trial._state.insert(payload, anchor))
-        self._ensure_paint_version(payload, author=author, at=at)
+        upgrade_batch = self._ensure_paint_version(payload, author=author, at=at)
         self._state.insert(payload, anchor)
         data = {
             "seq": self.seq + 1,
@@ -1606,7 +1621,7 @@ class AimDocument:
             "anchor": anchor.to_obj(),
             "after": payload,
             "author": author.to_obj(),
-            "batch": self._batch_id(),
+            "batch": upgrade_batch or self._batch_id(),
         }
         if explanation:
             data["explanation"] = explanation
@@ -1647,7 +1662,7 @@ class AimDocument:
         if payload == before:
             raise _NoOpEdit("modify with identical content")
         self._preflight_paint_upgrade(payload, lambda trial: trial._state.replace(cid, payload))
-        self._ensure_paint_version(payload, author=author, at=at)
+        upgrade_batch = self._ensure_paint_version(payload, author=author, at=at)
         self._state.replace(cid, payload)
         data = {
             "seq": self.seq + 1,
@@ -1658,7 +1673,7 @@ class AimDocument:
             "before": before,
             "after": payload,
             "author": author.to_obj(),
-            "batch": self._batch_id(),
+            "batch": upgrade_batch or self._batch_id(),
         }
         if explanation:
             data["explanation"] = explanation
@@ -2062,7 +2077,16 @@ class AimDocument:
     def _apply_data(self, data: dict) -> None:
         action, target = data["action"], data["target"]
         if target == VERSION_TARGET:
-            self._state.set_spec_version(data["after"])
+            declared = data["after"]
+            if (
+                not REGISTRY.version_includes(declared, REGISTRY.paint_since)
+                and self._retains_literal_paint()
+            ):
+                raise InvalidOperation(
+                    f"cannot set the declared version to {declared}: retained document state "
+                    f"or history contains literal paint requiring spec {REGISTRY.paint_since}"
+                )
+            self._state.set_spec_version(declared)
             return
         if target in ("aim:theme", "aim:doc"):
             setter = (
@@ -2174,7 +2198,7 @@ class AimDocument:
         # a paint payload sitting in the pending lane is already markup an
         # older validator rejects, so the proposal — not only its acceptance
         # — is what needs the version
-        self._ensure_paint_version(payload, author=author, at=at)
+        upgrade_batch = self._ensure_paint_version(payload, author=author, at=at)
         pid = pid or self._new_proposal_id()
         attrs: list[tuple[str, str | None]] = [("id", pid), ("data-action", action)]
         if anchor is not None:
@@ -2189,7 +2213,7 @@ class AimDocument:
             attrs.append(("data-author-id", author.id))
         if author.model:
             attrs.append(("data-author-model", author.model))
-        attrs.append(("data-batch", self._batch_id()))
+        attrs.append(("data-batch", upgrade_batch or self._batch_id()))
         if depends_on:
             attrs.append(("data-depends-on", depends_on))
         if explanation:
@@ -2653,7 +2677,9 @@ class AimDocument:
                     at=at,
                 ),
             )
-            self._ensure_paint_version(applied_payload, author=decided_by, at=at)
+            upgrade_batch = self._ensure_paint_version(applied_payload, author=decided_by, at=at)
+        else:
+            upgrade_batch = None
         return self._resolve(
             prop,
             decision="accepted",
@@ -2661,6 +2687,7 @@ class AimDocument:
             applied=applied_payload,
             explanation=explanation,
             at=at,
+            batch=upgrade_batch,
         )
 
     def _payload_like(
@@ -2752,6 +2779,7 @@ class AimDocument:
         superseded_by: str | None = None,
         explanation: str | None = None,
         at: str | None = None,
+        batch: str | None = None,
     ) -> Event:
         card = self._card_el(prop.id)
         data: dict = {
@@ -2764,7 +2792,7 @@ class AimDocument:
             "proposed_by": prop.author.to_obj(),
             "proposed_at": prop.at,
             "decided_by": decided_by.to_obj(),
-            "batch": self._batch_id(),
+            "batch": batch or self._batch_id(),
         }
         if superseded_by:
             data["superseded_by"] = superseded_by

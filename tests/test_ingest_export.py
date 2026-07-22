@@ -846,13 +846,13 @@ class TestDocxTextColour:
         out = self._export('<div class="text-red-600"><p>Child</p></div>', tmp_path)
         assert self._colours(out) == ["DC2626"]
 
-    def test_colour_inherits_from_the_body(self, tmp_path):
+    def test_unversioned_body_paint_is_not_exported(self, tmp_path):
         doc = aim.from_text("placeholder", title="t")
         doc.add_chunk('<p data-aim="p1">Child</p>', author=aim.external("test"))
         painted = aim.loads(doc.dumps().replace("<body>", '<body style="color:#ff69b4">'))
         out = tmp_path / "body-paint.docx"
         aim.to_docx(painted, out, pending="accept-all")
-        assert self._colours(out) == ["FF69B4"]
+        assert self._colours(out) == []
 
     def test_inherited_colour_reaches_every_leaf_family(self, tmp_path):
         out = self._export(
@@ -1078,6 +1078,17 @@ class TestDocxPaintBoxes:
         )
         assert self._fills(out) == ["EEEEEE"]
 
+    def test_a_descendant_base_background_hides_the_group(self, tmp_path):
+        import re
+
+        out = self._export(
+            '<table style="background-color:#fff1f7"><thead><tr><th>Head</th></tr></thead>'
+            "<tbody><tr><td>Body</td></tr></tbody></table>",
+            tmp_path,
+        )
+        assert self._fills(out) == ["FFF1F7"]
+        assert len(re.findall(r'<w:shd [^>]*w:fill="FFF1F7"', self._xml(out))) == 1
+
     def test_an_unpainted_document_gains_no_shading(self, tmp_path):
         assert self._fills(self._export("<p>Plain</p>", tmp_path)) == []
 
@@ -1106,6 +1117,15 @@ class TestDocxPaintBoxes:
     def test_a_blockquotes_base_stylesheet_border_is_recoloured(self, tmp_path):
         out = self._export('<blockquote style="border-color:#ff69b4">q</blockquote>', tmp_path)
         assert self._borders(out, "pBdr") == {"left": "FF69B4"}
+
+    def test_a_grouping_border_is_carried_by_each_emitted_child_block(self, tmp_path):
+        import re
+
+        out = self._export(
+            '<blockquote style="border-color:#ff69b4"><p>One</p><p>Two</p></blockquote>',
+            tmp_path,
+        )
+        assert len(re.findall(r'<w:left [^>]*w:color="FF69B4"', self._xml(out))) == 2
 
     def test_a_class_border_colour_matches_the_browsers_shorthand_reset(self, tmp_path):
         """`.border-t` sorts AFTER `.border-red-600` in the generated

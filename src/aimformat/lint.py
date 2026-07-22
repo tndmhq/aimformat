@@ -151,6 +151,17 @@ class _Linter:
                 f"document targets spec {version}, this tool implements "
                 f"{REGISTRY.spec_version} — rules it does not know are unchecked",
             )
+        if (
+            version is not None
+            and not REGISTRY.version_includes(version, REGISTRY.paint_since)
+            and self._contains_literal_paint()
+        ):
+            self.add(
+                "S032",
+                ERROR,
+                f"literal paint requires spec {REGISTRY.paint_since} or newer, "
+                f"but the document declares {version}",
+            )
         head = self.state.head
         if not head.find(lambda e: e.tag == "meta" and e.get("charset") == "utf-8"):
             self.add("S003", ERROR, '<head> must declare <meta charset="utf-8">')
@@ -235,6 +246,15 @@ class _Linter:
         # structural chrome: no event handlers on <html>/<body>
         self._forbid_handlers(self.state.html, "html")
         self._forbid_handlers(self.state.body, "body")
+        for name, _ in self.state.body.attrs:
+            if not name.startswith("on") and not name.startswith("data-x-"):
+                self.add(
+                    "V003",
+                    ERROR,
+                    f"attribute {name!r} is not allowed on <body> "
+                    "(body state is not addressable or hashed)",
+                    "body",
+                )
 
         # <head>: closed child vocabulary + a forbidden-element / handler sweep
         # (vocabulary() never visits the head)
@@ -278,6 +298,15 @@ class _Linter:
         for name, _ in el.attrs:
             if name.startswith("on"):
                 self.add("X002", ERROR, f"event-handler attribute {name!r} is forbidden", where)
+
+    def _contains_literal_paint(self) -> bool:
+        """Paint anywhere retained by the file needs the paint-era version.
+
+        The body serialization covers live constructs and pending templates.
+        Raw history scripts are inert DOM text, so inspect every markup field
+        that history retains separately as well.
+        """
+        return self.doc._retains_literal_paint()
 
     def body_sections(self) -> None:
         seen: dict[int, int] = {}

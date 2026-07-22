@@ -9,7 +9,8 @@ required to add entries.)
 
 | Date | Type | Entry | Status | What |
 |---|---|---|---|---|
-| 2026-07-22 16:06 | decision | [literal-paint-review-corrections](2026-07-22_1606_decision_literal-paint-review-corrections.md) | active | Supersede the shorthand-border choice, make first-paint upgrades atomic, preserve live parent context, and keep tracked box paint inside revisions |
+| 2026-07-22 16:42 | decision | [literal-paint-review-round-one](2026-07-22_1642_decision_literal-paint-review-round-one.md) | active | Close the first automated-review round: enforce version/paint parity, replay version events, batch first paint atomically, model descendant base rules, reject body paint, and preserve grouping borders in DOCX |
+| 2026-07-22 16:06 | decision | [literal-paint-review-corrections](2026-07-22_1606_decision_literal-paint-review-corrections.md) | superseded | Supersede the shorthand-border choice, make first-paint upgrades atomic, preserve live parent context, and keep tracked box paint inside revisions |
 | 2026-07-22 15:59 | plan | [literal-paint-self-review-fixes](2026-07-22_1559_plan_literal-paint-self-review-fixes.md) | done | Make the v0.3 upgrade atomic, preserve body/pending paint context, match shorthand-reset border colour in DOCX, and carry tracked box paint inside revision runs |
 | 2026-07-22 14:51 | decision | [literal-paint-implementation-choices](2026-07-22_1451_decision_literal-paint-implementation-choices.md) | superseded | Choices the implementing agent made inside the confirmed literal-paint plan, superseded after self-review found one browser-semantics conflict |
 | 2026-07-22 08:44 | plan | [literal-element-paint](2026-07-22_0844_plan_literal-element-paint.md) | done | Add canonical literal color, background-color, and border-color values to .aim; carry them through Python/TypeScript canonicalization and DOCX export without losing slide geometry |

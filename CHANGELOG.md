@@ -30,13 +30,16 @@ the new number.
   `color` inherits, `background-color` and `border-color` do not, and
   `border-color` recolours an existing border rather than creating one.
 
-- **`aimformat.paint`** — computed paint for a whole tree, resolved once
-  against the generated stylesheet and stored by object identity. It
-  implements the real cascade, shorthand resets included: because
+- **`aimformat.paint`** — computed paint for content trees, resolved once per
+  live construct against the generated stylesheet and stored by object
+  identity. It implements the real cascade, descendant base rules and
+  shorthand resets included: because
   `.border-t{border-top:1px solid #e5e7eb}` is emitted after
   `.border-red-600{border-color:#dc2626}`, `class="border-t border-red-600"`
   renders GREY, and a converter matching `border-color` declarations alone
-  would disagree with every browser.
+  would disagree with every browser. Structural `<body>` paint is rejected
+  (V003) and never affects export because body state is neither addressable nor
+  hashed.
 
 - **DOCX paint** — text colour now **inherits** through every leaf emitter
   (blocks, list items, `pre`/`code`, table cells, figure captions, slides
@@ -46,10 +49,12 @@ the new number.
   both loose text and a coloured `<code>` painted nothing. Backgrounds map
   to run/paragraph/cell shading (`w:shd`, real RGB — not Word's 16-value
   highlight enum) and border colour to `w:bdr`/`w:pBdr`/`w:tcBorders`.
-  Word degradations, deliberate and tested: a grouping background is
-  approximated by shading the emitted descendants rather than one
-  contiguous box; a run has one border, not four sides; and `hr` keeps its
-  em-dash rule, painted in the authored border colour. In tracked mode,
+  Word degradations, deliberate and tested: a grouping background or border
+  is approximated on every emitted descendant rather than one contiguous box
+  (a descendant's own border wins by side); a run has one border, not four
+  sides; and `hr` keeps its em-dash rule, painted in the authored border
+  colour. Descendant base paint such as `thead th` still stops inherited
+  grouping paint without itself becoming explicit Word paint. In tracked mode,
   block and cell box paint rides the deleted and inserted runs because Word
   keeps paragraph and cell properties outside revisions; `accept-all` and
   `reject-all` retain the exact paragraph/cell mapping. An unpainted document
@@ -62,9 +67,14 @@ the new number.
   document without complaint. Adding paint to a 0.2 document is a recorded
   upgrade: the SDK bumps the attribute AND appends a `modify` event on the
   new reserved target `aim:version`, so replay restores the old value and
-  every earlier checkpoint still verifies. A document whose history cannot
-  record that event refuses paint instead. The edit is preflighted before the
-  upgrade event, so a failed operation leaves the older document unchanged.
+  every earlier checkpoint still verifies. That event shares a batch with the
+  first painted edit. A document whose history cannot record it refuses paint
+  instead, and the edit is preflighted so failure leaves the older document
+  unchanged. Registry `paint_since` metadata also drives S032: declaring a
+  pre-v0.3 version while retaining paint in the live body, pending payloads, or
+  history payloads is an error rather than a false-clean older document. Undo
+  refuses that downgrade while paint remains retained; time travel below the
+  upgrade stays valid because it trims the later paint-bearing events.
 
   Migration: none. Existing 0.2 documents stay 0.2, serialize with an
   unchanged body, and lint clean.

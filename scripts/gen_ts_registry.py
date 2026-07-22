@@ -74,6 +74,9 @@ def render() -> str:
         "export const STYLE_PROP_PAINT: readonly string[] = "
         f"{_ts(registry['style_props']['paint'])};",
         "",
+        "// First spec version whose style grammar includes literal paint.",
+        f"export const STYLE_PROP_PAINT_SINCE = {_ts(registry['style_props']['paint_since'])};",
+        "",
         f"export const SCRIPT_TYPES = {_ts(registry['sections']['script_types'])} as const;",
         "",
         "export const PAGE_SIZES_MM: Readonly<Record<string, readonly number[]>> = "

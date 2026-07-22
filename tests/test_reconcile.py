@@ -67,6 +67,46 @@ class TestDryRun:
 
 # ===========================================================================
 class TestContentEdits:
+    def test_reconcile_replays_the_recorded_version_upgrade(self):
+        doc = aim.new_document(title="upgraded document")
+        doc.add_chunk('<p data-aim="p1">Plain.</p>', author=BOT, at=ts(0))
+        older = aim.loads(
+            doc.dumps().replace(f'data-aim-version="{aim.SPEC_VERSION}"', 'data-aim-version="0.2"')
+        )
+        older.checkpoint("before paint", at=ts(1))
+        older.modify_chunk(
+            "p1", '<p data-aim="p1" style="color:#ff69b4">Painted.</p>', author=ME, at=ts(2)
+        )
+        drifted = aim.loads(older.dumps().replace(">Painted.</p>", ">Hand edited.</p>", 1))
+
+        report = reconciled(drifted)
+
+        assert report.changed
+        assert drifted.spec_version == aim.SPEC_VERSION
+        assert drifted.chunk("p1").text == "Hand edited."
+
+    def test_reconcile_records_the_upgrade_for_out_of_band_paint(self):
+        doc = aim.new_document(title="older document")
+        doc.add_chunk('<p data-aim="p1">Plain.</p>', author=BOT, at=ts(0))
+        older = aim.loads(
+            doc.dumps().replace(f'data-aim-version="{aim.SPEC_VERSION}"', 'data-aim-version="0.2"')
+        )
+        older.checkpoint("before paint", at=ts(1))
+        drifted = aim.loads(
+            older.dumps().replace(
+                '<p data-aim="p1">Plain.</p>',
+                '<p data-aim="p1" style="color:#ff69b4">Painted.</p>',
+                1,
+            )
+        )
+
+        report = reconciled(drifted)
+
+        upgrade = next(event for event in report.events if event.target == "aim:version")
+        edit = next(event for event in report.events if event.target == "p1")
+        assert drifted.spec_version == aim.SPEC_VERSION
+        assert upgrade.batch == edit.batch
+
     def test_hand_edited_chunk_yields_exact_modify_event(self, basic_doc):
         text = basic_doc.dumps().replace("Intro paragraph.", "Intro, edited by hand.", 1)
         doc = aim.loads(text)
