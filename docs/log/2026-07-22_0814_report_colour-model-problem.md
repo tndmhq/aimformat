@@ -199,8 +199,18 @@ Not requirements — the things that will bite a proposal that ignores them.
    a human accepts; the review card has to be able to *show* the resulting
    colour, including when the colour and the element arrive as two proposals in
    one turn.
-6. **Round-trip stability.** `loads(dumps(x)) == x`, and colour must survive
-   ingest from DOCX/PDF/Markdown and export back.
+6. **Round-trip stability, precisely.** `loads(dumps(x)) == x`, and colour
+   must survive **export** to DOCX/PDF/HTML and a reload of the `.aim`.
+   Preserving colour on the way IN is deliberately NOT a constraint here: the
+   ingestors drop presentation generally, and the cause is upstream — docling's
+   formatting model carries only bold/italic/underline/strikethrough, so
+   colour, alignment and font size never reach the mapping code at all
+   (measured 2026-07-22, recorded in
+   [`docs/knowledge/architecture.md`](../knowledge/architecture.md)).
+   Recovering them needs a python-docx side pass over the original file and is
+   its own project. Stating it as a constraint here conflicted with the
+   implementation plan, which excludes it — leaving two active log entries with
+   contradictory acceptance criteria (Codex on #20).
 
 ## 6. Directions worth arguing about
 

@@ -50,8 +50,10 @@ the implementing agent.
 4. **Canonical order:** retain the existing geometry order, then append paint
    in this order:
    `left, top, width, height, transform, z-index, color, background-color,
-   border-color`. Existing documents therefore keep identical bytes and
-   hashes; a mixed slide title serializes geometry before paint.
+   border-color`. Appending rather than interleaving means an existing
+   document's BODY serializes unchanged; a mixed slide title serializes
+   geometry before paint. (The embedded stylesheet still refreshes on write,
+   as it always has — decision 8.)
 5. **Cascade:** native CSS semantics are normative. Inline paint wins over
    every class. `color` inherits. `background-color` and `border-color` do not
    inherit. `border-color` does not create a border; it only recolours a border
@@ -68,11 +70,29 @@ the implementing agent.
    0.2 validator (V007) and accepted by a newer one, so two tools claiming to
    implement the same spec version would disagree about conformance. The
    version is the compatibility signal, and it must keep meaning one thing.
-   So bump `data-aim-version` to `0.3`, update the generated `data-aim-css`
-   handling with it, and take the toolkit to the matching version. Do not
-   rewrite historical checkpoint hashes or migrate existing documents: a 0.2
-   document stays a valid 0.2 document, and only a document that actually uses
-   paint is 0.3.
+   So bump `data-aim-version` to `0.3` for documents that use paint, and take
+   the toolkit to the matching version.
+
+   **What that costs, checked in the code rather than assumed** (Codex on
+   #20): `dumps()` refreshes the machine-managed stylesheet and stamps
+   `data-aim-css` with `REGISTRY.spec_version` unconditionally
+   (`document.py`), and lint compares both markers against the toolkit's
+   version (S002/S006). So three things follow, and the plan must say them:
+
+   - **"Byte-identical" narrows to the BODY and the authored head.** The
+     embedded stylesheet is machine-managed and already refreshes on every
+     write — that is true of any registry change, not just a version bump, so
+     the earlier blanket promise was never accurate.
+   - **`data-aim-version` is authored, not machine-managed: never rewrite it.**
+     A 0.2 document stays a 0.2 document. It becomes 0.3 when, and only when,
+     paint is added to it.
+   - **S002/S006 must become "accept older, warn on newer".** Today they warn
+     whenever the document's version differs from the tool's in either
+     direction, so a 0.3 toolkit would warn on every existing 0.2 document —
+     noise on files that are perfectly valid. A tool implementing 0.3
+     understands 0.2; it should warn only for a version it does NOT implement.
+
+   Do not rewrite historical checkpoint hashes or migrate existing documents.
 
 9. **No source-tree mutation during export:** computed paint is derived once
    into export-local state. Never copy inherited styles or classes back onto
@@ -347,7 +367,10 @@ this plan owes them is the contract:
   `border-color` do not (§Cascade);
 - `style` carries geometry AND paint after this change, so anything that
   filters `style` must filter by property rather than dropping the attribute;
-- documents without the new properties serialize and hash identically.
+- a document without the new properties has its BODY serialized unchanged
+  and its `data-aim-version` untouched (the machine-managed stylesheet
+  refreshes as it does for any registry change — see §Fixed design
+  decisions 8).
 
 ### 8. Land in dependency order
 
@@ -363,16 +386,14 @@ Rerun every generator and require a clean generated-artifact diff. Update
 decisions 8), and make sure the spec, Appendix A, and the conformance fixtures
 carry a document at each version — a 0.2 file must still verify.
 
-**This repo lands first.** A consumer pins an exact merged SHA, never an
-unmerged feature branch, and asserts at its pin that all three properties lint
-clean.
+**This repo lands first**; consumers pin an exact merged SHA afterwards. How
+any given consumer sequences its own work is its own business and is not
+planned here.
 
 ## Commit and review boundaries
 
 - One focused commit/PR here: registry + canonical/parity + spec + converters
   + tests. The plan and report log entries can ride that PR.
-- Consumers land their own commit after this one merges, referencing the merge
-  SHA. There is no atomic cross-repo commit.
 - Preserve unrelated working-tree changes, and never stage from a workspace
   root. (Deliberately no snapshot of any particular checkout's dirty state:
   this log is durable memory, and a future agent reading a stale list of
@@ -383,9 +404,11 @@ clean.
 
 - [ ] All three properties share one registry grammar across Python, TS,
       and any consumer.
-- [ ] Old documents serialize and hash identically, and stay `0.2`.
-- [ ] Documents using paint declare `0.3`; both versions verify under the
-      new toolkit.
+- [ ] A 0.2 document's BODY serializes identically and its
+      `data-aim-version` is untouched; only the machine-managed stylesheet
+      refreshes, as it does for any registry change.
+- [ ] Documents using paint declare `0.3`; a 0.2 document verifies under the
+      0.3 toolkit with NO version warning (S002/S006 accept older).
 - [ ] Literal local paint needs no theme mutation.
 - [ ] Inline paint wins over classes in every renderer.
 - [ ] DOCX text colour inherits across every leaf emitter.
