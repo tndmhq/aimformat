@@ -108,6 +108,16 @@ technical content only (see Governance below).
    compatibility requirement, and redesigning it is a deliberate, versioned
    step rather than a free hand.
 
+7. **Review your own diff before a reviewer does.** Run [`REVIEW.md`](REVIEW.md)
+   over it — same bar, no nits — and fix what you find first; review rounds cost
+   real credit. When the diff is itself a fix, ask what it *breaks*, not only whether
+   it is correct: that is where repeat rounds come from. Fix everything a round
+   raised, then request ONE re-review for the whole batch — never one per fix.
+   Never request it at all on a commit whose gates you have not run to a green
+   exit code (lint, format, types, tests); a round CI would have failed anyway
+   is wasted. Pure prose needs no round; anything specifying behaviour — spec,
+   plan, contract — always gets one.
+
 ## Governance (public repo)
 
 - **Reviewing a PR (human or bot)?** Follow [`REVIEW.md`](REVIEW.md) — ≤5
