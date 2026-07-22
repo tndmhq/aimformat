@@ -91,23 +91,24 @@ implement the same rule to agree. A sharp edge a redesign could remove.
 
 All merged and in production.
 
-**Editor (`tndm`)**
+**Consumer side** (an editor built on this format; its own fixes are recorded
+in its own repo, so only the format-relevant shape is here)
 
-- Theme proposals rendered as literal CSS text in the document, because every
-  preview path reduces a payload to `textContent` and for a `<style>` element
-  that *is* the stylesheet source. They now render as named slots with a swatch.
-- The flow editor had **no `.text-brand-*` rules and no `--aim-brand-*`
-  variables at all** — the document stylesheet is injected only for slides. So
-  even with the right class, a heading rendered in default ink.
-- The proposal preview stripped every `class`, so a colour-only change (whose
-  text is unchanged) showed an uncoloured heading in the one place a human
-  reviews it.
-- The prompt **forbade all class attributes**, so the model's only colour lever
-  was a theme slot — and nothing makes a heading read `--aim-brand-*`. It set
-  the slot, told the user the heading would be pink, and it rendered at
-  `rgb(33,26,18)`. It could not have done better. Brand utilities are now an
-  explicit exception, and `span` is allowed solely to carry one so "make only
-  the word Confidential pink" has a legal wrapper.
+Four separate defects, none of them format bugs, all downstream of the same
+gap — the only way to express a colour is a shared token, so every layer had
+to special-case theme edits:
+
+- a theme proposal is a `<style>` payload, and any preview that reduces a
+  payload to its text renders the stylesheet source at the reader;
+- a colour class does nothing unless that surface also injects the document
+  stylesheet and the theme variables, which is easy to do for one surface and
+  forget for another;
+- a colour-only change leaves the text identical, so any preview that strips
+  `class` shows the reviewer no change at all — in the one place they decide;
+- and an AI told not to emit class attributes has **only** the theme slot
+  left. It set the slot, said the heading would be pink, and the heading
+  rendered in default ink. It could not have done better with what the format
+  offered.
 
 **Format (`aimformat`)**
 
@@ -145,8 +146,27 @@ down ~40 call sites. That is a real refactor and wants a human in the loop. A
 test in `tests/test_ingest_export.py` documents the limitation so it is not
 mistaken for an oversight.
 
-**Colour applied directly to an element works everywhere. Only inheritance is
-missing, and only in DOCX.**
+**Colour applied directly to an element works everywhere, with one documented
+exception below. Inheritance is missing, and only in DOCX.**
+
+### 4c. One direct-colour hole in DOCX: mixed `<pre>`
+
+`emit_pre` flattens a `<pre>` to a single run, so when the block holds BOTH
+loose text and a coloured `<code>` child, adopting the child's colour would
+paint the sibling text too. It therefore colours nothing:
+
+```aim
+<pre>plain <code class="text-red-600">x</code></pre>   → no w:color at all
+<pre><code class="text-red-600">x</code></pre>         → red, as expected
+```
+
+Pinned by `TestDocxTextColour::test_a_pres_sibling_text_is_not_painted_by_a_nested_code`
+— colouring nothing was chosen over colouring the wrong text (Codex #19). It
+is a real direct-colour gap, not only an inheritance one, and it closes the
+same way §4a does: resolve each element's effective paint once against the
+tree, so a run can carry its own colour without the block guessing.
+(Caught by Codex on #20 — the earlier wording sent the follow-up work at
+inheritance alone.)
 
 ### 4b. The underlying design problem is untouched
 

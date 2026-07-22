@@ -26,8 +26,7 @@ remain useful for reusable design tokens. Literal paint and theme paint are
 different semantics, not two spellings that canonicalization must collapse.
 
 The change is complete only when the Python SDK, official TypeScript reader,
-HTML/PDF path, DOCX exporter, both Tndm AI-edit paths, flow editor, slide
-editor, and proposal preview agree. The reported title case must become one
+HTML/PDF path, DOCX exporter, and every consumer agree. The reported title case must become one
 chunk proposal, not a coupled theme-plus-chunk proposal.
 
 ## Fixed design decisions
@@ -81,7 +80,8 @@ Included:
   borders where the AIM element has a visible border;
 - DOCX text-colour inheritance across every existing leaf emitter;
 - honest, documented DOCX approximations where Word has no CSS box analogue;
-- Tndm AI creation/review/acceptance and manual round-trip preservation;
+- consumer-side AI creation/review/acceptance and manual round-trip
+  preservation, planned in the consumer's own repo;
 - cross-repo dependency pin bump after the format change reaches
   `aimformat/main`.
 
@@ -203,7 +203,7 @@ Do not change implementation until these tests fail for the expected reason.
    hard-coded Python lists.
 3. Extend `scripts/gen_ts_registry.py` to emit both `STYLE_PROP_ORDER` and
    `STYLE_PROP_PATTERNS`. Export them from `ts/src/index.ts`. Generate JS
-   regexes from the same registry patterns so Tndm can validate rather than
+   regexes from the same registry patterns so consumers can validate rather than
    maintaining a third grammar.
 4. Regenerate:
 
@@ -317,139 +317,68 @@ after page CSS injection. Add one browser-backed smoke test if the existing
 Playwright test environment makes computed-style inspection cheap; do not add
 a brittle pixel-golden system for three CSS properties.
 
-### 7. Migrate Tndm's shared style handling
+### 7. Consumers migrate separately
 
-Only start this after the aimformat commit is on `aimformat/main`; development
-may use the sibling editable install, but CI/prod must pin the merged SHA.
+This repo is public and the editor is not. Its migration — which files change,
+which sanitizers and prompts move, which tests gate it — is editor
+implementation detail and lives in the private repo's own log, not here
+(workspace guardrail 5; Codex on #20).
 
-Frontend:
+What is public, and all a consumer needs from this plan, is the contract:
 
-1. In `frontend/src/lib/canvas.ts`, replace the geometry-only hard-coded list
-   with registry data imported from `@aimformat/reader`. Split the helpers into:
-   - `filterAimStyle`: all nine legal properties, with value validation;
-   - `filterGeometryStyle`: geometry subset for layout calculations when
-     needed;
-   - `filterPaintStyle`: the three paint properties for proposal cards.
-   `setStyleProp` must use the generated canonical order.
-2. Use `filterAimStyle` in every edit sanitizer for blocks, spans, images,
-   table cells, and nested structures. Keep `parseGeometry` focused on
-   geometry; paint must survive without being interpreted as layout.
-3. The mapper/schema already carry `aimStyle`; add fixed-point tests proving
-   all three paint properties survive on block roots, inline spans, list
-   items, cells, and slide children alongside geometry.
-4. In `SuggestionsPlugin.renderFragment`, retain only validated paint
-   declarations from `style`; continue stripping geometry so a positioned
-   title cannot escape its proposal card. Keep brand classes as today. The
-   style attribute already participates in `structureSignature`, so a
-   paint-only proposal must select the rendered-format preview and visibly
-   show the result.
-5. Add unit tests for invalid value stripping, geometry/paint separation,
-   proposal scoping, and a theme proposal plus unrelated literal-paint
-   proposal in the same turn.
+- the three properties, the `^#[0-9a-f]{6}$` grammar, and the canonical order
+  are published in `registry.json` and projected to `@aimformat/reader`, so a
+  consumer validates and orders against registry data rather than a hard-coded
+  list of its own;
+- inline paint outranks every class, `color` inherits, `background-color` and
+  `border-color` do not (§Cascade);
+- `style` carries geometry AND paint after this change, so anything that
+  filters `style` must filter by property rather than dropping the attribute;
+- documents without the new properties serialize and hash identically.
 
-Backend, both the legacy pipeline and agent harness:
+### 8. Land in dependency order
 
-1. Update `services/ai/prompts.py` and the `propose_edits` tool description in
-   `services/agent/tools.py`. Permit only the three exact properties and
-   six-digit lowercase values. Allow `span` to carry literal paint. Tell the
-   model:
-   - exact/local request -> one chunk proposal with inline paint;
-   - reusable/global theme request -> theme slot/class;
-   - never change a theme slot merely to colour one element;
-   - re-emit the complete existing paint style when changing one paint
-     property.
-2. Replace the root style restore in `_payload_with_id` with property-aware
-   merging:
-   - if the model omits `style`, preserve the live style unchanged;
-   - if it sends `style`, treat its complete paint subset as authoritative
-     (so omitted live paint is removed), preserve any live geometry property
-     the model omitted, reject/let lint reject everything else, and serialize
-     in registry order;
-   - `style=""` therefore removes all root paint while retaining geometry.
-   Do not use string concatenation or let `style="color:…"` drop a slide's
-   `left/top/width/height/transform/z-index`.
-3. Generalize the existing “pure colour change” metadata restoration from a
-   brand-only class to a payload whose only authored styling change is paint.
-   This keeps root `href`, `title`, `dir`, and `lang` for a colour-only edit
-   without resurrecting attributes during an ordinary rewrite. Preserve the
-   existing conservative rule for nested elements: the model must re-emit
-   nested link/image attributes because positional grafting can corrupt them.
-4. Keep the brand-class merge path for semantic/theme edits; inline paint
-   does not need to delete a conflicting colour class because native inline
-   precedence is intentional.
-5. Add parallel tests for the old pipeline and `propose_edits` agent tool:
-   local title paint yields one proposal and no theme proposal; word-level
-   paint uses a span; background/border survive; invalid values fail closed;
-   geometry survives a slide recolour; clearing paint works; metadata and
-   classes survive a pure paint edit; unrelated edits preserve existing paint.
-
-### 8. Pin, integration-test, and land in dependency order
-
-Aimformat gate:
+Gate:
 
 ```sh
 python3 -m pytest
 cd ts && npm test
 ```
 
-Also rerun every generator and require a clean generated-artifact diff. Update
-`src/aimformat/__init__.py` and `CHANGELOG.md` to the chosen next `0.2.x`
-version. Land aimformat first.
+Rerun every generator and require a clean generated-artifact diff. Update
+`src/aimformat/__init__.py` and `CHANGELOG.md` to the chosen next version.
 
-Tndm then updates the single `ARG AIMFORMAT_REF` in `backend/Dockerfile` to
-the exact merged aimformat SHA and extends
-`backend/tests/test_format_contract.py` to assert that all three literal paint
-properties lint clean at the pin. Do not pin an unmerged feature-branch SHA.
-
-Tndm gate:
-
-```sh
-conda run -n tndm pytest backend/tests
-cd frontend && npm test
-```
-
-Run the targeted Playwright flows for flow editing, slide editing, proposal
-review, and DOCX download. The end-to-end acceptance case is:
-
-1. Start with a positioned, class-styled title and another element using
-   `brand-1`.
-2. Ask “make only this title #ff69b4.”
-3. Observe one paint-only chunk proposal whose preview is pink.
-4. Accept it.
-5. Confirm title geometry/classes remain, the other brand element is
-   unchanged, and the saved `.aim` contains canonical inline paint.
-6. Download HTML, PDF, and DOCX; the title is pink in each.
-7. Undo/redo and reject a second recolour; history verifies throughout.
+**This repo lands first.** A consumer pins an exact merged SHA, never an
+unmerged feature branch, and asserts at its pin that all three properties lint
+clean.
 
 ## Commit and review boundaries
 
-- Never stage or commit from the workspace root.
-- Aimformat: one focused commit/PR for registry + canonical/parity + spec +
-  converters + its tests. The plan/report log can ride that PR.
-- Tndm: one implementation commit/PR after aimformat merges, followed by a
-  separate pin commit if review timing requires it. Reference the aimformat
-  merge SHA in the commit message.
-- Preserve unrelated working-tree changes. At plan creation, `aimformat` had
-  an unrelated modified `AGENTS.md`, and `tndm` had an unrelated modified
-  `frontend/package-lock.json`; do not stage, rewrite, or “clean up” either.
-- Use a deep worktree if those changes overlap or if another agent is active:
-  from the workspace root,
-  `scripts/deep-worktree.sh literal-paint aimformat tndm`.
+- One focused commit/PR here: registry + canonical/parity + spec + converters
+  + tests. The plan and report log entries can ride that PR.
+- Consumers land their own commit after this one merges, referencing the merge
+  SHA. There is no atomic cross-repo commit.
+- Preserve unrelated working-tree changes, and never stage from a workspace
+  root. (Deliberately no snapshot of any particular checkout's dirty state:
+  this log is durable memory, and a future agent reading a stale list of
+  "unrelated modified files" would work around changes that no longer exist —
+  Codex on #20.)
 
 ## Completion checklist
 
-- [ ] All three properties share one registry grammar across Python, TS, and
-      Tndm.
+- [ ] All three properties share one registry grammar across Python, TS,
+      and any consumer.
 - [ ] Old documents serialize and hash identically.
 - [ ] Literal local paint needs no theme mutation.
 - [ ] Inline paint wins over classes in every renderer.
 - [ ] DOCX text colour inherits across every leaf emitter.
 - [ ] DOCX background/border mappings and Word-only degradations are tested
       and documented.
-- [ ] Flow, slide, proposal-preview, legacy-AI, and agent-loop paths preserve
-      paint and geometry.
-- [ ] Aimformat merges before Tndm pins it; one commit boundary per repo.
-- [ ] Full Python/TS/backend/frontend/e2e gates pass.
+- [ ] Consumer editing/preview paths preserve paint and geometry (tracked in
+      the consumer's own plan).
+- [ ] This repo merges before any consumer pins it; one commit boundary per
+      repo.
+- [ ] Full Python and TypeScript gates pass here; consumers gate their own.
 - [ ] This entry and its index row are marked `done`; the colour-problem
       report is marked `superseded` or linked to the shipped decision; durable
       styling/export facts are promoted into `docs/knowledge/architecture.md`.
