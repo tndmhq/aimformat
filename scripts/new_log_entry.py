@@ -14,7 +14,7 @@ Stdlib only — runs in any Python ≥ 3.9, no env needed::
 
 Then open the created file and write the content. The log in this repo is
 kept light (durable decisions, major plans/reviews only — see
-``docs/README.md``). Ported from the bluegov-it-hr scaffolder.
+``docs/README.md``).
 """
 
 from __future__ import annotations

@@ -224,3 +224,30 @@ findings); nok fixtures trip exactly their named code (the generator's
 sanity check enforces it); when adding a public operation, end its test
 with `lint(dumps()) == []` — three review findings would have been caught
 mechanically by that one assertion.
+
+## What the 2026-07 deep review said NOT to refactor
+
+Two independent design panels (Fable 5 and GPT-5.6), reviewing this repo
+without seeing each other's output, agreed **verbatim** on a leave-alone list.
+It is recorded here because an anti-recommendation is the thing most likely to
+be re-litigated by the next agent that reads a large module and assumes it is
+technical debt:
+
+`dom.py` · `canonical.py` · `pagesetup.py` (named the exemplar) · `css.py` ·
+`registry.py` · the linter's **multi-pass** structure · `reconcile`'s E→A diff.
+
+Both panels flagged these independently as compact, cohesive and heavily
+test-pinned. On the parser specifically: *"do not split or replace the
+transparent parser."*
+
+This is not "never touch these" — it is "a refactor here needs a reason
+stronger than size, and two reviewers already looked for one and did not find
+it."
+
+### Pre-0.2 uploads are expected to fail (owner decision, 2026-07-17)
+
+A file carrying a stale `data-aim-css="0.1"` marker is **rejected** on upload
+since the AF-21 fix, and that is intended: breaking the format is acceptable
+pre-release, so the 422 stands. **Do not add normalize-on-ingest** — it was
+considered and declined. Revisit only if real user files start hitting it
+after 1.0.
