@@ -411,6 +411,48 @@ class TestToHtml:
             aim.to_html(self._doc(), pending="tracked")
 
 
+class TestHtmlPaint:
+    """HTML needs no paint translation — the declaration IS the rendering.
+    What it does need is to survive canonicalization and the pending lane."""
+
+    @staticmethod
+    def _painted():
+        doc = aim.from_text("Plain.")
+        bot = aim.agent("test-model")
+        c = doc.chunks[0]
+        doc.propose_modify(
+            c.id,
+            f'<p data-aim="{c.id}" style="color:#ff69b4">Painted.</p>',
+            author=bot,
+            explanation="Recolour.",
+        )
+        return doc
+
+    def test_paint_survives_every_pending_mode(self):
+        keep = aim.to_html(self._painted())
+        assert 'style="color:#ff69b4"' in keep and not _errors(keep)
+        accepted = aim.to_html(self._painted(), pending="accept-all")
+        assert 'style="color:#ff69b4"' in accepted and not _errors(accepted)
+        rejected = aim.to_html(self._painted(), pending="reject-all")
+        assert "#ff69b4" not in rejected and not _errors(rejected)
+
+    def test_the_print_copy_keeps_mixed_geometry_and_paint(self):
+        """PDF is Chromium, so the only thing to assert is that the canonical
+        declaration reaches it intact after the @page CSS is spliced in."""
+        from aimformat.convert._pdf_out import _print_html
+
+        doc = aim.new_document(title="Painted deck")
+        doc.add_chunk(
+            '<aim-slide data-aim-container="s1" style="width:960px; height:540px">'
+            '<h2 data-aim="t1" style="left:48px; top:32px; width:450px; color:#ff69b4">'
+            "Pink slide title</h2></aim-slide>",
+            author=aim.agent("test-model"),
+        )
+        html = _print_html(doc, "keep", None)
+        assert 'style="left:48px; top:32px; width:450px; color:#ff69b4"' in html
+        assert "@page pg-s1" in html  # …and the slide is still its own page
+
+
 class TestFromPath:
     def test_dispatch(self, tmp_path):
         md = tmp_path / "a.md"
