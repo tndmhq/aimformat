@@ -206,6 +206,29 @@ def _block_runs(el: Element, paint: PaintResolver) -> list[dict]:
     return _runs_of(el, None, paint)
 
 
+def _clean_runs_and_box(el: Element, paint: PaintResolver) -> tuple[list[dict], Paint]:
+    """Clean-export runs plus the box paint Word can apply safely.
+
+    A Word paragraph/cell shade sits behind every run. When a descendant's
+    opaque base background (for example ``code``) stops the AIM ancestor box,
+    that one box shade would leak through it. Fall back to run shading for the
+    parts where the authored box really shows and leave the base-backed run
+    clear for the recipient template.
+    """
+    box = paint.of(el)
+    if box.background is None or not any(
+        descendant is not el and paint.of(descendant).background is None for descendant in el.iter()
+    ):
+        return _runs_of(el, None, paint), box
+    runs = _runs_of(el, {"shade": box.background}, paint)
+    return runs, Paint(
+        color=box.color,
+        background=None,
+        own_background=box.own_background,
+        borders=box.borders,
+    )
+
+
 def _tracked_box_fmt(el: Element, paint: PaintResolver, *, border: bool = True) -> dict:
     """Run-level approximation of a block/cell box inside a revision.
 
@@ -761,29 +784,45 @@ class _Exporter:
         """A proposal's payload roots, with their paint already resolved.
 
         A payload is a separately parsed tree, so it has no ancestors to
-        inherit from — it gets the context of the container it will land in,
-        which is what its future siblings inherit today."""
+        inherit from — it gets the paint and selector context of the exact
+        parent it will land in."""
         els = [n for n in parse_fragment(prop.payload_html or "") if isinstance(n, Element)]
-        context = self.paint.context_of(self._payload_parent_node(prop))
+        parent = self._payload_parent_node(prop)
+        context = self.paint.context_of(parent)
+        ancestor_tags = self._payload_ancestor_tags(parent)
         for el in els:
-            self.paint.resolve(el, inherited=context)
+            self.paint.resolve(el, inherited=context, ancestor_tags=ancestor_tags)
         return els
 
     def _payload_parent_node(self, prop: Proposal) -> Element | None:
         """The exact live parent whose context a payload will enter."""
         if prop.action == "add":
             container = prop.anchor_container or "body"
-            return (
+            parent = (
                 self.aim._state.body
                 if container == "body"
                 else self.aim._state.container_node(container)
             )
+            if parent is not None and parent.tag == "table" and prop.anchor_shell is not None:
+                return next(
+                    (child for child in parent.elements() if child.tag == prop.anchor_shell),
+                    parent,
+                )
+            return parent
         if prop.target:
             try:
                 return self.aim._state._target_elements(prop.target)[0][0]
             except Exception:  # malformed/dangling foreign proposal
                 return None
         return None
+
+    def _payload_ancestor_tags(self, parent: Element | None) -> tuple[str, ...]:
+        """Type-selector ancestry a detached payload will have when applied."""
+        tags: list[str] = []
+        while parent is not None and parent is not self.aim._state.body:
+            tags.append(parent.tag)
+            parent = self.aim._state._parent_of(parent)
+        return tuple(reversed(tags))
 
     def _safe_style(self, name: str | None) -> str | None:
         if name is None:
@@ -894,8 +933,9 @@ class _Exporter:
             self.emit_list(el)
             return
         para = self.out.add_paragraph(style=style or self._safe_style(_style_for(el.tag)))
-        _apply_runs(para, _runs_of(el, None, self.paint))
-        _paint_paragraph(para, self.paint.of(el))
+        runs, box = _clean_runs_and_box(el, self.paint)
+        _apply_runs(para, runs)
+        _paint_paragraph(para, box)
 
     def emit_pre(self, el: Element) -> None:
         """A code block, one run per (paint, line) segment.
@@ -904,7 +944,8 @@ class _Exporter:
         exporter to choose between painting a nested `<code>`'s sibling text
         and painting nothing at all; per-element paint removes the choice."""
         para = self.out.add_paragraph()
-        for segment in _runs_of(el, None, self.paint):
+        runs, box = _clean_runs_and_box(el, self.paint)
+        for segment in runs:
             if segment.get("break"):
                 para.add_run().add_break()
                 continue
@@ -913,7 +954,7 @@ class _Exporter:
                     para.add_run().add_break()
                 if line:
                     _format_run(para.add_run(line), {**segment, "mono": True})
-        _paint_paragraph(para, self.paint.of(el))
+        _paint_paragraph(para, box)
 
     def emit_slide(self, el: Element) -> None:
         """Linearize a fixed-canvas page: a page break, then the slide's
@@ -1016,8 +1057,9 @@ class _Exporter:
                 # caption's own formatting — including colour — survives
                 # (Codex aimformat#19)
                 para = self.out.add_paragraph(style=self._safe_style("Caption"))
-                _apply_runs(para, _runs_of(cap, None, self.paint))
-                _paint_paragraph(para, self.paint.of(cap))
+                runs, box = _clean_runs_and_box(cap, self.paint)
+                _apply_runs(para, runs)
+                _paint_paragraph(para, box)
 
     def _figure_width(self, fig: Element, img: Element):
         """The authored image width (inline style, CSS px at 96 dpi — the
@@ -1159,11 +1201,11 @@ class _Exporter:
                             occupied.add((ri + dr, ci + dc))
                 para = cell.paragraphs[0]
                 tracked_cell = force is not None or prop_del is not None or prop_mod is not None
-                runs = (
-                    _tracked_runs(cell_el, self.paint)
-                    if tracked_cell
-                    else _runs_of(cell_el, None, self.paint)
-                )
+                if tracked_cell:
+                    runs = _tracked_runs(cell_el, self.paint)
+                    clean_box = None
+                else:
+                    runs, clean_box = _clean_runs_and_box(cell_el, self.paint)
                 if cell_el.tag == "th":
                     runs = [{**r, "bold": True} for r in runs]
                 if force == "ins" and prop is not None:
@@ -1185,7 +1227,8 @@ class _Exporter:
                 # Its old/new box paint rides the corresponding runs instead;
                 # clean cells keep exact cell shading and per-side borders.
                 if not tracked_cell:
-                    _paint_cell(cell, self.paint.of(cell_el))
+                    assert clean_box is not None
+                    _paint_cell(cell, clean_box)
                 ci += colspan
         # row-adds only after the content loop: inserting rows mid-loop would
         # shift the (ri, ci) coordinates the loop and the merges rely on

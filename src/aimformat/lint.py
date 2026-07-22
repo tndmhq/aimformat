@@ -306,7 +306,13 @@ class _Linter:
         Raw history scripts are inert DOM text, so inspect every markup field
         that history retains separately as well.
         """
-        return self.doc._retains_literal_paint()
+        try:
+            return self.doc._retains_literal_paint()
+        except HistoryError:
+            # The dedicated history pass reports H002.  A malformed JSONL
+            # record cannot establish retained paint and must not short-circuit
+            # the rest of lint as the generic S000 crash guard.
+            return False
 
     def body_sections(self) -> None:
         seen: dict[int, int] = {}

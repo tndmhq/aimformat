@@ -311,9 +311,20 @@ class PaintResolver:
         self._records: dict[int, tuple[Element, Paint]] = {}
 
     # -- public ---------------------------------------------------------------
-    def resolve(self, root: Element, *, inherited: PaintContext | None = None) -> None:
-        """Compute and store paint for *root* and everything beneath it."""
-        self._walk(root, inherited or ROOT_CONTEXT, ())
+    def resolve(
+        self,
+        root: Element,
+        *,
+        inherited: PaintContext | None = None,
+        ancestor_tags: tuple[str, ...] = (),
+    ) -> None:
+        """Compute and store paint for *root* and everything beneath it.
+
+        ``ancestor_tags`` supplies the future selector context for a detached
+        proposal payload. Live roots leave it empty because their descendants
+        acquire the same context during the normal tree walk.
+        """
+        self._walk(root, inherited or ROOT_CONTEXT, ancestor_tags)
 
     def of(self, el: Element) -> Paint:
         """The computed record for *el* — unpainted when never resolved."""

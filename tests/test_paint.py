@@ -122,6 +122,18 @@ class TestBackground:
         assert r.of(header).background is None
         assert r.of(body).background == "FFF1F7"
 
+    def test_a_detached_payload_keeps_its_future_descendant_selector_context(self):
+        """Pending payloads are parsed outside the live tree, but `thead th`
+        must still win once the payload is evaluated in its future parent."""
+        root = el("<tr><th>Pending head</th></tr>")
+        r = PaintResolver()
+        r.resolve(
+            root,
+            inherited=r.context(background="FFF1F7"),
+            ancestor_tags=("table", "thead"),
+        )
+        assert r.of(root.elements()[0]).background is None
+
     def test_a_bg_class_resolves(self):
         root, r = resolved('<p class="bg-amber-50">x</p>')
         assert r.of(root).own_background == "FFFBEB"
@@ -365,6 +377,20 @@ class TestVersionUpgrade:
         upgrade = next(event for event in older.history if event.target == "aim:version")
         assert upgrade.batch == proposal.batch
 
+    def test_amending_a_proposal_to_paint_moves_the_card_into_the_upgrade_batch(self, older):
+        proposal = older.propose_modify("t", '<h1 data-aim="t">Retitled</h1>', author=BOT, at=ts(2))
+
+        amended = older.amend_proposal(
+            proposal.id,
+            '<h1 data-aim="t" style="color:#ff69b4">Retitled</h1>',
+            at=ts(3),
+        )
+
+        upgrade = next(event for event in older.history if event.target == "aim:version")
+        assert amended.batch == upgrade.batch
+        assert amended.batch != proposal.batch
+        assert older.verify() == []
+
     def test_accepting_foreign_paint_groups_the_upgrade_with_the_resolution(self, older):
         proposal = older.propose_modify("t", '<h1 data-aim="t">Retitled</h1>', author=BOT, at=ts(2))
         foreign = aim.loads(
@@ -379,6 +405,59 @@ class TestVersionUpgrade:
 
         upgrade = next(event for event in foreign.history if event.target == "aim:version")
         assert upgrade.batch == resolution.batch
+
+    @staticmethod
+    def _foreign_painted_proposal(older):
+        proposal = older.propose_modify("t", '<h1 data-aim="t">Retitled</h1>', author=BOT, at=ts(2))
+        foreign = aim.loads(
+            older.dumps().replace(
+                '<h1 data-aim="t">Retitled</h1>',
+                '<h1 data-aim="t" style="color:#ff69b4">Retitled</h1>',
+                1,
+            )
+        )
+        return foreign, proposal.id
+
+    def test_rejecting_foreign_paint_upgrades_the_retained_proposed_history(self, older):
+        foreign, pid = self._foreign_painted_proposal(older)
+
+        resolution = foreign.reject(pid, decided_by=ME, at=ts(3))
+
+        upgrade = next(event for event in foreign.history if event.target == "aim:version")
+        assert foreign.spec_version == aim.SPEC_VERSION
+        assert resolution.get("proposed") is not None and "#ff69b4" in resolution.get("proposed")
+        assert upgrade.batch == resolution.batch
+        assert foreign.verify() == []
+        assert [f for f in aim.lint(foreign) if f.level == "error"] == []
+
+    def test_accepting_an_unpainted_tweak_still_upgrades_retained_foreign_paint(self, older):
+        foreign, pid = self._foreign_painted_proposal(older)
+
+        resolution = foreign.accept(
+            pid,
+            decided_by=ME,
+            applied='<h1 data-aim="t">Retitled safely</h1>',
+            at=ts(3),
+        )
+
+        upgrade = next(event for event in foreign.history if event.target == "aim:version")
+        assert "#ff69b4" in resolution.get("proposed")
+        assert "#ff69b4" not in (resolution.get("applied") or "")
+        assert upgrade.batch == resolution.batch
+        assert foreign.verify() == []
+
+    def test_superseding_foreign_paint_upgrades_the_retained_proposed_history(self, older):
+        foreign, _ = self._foreign_painted_proposal(older)
+
+        replacement = foreign.propose_modify(
+            "t", '<h1 data-aim="t">Second proposal</h1>', author=BOT, at=ts(3)
+        )
+
+        upgrade = next(event for event in foreign.history if event.target == "aim:version")
+        superseded = next(event for event in foreign.history if event.decision == "superseded")
+        assert "#ff69b4" in superseded.get("proposed")
+        assert upgrade.batch == superseded.batch == replacement.batch
+        assert foreign.verify() == []
 
     def test_an_unpainted_edit_leaves_the_version_alone(self, older):
         older.modify_chunk("t", '<h1 data-aim="t">Retitled</h1>', author=ME, at=ts(2))

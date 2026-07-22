@@ -9,6 +9,7 @@ required to add entries.)
 
 | Date | Type | Entry | Status | What |
 |---|---|---|---|---|
+| 2026-07-22 17:37 | review | [literal-paint-review-round-two](2026-07-22_1737_review_literal-paint-review-round-two.md) | done | Fix five second-round review findings and verify browser, DOCX, PDF, history, and cascade behavior. |
 | 2026-07-22 16:42 | decision | [literal-paint-review-round-one](2026-07-22_1642_decision_literal-paint-review-round-one.md) | active | Close the first automated-review round: enforce version/paint parity, replay version events, batch first paint atomically, model descendant base rules, reject body paint, and preserve grouping borders in DOCX |
 | 2026-07-22 16:06 | decision | [literal-paint-review-corrections](2026-07-22_1606_decision_literal-paint-review-corrections.md) | superseded | Supersede the shorthand-border choice, make first-paint upgrades atomic, preserve live parent context, and keep tracked box paint inside revisions |
 | 2026-07-22 15:59 | plan | [literal-paint-self-review-fixes](2026-07-22_1559_plan_literal-paint-self-review-fixes.md) | done | Make the v0.3 upgrade atomic, preserve body/pending paint context, match shorthand-reset border colour in DOCX, and carry tracked box paint inside revision runs |

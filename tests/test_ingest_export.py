@@ -1089,6 +1089,43 @@ class TestDocxPaintBoxes:
         assert self._fills(out) == ["FFF1F7"]
         assert len(re.findall(r'<w:shd [^>]*w:fill="FFF1F7"', self._xml(out))) == 1
 
+    def test_a_base_inline_background_masks_clean_paragraph_shading(self, tmp_path):
+        import re
+
+        out = self._export(
+            '<p style="background-color:#fff1f7">plain <code>code</code></p>', tmp_path
+        )
+        paragraph = next(
+            block
+            for block in re.findall(r"<w:p>.*?</w:p>", self._xml(out), re.S)
+            if "plain " in block
+        )
+        ppr = re.search(r"<w:pPr>.*?</w:pPr>", paragraph, re.S)
+        assert ppr is None or 'w:fill="FFF1F7"' not in ppr.group(0)
+        runs = re.findall(r"<w:r>.*?</w:r>", paragraph, re.S)
+        plain = next(run for run in runs if "plain " in run)
+        code = next(run for run in runs if ">code</w:t>" in run)
+        assert 'w:fill="FFF1F7"' in plain
+        assert 'w:fill="FFF1F7"' not in code
+
+    def test_a_base_inline_background_masks_clean_cell_shading(self, tmp_path):
+        import re
+
+        out = self._export(
+            '<table><tbody><tr><td style="background-color:#fff1f7">'
+            "plain <code>code</code></td></tr></tbody></table>",
+            tmp_path,
+        )
+        cell = re.search(r"<w:tc>.*?</w:tc>", self._xml(out), re.S)
+        assert cell is not None
+        tcpr = re.search(r"<w:tcPr>.*?</w:tcPr>", cell.group(0), re.S)
+        assert tcpr is not None and 'w:fill="FFF1F7"' not in tcpr.group(0)
+        runs = re.findall(r"<w:r>.*?</w:r>", cell.group(0), re.S)
+        plain = next(run for run in runs if "plain " in run)
+        code = next(run for run in runs if ">code</w:t>" in run)
+        assert 'w:fill="FFF1F7"' in plain
+        assert 'w:fill="FFF1F7"' not in code
+
     def test_an_unpainted_document_gains_no_shading(self, tmp_path):
         assert self._fills(self._export("<p>Plain</p>", tmp_path)) == []
 
@@ -1296,6 +1333,50 @@ class TestDocxPaintPendingModes:
         aim.to_docx(doc, out, pending="tracked")
         inserted = re.search(r"<w:ins .*?</w:ins>", self._xml(out), re.S)
         assert inserted is not None and 'w:val="FF69B4"' in inserted.group(0)
+
+    def test_a_pending_header_row_keeps_its_future_descendant_base_background(self, tmp_path):
+        import re
+
+        doc = aim.new_document(title="pending header cascade")
+        doc.add_chunk(
+            '<table data-aim-container="table" style="background-color:#fff1f7">'
+            '<thead><tr data-aim="row"><th>Old</th></tr></thead></table>',
+            author=BOT,
+            at=ts(0),
+        )
+        doc.propose_modify(
+            "row",
+            '<tr data-aim="row"><th>New</th></tr>',
+            author=BOT,
+            at=ts(1),
+        )
+        out = tmp_path / "pending-header.docx"
+        aim.to_docx(doc, out, pending="tracked")
+        inserted = re.search(r"<w:ins .*?</w:ins>", self._xml(out), re.S)
+        assert inserted is not None and 'w:fill="FFF1F7"' not in inserted.group(0)
+
+    def test_a_pending_header_add_uses_its_recorded_table_shell_context(self, tmp_path):
+        import re
+
+        doc = aim.new_document(title="pending header add cascade")
+        doc.add_chunk(
+            '<table data-aim-container="table" style="background-color:#fff1f7">'
+            '<thead><tr data-aim="row"><th>Old</th></tr></thead></table>',
+            author=BOT,
+            at=ts(0),
+        )
+        proposal = doc.propose_add(
+            '<tr data-aim="new-row"><th>New</th></tr>',
+            author=BOT,
+            container="table",
+            after="row",
+            at=ts(1),
+        )
+        assert proposal.anchor_shell == "thead"
+        out = tmp_path / "pending-header-add.docx"
+        aim.to_docx(doc, out, pending="tracked")
+        inserted = re.search(r"<w:ins .*?</w:ins>", self._xml(out), re.S)
+        assert inserted is not None and 'w:fill="FFF1F7"' not in inserted.group(0)
 
     def test_accept_all_carries_exactly_the_proposed_paint(self, tmp_path):
         xml = self._xml(self._out(tmp_path, "accept-all"))

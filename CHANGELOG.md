@@ -54,12 +54,16 @@ the new number.
   (a descendant's own border wins by side); a run has one border, not four
   sides; and `hr` keeps its em-dash rule, painted in the authored border
   colour. Descendant base paint such as `thead th` still stops inherited
-  grouping paint without itself becoming explicit Word paint. In tracked mode,
-  block and cell box paint rides the deleted and inserted runs because Word
-  keeps paragraph and cell properties outside revisions; `accept-all` and
-  `reject-all` retain the exact paragraph/cell mapping. An unpainted document
-  still gains no explicit Word colour, shading or border, so it follows the
-  recipient's template as before.
+  grouping paint without itself becoming explicit Word paint. Pending payloads
+  carry their future ancestor selector context too, including the recorded
+  table shell for a pending header row. When a base descendant background such
+  as `code` masks an authored paragraph or cell background, clean export uses
+  run shading for the visible authored area rather than leaking box shading
+  behind the base background. In tracked mode, block and cell box paint rides
+  the deleted and inserted runs because Word keeps paragraph and cell
+  properties outside revisions; `accept-all` and `reject-all` retain the exact
+  paragraph/cell mapping. An unpainted document still gains no explicit Word
+  colour, shading or border, so it follows the recipient's template as before.
 
 - **Version marker semantics.** `data-aim-version` is authored state that
   writers never rewrite, and a tool now warns (S002/S006) only for a
@@ -74,7 +78,12 @@ the new number.
   pre-v0.3 version while retaining paint in the live body, pending payloads, or
   history payloads is an error rather than a false-clean older document. Undo
   refuses that downgrade while paint remains retained; time travel below the
-  upgrade stays valid because it trims the later paint-bearing events.
+  upgrade stays valid because it trims the later paint-bearing events. An
+  amendment that first adds paint moves the proposal card into the upgrade
+  batch. Rejection, supersession, and accept-with-unpainted-tweaks inspect the
+  retained `proposed` payload and share their resolution batch with the
+  upgrade. Malformed history is reported as H002 rather than a generic S000
+  failure during the earlier S032 precheck.
 
   Migration: none. Existing 0.2 documents stay 0.2, serialize with an
   unchanged body, and lint clean.

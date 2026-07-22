@@ -122,22 +122,33 @@ codes bidirectionally in sync with what `lint.py` can actually emit.
   `class` or `style` there (V003), paint resolution starts at each live
   construct, and exporters never let body attributes affect output. Pending
   payloads still resolve against their exact future content parent so legal
-  ancestor inheritance is preserved.
+  ancestor inheritance is preserved. Detached payload resolution also carries
+  the future ancestor tag chain. A pending row uses its recorded table shell,
+  which lets selectors such as `thead th` match before the row exists in the
+  live tree.
 - **Grouping borders degrade onto emitted units.** DOCX has no wrapper box for
   a flattened `section`, `div`, `blockquote`, or slide. Its border is copied to
   each emitted block, list item, or table cell; an explicit border on that
   descendant wins side by side. Group backgrounds use the same flattened-box
-  approximation.
+  approximation. Paragraph and cell shading cannot express a descendant base
+  background such as `code { background: ... }` that masks the surrounding
+  authored background. In that mixed case, clean DOCX export places authored
+  shading on the visible runs instead of the whole paragraph or cell.
 - **The declared version is authored state.** `dumps()` never rewrites
   `data-aim-version`, S002/S006 warn only for a version the tool does NOT
   implement, and introducing markup an older version lacks records an
   `aim:version` modify event in the same batch as the first painted edit (spec
   §3.7) so earlier checkpoints keep verifying and replay restores the declared
-  version. Registry metadata (`paint_since`) drives S032 across live, pending,
-  and retained history payloads, and undo refuses to downgrade while any of
-  those payloads still carries paint. A time-travel copy can be older because
-  it trims the later events too. The `<html>` open tag is inside `doc_hash`;
-  anything that touches it needs an event, exactly like the body.
+  version. A paint-bearing amendment moves its card into the upgrade batch.
+  Resolution paths inspect both `proposed` and `applied`, including rejection,
+  supersession, and an unpainted accept-with-tweaks payload, because history
+  retains the original proposal. Registry metadata (`paint_since`) drives S032
+  across live, pending, and retained history payloads, and undo refuses to
+  downgrade while any of those payloads still carries paint. A time-travel
+  copy can be older because it trims the later events too. The `<html>` open
+  tag is inside `doc_hash`; anything that touches it needs an event, exactly
+  like the body. Malformed history stays the history pass's responsibility:
+  the S032 precheck defers to H002 instead of collapsing lint into S000.
 
 ## The TypeScript reader (`ts/`)
 

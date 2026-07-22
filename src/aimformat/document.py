@@ -104,6 +104,11 @@ def _payload_has_paint(markup: str | None) -> bool:
     return False
 
 
+def _first_painted_payload(*payloads: str | None) -> str | None:
+    """The first retained payload whose syntax requires the paint version."""
+    return next((payload for payload in payloads if _payload_has_paint(payload)), None)
+
+
 def _payload_marker(el: Element) -> str:
     """The identity marker an unmarked payload root receives.
 
@@ -2234,7 +2239,13 @@ class AimDocument:
         self, target: str, new_pid: str, author: Actor, at: str | None
     ) -> None:
         for p in self._superseded_by_new(target):
-            self._resolve(p, decision="superseded", decided_by=author, superseded_by=new_pid, at=at)
+            self._resolve_retaining_paint(
+                p,
+                decision="superseded",
+                decided_by=author,
+                superseded_by=new_pid,
+                at=at,
+            )
 
     def _superseded_by_new(self, target: str) -> list[Proposal]:
         """The pending cards a new modify/delete proposal on *target* replaces."""
@@ -2509,11 +2520,13 @@ class AimDocument:
         Spec §5.4 sanctions this: editing a pending payload is allowed and
         unrecorded — no history event is appended (provenance is preserved
         at resolution via ``proposed`` vs ``applied``). The proposal keeps
-        its id, action, target, anchor, author, batch, and dependencies;
-        re-anchoring or re-targeting is a reject + new propose, not an
-        amend. Payloads are validated exactly like the original propose
-        call (modify: against the live target; add: keeping the proposed
-        root id and marker kind, so chained anchors stay stable).
+        its id, action, target, anchor, author, and dependencies. Its batch
+        also stays unless the amendment first introduces newer-version
+        syntax, in which case the card moves into the recorded upgrade batch.
+        Re-anchoring or re-targeting is a reject + new propose, not an amend.
+        Payloads are validated exactly like the original propose call
+        (modify: against the live target; add: keeping the proposed root id
+        and marker kind, so chained anchors stay stable).
         delete/move proposals carry no payload — only their explanation
         can be amended. ``explanation=""`` clears it.
         """
@@ -2560,8 +2573,10 @@ class AimDocument:
                     ) from exc
             # §5.4 makes the amend itself unrecorded, but the version the
             # document conforms to is not the amend's to change silently
-            self._ensure_paint_version(payload, author=prop.author, at=at)
+            upgrade_batch = self._ensure_paint_version(payload, author=prop.author, at=at)
             _set_card_payload(card, payload)
+            if upgrade_batch is not None:
+                card.set("data-batch", upgrade_batch)
         if explanation is not None:
             if explanation:
                 card.set("data-explanation", explanation)
@@ -2666,25 +2681,51 @@ class AimDocument:
                     )
             else:
                 applied_payload = prop.payload_html
-            self._preflight_paint_upgrade(
-                applied_payload,
-                lambda trial: trial._resolve(
-                    trial.proposal(pid),
-                    decision="accepted",
-                    decided_by=decided_by,
-                    applied=applied_payload,
-                    explanation=explanation,
-                    at=at,
-                ),
-            )
-            upgrade_batch = self._ensure_paint_version(applied_payload, author=decided_by, at=at)
-        else:
-            upgrade_batch = None
-        return self._resolve(
+        return self._resolve_retaining_paint(
             prop,
             decision="accepted",
             decided_by=decided_by,
             applied=applied_payload,
+            explanation=explanation,
+            at=at,
+        )
+
+    def _resolve_retaining_paint(
+        self,
+        prop: Proposal,
+        *,
+        decision: str,
+        decided_by: Actor,
+        applied: str | None = None,
+        superseded_by: str | None = None,
+        explanation: str | None = None,
+        at: str | None = None,
+    ) -> Event:
+        """Resolve a card after versioning every paint payload the event retains."""
+        paint_payload = _first_painted_payload(prop.payload_html, applied)
+        self._preflight_paint_upgrade(
+            paint_payload,
+            lambda trial: trial._resolve(
+                trial.proposal(prop.id),
+                decision=decision,
+                decided_by=decided_by,
+                applied=applied,
+                superseded_by=superseded_by,
+                explanation=explanation,
+                at=at,
+            ),
+        )
+        upgrade_batch = self._ensure_paint_version(
+            paint_payload,
+            author=decided_by,
+            at=at,
+        )
+        return self._resolve(
+            prop,
+            decision=decision,
+            decided_by=decided_by,
+            applied=applied,
+            superseded_by=superseded_by,
             explanation=explanation,
             at=at,
             batch=upgrade_batch,
@@ -2761,7 +2802,7 @@ class AimDocument:
         explanation: str | None = None,
         at: str | None = None,
     ) -> Event:
-        return self._resolve(
+        return self._resolve_retaining_paint(
             self.proposal(pid),
             decision="rejected",
             decided_by=decided_by,

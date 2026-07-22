@@ -423,6 +423,14 @@ the markup rather than produce an unverifiable history; historical checkpoint
 hashes are never rewritten, and a document that never uses the new markup is
 never migrated.
 
+The same rule covers retained markup that does not enter live content. A
+resolution event retains its `proposed` payload after rejection,
+supersession, or accept-with-tweaks, so a writer MUST record the upgrade before
+resolving a paint-bearing proposal under an older declaration. The resolution
+and upgrade share a batch. If an in-place proposal amendment first introduces
+paint, its card moves into the upgrade event's batch even though the amendment
+itself remains unrecorded (§5.4).
+
 `aim:version` is a reserved singleton like `aim:theme` and `aim:doc`: it can
 be modified but never deleted or moved. It is **not** a proposal target —
 the upgrade rides the edit that needs it, and a pending card aimed at it is
@@ -550,7 +558,10 @@ one-line "why".
 - Theme proposals use the same mechanism with `data-for="aim:theme"` and a
   whole theme block as payload.
 - Editing a pending payload in place is allowed and unrecorded; provenance
-  is preserved at resolution via `proposed` vs `applied` (§6.2).
+  is preserved at resolution via `proposed` vs `applied` (§6.2). If the
+  amended payload first requires a newer declared version, the required
+  version event is recorded and the proposal card moves into that event's
+  batch (§3.7).
 
 ### 5.5 The raw-tier change memo (informative)
 
@@ -592,6 +603,12 @@ chronology survives without duplicating pending content. **`applied` vs
 `applied ≠ proposed` (the field is omitted when identical) — not a fourth
 decision type. This preserves "verbatim AI vs human-corrected" attribution
 without a phantom intermediate version.
+
+Every retained `proposed` and `applied` payload MUST conform to the declared
+version. This applies to all three decisions: rejected and superseded
+resolutions still keep `proposed`, while an accepted resolution may keep both
+fields. A resolution that first retains newer-version syntax records the
+version upgrade in the same batch (§3.7).
 
 ### 6.3 Ordering, actors, batches
 
