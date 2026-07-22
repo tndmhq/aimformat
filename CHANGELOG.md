@@ -64,6 +64,9 @@ the new number.
   properties outside revisions; `accept-all` and `reject-all` retain the exact
   paragraph/cell mapping. An unpainted document still gains no explicit Word
   colour, shading or border, so it follows the recipient's template as before.
+  The generated suffix for an external link uses the link's computed paint,
+  so a base link colour that stops parent-colour inheritance also clears the
+  suffix instead of painting only the URL in the parent's colour.
 
 - **Version marker semantics.** `data-aim-version` is authored state that
   writers never rewrite, and a tool now warns (S002/S006) only for a
@@ -83,7 +86,11 @@ the new number.
   batch. Rejection, supersession, and accept-with-unpainted-tweaks inspect the
   retained `proposed` payload and share their resolution batch with the
   upgrade. Malformed history is reported as H002 rather than a generic S000
-  failure during the earlier S032 precheck.
+  failure during the earlier S032 precheck; malformed retained markup reaches
+  H006 for the same reason. Reconcile records an out-of-band first-paint
+  upgrade when the old marker is still present. If an editor hand-bumped the
+  marker too and checkpoints show that the missing `before` value matters,
+  reconcile refuses the ambiguous repair without mutating the document.
 
   Migration: none. Existing 0.2 documents stay 0.2, serialize with an
   unchanged body, and lint clean.

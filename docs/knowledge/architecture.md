@@ -30,13 +30,13 @@ codes bidirectionally in sync with what `lint.py` can actually emit.
 | `document.py` | `AimDocument`: ops, pending lane, verify, time travel, assets | every state change mutates the tree AND appends the matching event — never one without the other; a lazy per-instance `_HistoryIndex` derives parsed events, id reservations/tombstones, and seq/batch counters from authoritative JSONL + pending state, then the three history writers update it incrementally; replay/verify always run on a deep copy (`DocState` over a clone), never the live tree |
 | `events.py` | `Actor`/`Event` over canonical dicts | unknown fields ignored; `x_*` reserved |
 | `lint.py` | the verifier; stable codes S/V/X/P/H/M/C | collects all findings in one run; `C001` byte-compares the source against the canonical serialization |
-| `reconcile.py` | repair out-of-band edits; adoption path for hand-written files | edit script from expected state E (forward replay of the FULL log) to actual body A, appended as `origin:"reconcile"` events — so `verify()` passes by construction; refuses pruned/damaged logs; never rewrites body content (only ids) |
+| `reconcile.py` | repair out-of-band edits; adoption path for hand-written files | edit script from expected state E (forward replay of the FULL log) to actual body A, appended as `origin:"reconcile"` events so `verify()` passes by construction; refuses pruned/damaged logs and an ambiguous hand-bumped first-paint version; never rewrites body content (only ids) |
 | `css.py` | deterministic stylesheet | budget guarded by tests (<40 KB raw) |
 | `paint.py` | computed paint (text colour, background, per-side borders) for content trees | runs the real cascade against the GENERATED stylesheet, including supported descendant base rules; resolves each live construct once per export into immutable records keyed by object identity, never treats structural `body` chrome as authored state, and never writes to the tree |
 | `pagesetup.py` | `aim:doc` page validation, resolved geometry, and print CSS | the registry defines sizes, margins, and defaults; PDF, DOCX, and editors consume the same `PageSetup` |
 | `ingest.py` | DoclingDocument dict → chunks | dict-shaped input only — docling never becomes a dependency; run `formatting`/`hyperlink` and `inline` groups map to strong/em/u/s/sub/sup/a (safe schemes only). **Presentation is lost UPSTREAM, not here:** docling's `formatting` model carries only `bold`/`italic`/`underline`/`strikethrough`/`script`, so colour, paragraph alignment, and font size never reach this mapping at all (measured 2026-07-22 — a centred, red, 24 pt DOCX paragraph arrives as a bare `<p>`). Word's **Quote** style is flattened the same way: docling labels it plain `text`, so it lands as `<p>`, not `<blockquote>`. STRUCTURE otherwise survives well — headings, ordered vs unordered lists, tables, and hard page breaks all round-trip. Recovering any of them needs a python-docx side pass over the original file, the way `convert/_docx_pages.py` already does for pagination — there is nothing to fix in `ingest.py` |
 | `convert/` | text/Markdown/DOCX/PDF import and Markdown/HTML/PDF export | stdlib directions stay dependency-free; Markdown, Docling, and Playwright imports remain lazy behind extras |
-| `export_docx.py` | .aim → Word incl. `w:ins`/`w:del` tracked changes | `accept-all`/`reject-all` resolve a throwaway copy through the real accept/reject machinery; grouping box paint is carried to emitted descendants, and tracked block/cell box paint rides revision runs as a reviewable approximation because Word keeps paragraph/cell properties outside revisions |
+| `export_docx.py` | .aim → Word incl. `w:ins`/`w:del` tracked changes | `accept-all`/`reject-all` resolve a throwaway copy through the real accept/reject machinery; grouping box paint is carried to emitted descendants, tracked block/cell box paint rides revision runs, and generated external-link suffixes use the link's computed paint |
 | `cli.py` | `aim` entry point (also installed as `aimformat`) | exit codes 0/1/2; `--format json` for tooling |
 | `note.py` | canonical agent-note template + helpers (spec §2.5) | the note text contains no markup — structural substring checks must never false-positive on it |
 | `mcp.py` | MCP server (FastMCP, stdio); extra `[mcp]` | six workflow tools, not a 1:1 SDK mirror; lazy-imported by the CLI so core stays stdlib-only |
@@ -147,8 +147,12 @@ codes bidirectionally in sync with what `lint.py` can actually emit.
   downgrade while any of those payloads still carries paint. A time-travel
   copy can be older because it trims the later events too. The `<html>` open
   tag is inside `doc_hash`; anything that touches it needs an event, exactly
-  like the body. Malformed history stays the history pass's responsibility:
-  the S032 precheck defers to H002 instead of collapsing lint into S000.
+  like the body. An out-of-band editor leaves the old marker in place so
+  reconcile can record its change. If it also hand-bumps the marker and
+  checkpoints prove the missing `before` value matters, reconcile refuses
+  before mutating the file. Malformed history stays the history pass's
+  responsibility: the S032 precheck defers malformed JSONL to H002 and
+  malformed retained payloads to H006 instead of collapsing lint into S000.
 
 ## The TypeScript reader (`ts/`)
 

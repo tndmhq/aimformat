@@ -308,10 +308,10 @@ class _Linter:
         """
         try:
             return self.doc._retains_literal_paint()
-        except HistoryError:
-            # The dedicated history pass reports H002.  A malformed JSONL
-            # record cannot establish retained paint and must not short-circuit
-            # the rest of lint as the generic S000 crash guard.
+        except (HistoryError, ParseError):
+            # The dedicated history pass reports malformed JSONL as H002 and
+            # malformed retained markup as H006. Neither can establish paint
+            # here, and neither may short-circuit lint as generic S000.
             return False
 
     def body_sections(self) -> None:

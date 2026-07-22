@@ -27,6 +27,10 @@ Scope and honesty:
 - **Some damage is detectable but not repairable** append-only: a tampered
   checkpoint ``doc_hash`` line, for instance. Whatever :meth:`verify` still
   reports after reconciliation is returned as :attr:`ReconcileReport.residual`.
+- **A hand-bumped version can make a first-paint repair ambiguous.** When
+  checkpoints prove the old marker matters but no new version event was
+  synthesized, reconcile refuses before mutating the caller. Restoring the old
+  marker lets the normal paint-upgrade path record both values.
 - Reconcile makes the *history* consistent with the body; it does not make an
   invalid body valid — vocabulary or structure violations the hand edit
   introduced are declared as-is and remain the linter's to flag.
@@ -47,6 +51,7 @@ from .document import (
     _apply_move_data,
     _ChainedAddCycle,
     _now_iso,
+    _payload_has_paint,
     resolution_order,
 )
 from .dom import Element, parse_fragment, parse_html
@@ -623,11 +628,13 @@ def reconcile_document(
     _strip_body_state(S)
     _replay(S, events)
     expected_alive = S._state.all_ids()
+    expected_has_paint = any(_payload_has_paint(unit.serial) for unit in _units(S._state).values())
 
     work = _clone(doc)  # A: the actual body, ids fixed up
     report = ReconcileReport()
     report.assigned_ids = _fixup_ids(work, expected_alive)
     _align_theme_baseline(S, events, work)
+    actual_has_paint = any(_payload_has_paint(unit.serial) for unit in _units(work._state).values())
 
     n0 = len(events)
     with S.batch():  # one reconcile = one editing intention
@@ -644,6 +651,17 @@ def reconcile_document(
         )
     report.events = S.history[n0:]
     report.residual = S.verify()
+    if (
+        actual_has_paint
+        and not expected_has_paint
+        and not any(event.target == VERSION_TARGET for event in report.events)
+        and any("checkpoint" in problem and "mismatch" in problem for problem in report.residual)
+    ):
+        raise HistoryError(
+            "cannot reconcile out-of-band paint after an unrecorded version marker change: "
+            "the earlier declared version cannot be recovered safely. Restore the pre-edit "
+            "version marker and reconcile again so the upgrade can be recorded"
+        )
 
     if report.changed and not dry_run:
         burned = set(S._get_history_index().burned_ids)

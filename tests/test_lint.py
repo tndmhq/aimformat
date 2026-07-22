@@ -99,6 +99,22 @@ class TestStructureRules:
         assert "H002" in findings
         assert "S000" not in findings
 
+    def test_malformed_retained_markup_is_not_misreported_as_a_structure_crash(self):
+        doc = aim.new_document(title="prior version malformed retained markup")
+        doc.add_chunk('<p data-aim="p1">Plain.</p>', author=BOT, at=ts(0))
+        text = doc.dumps().replace(
+            f'data-aim-version="{aim.SPEC_VERSION}"', 'data-aim-version="0.2"'
+        )
+        text = text.replace(
+            '<p data-aim=\\"p1\\">Plain.<\\/p>',
+            '<p data-aim=\\"p1\\" style=\\"color:#ff69b4\\">Plain.',
+            1,
+        )
+
+        findings = codes(text)
+        assert "H006" in findings
+        assert "S000" not in findings
+
     def test_S003_missing_charset(self, good_text):
         broken = good_text.replace('<meta charset="utf-8">\n', "")
         assert "S003" in codes(broken)

@@ -423,6 +423,13 @@ the markup rather than produce an unverifiable history; historical checkpoint
 hashes are never rewritten, and a document that never uses the new markup is
 never migrated.
 
+An out-of-band editor that relies on reconciliation MUST leave the old marker
+in place. This gives the reconciler the `before` value it needs for the
+version event. If the editor changes both the syntax and the marker, and the
+retained history cannot establish the old marker, reconciliation MUST refuse
+the repair rather than save a file whose earlier checkpoints no longer
+verify.
+
 The same rule covers retained markup that does not enter live content. A
 resolution event retains its `proposed` payload after rejection,
 supersession, or accept-with-tweaks, so a writer MUST record the upgrade before
@@ -685,7 +692,10 @@ the tool, and whatever it declares becomes truth going forward — also the
 adoption path for hand-edited files). The reference toolkit implements
 reconcile as `AimDocument.reconcile()` / `aim reconcile`; it requires the
 full retained log (reconciling a pruned history is an error there — the
-baseline below the prune floor is unrecoverable).
+baseline below the prune floor is unrecoverable). It also refuses an
+out-of-band first-paint edit that hand-bumped the declared version when the
+old marker cannot be recovered; the file must be restored to that marker so
+reconcile can record the upgrade (§3.7).
 
 ---
 

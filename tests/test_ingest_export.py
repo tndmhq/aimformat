@@ -896,6 +896,20 @@ class TestDocxTextColour:
         assert self._colours(out) == ["DC2626"]
         assert self._colour_count(out) == 1
 
+    def test_an_external_link_suffix_clears_inherited_parent_colour(self, tmp_path):
+        out = self._export(
+            '<p style="color:#ff69b4">see <a href="https://e.example">link</a></p>',
+            tmp_path,
+        )
+        runs = {
+            run.text: str(run.font.color.rgb) if run.font.color.rgb is not None else None
+            for paragraph in docx.Document(str(out)).paragraphs
+            for run in paragraph.runs
+        }
+        assert runs["see "] == "FF69B4"
+        assert runs["link"] is None
+        assert runs[" (https://e.example)"] is None
+
     def test_the_cascade_winner_is_the_last_sorted_class(self, tmp_path):
         """generate_aim_css sorts class rules by name and CSS is last-wins, so
         `text-brand-1 text-red-600` renders RED whichever is written first.

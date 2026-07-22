@@ -29,6 +29,24 @@ def reconciled(doc, **kw):
     return report
 
 
+def hand_bumped_paint_text() -> str:
+    doc = aim.new_document(title="hand-bumped document")
+    doc.add_chunk('<p data-aim="p1">Plain.</p>', author=BOT, at=ts(0))
+    older = aim.loads(
+        doc.dumps().replace(f'data-aim-version="{aim.SPEC_VERSION}"', 'data-aim-version="0.2"')
+    )
+    older.checkpoint("before hand edit", at=ts(1))
+    return (
+        older.dumps()
+        .replace('data-aim-version="0.2"', f'data-aim-version="{aim.SPEC_VERSION}"', 1)
+        .replace(
+            '<p data-aim="p1">Plain.</p>',
+            '<p data-aim="p1" style="color:#ff69b4">Painted.</p>',
+            1,
+        )
+    )
+
+
 # ===========================================================================
 class TestNoOp:
     @pytest.mark.parametrize("fixture", ["empty_doc", "basic_doc", "rich_doc", "lifecycle_doc"])
@@ -106,6 +124,15 @@ class TestContentEdits:
         edit = next(event for event in report.events if event.target == "p1")
         assert drifted.spec_version == aim.SPEC_VERSION
         assert upgrade.batch == edit.batch
+
+    def test_reconcile_refuses_paint_with_an_unrecorded_hand_bumped_version(self):
+        drifted = aim.loads(hand_bumped_paint_text())
+        before = drifted.dumps()
+
+        with pytest.raises(HistoryError, match="unrecorded version marker"):
+            drifted.reconcile(at=ts(60))
+
+        assert drifted.dumps() == before
 
     def test_hand_edited_chunk_yields_exact_modify_event(self, basic_doc):
         text = basic_doc.dumps().replace("Intro paragraph.", "Intro, edited by hand.", 1)
@@ -656,6 +683,16 @@ class TestCli:
         assert f"wrote {drifted}" in out
         assert main(["lint", str(drifted)]) == 0
         assert aim.load(drifted).verify() == []
+
+    def test_fix_mode_does_not_write_an_ambiguous_hand_bumped_version(self, tmp_path, capsys):
+        path = tmp_path / "hand-bumped.aim"
+        path.write_text(hand_bumped_paint_text(), "utf-8")
+        before = path.read_bytes()
+
+        assert main(["reconcile", str(path)]) == 1
+
+        assert "unrecorded version marker" in capsys.readouterr().err
+        assert path.read_bytes() == before
 
     def test_fix_mode_with_output_leaves_source(self, drifted, tmp_path, capsys):
         before = drifted.read_bytes()

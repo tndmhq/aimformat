@@ -174,10 +174,11 @@ def _runs_of(
             if child.tag == "br":
                 runs.append({"break": True, **fmt})
             elif child.tag == "a":
+                link_fmt = _paint_fmt(paint.of(child), fmt, inline=True)
                 runs += _runs_of(child, {**fmt, "underline": True}, paint, inline=True)
                 href = child.get("href") or ""
                 if href and not href.startswith("#"):
-                    runs.append({"text": f" ({href})", **fmt})
+                    runs.append({"text": f" ({href})", **link_fmt})
             elif child.tag == "img":
                 # inline image: honest placeholder (figure-fallback style),
                 # URL kept unless it's an embedded data blob
