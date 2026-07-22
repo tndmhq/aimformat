@@ -99,10 +99,14 @@ technical content only (see Governance below).
    adding to `AGENTS.md`, conventions worth codifying, reusable tooling — and
    suggest them; fold accepted ones into `docs/knowledge/` or `AGENTS.md`.
 
-6. **No change is off the table: prefer the right design over backward-compatible
-   workarounds.** This project is early-stage: existing structures and internal
-   APIs are not constraints. When requirements expose a weak design, refactor or
-   replace it rather than add shims, parallel paths, or hacks.
+6. **Prefer the right design over a backward-compatible workaround.** When
+   requirements expose a weak design, refactor or replace it rather than add
+   shims, parallel paths, or hacks. How far that licence runs is a per-repo
+   fact, so establish it before invoking this: **internal** structures and APIs
+   are never a constraint, but anything already **published** — a released
+   package, a frozen spec, a public endpoint, a persisted file format — is a
+   compatibility requirement, and redesigning it is a deliberate, versioned
+   step rather than a free hand.
 
 ## Governance (public repo)
 
