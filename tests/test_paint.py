@@ -377,3 +377,22 @@ class TestVersionUpgrade:
                 "t", '<h1 data-aim="t" style="color:#ff69b4">Tampered</h1>', author=ME, at=ts(2)
             )
         assert damaged.spec_version == "0.2"
+
+    def test_a_document_from_the_future_keeps_its_own_version(self, older):
+        """A version this build does not implement is not ours to set — we
+        cannot know what else that version requires."""
+        ahead = aim.loads(older.dumps().replace('data-aim-version="0.2"', 'data-aim-version="9.9"'))
+        ahead.modify_chunk(
+            "t", '<h1 data-aim="t" style="color:#ff69b4">Title</h1>', author=ME, at=ts(2)
+        )
+        assert ahead.spec_version == "9.9"
+        assert [e for e in ahead.history if e.target == "aim:version"] == []
+
+    def test_a_document_declaring_no_version_refuses_paint(self, older):
+        """There is nothing to upgrade FROM, and inventing a `before` would
+        put a fiction in the history."""
+        headless = aim.loads(older.dumps().replace(' data-aim-version="0.2"', ""))
+        with pytest.raises(aim.InvalidOperation):
+            headless.modify_chunk(
+                "t", '<h1 data-aim="t" style="color:#ff69b4">Title</h1>', author=ME, at=ts(2)
+            )
