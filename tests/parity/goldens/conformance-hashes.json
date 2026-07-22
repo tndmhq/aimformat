@@ -3,9 +3,10 @@
   "ok_flattened.aim": "sha256:d8ef3c2264ba66f59e4246db3698163e6d4b03aa69d1dfc10cf1233989668930",
   "ok_lifecycle.aim": "sha256:81156bad0a33faf2a78d57eae1fcd6e552da88f43265197a649071fb6675dd29",
   "ok_minimal.aim": "sha256:8da7b2ffbd5099a3a12c1c7845b2eef3486a56ee3ee5a1d7a88118a54b80ce89",
-  "ok_pagination.aim": "sha256:4f8d939bdc66ab932f308d51f4fc9051fad0b7dcbf93dbfe344f78fdae7486fc",
+  "ok_pagination.aim": "sha256:114f7ed84a191979f1ae340151d33ed8566d94ebad05bf6ca124ef13f89dd62b",
   "ok_paint.aim": "sha256:0872c279c1a478fe6d1f26da40a3eee7f1d06e2a02fdab04b3e13c8cb6a9424c",
   "ok_prior_version.aim": "sha256:d06a7646d0711fe7632346663044c66ce49af4c8d2ca84eedcd9ae2da92c8690",
   "ok_self_closing_exceptions.aim": "sha256:e1f16d54105f32a32e811ccfcdfdd5b3dec9d39598033ff3870e0b0ee138f805",
-  "ok_slides.aim": "sha256:9da7222f102acabfd94859498fd8c994c7e40d39a71a6b4efd88f98c04200a76"
+  "ok_slides.aim": "sha256:9da7222f102acabfd94859498fd8c994c7e40d39a71a6b4efd88f98c04200a76",
+  "ok_version_upgrade.aim": "sha256:f7ecaffc03996ac6f95d6ca7382704d0110bb4bb0264997c0f3e349717f7cd9e"
 }

@@ -17,9 +17,6 @@ validate with `aim lint`. Humans review in AIM editors:
 https://aimformat.com/editors
 -->
 <title>Conformance fixture</title>
-<script type="application/aim-doc+json">
-{"page":{"margins":{"bottom":"20mm","left":"18mm","right":"18mm","top":"20mm"},"orientation":"portrait","size":"A4"}}
-</script>
 <style data-aim-css="0.3">
 :root{--aim-brand-1:#1d4ed8;--aim-brand-2:#0f766e;--aim-brand-3:#b45309;--aim-brand-4:#6d28d9;--aim-font-heading:system-ui, -apple-system, 'Segoe UI', sans-serif;--aim-font-body:system-ui, -apple-system, 'Segoe UI', sans-serif;--aim-font-mono:ui-monospace, 'SF Mono', Menlo, Consolas, monospace}
 html{-webkit-text-size-adjust:100%}
@@ -306,9 +303,8 @@ aim-assets{display:none}
 <style data-aim-theme>:root{--aim-brand-1:#1a73e8}</style>
 </head>
 <body>
-<h1 data-aim="h1" class="font-bold text-3xl">Fixture</h1>
+<h1 data-aim="h1" class="font-bold text-3xl" style="color:#ff69b4">Fixture</h1>
 <p data-aim="p1">One paragraph &amp; some text.</p>
-<aim-page-break data-aim="r7d61iq8"></aim-page-break>
 <ul data-aim-container="l1"><li data-aim="i1">First</li><li data-aim="i2">Run…</li><li data-aim="i2">…run</li></ul>
 <script type="application/aim-history+jsonl">
 
@@ -318,8 +314,8 @@ aim-assets{display:none}
 {"action":"add","after":"<h1 data-aim=\"h1\" class=\"font-bold text-3xl\">Fixture<\/h1>","anchor":{"after":null,"container":"body"},"author":{"model":"claude-opus-4-8","type":"agent"},"batch":"b1","kind":"direct_edit","seq":1,"t":"2026-07-07T12:00:00Z","target":"h1"}
 {"action":"add","after":"<p data-aim=\"p1\">One paragraph &amp; some text.<\/p>","anchor":{"after":"h1","container":"body"},"author":{"model":"claude-opus-4-8","type":"agent"},"batch":"b2","kind":"direct_edit","seq":2,"t":"2026-07-07T12:00:01Z","target":"p1"}
 {"action":"add","after":"<ul data-aim-container=\"l1\"><li data-aim=\"i1\">First<\/li><li data-aim=\"i2\">Run…<\/li><li data-aim=\"i2\">…run<\/li><\/ul>","anchor":{"after":"p1","container":"body"},"author":{"model":"claude-opus-4-8","type":"agent"},"batch":"b3","kind":"direct_edit","seq":3,"t":"2026-07-07T12:00:02Z","target":"l1"}
-{"action":"modify","after":"<script type=\"application/aim-doc+json\">\n{\"page\":{\"margins\":{\"bottom\":\"20mm\",\"left\":\"18mm\",\"right\":\"18mm\",\"top\":\"20mm\"},\"orientation\":\"portrait\",\"size\":\"A4\"}}\n<\/script>","author":{"id":"ada","type":"human"},"batch":"b4","kind":"direct_edit","seq":4,"t":"2026-07-07T12:00:03Z","target":"aim:doc"}
-{"action":"add","after":"<aim-page-break data-aim=\"r7d61iq8\"><\/aim-page-break>","anchor":{"after":"p1","container":"body"},"author":{"id":"ada","type":"human"},"batch":"b5","kind":"direct_edit","seq":5,"t":"2026-07-07T12:00:04Z","target":"r7d61iq8"}
+{"action":"modify","after":"0.3","author":{"id":"ada","type":"human"},"batch":"b4","before":"0.2","explanation":"literal paint requires spec 0.3","kind":"direct_edit","seq":4,"t":"2026-07-07T12:00:04Z","target":"aim:version"}
+{"action":"modify","after":"<h1 data-aim=\"h1\" class=\"font-bold text-3xl\" style=\"color:#ff69b4\">Fixture<\/h1>","author":{"id":"ada","type":"human"},"batch":"b5","before":"<h1 data-aim=\"h1\" class=\"font-bold text-3xl\">Fixture<\/h1>","kind":"direct_edit","seq":5,"t":"2026-07-07T12:00:04Z","target":"h1"}
 </script>
 </body>
 </html>

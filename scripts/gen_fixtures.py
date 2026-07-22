@@ -119,12 +119,24 @@ def main() -> None:
     # A previous-version document, still conforming under this toolkit: a
     # 0.3 tool understands 0.2, so neither the version marker nor the
     # stylesheet stamp is a finding (S002/S006 accept older).
-    files["ok_prior_version.aim"] = (
+    prior = (
         base_doc()
         .dumps()
         .replace(f'data-aim-version="{aim.SPEC_VERSION}"', 'data-aim-version="0.2"')
         .replace(f'data-aim-css="{aim.SPEC_VERSION}"', 'data-aim-css="0.2"')
     )
+    files["ok_prior_version.aim"] = prior
+
+    # …and the same document after paint entered it: the version marker moved
+    # and the history says so, on the reserved target aim:version (§3.7).
+    upgraded = aim.loads(prior)
+    upgraded.modify_chunk(
+        "h1",
+        '<h1 data-aim="h1" class="font-bold text-3xl" style="color:#ff69b4">Fixture</h1>',
+        author=ME,
+        at=t(4),
+    )
+    files["ok_version_upgrade.aim"] = upgraded.dumps()
 
     paginated = base_doc()
     paginated.set_page_setup(
