@@ -1,6 +1,6 @@
 # Toolkit architecture
 
-Curated map of how the v0.2 reference toolkit fits together. Read this
+Curated map of how the v0.3 reference toolkit fits together. Read this
 before changing code; update it when the shape changes.
 
 ## One registry drives everything
@@ -36,7 +36,7 @@ codes bidirectionally in sync with what `lint.py` can actually emit.
 | `pagesetup.py` | `aim:doc` page validation, resolved geometry, and print CSS | the registry defines sizes, margins, and defaults; PDF, DOCX, and editors consume the same `PageSetup` |
 | `ingest.py` | DoclingDocument dict → chunks | dict-shaped input only — docling never becomes a dependency; run `formatting`/`hyperlink` and `inline` groups map to strong/em/u/s/sub/sup/a (safe schemes only). **Presentation is lost UPSTREAM, not here:** docling's `formatting` model carries only `bold`/`italic`/`underline`/`strikethrough`/`script`, so colour, paragraph alignment, and font size never reach this mapping at all (measured 2026-07-22 — a centred, red, 24 pt DOCX paragraph arrives as a bare `<p>`). Word's **Quote** style is flattened the same way: docling labels it plain `text`, so it lands as `<p>`, not `<blockquote>`. STRUCTURE otherwise survives well — headings, ordered vs unordered lists, tables, and hard page breaks all round-trip. Recovering any of them needs a python-docx side pass over the original file, the way `convert/_docx_pages.py` already does for pagination — there is nothing to fix in `ingest.py` |
 | `convert/` | text/Markdown/DOCX/PDF import and Markdown/HTML/PDF export | stdlib directions stay dependency-free; Markdown, Docling, and Playwright imports remain lazy behind extras |
-| `export_docx.py` | .aim → Word incl. `w:ins`/`w:del` tracked changes | `accept-all`/`reject-all` resolve a throwaway copy through the real accept/reject machinery |
+| `export_docx.py` | .aim → Word incl. `w:ins`/`w:del` tracked changes | `accept-all`/`reject-all` resolve a throwaway copy through the real accept/reject machinery; tracked block/cell box paint rides revision runs as a reviewable approximation because Word keeps paragraph/cell properties outside revisions |
 | `cli.py` | `aim` entry point (also installed as `aimformat`) | exit codes 0/1/2; `--format json` for tooling |
 | `note.py` | canonical agent-note template + helpers (spec §2.5) | the note text contains no markup — structural substring checks must never false-positive on it |
 | `mcp.py` | MCP server (FastMCP, stdio); extra `[mcp]` | six workflow tools, not a 1:1 SDK mirror; lazy-imported by the CLI so core stays stdlib-only |
@@ -104,14 +104,16 @@ codes bidirectionally in sync with what `lint.py` can actually emit.
   longhands they omit; matching `border-color` declarations alone produces
   red and disagrees with every renderer. `paint.py` exists so exactly one
   place has to get this right.
-- **Only what the author declared crosses into another format.** A value the
+- **Only paint the author selected crosses into another format.** A value the
   base element layer supplies (`a{color:…}`, `blockquote{color:…}`,
   `code{background:…}`, a border's default ink inside `border:1px solid …`)
   participates in the cascade — it is what STOPS inheritance — but it is
   never emitted: the recipient's Word template owns those defaults, and an
-  unpainted document must gain no explicit colour, shading or border. The
-  same rule one level down makes a border shorthand's colour component not a
-  colour *choice*: the author asked for a border, not for grey.
+  unpainted document must gain no explicit colour, shading or border. A bare
+  border shorthand therefore exports no default ink. Once an explicit colour
+  declaration participates, however, export the final computed value even if
+  a later shorthand resets it: the author selected colour, and reporting the
+  losing declaration would disagree with the browser.
 - **The declared version is authored state.** `dumps()` never rewrites
   `data-aim-version`, S002/S006 warn only for a version the tool does NOT
   implement, and introducing markup an older version lacks records an

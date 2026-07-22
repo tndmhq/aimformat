@@ -846,6 +846,14 @@ class TestDocxTextColour:
         out = self._export('<div class="text-red-600"><p>Child</p></div>', tmp_path)
         assert self._colours(out) == ["DC2626"]
 
+    def test_colour_inherits_from_the_body(self, tmp_path):
+        doc = aim.from_text("placeholder", title="t")
+        doc.add_chunk('<p data-aim="p1">Child</p>', author=aim.external("test"))
+        painted = aim.loads(doc.dumps().replace("<body>", '<body style="color:#ff69b4">'))
+        out = tmp_path / "body-paint.docx"
+        aim.to_docx(painted, out, pending="accept-all")
+        assert self._colours(out) == ["FF69B4"]
+
     def test_inherited_colour_reaches_every_leaf_family(self, tmp_path):
         out = self._export(
             '<section style="color:#ff69b4">'
@@ -1102,9 +1110,10 @@ class TestDocxPaintBoxes:
     def test_a_class_border_colour_matches_the_browsers_shorthand_reset(self, tmp_path):
         """`.border-t` sorts AFTER `.border-red-600` in the generated
         stylesheet, so its `border-top:1px solid #e5e7eb` shorthand resets the
-        colour and a browser renders GREY. DOCX must not emit red."""
+        colour and a browser renders GREY. DOCX must emit that computed grey,
+        not the losing red and not an absent border."""
         out = self._export('<p class="border-t border-red-600">x</p>', tmp_path)
-        assert self._borders(out, "pBdr") == {}
+        assert self._borders(out, "pBdr") == {"top": "E5E7EB"}
 
     def test_a_cell_border_colour_reaches_the_cell(self, tmp_path):
         out = self._export(
@@ -1182,7 +1191,9 @@ class TestDocxPaintPendingModes:
         doc.add_chunk('<p data-aim="p1">Plain</p>', author=BOT, at=ts(0))
         doc.propose_modify(
             "p1",
-            '<p data-aim="p1" style="color:#ff69b4; background-color:#fff1f7">Pink</p>',
+            '<p data-aim="p1" class="border" '
+            'style="color:#ff69b4; background-color:#fff1f7; border-color:#123456">'
+            "Pink</p>",
             author=BOT,
             explanation="Recolour.",
             at=ts(1),
@@ -1195,17 +1206,20 @@ class TestDocxPaintPendingModes:
         return out
 
     def test_tracked_insertions_carry_the_proposed_paint(self, tmp_path):
-        """Text colour rides the inserted RUN properties, so old and new ink
-        are both reviewable. The block box is a paragraph property and Word
-        has only one per paragraph — which is exact here because the delete
-        and the insert are separate paragraphs."""
+        """Text and the run-level approximation of the new block box ride the
+        inserted revision. Rejecting it must not leave paint on the empty
+        paragraph that remains."""
         import re
 
         xml = self._xml(self._out(tmp_path, "tracked"))
         inserted = next(p for p in re.findall(r"<w:p>.*?</w:p>", xml, re.S) if "<w:ins " in p)
         ins = re.search(r"<w:ins .*?</w:ins>", inserted, re.S)
         assert ins is not None and 'w:val="FF69B4"' in ins.group(0)
-        assert 'w:fill="FFF1F7"' in inserted.split("<w:ins ")[0]  # the paragraph's own box
+        assert 'w:fill="FFF1F7"' in ins.group(0)
+        assert '<w:bdr w:val="single"' in ins.group(0)
+        assert 'w:color="123456"' in ins.group(0)
+        assert 'w:fill="FFF1F7"' not in inserted.split("<w:ins ")[0]
+        assert "w:pBdr" not in inserted.split("<w:ins ")[0]
 
     def test_a_tracked_deletion_keeps_the_paint_it_is_removing(self, tmp_path):
         import re
@@ -1214,13 +1228,63 @@ class TestDocxPaintPendingModes:
         deleted = next(p for p in re.findall(r"<w:p>.*?</w:p>", xml, re.S) if "<w:del " in p)
         assert "FF69B4" not in deleted and "FFF1F7" not in deleted
 
+    def test_a_tracked_cell_replacement_carries_both_box_colours_in_the_revisions(self, tmp_path):
+        import re
+
+        doc = aim.new_document(title="cell paint")
+        doc.add_chunk(
+            '<table data-aim-container="table"><tbody><tr data-aim="row">'
+            '<td style="background-color:#111111">Old</td></tr></tbody></table>',
+            author=BOT,
+            at=ts(0),
+        )
+        doc.propose_modify(
+            "row",
+            '<tr data-aim="row"><td style="background-color:#ff69b4">New</td></tr>',
+            author=BOT,
+            at=ts(1),
+        )
+        out = tmp_path / "tracked-cell.docx"
+        aim.to_docx(doc, out, pending="tracked")
+        xml = self._xml(out)
+        cell = re.search(r"<w:tc>.*?</w:tc>", xml, re.S)
+        assert cell is not None
+        deleted = re.search(r"<w:del .*?</w:del>", cell.group(0), re.S)
+        inserted = re.search(r"<w:ins .*?</w:ins>", cell.group(0), re.S)
+        assert deleted is not None and 'w:fill="111111"' in deleted.group(0)
+        assert inserted is not None and 'w:fill="FF69B4"' in inserted.group(0)
+        tc_props = re.search(r"<w:tcPr>.*?</w:tcPr>", cell.group(0), re.S)
+        assert tc_props is not None and "w:shd" not in tc_props.group(0)
+
+    def test_a_pending_container_replacement_inherits_from_its_actual_parent(self, tmp_path):
+        import re
+
+        doc = aim.new_document(title="pending inheritance")
+        doc.add_chunk(
+            '<aim-slide data-aim-container="slide" style="color:#ff69b4">'
+            '<ul data-aim-container="list"><li data-aim="old">Old</li></ul></aim-slide>',
+            author=BOT,
+            at=ts(0),
+        )
+        doc.propose_modify(
+            "list",
+            '<ul data-aim-container="list"><li data-aim="new">New</li></ul>',
+            author=BOT,
+            at=ts(1),
+        )
+        out = tmp_path / "pending-parent.docx"
+        aim.to_docx(doc, out, pending="tracked")
+        inserted = re.search(r"<w:ins .*?</w:ins>", self._xml(out), re.S)
+        assert inserted is not None and 'w:val="FF69B4"' in inserted.group(0)
+
     def test_accept_all_carries_exactly_the_proposed_paint(self, tmp_path):
         xml = self._xml(self._out(tmp_path, "accept-all"))
-        assert 'w:val="FF69B4"' in xml and "w:ins" not in xml
+        assert 'w:val="FF69B4"' in xml and 'w:color="123456"' in xml
+        assert "w:pBdr" in xml and "w:ins" not in xml
 
     def test_reject_all_carries_no_paint(self, tmp_path):
         xml = self._xml(self._out(tmp_path, "reject-all"))
-        assert "FF69B4" not in xml and "FFF1F7" not in xml
+        assert "FF69B4" not in xml and "FFF1F7" not in xml and "123456" not in xml
 
     @pytest.mark.parametrize("pending", ["tracked", "accept-all", "reject-all"])
     def test_no_pending_mode_mutates_the_source(self, tmp_path, pending):

@@ -15,7 +15,8 @@ the new number.
   nothing else. Named colours, `#rgb`, `rgb()`, `transparent`,
   `currentColor`, `var()` and `!important` all fail V008; unregistered
   properties still fail V007. Canonical order appends paint after geometry,
-  so a document that uses none serializes unchanged.
+  so body and authored-head markup that uses none keeps its previous ordering;
+  the machine-owned stylesheet cache may still refresh independently.
 
   This is what "make only this heading pink" needed. Before it, the only
   way to spell an arbitrary colour was to repaint one of four
@@ -48,9 +49,12 @@ the new number.
   Word degradations, deliberate and tested: a grouping background is
   approximated by shading the emitted descendants rather than one
   contiguous box; a run has one border, not four sides; and `hr` keeps its
-  em-dash rule, painted in the authored border colour. An unpainted
-  document still gains no explicit Word colour, shading or border, so it
-  follows the recipient's template as before.
+  em-dash rule, painted in the authored border colour. In tracked mode,
+  block and cell box paint rides the deleted and inserted runs because Word
+  keeps paragraph and cell properties outside revisions; `accept-all` and
+  `reject-all` retain the exact paragraph/cell mapping. An unpainted document
+  still gains no explicit Word colour, shading or border, so it follows the
+  recipient's template as before.
 
 - **Version marker semantics.** `data-aim-version` is authored state that
   writers never rewrite, and a tool now warns (S002/S006) only for a
@@ -59,7 +63,8 @@ the new number.
   upgrade: the SDK bumps the attribute AND appends a `modify` event on the
   new reserved target `aim:version`, so replay restores the old value and
   every earlier checkpoint still verifies. A document whose history cannot
-  record that event refuses paint instead.
+  record that event refuses paint instead. The edit is preflighted before the
+  upgrade event, so a failed operation leaves the older document unchanged.
 
   Migration: none. Existing 0.2 documents stay 0.2, serialize with an
   unchanged body, and lint clean.

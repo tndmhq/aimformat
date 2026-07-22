@@ -57,11 +57,12 @@ _BORDER_STYLES = frozenset(
 )
 _INVISIBLE_STYLES = frozenset({"none", "hidden"})
 
-#: Properties through which an author picks a COLOUR. A colour arriving as a
-#: component of a border shorthand — `.border-t{border-top:1px solid #e5e7eb}`
-#: — is the utility's default ink, not a choice: it wins the cascade (so the
-#: browser paints grey) but nothing was asked for, so nothing crosses into
-#: another format. Same rule as the base layer, one level down.
+#: Properties through which an author picks a COLOUR. A colour arriving only
+#: as a component of a border shorthand is the utility's default ink, not a
+#: choice. If an explicit colour declaration also participated, however, a
+#: later shorthand reset is the computed result and must cross into another
+#: format; otherwise `.border-t.border-red-600` is grey in a browser and
+#: absent in Word.
 _COLOUR_PROPS = frozenset(
     {"color", "background-color", "border-color", *(f"border-{s}-color" for s in SIDES)}
 )
@@ -355,7 +356,7 @@ class PaintResolver:
             self._walk(child, child_ctx)
 
     def _cascade(self, el: Element) -> dict[str, tuple[str, bool]]:
-        """Longhand -> (value, authored) after the stylesheet cascade.
+        """Longhand -> (value, explicit-colour-seen) after the cascade.
 
         Sequential overwrite IS the cascade here: type rules come first in
         source order, then class rules in the stylesheet's own (alphabetical)
@@ -369,7 +370,12 @@ class PaintResolver:
             for prop, value in declarations:
                 chosen = authored and prop in _COLOUR_PROPS
                 for longhand, expanded in _expand(prop, value):
-                    out[longhand] = (expanded, chosen)
+                    # Keep the explicit-colour signal through a later
+                    # shorthand reset. The reset supplies the computed value;
+                    # the earlier colour declaration is why that value belongs
+                    # in the conversion at all.
+                    seen = out.get(longhand, ("", False))[1]
+                    out[longhand] = (expanded, seen or chosen)
 
         for rule in by_tag.get(el.tag, ()):
             apply(rule.declarations, authored=False)

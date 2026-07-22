@@ -1279,6 +1279,24 @@ class AimDocument:
             }
         )
 
+    def _preflight_paint_upgrade(
+        self, markup: str | None, operation: Callable[[AimDocument], object]
+    ) -> None:
+        """Prove *operation* can finish before recording a paint upgrade.
+
+        The upgrade event must precede the edit that needs it, but a failed
+        edit must not leave a v0.2 document upgraded with no paint added.
+        Only the once-per-document older-version path pays for the clone.
+        """
+        declared = self._state.spec_version()
+        if (
+            declared is not None
+            and declared != REGISTRY.spec_version
+            and REGISTRY.implements(declared)
+            and _payload_has_paint(markup)
+        ):
+            operation(self._clone())
+
     # -- batching -----------------------------------------------------------------
     def _next_batch(self) -> str:
         return self._get_history_index().next_batch
@@ -1575,8 +1593,9 @@ class AimDocument:
     ) -> Chunk:
         """Add a chunk (direct edit). ``after=None`` inserts at first position."""
         cid, payload = self._normalize_payload(markup)
-        self._ensure_paint_version(payload, author=author, at=at)
         anchor = self._resolve_end_anchor(container, after)
+        self._preflight_paint_upgrade(payload, lambda trial: trial._state.insert(payload, anchor))
+        self._ensure_paint_version(payload, author=author, at=at)
         self._state.insert(payload, anchor)
         data = {
             "seq": self.seq + 1,
@@ -1627,6 +1646,7 @@ class AimDocument:
             _, payload = self._normalize_payload(markup, expect_id=cid)
         if payload == before:
             raise _NoOpEdit("modify with identical content")
+        self._preflight_paint_upgrade(payload, lambda trial: trial._state.replace(cid, payload))
         self._ensure_paint_version(payload, author=author, at=at)
         self._state.replace(cid, payload)
         data = {
@@ -2622,6 +2642,17 @@ class AimDocument:
                     )
             else:
                 applied_payload = prop.payload_html
+            self._preflight_paint_upgrade(
+                applied_payload,
+                lambda trial: trial._resolve(
+                    trial.proposal(pid),
+                    decision="accepted",
+                    decided_by=decided_by,
+                    applied=applied_payload,
+                    explanation=explanation,
+                    at=at,
+                ),
+            )
             self._ensure_paint_version(applied_payload, author=decided_by, at=at)
         return self._resolve(
             prop,

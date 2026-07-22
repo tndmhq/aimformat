@@ -140,12 +140,17 @@ class TestBorders:
         resolver matching only `border-color` would emit red and disagree with
         every renderer."""
         root, r = resolved('<p class="border-t border-red-600">x</p>')
-        assert r.of(root).borders == {}  # the winning colour is base-layer grey
+        assert {s: b.color for s, b in r.of(root).borders.items()} == {"top": "E5E7EB"}
 
     def test_the_unreset_sides_of_a_shorthand_reset_keep_the_class_colour(self):
         root, r = resolved('<p class="border border-t border-red-600">x</p>')
         painted = {s: b.color for s, b in r.of(root).borders.items()}
-        assert painted == {"right": "DC2626", "bottom": "DC2626", "left": "DC2626"}
+        assert painted == {
+            "top": "E5E7EB",
+            "right": "DC2626",
+            "bottom": "DC2626",
+            "left": "DC2626",
+        }
 
     def test_inline_colour_outranks_the_shorthand_reset(self):
         """The trap above is exactly what an inline literal sidesteps."""
@@ -396,3 +401,61 @@ class TestVersionUpgrade:
             headless.modify_chunk(
                 "t", '<h1 data-aim="t" style="color:#ff69b4">Title</h1>', author=ME, at=ts(2)
             )
+
+    def test_a_failed_painted_add_does_not_upgrade_the_document(self, older):
+        before = older.dumps()
+        before_history = [event.data for event in older.history]
+        with pytest.raises(aim.TargetNotFound):
+            older.add_chunk(
+                '<p style="color:#ff69b4">Never added.</p>',
+                author=ME,
+                container="missing",
+                at=ts(2),
+            )
+        assert older.dumps() == before
+        assert [event.data for event in older.history] == before_history
+        assert older.spec_version == "0.2"
+
+    def test_a_failed_painted_accept_does_not_upgrade_the_document(self, older):
+        proposal = older.propose_add(
+            "<p>Pending.</p>", author=BOT, container="body", after="t", at=ts(2)
+        )
+        broken = aim.loads(
+            older.dumps().replace(
+                'data-anchor-container="body"', 'data-anchor-container="missing"', 1
+            )
+        )
+        live = broken.proposal(proposal.id)
+        assert live.payload_html is not None
+        painted = live.payload_html.replace(">Pending.</p>", ' style="color:#ff69b4">Pending.</p>')
+        before = broken.dumps()
+        before_history = [event.data for event in broken.history]
+        with pytest.raises(aim.TargetNotFound):
+            broken.accept(proposal.id, decided_by=ME, applied=painted, at=ts(3))
+        assert broken.dumps() == before
+        assert [event.data for event in broken.history] == before_history
+        assert broken.spec_version == "0.2"
+
+    def test_a_failed_painted_modify_does_not_upgrade_the_document(self):
+        doc = aim.new_document(title="older list")
+        doc.add_chunk(
+            '<ul data-aim-container="list"><li data-aim="item">Item.</li></ul>',
+            author=BOT,
+            at=ts(0),
+        )
+        older = aim.loads(
+            doc.dumps().replace(f'data-aim-version="{aim.SPEC_VERSION}"', 'data-aim-version="0.2"')
+        )
+        older.checkpoint("before", at=ts(1))
+        before = older.dumps()
+        before_history = [event.data for event in older.history]
+        with pytest.raises(aim.InvalidOperation):
+            older.modify_chunk(
+                "item",
+                '<p data-aim="item" style="color:#ff69b4">Wrong carrier.</p>',
+                author=ME,
+                at=ts(2),
+            )
+        assert older.dumps() == before
+        assert [event.data for event in older.history] == before_history
+        assert older.spec_version == "0.2"

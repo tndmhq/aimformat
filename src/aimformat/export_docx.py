@@ -120,6 +120,11 @@ def _paint_fmt(paint: Paint, fmt: dict, *, inline: bool) -> dict:
     if inline:
         if paint.own_background:
             out["shade"] = paint.own_background
+        elif paint.background is None:
+            # A base-layer opaque background (for example `code`) hides an
+            # ancestor box in the browser. Drop a tracked block's inherited
+            # run-shading approximation here too.
+            out.pop("shade", None)
         border = paint.any_border
         if border is not None:
             out["border"] = border
@@ -191,7 +196,50 @@ def _block_runs(el: Element, paint: PaintResolver) -> list[dict]:
     pending break as an empty revision paragraph)."""
     if el.tag == "aim-page-break":
         return [{"page_break": True}]
+    if el.tag == "hr":
+        spec = {"text": "—" * 12}
+        border = paint.of(el).any_border
+        if border is not None:
+            spec["color"] = border.color
+        return [spec]
     return _runs_of(el, None, paint)
+
+
+def _tracked_box_fmt(el: Element, paint: PaintResolver, *, border: bool = True) -> dict:
+    """Run-level approximation of a block/cell box inside a revision.
+
+    Word has one paragraph/cell property outside `w:ins`/`w:del`. Putting a
+    proposed box there makes rejection keep the proposed paint. Revision runs
+    can carry their own shading and one whole-run border, so old and new paint
+    remain independently reviewable.
+    """
+    resolved = paint.of(el)
+    out: dict = {}
+    if resolved.background:
+        out["shade"] = resolved.background
+    side = resolved.any_border if border else None
+    if side is not None:
+        out["border"] = side
+    return out
+
+
+def _tracked_runs(el: Element, paint: PaintResolver) -> list[dict]:
+    fmt = _tracked_box_fmt(el, paint)
+    runs = _runs_of(el, fmt or None, paint)
+    return runs or ([{"text": "", **fmt}] if fmt else [])
+
+
+def _tracked_block_runs(el: Element, paint: PaintResolver) -> list[dict]:
+    if el.tag == "aim-page-break":
+        return _block_runs(el, paint)
+    if el.tag == "hr":
+        # The clean degradation paints the em-dash rule's ink rather than
+        # adding a second Word border. Keep that shape inside revisions.
+        fmt = _tracked_box_fmt(el, paint, border=False)
+        return [{**run, **fmt} for run in _block_runs(el, paint)]
+    fmt = _tracked_box_fmt(el, paint)
+    runs = _runs_of(el, fmt or None, paint)
+    return runs or ([{"text": "", **fmt}] if fmt else [])
 
 
 def _apply_runs(paragraph, runs: list[dict]) -> None:
@@ -566,8 +614,7 @@ class _Exporter:
         # records by object identity, so nothing is ever written back into the
         # document being exported.
         self.paint = PaintResolver(self.palette)
-        for construct in doc._state.constructs():
-            self.paint.resolve(construct)
+        self.paint.resolve(doc._state.body)
         self.out = docx_mod.Document()
         self.rev = _Revisions()
         # Set after a slide: True means accepted structure owns the next
@@ -663,9 +710,11 @@ class _Exporter:
                     style=style or self._safe_style(_style_for(block.tag))
                 )
                 self.rev.ins(
-                    para, _block_runs(block, self.paint), _actor_label(prop.author), prop.at
+                    para,
+                    _tracked_block_runs(block, self.paint),
+                    _actor_label(prop.author),
+                    prop.at,
                 )
-                _paint_paragraph(para, self.paint.of(block))
         if slide_payload:
             # When an accepted slide already required a page boundary, move
             # that plain break past this insertion. Otherwise the trailing
@@ -681,8 +730,7 @@ class _Exporter:
         label, date = _actor_label(prop.author), prop.at
         for li in el.elements():
             para = self.out.add_paragraph(style=style)
-            self.rev.ins(para, _runs_of(li, None, self.paint), label, date)
-            _paint_paragraph(para, self.paint.of(li))
+            self.rev.ins(para, _tracked_runs(li, self.paint), label, date)
 
     def _payload_elements(self, prop: Proposal) -> list[Element]:
         """A proposal's payload roots, with their paint already resolved.
@@ -691,23 +739,26 @@ class _Exporter:
         inherit from — it gets the context of the container it will land in,
         which is what its future siblings inherit today."""
         els = [n for n in parse_fragment(prop.payload_html or "") if isinstance(n, Element)]
-        context = self.paint.context_of(self._anchor_node(prop))
+        context = self.paint.context_of(self._payload_parent_node(prop))
         for el in els:
             self.paint.resolve(el, inherited=context)
         return els
 
-    def _anchor_node(self, prop: Proposal) -> Element | None:
-        """The container element a proposal's payload lands inside, if it is
-        a real element (``body`` and unknown containers inherit nothing)."""
-        container = prop.anchor_container if prop.action == "add" else None
-        if container is None and prop.target:
+    def _payload_parent_node(self, prop: Proposal) -> Element | None:
+        """The exact live parent whose context a payload will enter."""
+        if prop.action == "add":
+            container = prop.anchor_container or "body"
+            return (
+                self.aim._state.body
+                if container == "body"
+                else self.aim._state.container_node(container)
+            )
+        if prop.target:
             try:
-                container = self.aim._state.container_of_chunk(prop.target)
-            except Exception:  # a container target, or one already gone
-                container = None
-        if not container or container == "body":
-            return None
-        return self.aim._state.container_node(container)
+                return self.aim._state._target_elements(prop.target)[0][0]
+            except Exception:  # malformed/dangling foreign proposal
+                return None
+        return None
 
     def _safe_style(self, name: str | None) -> str | None:
         if name is None:
@@ -763,32 +814,26 @@ class _Exporter:
         label, date = _actor_label(prop.author), prop.at
         for block in _block_children(el, self.paint):
             para = self.out.add_paragraph(style=style or self._safe_style(_style_for(block.tag)))
-            self.rev.dele(para, _block_runs(block, self.paint), label, date)
-            # a deleted paragraph keeps the box it currently has: the reviewer
-            # is looking at what accepting the change would REMOVE
-            _paint_paragraph(para, self.paint.of(block))
+            self.rev.dele(para, _tracked_block_runs(block, self.paint), label, date)
         if payload and prop.action == "modify":
             for new_el in self._payload_elements(prop):
                 for block in _block_children(new_el, self.paint):
                     para = self.out.add_paragraph(
                         style=style or self._safe_style(_style_for(block.tag))
                     )
-                    self.rev.ins(para, _block_runs(block, self.paint), label, date)
-                    _paint_paragraph(para, self.paint.of(block))
+                    self.rev.ins(para, _tracked_block_runs(block, self.paint), label, date)
 
     def emit_tracked_list_container(self, el: Element, prop: Proposal) -> None:
         label, date = _actor_label(prop.author), prop.at
         style = self._safe_style("List Bullet" if el.tag == "ul" else "List Number")
         for li in el.elements():
             para = self.out.add_paragraph(style=style)
-            self.rev.dele(para, _runs_of(li, None, self.paint), label, date)
-            _paint_paragraph(para, self.paint.of(li))
+            self.rev.dele(para, _tracked_runs(li, self.paint), label, date)
         if prop.action == "modify":
             for new_el in self._payload_elements(prop):
                 for li in new_el.elements():
                     para = self.out.add_paragraph(style=style)
-                    self.rev.ins(para, _runs_of(li, None, self.paint), label, date)
-                    _paint_paragraph(para, self.paint.of(li))
+                    self.rev.ins(para, _tracked_runs(li, self.paint), label, date)
 
     # -- plain blocks -----------------------------------------------------------
     def emit_block(self, el: Element, cid: str, style: str | None = None) -> None:
@@ -1088,7 +1133,12 @@ class _Exporter:
                         for dc in range(colspan):
                             occupied.add((ri + dr, ci + dc))
                 para = cell.paragraphs[0]
-                runs = _runs_of(cell_el, None, self.paint)
+                tracked_cell = force is not None or prop_del is not None or prop_mod is not None
+                runs = (
+                    _tracked_runs(cell_el, self.paint)
+                    if tracked_cell
+                    else _runs_of(cell_el, None, self.paint)
+                )
                 if cell_el.tag == "th":
                     runs = [{**r, "bold": True} for r in runs]
                 if force == "ins" and prop is not None:
@@ -1100,17 +1150,17 @@ class _Exporter:
                     if new_cells is not None:  # cellwise: shapes match 1:1
                         self.rev.ins(
                             para,
-                            _runs_of(new_cells[orig_idx], None, self.paint),
+                            _tracked_runs(new_cells[orig_idx], self.paint),
                             _actor_label(prop_mod.author),
                             prop_mod.at,
                         )
                 else:
                     _apply_runs(para, runs)
-                # a cellwise replacement paints the cell with the PROPOSED
-                # box: Word has one shading per cell, and showing the old one
-                # under an inserted run would misreport the pending state
-                painted = new_cells[orig_idx] if new_cells is not None else cell_el
-                _paint_cell(cell, self.paint.of(painted))
+                # A tracked cell has one live w:tcPr outside both revisions.
+                # Its old/new box paint rides the corresponding runs instead;
+                # clean cells keep exact cell shading and per-side borders.
+                if not tracked_cell:
+                    _paint_cell(cell, self.paint.of(cell_el))
                 ci += colspan
         # row-adds only after the content loop: inserting rows mid-loop would
         # shift the (ri, ci) coordinates the loop and the merges rely on
@@ -1157,9 +1207,9 @@ class _Exporter:
                     cs = int(c.get("colspan") or 1)
                     rs = min(int(c.get("rowspan") or 1), len(payload_rows) - pi)
                     para = self._new_span_cell(
-                        table, tr, colspan=cs, vmerge="restart" if rs > 1 else None, source=c
+                        table, tr, colspan=cs, vmerge="restart" if rs > 1 else None
                     )
-                    runs = _runs_of(c, None, self.paint)
+                    runs = _tracked_runs(c, self.paint)
                     if c.tag == "th":
                         runs = [{**run, "bold": True} for run in runs]
                     self.rev.ins(para, runs, label, date)
@@ -1171,12 +1221,9 @@ class _Exporter:
                 cur.addnext(tr)
                 cur = tr
 
-    def _new_span_cell(
-        self, table, tr, *, colspan: int, vmerge: str | None, source: Element | None = None
-    ):
-        """Append one cell to a rebuilt payload row, carrying its span
-        structure (w:gridSpan / w:vMerge) and, from *source*, its paint;
-        returns the cell's paragraph."""
+    def _new_span_cell(self, table, tr, *, colspan: int, vmerge: str | None):
+        """Append one cell to a rebuilt payload row with its span structure;
+        return the cell's paragraph."""
         from docx.oxml import OxmlElement
         from docx.oxml.ns import qn
         from docx.table import _Cell
@@ -1192,8 +1239,6 @@ class _Exporter:
                 merge.set(qn("w:val"), "restart")
             tc.get_or_add_tcPr().append(merge)
         cell = _Cell(tc, table)
-        if source is not None:
-            _paint_cell(cell, self.paint.of(source))
         return cell.paragraphs[0]
 
     def _continue_vmerges(
@@ -1240,11 +1285,10 @@ class _Exporter:
                 cell = new_row.cells[idx]
                 self.rev.ins(
                     cell.paragraphs[0],
-                    _runs_of(payload_cells[idx], None, self.paint),
+                    _tracked_runs(payload_cells[idx], self.paint),
                     _actor_label(prop.author),
                     prop.at,
                 )
-                _paint_cell(cell, self.paint.of(payload_cells[idx]))
             if first:
                 table.rows[0]._tr.addprevious(new_row._tr)
             else:

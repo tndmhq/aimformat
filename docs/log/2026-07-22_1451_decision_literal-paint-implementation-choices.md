@@ -1,7 +1,7 @@
 ---
 date: 2026-07-22 14:51
 type: decision
-status: active
+status: superseded
 related:
   - 2026-07-22_0844_plan_literal-element-paint.md
 ---
