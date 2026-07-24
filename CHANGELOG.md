@@ -3,7 +3,7 @@
 All notable changes to the spec and the reference toolkit. The package
 version tracks the spec version it implements (0.x minors may break).
 
-## 0.3.0 — unreleased
+## 0.3.0 — 2026-07-24
 
 Everything below shipped as 0.3.0; the 0.2.1 line was never released, and
 the paint work moves the spec version, so the whole unreleased set carries
