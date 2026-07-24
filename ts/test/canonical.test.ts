@@ -63,7 +63,11 @@ describe("canonical serialization", () => {
       if (pattern === undefined) throw new Error(`no grammar for ${prop}`);
       return pattern.test(value);
     };
-    expect(STYLE_PROP_PAINT).toEqual(["color", "background-color", "border-color"]);
+    expect(STYLE_PROP_PAINT).toEqual([
+      "color",
+      "background-color",
+      "border-color",
+    ]);
     // v0.4 appends literal typography after paint
     expect(STYLE_PROP_ORDER.slice(-5)).toEqual([
       "color",
