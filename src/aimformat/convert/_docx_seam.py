@@ -83,6 +83,7 @@ __all__ = [
     "shading_hex",
     "symbol_char",
     "textbox_paragraphs",
+    "picture_relationships",
     "twips_to_mm",
 ]
 
@@ -92,6 +93,10 @@ _W_NS = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
 _M_NS = "http://schemas.openxmlformats.org/officeDocument/2006/math"
 _W14_NS = "http://schemas.microsoft.com/office/word/2010/wordml"
 _MC_NS = "http://schemas.openxmlformats.org/markup-compatibility/2006"
+_V_NS = "urn:schemas-microsoft-com:vml"
+_O_NS = "urn:schemas-microsoft-com:office:office"
+_R_NS = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
+_WP_NS = "http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing"
 
 #: Word's fixed highlight palette (ST_HighlightColor) as lowercase hex.
 _HIGHLIGHTS = {
@@ -222,6 +227,15 @@ class ParsedDocx:
     content: list[tuple[Any, Any]]  # (dpc item, source w:p/w:tbl element) in body order
     resolver: StyleResolver
     numbering: Any | None
+    #: numId → the instance whose counters it must share. Word clones a
+    #: numbering instance whenever a list is interrupted, so one visible
+    #: list can span several numIds that all point at the same abstract
+    #: definition; counting per numId restarts it mid-document.
+    num_alias: dict[int, int]
+    #: Stateful label generator for numbered paragraphs ("1.1.1"): its
+    #: counters advance per call, so it is shared for one walk in document
+    #: order and never reused across documents.
+    numbering_tracker: Any | None
     hyperlinks: dict[str, str]  # rId → external URL
     images: dict[str, tuple[bytes, str]]  # rId → (bytes, mime)
     theme: DocxTheme
@@ -255,12 +269,41 @@ def parse_docx(source: str | bytes | BinaryIO) -> ParsedDocx:
         content=content,
         resolver=resolver,
         numbering=numbering,
+        num_alias=_num_aliases(numbering),
+        numbering_tracker=NumberingTracker(numbering) if numbering is not None else None,
         hyperlinks=hyperlinks,
         images=images,
         theme=theme,
         default_style_id=default_id,
         baseline_run=baseline,
     )
+
+
+def _num_aliases(numbering: Any) -> dict[int, int]:
+    """numId → the lowest numId sharing its abstract definition.
+
+    Word emits a fresh ``w:num`` whenever a numbered list is interrupted, so
+    a single visible sequence ("1.1.1 … 1.1.14") routinely arrives as two or
+    three numIds over one ``abstractNumId``. Counters therefore belong to the
+    abstract definition, not the instance — keying them per numId restarts
+    the numbering mid-list. Instances carrying their own level overrides
+    (``w:lvlOverride``, i.e. a deliberate restart) are left alone.
+    """
+    canonical: dict[int, int] = {}
+    for inst in getattr(numbering, "num", None) or []:
+        num_id = getattr(inst, "num_id", None)
+        abstract = getattr(inst, "abstract_num_id", None)
+        if num_id is None or abstract is None or getattr(inst, "lvl_override", None):
+            continue
+        first = canonical.setdefault(abstract, num_id)
+        canonical[abstract] = min(first, num_id)
+    out: dict[int, int] = {}
+    for inst in getattr(numbering, "num", None) or []:
+        num_id = getattr(inst, "num_id", None)
+        abstract = getattr(inst, "abstract_num_id", None)
+        if num_id is not None and abstract in canonical:
+            out[num_id] = canonical[abstract]
+    return out
 
 
 def _body_content_pairs(body_elem: Any) -> list[tuple[Any, Any]]:
@@ -602,6 +645,116 @@ def paragraph_math_text(elem: Any) -> str:
     equation interleaved mid-line (it trails the paragraph's run text)."""
     m_t = f"{{{_M_NS}}}t"
     return "".join(t.text or "" for t in _effective_descendants(elem) if t.tag == m_t)
+
+
+_EMU_PER_PX = 9525
+
+
+def _local(node: Any) -> str:
+    tag = getattr(node, "tag", "")
+    return tag.rsplit("}", 1)[-1] if isinstance(tag, str) else ""
+
+
+def _geometry_ext(root: Any) -> Any | None:
+    """The first ``a:ext`` under *root* that carries geometry (``@cx``).
+    Plain ``.//a:ext`` also matches the ``a:extLst`` extension elements,
+    which have a uri and no size."""
+    for el in root.iter():
+        if _local(el) == "ext" and el.get("cx"):
+            return el
+    return None
+
+
+def _picture_width_px(node: Any, is_vml: bool) -> int | None:
+    """The width Word draws this picture at, in CSS px, or None.
+
+    A picture inside a group is authored in the GROUP's coordinate space, so
+    its real width is ``group_px * own_ext / group_child_ext``. Without that
+    scaling a 1.5-inch logo lands at its full pixel size and swamps the page.
+    """
+    if is_vml:
+        cur = node  # v:shape / v:group carry CSS-ish geometry in @style
+        while cur is not None:
+            m = re.search(r"width:\s*([\d.]+)pt", cur.get("style") or "")
+            if m:
+                return max(1, round(float(m.group(1)) / 0.75))
+            cur = cur.getparent()
+        return None
+
+    # this picture's own extent (pic → pic:spPr/a:xfrm/a:ext)
+    pic = node
+    while pic is not None and _local(pic) != "pic":
+        pic = pic.getparent()
+    # NB: a:extLst holds unrelated <a:ext uri="…"> extension elements, so
+    # only an ext that actually carries geometry (@cx) counts
+    own_ext = _geometry_ext(pic) if pic is not None else None
+
+    # the drawing/group that gives the extent in real units, plus the child
+    # coordinate space the picture's own extent is expressed in
+    group_px: float | None = None
+    child_space: float | None = None
+    cur = pic.getparent() if pic is not None else node
+    while cur is not None:
+        ch = cur.find(f".//{{{_A_NS}}}chExt")
+        ext = _geometry_ext(cur)
+        if ch is not None and ext is not None and ch.get("cx"):
+            try:
+                group_px, child_space = int(ext.get("cx")) / _EMU_PER_PX, float(ch.get("cx"))
+            except (TypeError, ValueError):
+                return None
+            break
+        cur = cur.getparent()
+    if group_px is None:  # ungrouped: the drawing's own extent is the size
+        cur = node
+        while cur is not None:
+            ext = cur.find(f".//{{{_WP_NS}}}extent")
+            if ext is not None and ext.get("cx"):
+                try:
+                    return max(1, round(int(ext.get("cx")) / _EMU_PER_PX))
+                except (TypeError, ValueError):
+                    return None
+            cur = cur.getparent()
+        return None
+    if own_ext is not None and child_space and own_ext.get("cx"):
+        try:
+            return max(1, round(group_px * int(own_ext.get("cx")) / child_space))
+        except (TypeError, ValueError, ZeroDivisionError):
+            return None
+    return max(1, round(group_px))
+
+
+def picture_relationships(elem: Any) -> list[tuple[str, str, int | None]]:
+    """[(relationship id, alt text)] for EVERY picture in this paragraph, in
+    document order and MCE-resolved — both DrawingML (``a:blip``) and legacy
+    VML (``v:imagedata``).
+
+    dpc's typed model exposes only the common shape: one ``w:drawing``
+    wrapping a single ``pic:pic``. Real documents also carry grouped artwork
+    (a ``wpg:wgp`` of several pictures — a row of logos on a title page) and
+    VML pictures, and both vanish silently from that model. The converter
+    uses this to emit whatever the typed walk did not already place, so the
+    recovery is additive rather than a second source of truth.
+    """
+    blip = f"{{{_A_NS}}}blip"
+    imagedata = f"{{{_V_NS}}}imagedata"
+    embed, rel_id = f"{{{_R_NS}}}embed", f"{{{_R_NS}}}id"
+    out: list[tuple[str, str, int | None]] = []
+    seen: set[str] = set()
+    for node in _effective_descendants(elem):
+        if node.tag == blip:
+            rid, alt = node.get(embed), "image"
+        elif node.tag == imagedata:
+            rid = node.get(rel_id)
+            alt = node.get(f"{{{_O_NS}}}title") or node.get("alt") or "image"
+        else:
+            continue
+        # one relationship can legitimately repeat (the Choice and Fallback of
+        # the same shape); dedupe so a logo is not emitted several times
+        if not rid or rid in seen:
+            continue
+        seen.add(rid)
+        out.append((rid, alt, _picture_width_px(node, node.tag == imagedata)))
+    return out
 
 
 def textbox_paragraphs(elem: Any) -> list[Any]:
