@@ -219,3 +219,28 @@ class TestTheme:
 
         doc = convert_docx(_styled_docx(), theme={"--aim-font-body": "Test Face"})
         assert "--aim-font-body:Test Face" in doc.dumps()
+
+
+def test_a_list_starting_indented_keeps_its_outdented_items():
+    """ilvl 1 then ilvl 0: nesting starts at the group's minimum level, so
+    the outdented item must survive (not be dropped by the walk return)."""
+    doc = Document()
+    for text, ilvl in (("DeepFirst", 1), ("ShallowSecond", 0)):
+        p = doc.add_paragraph(text, style="List Bullet")
+        num_pr = OxmlElement("w:numPr")
+        lvl = OxmlElement("w:ilvl")
+        lvl.set(qn("w:val"), str(ilvl))
+        num_id = OxmlElement("w:numId")
+        num_id.set(qn("w:val"), "1")
+        num_pr.append(lvl)
+        num_pr.append(num_id)
+        p._p.get_or_add_pPr().append(num_pr)
+    out = io.BytesIO()
+    doc.save(out)
+    out.seek(0)
+    from aimformat.convert._docx_in import convert_docx
+
+    imported = convert_docx(out)
+    text = imported.dumps()
+    assert "DeepFirst" in text and "ShallowSecond" in text
+    assert [f for f in aim.lint(imported) if f.level == "error"] == []

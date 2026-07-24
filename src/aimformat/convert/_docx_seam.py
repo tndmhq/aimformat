@@ -50,15 +50,20 @@ except ImportError as exc:  # pragma: no cover - exercised without the extra
 from lxml import etree
 
 __all__ = [
-    "ParsedDocx",
-    "parse_docx",
-    "effective_run_props",
-    "resolve_color",
-    "highlight_hex",
-    "half_points_to_pt",
-    "twips_to_mm",
-    "font_of",
+    "DocxTheme",
     "NumberingTracker",
+    "ParsedDocx",
+    "data_uri",
+    "effective_run_props",
+    "font_of",
+    "half_points_to_pt",
+    "highlight_hex",
+    "model_dump",
+    "paragraph_run_baseline",
+    "parse_docx",
+    "resolve_color",
+    "shading_hex",
+    "twips_to_mm",
 ]
 
 _A_NS = "http://schemas.openxmlformats.org/drawingml/2006/main"

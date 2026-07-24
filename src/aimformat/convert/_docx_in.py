@@ -43,6 +43,7 @@ from ..canonical import escape_attr, escape_text
 from ..document import AimDocument, new_document
 from ..events import Actor, external
 from ..ingest import _containerize
+from ..pagesetup import _fmt_mm
 from ..registry import REGISTRY
 from ._docx_pages import _match_named_size
 from ._docx_seam import (
@@ -165,8 +166,10 @@ class _Converter:
         margins = getattr(sect, "pg_mar", None)
 
         def margin(tw: Any) -> str:
+            # clamp into the registry bounds up front, and format through
+            # the grammar-safe fixed-point formatter (never %g)
             mm = max(0.0, round(twips_to_mm(tw) or 0.0, 1))
-            return f"{min(mm, float(REGISTRY.margin_max_mm)):g}mm"
+            return _fmt_mm(min(mm, float(REGISTRY.margin_max_mm)))
 
         return {
             "size": named,
@@ -248,7 +251,7 @@ class _Converter:
             elif kind == "Hyperlink":
                 inner_parts: list[str] = []
                 for run in item.content:
-                    markup, saw_break = self._run_markup(run, style_id)
+                    markup, saw_break = self._run_markup(run, style_id, fold_char_style=True)
                     inner_parts.append(markup)
                     page_break = page_break or saw_break
                 inner = "".join(inner_parts)
@@ -261,14 +264,22 @@ class _Converter:
                     parts.append(inner)  # unresolvable target keeps its text
         return "".join(parts).strip(), page_break
 
-    def _run_markup(self, run: Any, para_style_id: str | None) -> tuple[str, bool]:
+    def _run_markup(
+        self, run: Any, para_style_id: str | None, *, fold_char_style: bool = False
+    ) -> tuple[str, bool]:
         direct = model_dump(getattr(run, "r_pr", None))
         run_style = direct.pop("r_style", None)
         props = effective_run_props(self.p.resolver, para_style_id, run_style, direct)
         # the paragraph's own context (docDefaults + its style) is the
         # baseline: what IT sets is rhythm (suppressed); what the run adds
-        # on top is local intent
+        # on top is local intent. Inside a hyperlink the character style is
+        # role, not intent — <a> already carries link-ness, so the
+        # Hyperlink style's blue underline folds into the baseline too.
         baseline = paragraph_run_baseline(self.p.resolver, para_style_id)
+        if fold_char_style and run_style:
+            baseline = self.p.resolver.merge_with_direct(
+                baseline, self.p.resolver.resolve_run_properties(run_style)
+            )
 
         text_parts: list[str] = []
         page_break = False
@@ -378,8 +389,13 @@ class _Converter:
             self._blocks.append(self._list_markup(num_id, group))
 
     def _list_markup(self, num_id: int, items: list[tuple[int, int, str]]) -> str:
-        tag = "ol" if self._ordered(num_id, items[0][1]) else "ul"
-        body, _ = self._nest(items, 0, items[0][1])
+        # nest from the group's MINIMUM level, not the first item's: a list
+        # that starts indented and later outdents must keep the outdented
+        # items (starting deeper would drop everything below the entry
+        # level when the walk returns)
+        start = min(ilvl for _, ilvl, _ in items)
+        tag = "ol" if self._ordered(num_id, start) else "ul"
+        body, _ = self._nest(items, 0, start)
         return f"<{tag}>{body}</{tag}>"
 
     def _nest(self, items: list[tuple[int, int, str]], i: int, level: int) -> tuple[str, int]:
