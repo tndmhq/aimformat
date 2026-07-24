@@ -163,6 +163,23 @@ class TestStyling:
         assert any('class="text-center"' in t for t in tags)
         assert any('class="text-justify"' in t for t in tags)
 
+    def test_caps_combines_with_other_run_styling(self):
+        # all-caps + colour on one run: one span carrying BOTH the uppercase
+        # class and the literal paint — neither silently dropped
+        doc = Document()
+        p = doc.add_paragraph()
+        run = p.add_run("Shouted")
+        run.font.all_caps = True
+        run.font.color.rgb = RGBColor(0x1D, 0x4E, 0xD8)
+        lone = p.add_run(" and just caps")
+        lone.font.all_caps = True
+        out = io.BytesIO()
+        doc.save(out)
+        out.seek(0)
+        html = "\n".join(c.html for c in convert_docx(out).chunks)
+        assert '<span class="uppercase" style="color:#1d4ed8">Shouted</span>' in html
+        assert '<span class="uppercase"> and just caps</span>' in html
+
     def test_style_driven_bold_is_suppressed_on_headings(self, imported):
         h1 = next(c for c in imported.chunks if c.tag == "h1")
         assert h1.html == f'<h1 data-aim="{h1.id}">Heading One Alpha</h1>'
@@ -398,6 +415,46 @@ class TestTextbox:
         assert texts == ["Anchor", "BoxLine"]
 
 
+class TestArchiveGuards:
+    """Zip-slip / zip-bomb rejection on EVERY input, not only Strict OOXML."""
+
+    @staticmethod
+    def _plain_docx() -> io.BytesIO:
+        doc = Document()
+        doc.add_paragraph("ok")
+        out = io.BytesIO()
+        doc.save(out)
+        out.seek(0)
+        return out
+
+    def test_zip_slip_member_rejected(self):
+        import zipfile
+
+        src = zipfile.ZipFile(self._plain_docx())
+        out = io.BytesIO()
+        with zipfile.ZipFile(out, "w") as z:
+            for info in src.infolist():
+                z.writestr(info, src.read(info.filename))
+            z.writestr("../evil.txt", b"x")
+        out.seek(0)
+        with pytest.raises(ValueError, match="zip-slip"):
+            convert_docx(out)
+
+    def test_oversized_member_rejected(self, monkeypatch):
+        from aimformat.convert import _docx_seam
+
+        monkeypatch.setattr(_docx_seam, "_MAX_MEMBER_BYTES", 64)
+        with pytest.raises(ValueError, match="oversized"):
+            convert_docx(self._plain_docx())
+
+    def test_total_size_cap_rejected(self, monkeypatch):
+        from aimformat.convert import _docx_seam
+
+        monkeypatch.setattr(_docx_seam, "_MAX_TOTAL_BYTES", 256)
+        with pytest.raises(ValueError, match="size limit"):
+            convert_docx(self._plain_docx())
+
+
 class TestStrictOoxml:
     @staticmethod
     def _to_strict(transitional: io.BytesIO) -> io.BytesIO:
@@ -545,6 +602,23 @@ class TestExportSymmetry:
             r.font.size.pt for p in d.paragraphs for r in p.runs if r.text == "Big" and r.font.size
         ]
         assert sizes == [18.0]
+
+    def test_list_item_alignment_and_size_survive_export(self, tmp_path):
+        # the synthetic li the exporter rebuilds must keep class/style — a
+        # centered, sized list item exports with alignment and run size
+        from docx.enum.text import WD_ALIGN_PARAGRAPH
+
+        doc = aim.new_document(title="Li")
+        doc.add_chunk(
+            '<ul><li class="text-center" style="font-size:14pt">Item</li></ul>',
+            author=aim.external("t"),
+        )
+        out = tmp_path / "li.docx"
+        aim.to_docx(doc, str(out))
+        d = Document(str(out))
+        para = next(p for p in d.paragraphs if "Item" in p.text)
+        assert para.alignment == WD_ALIGN_PARAGRAPH.CENTER
+        assert [r.font.size.pt for r in para.runs if r.text == "Item"] == [14.0]
 
     def test_font_stack_exports_its_first_family(self, tmp_path):
         # the inline grammar allows a stack; Word run props name one face

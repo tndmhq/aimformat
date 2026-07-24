@@ -364,13 +364,17 @@ class _Converter:
             if REGISTRY.style_patterns["font-family"].fullmatch(face):
                 styles.append(("font-family", face))
 
-        if styles:
-            order = {p: i for i, p in enumerate(REGISTRY.style_prop_order)}
-            styles.sort(key=lambda kv: order.get(kv[0], 99))
-            decl = "; ".join(f"{k}:{v}" for k, v in styles)
-            out = f'<span style="{escape_attr(decl)}">{out}</span>'
-        if props.get("caps") and not baseline.get("caps") and not styles:
-            out = f'<span class="uppercase">{out}</span>'
+        caps = bool(props.get("caps")) and not baseline.get("caps")
+        if styles or caps:
+            # one span carries both: caps as the class, literal styling inline
+            cls = ' class="uppercase"' if caps else ""
+            sty = ""
+            if styles:
+                order = {p: i for i, p in enumerate(REGISTRY.style_prop_order)}
+                styles.sort(key=lambda kv: order.get(kv[0], 99))
+                decl = "; ".join(f"{k}:{v}" for k, v in styles)
+                sty = f' style="{escape_attr(decl)}"'
+            out = f"<span{cls}{sty}>{out}</span>"
         if highlight and highlight != highlight_hex(baseline.get("highlight")):
             paint = "" if highlight == "#ffff00" else f' style="background-color:{highlight}"'
             out = f"<mark{paint}>{out}</mark>"

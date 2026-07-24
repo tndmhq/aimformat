@@ -232,6 +232,7 @@ class ParsedDocx:
 def parse_docx(source: str | bytes | BinaryIO) -> ParsedDocx:
     """Open and parse *source* through the pinned parse layer + gap-fillers."""
     zf = _api.open_docx(source)
+    _guard_archive(zf)  # every input, not only the Strict-OOXML branch
     if _is_strict_ooxml(zf):
         zf = _api.open_docx(_normalize_strict_ooxml(zf))
     doc_elem = _api.extract_document_xml(zf)
@@ -284,6 +285,21 @@ def _body_content_pairs(body_elem: Any) -> list[tuple[Any, Any]]:
     return pairs
 
 
+def _guard_archive(zf: zipfile.ZipFile) -> None:
+    """Reject zip-slip member names and zip-bomb sizes on ANY archive before
+    a single member is read — ``from_docx`` ingests arbitrary user uploads,
+    so the guards cannot live only on the (rare) Strict-OOXML rewrite path."""
+    total = 0
+    for info in zf.infolist():
+        if not _is_safe_zip_member(info.filename):
+            raise ValueError(f"unsafe zip member (zip-slip): {info.filename}")
+        if info.file_size > _MAX_MEMBER_BYTES:
+            raise ValueError(f"oversized OOXML part: {info.filename}")
+        total += info.file_size
+        if total > _MAX_TOTAL_BYTES:
+            raise ValueError("OOXML package exceeds the uncompressed size limit")
+
+
 def _is_strict_ooxml(zf: zipfile.ZipFile) -> bool:
     """Whether the archive is a Strict OOXML package — decided from the tiny
     root relationships part only, so Transitional files pay nothing."""
@@ -317,19 +333,11 @@ def _strict_ns_to_transitional(strict_ns: str) -> str:
 def _normalize_strict_ooxml(zf: zipfile.ZipFile) -> BytesIO:
     """Rewrite a Strict OOXML package to Transitional namespaces in memory.
     Only XML/relationship parts carrying a Strict namespace are decoded and
-    rewritten; every other member is copied through. Validated against
-    zip-slip and zip-bomb as it is read."""
+    rewritten; every other member is copied through. The archive has already
+    passed :func:`_guard_archive` (zip-slip / zip-bomb) in ``parse_docx``."""
     out = BytesIO()
-    total = 0
     with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as target:
         for info in zf.infolist():
-            if not _is_safe_zip_member(info.filename):
-                raise ValueError(f"unsafe zip member (zip-slip): {info.filename}")
-            if info.file_size > _MAX_MEMBER_BYTES:
-                raise ValueError(f"oversized OOXML part: {info.filename}")
-            total += info.file_size
-            if total > _MAX_TOTAL_BYTES:
-                raise ValueError("OOXML package exceeds the uncompressed size limit")
             content = zf.read(info.filename)
             if info.filename.endswith((".xml", ".rels")) and _STRICT_MARKER in content:
                 content = _STRICT_NS_RE.sub(

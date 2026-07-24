@@ -1192,8 +1192,14 @@ class _Exporter:
                 content.children = [
                     c for c in li.children if not (isinstance(c, Element) and c.tag in ("ul", "ol"))
                 ]
-                # the copy is synthetic and carries no attributes, so it adopts
-                # the item's computed paint rather than a subset of its markup
+                # the copy is synthetic, so it adopts the item's computed
+                # paint rather than resolving as if it were in the tree — but
+                # class/style must ride along: alignment and literal
+                # typography are read off the element itself
+                for attr in ("class", "style"):
+                    value = li.get(attr)
+                    if value:
+                        content.set(attr, value)
                 self.paint.adopt(content, li)
                 if prop is not None:
                     self.emit_tracked_chunk(content, prop, style=style, payload=li is group[-1])
