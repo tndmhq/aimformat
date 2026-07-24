@@ -64,9 +64,18 @@ def build() -> str:
     a("")
     c = raw["classes"]
     a(f"- **Type scale** `text-*`: {code(c['type_scale'])}")
+    a(
+        f"- **Type scale point equivalents** (normative for point-based "
+        f"exporters; rem × 12): {code(c['type_scale_pt'])}"
+    )
     a(f"- **Weights** `font-*`: {code(c['font_weights'])}")
     a(f"- **Leading** `leading-*`: {code(c['leadings'])}")
     a(f"- **Alignment** `text-*`: {code(c['alignments'])}")
+    if c.get("since"):
+        a(
+            f"- **Since a later spec version** (gated like inline typography, "
+            f"S033): {code(c['since'])}"
+        )
     pal = "; ".join(f"`{fam}` ({', '.join(shades)})" for fam, shades in c["palette"].items())
     a(
         f"- **Palette** for `text-` / `bg-` / `border-`: {pal}; plus "
@@ -85,6 +94,13 @@ def build() -> str:
     a("|---|---|")
     for prop in r.style_prop_order:
         a(f"| `{prop}` | `{raw['style_props']['patterns'][prop]}` |")
+    a("")
+    a(
+        f"Literal paint ({code(raw['style_props']['paint'])}) is since spec "
+        f"{raw['style_props']['paint_since']} (S032); literal typography "
+        f"({code(raw['style_props']['typography'])}) since "
+        f"{raw['style_props']['typography_since']} (S033)."
+    )
     a("")
 
     a("### A.4 Theme slots")

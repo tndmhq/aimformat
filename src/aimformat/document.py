@@ -36,7 +36,7 @@ from .pagesetup import (
     page_setup_from_settings,
     parse_doc_settings,
 )
-from .registry import REGISTRY
+from .registry import REGISTRY, version_key
 
 if TYPE_CHECKING:  # pragma: no cover - import cycle guard, typing only
     from .reconcile import ReconcileReport
@@ -84,29 +84,79 @@ def _no_delete_move(target: str, action: str) -> None:
         )
 
 
-def _payload_has_paint(markup: str | None) -> bool:
-    """Whether *markup* declares any literal paint property (spec §3.3).
+def _payload_floors(markup: str | None) -> set[str]:
+    """The spec-version floors *markup*'s constructs require (spec §3.3):
+    literal paint needs the paint era, literal typography (inline
+    font-size/font-family and the since-gated classes) the typography era.
 
     Parsed rather than pattern-matched: a text node may legitimately contain
     the characters ``style="color:#ff69b4"`` (a code sample), and a regex
     over the payload would read that as paint.
     """
-    if not markup or not any(p in markup for p in REGISTRY.paint_props):
-        return False
+    floors: set[str] = set()
+    if not markup:
+        return floors
+    gated_classes = REGISTRY.class_floors
+    if not (
+        any(p in markup for p in REGISTRY.paint_props)
+        or any(p in markup for p in REGISTRY.typography_props)
+        or any(c in markup for c in gated_classes)
+    ):
+        return floors
     for node in parse_fragment(markup):
         if not isinstance(node, Element):
             continue
         for el in node.iter():
             for piece in (el.get("style") or "").split(";"):
                 prop, sep, _ = piece.partition(":")
-                if sep and prop.strip() in REGISTRY.paint_props:
-                    return True
-    return False
+                if not sep:
+                    continue
+                name = prop.strip()
+                if name in REGISTRY.paint_props:
+                    floors.add(REGISTRY.paint_since)
+                elif name in REGISTRY.typography_props:
+                    floors.add(REGISTRY.typography_since)
+            for token in (el.get("class") or "").split():
+                floor = gated_classes.get(token)
+                if floor is not None:
+                    floors.add(floor)
+    return floors
 
 
-def _first_painted_payload(*payloads: str | None) -> str | None:
-    """The first retained payload whose syntax requires the paint version."""
-    return next((payload for payload in payloads if _payload_has_paint(payload)), None)
+def _floor_of(markup: str | None) -> str | None:
+    """The binding (newest) version floor of *markup*, or None."""
+    floors = _payload_floors(markup)
+    if not floors:
+        return None
+    return max(floors, key=lambda f: version_key(f) or ())
+
+
+def _payload_has_paint(markup: str | None) -> bool:
+    """Whether *markup* declares any literal paint property (spec §3.3)."""
+    return REGISTRY.paint_since in _payload_floors(markup)
+
+
+def _floor_label(floor: str) -> str:
+    """Human name of the construct family a version floor gates."""
+    if floor == REGISTRY.typography_since:
+        return "literal typography"
+    if floor == REGISTRY.paint_since:
+        return "literal paint"
+    return "a newer-spec construct"
+
+
+def _binding_payload(*payloads: str | None) -> str | None:
+    """The retained payload whose constructs set the newest version floor."""
+    best: str | None = None
+    best_key: tuple[int, ...] = ()
+    for payload in payloads:
+        floor = _floor_of(payload)
+        if floor is None:
+            continue
+        key = version_key(floor) or ()
+        if best is None or key > best_key:
+            best, best_key = payload, key
+    return best
 
 
 def _payload_marker(el: Element) -> str:
@@ -1235,43 +1285,53 @@ class AimDocument:
         return Event(data)
 
     # -- declared spec version ------------------------------------------------
-    def _ensure_paint_version(
+    def _ensure_feature_version(
         self, markup: str | None, *, author: Actor, at: str | None = None
     ) -> str | None:
-        """Record the version upgrade literal paint requires (spec §3.3).
+        """Record the version upgrade a gated construct requires (spec §3.3).
 
-        Paint is a 0.3 feature, so putting it into an older document changes
-        what version that document conforms to. ``data-aim-version`` rides
-        the ``<html>`` open tag, which ``doc_hash`` covers, so bumping it in
-        place would break every checkpoint recorded under the old line —
-        while leaving it declares a version the document no longer conforms
-        to. Neither is allowed, and this repo already has the third option:
-        every state change mutates the tree AND appends the matching event,
-        so replay restores the old version and the old hashes verify again.
+        Literal paint is a 0.3 feature and literal typography a 0.4 feature,
+        so putting one into an older document changes what version that
+        document conforms to. ``data-aim-version`` rides the ``<html>`` open
+        tag, which ``doc_hash`` covers, so bumping it in place would break
+        every checkpoint recorded under the old line — while leaving it
+        declares a version the document no longer conforms to. Neither is
+        allowed, and this repo already has the third option: every state
+        change mutates the tree AND appends the matching event, so replay
+        restores the old version and the old hashes verify again.
+
+        The document is upgraded to the construct's own floor, not to this
+        build's version: a 0.2 document gaining paint declares 0.3 and stays
+        readable by every 0.3 tool — declaring the newest version the build
+        happens to implement would shrink its audience for no reason.
 
         Call this BEFORE mutating, from every write path that can put a
         payload into the document. It returns the upgrade event's batch so
-        the first painted edit can share that editing intention. The check is
-        a dict lookup for the common case (a document already at this version)
-        and costs a history replay only on the single edit that first paints a
-        legacy document.
+        the first gated edit can share that editing intention. The check is
+        a dict lookup for the common case (a document already at a
+        sufficient version) and costs a history replay only on the single
+        edit that first puts a gated construct into a legacy document.
         """
+        floor = _floor_of(markup)
         declared = self._state.spec_version()
-        if declared == REGISTRY.spec_version or not _payload_has_paint(markup):
+        if floor is None or REGISTRY.version_includes(declared, floor):
             return None
+        label = _floor_label(floor)
         if declared is None:
-            raise InvalidOperation("cannot add paint: <html> declares no data-aim-version (S001)")
+            raise InvalidOperation(
+                f"cannot add {label}: <html> declares no data-aim-version (S001)"
+            )
         if not REGISTRY.implements(declared):
             return None  # already ahead of this build; its version is not ours to set
         problems = self.verify()
         if problems:
             raise InvalidOperation(
-                "cannot add paint: the version upgrade it requires must be recorded, and "
+                f"cannot add {label}: the version upgrade it requires must be recorded, and "
                 f"this history cannot account for the document as it stands ({problems[0]}). "
                 "Repair or flatten the history first."
             )
         batch = self._batch_id()
-        self._state.set_spec_version(REGISTRY.spec_version)
+        self._state.set_spec_version(floor)
         self._append_event(
             {
                 "seq": self.seq + 1,
@@ -1280,42 +1340,50 @@ class AimDocument:
                 "target": VERSION_TARGET,
                 "action": "modify",
                 "before": declared,
-                "after": REGISTRY.spec_version,
+                "after": floor,
                 "author": author.to_obj(),
                 "batch": batch,
-                "explanation": f"literal paint requires spec {REGISTRY.spec_version}",
+                "explanation": f"{label} requires spec {floor}",
             }
         )
         return batch
 
-    def _preflight_paint_upgrade(
+    def _preflight_feature_upgrade(
         self, markup: str | None, operation: Callable[[AimDocument], object]
     ) -> None:
-        """Prove *operation* can finish before recording a paint upgrade.
+        """Prove *operation* can finish before recording a version upgrade.
 
         The upgrade event must precede the edit that needs it, but a failed
-        edit must not leave a v0.2 document upgraded with no paint added.
-        Only the once-per-document older-version path pays for the clone.
+        edit must not leave an older document upgraded with no gated
+        construct added. Only the once-per-document older-version path pays
+        for the clone.
         """
         declared = self._state.spec_version()
+        floor = _floor_of(markup)
         if (
             declared is not None
-            and declared != REGISTRY.spec_version
+            and floor is not None
+            and not REGISTRY.version_includes(declared, floor)
             and REGISTRY.implements(declared)
-            and _payload_has_paint(markup)
         ):
             operation(self._clone())
 
+    def _retained_floors(self) -> set[str]:
+        """Every gated-construct floor retained by live, pending, or
+        historical state. The body serialization covers live constructs and
+        pending templates; raw history scripts are inert DOM text, so every
+        markup field history retains is inspected separately."""
+        floors = _payload_floors(serialize(self._state.body))
+        for event in self.history:
+            for key in ("before", "after", "proposed", "applied"):
+                value = event.get(key)
+                if isinstance(value, str):
+                    floors |= _payload_floors(value)
+        return floors
+
     def _retains_literal_paint(self) -> bool:
         """Whether live, pending, or historical state retains paint syntax."""
-        if _payload_has_paint(serialize(self._state.body)):
-            return True
-        return any(
-            _payload_has_paint(value)
-            for event in self.history
-            for key in ("before", "after", "proposed", "applied")
-            if isinstance((value := event.get(key)), str)
-        )
+        return REGISTRY.paint_since in self._retained_floors()
 
     # -- batching -----------------------------------------------------------------
     def _next_batch(self) -> str:
@@ -1614,8 +1682,8 @@ class AimDocument:
         """Add a chunk (direct edit). ``after=None`` inserts at first position."""
         cid, payload = self._normalize_payload(markup)
         anchor = self._resolve_end_anchor(container, after)
-        self._preflight_paint_upgrade(payload, lambda trial: trial._state.insert(payload, anchor))
-        upgrade_batch = self._ensure_paint_version(payload, author=author, at=at)
+        self._preflight_feature_upgrade(payload, lambda trial: trial._state.insert(payload, anchor))
+        upgrade_batch = self._ensure_feature_version(payload, author=author, at=at)
         self._state.insert(payload, anchor)
         data = {
             "seq": self.seq + 1,
@@ -1666,8 +1734,8 @@ class AimDocument:
             _, payload = self._normalize_payload(markup, expect_id=cid)
         if payload == before:
             raise _NoOpEdit("modify with identical content")
-        self._preflight_paint_upgrade(payload, lambda trial: trial._state.replace(cid, payload))
-        upgrade_batch = self._ensure_paint_version(payload, author=author, at=at)
+        self._preflight_feature_upgrade(payload, lambda trial: trial._state.replace(cid, payload))
+        upgrade_batch = self._ensure_feature_version(payload, author=author, at=at)
         self._state.replace(cid, payload)
         data = {
             "seq": self.seq + 1,
@@ -2083,13 +2151,16 @@ class AimDocument:
         action, target = data["action"], data["target"]
         if target == VERSION_TARGET:
             declared = data["after"]
-            if (
-                not REGISTRY.version_includes(declared, REGISTRY.paint_since)
-                and self._retains_literal_paint()
-            ):
+            blocking = {
+                floor
+                for floor in self._retained_floors()
+                if not REGISTRY.version_includes(declared, floor)
+            }
+            if blocking:
+                floor = max(blocking, key=lambda f: version_key(f) or ())
                 raise InvalidOperation(
                     f"cannot set the declared version to {declared}: retained document state "
-                    f"or history contains literal paint requiring spec {REGISTRY.paint_since}"
+                    f"or history contains {_floor_label(floor)} requiring spec {floor}"
                 )
             self._state.set_spec_version(declared)
             return
@@ -2200,10 +2271,10 @@ class AimDocument:
         at: str | None,
         pid: str | None = None,
     ) -> Proposal:
-        # a paint payload sitting in the pending lane is already markup an
+        # a gated payload sitting in the pending lane is already markup an
         # older validator rejects, so the proposal — not only its acceptance
         # — is what needs the version
-        upgrade_batch = self._ensure_paint_version(payload, author=author, at=at)
+        upgrade_batch = self._ensure_feature_version(payload, author=author, at=at)
         pid = pid or self._new_proposal_id()
         attrs: list[tuple[str, str | None]] = [("id", pid), ("data-action", action)]
         if anchor is not None:
@@ -2573,7 +2644,7 @@ class AimDocument:
                     ) from exc
             # §5.4 makes the amend itself unrecorded, but the version the
             # document conforms to is not the amend's to change silently
-            upgrade_batch = self._ensure_paint_version(payload, author=prop.author, at=at)
+            upgrade_batch = self._ensure_feature_version(payload, author=prop.author, at=at)
             _set_card_payload(card, payload)
             if upgrade_batch is not None:
                 card.set("data-batch", upgrade_batch)
@@ -2701,10 +2772,10 @@ class AimDocument:
         explanation: str | None = None,
         at: str | None = None,
     ) -> Event:
-        """Resolve a card after versioning every paint payload the event retains."""
-        paint_payload = _first_painted_payload(prop.payload_html, applied)
-        self._preflight_paint_upgrade(
-            paint_payload,
+        """Resolve a card after versioning every gated payload the event retains."""
+        gated_payload = _binding_payload(prop.payload_html, applied)
+        self._preflight_feature_upgrade(
+            gated_payload,
             lambda trial: trial._resolve(
                 trial.proposal(prop.id),
                 decision=decision,
@@ -2715,8 +2786,8 @@ class AimDocument:
                 at=at,
             ),
         )
-        upgrade_batch = self._ensure_paint_version(
-            paint_payload,
+        upgrade_batch = self._ensure_feature_version(
+            gated_payload,
             author=decided_by,
             at=at,
         )

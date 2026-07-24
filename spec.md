@@ -1,7 +1,9 @@
-# The `.aim` document format — specification v0.3
+# The `.aim` document format — specification v0.4
 
-**Status: v0.3 (draft; v0.2 plus literal per-element paint — validated
-inline `color`, `background-color` and `border-color`, §3.3).** This is the
+**Status: v0.4 (draft; v0.3 plus literal per-element typography — validated
+inline `font-size` and `font-family`, the `text-justify` alignment utility,
+and the `text-7xl`–`text-9xl` display sizes, §3.3; v0.3 added literal
+per-element paint).** This is the
 normative specification
 for `.aim`, an AI-native document format in which AI proposals and human
 accept/reject decisions are first-class file primitives. The reference
@@ -13,11 +15,11 @@ Maintained by the aimformat project. Licensed MIT, like everything in this
 repository. Contributions: see [`CONTRIBUTING.md`](CONTRIBUTING.md).
 
 **Versioning.** A document declares the spec version it targets in
-`<html data-aim-version="0.3">`. The spec follows SemVer with the 0.x
+`<html data-aim-version="0.4">`. The spec follows SemVer with the 0.x
 caveat: **every 0.x minor may break**; parsers MUST ignore unknown JSON
 fields (with `x_*` reserved for vendor extensions) and MUST treat unknown
 event kinds or elements as errors within the same minor version. The
-embedded stylesheet is versioned with the spec (`data-aim-css="0.3"`).
+embedded stylesheet is versioned with the spec (`data-aim-css="0.4"`).
 
 The key words MUST, MUST NOT, SHOULD, SHOULD NOT, and MAY are to be
 interpreted as described in RFC 2119. Sections marked *informative* define
@@ -101,7 +103,7 @@ see §4.4 for id rules):
 
 ```html
 <!doctype html>
-<html data-aim-version="0.3" lang="en">
+<html data-aim-version="0.4" lang="en">
 <head>
 <meta charset="utf-8">
 <title>Q3 Proposal — Acme GmbH</title>
@@ -111,7 +113,7 @@ see §4.4 for id rules):
 <script type="application/aim-doc+json">
 {"page":{"margins":{"bottom":"15mm","left":"15mm","right":"15mm","top":"15mm"},"orientation":"portrait","size":"A4"}}
 </script>
-<style data-aim-css="0.3">/* machine-managed stylesheet, §3.4 */</style>
+<style data-aim-css="0.4">/* machine-managed stylesheet, §3.4 */</style>
 <style data-aim-theme>:root{--aim-brand-1:#1a73e8}</style>
 </head>
 <body>
@@ -208,7 +210,7 @@ The canonical note for this spec version:
 
 ```html
 <!--
-aim-note: This file is an AIM document (open format, v0.3) — valid HTML plus
+aim-note: This file is an AIM document (open format, v0.4) — valid HTML plus
 chunk identity, a pending-suggestions lane, and an edit history.
 Agent docs: https://aimformat.com/llms.txt
 The reliable way to edit this file is the `aimformat` tooling, which manages
@@ -269,7 +271,7 @@ utilities. Arbitrary-value classes (`w-[347px]`) are invalid. Rationale:
 finiteness makes one static stylesheet possible and eliminates cross-model
 drift.
 
-### 3.3 Validated inline styles: geometry and paint
+### 3.3 Validated inline styles: geometry, paint, and typography
 
 `style=""` carries values that are **continuous or local to one element**,
 restricted to a closed registry of properties *and* per-property value
@@ -280,8 +282,9 @@ grammars (Appendix A.3). The three-way rule:
 - **document-wide constants** → theme slots (§3.5).
 
 The whitelist is `left, top, width, height, transform, z-index` (geometry)
-plus `color, background-color, border-color` (paint), in that canonical
-order. Slide canvas size is expressed the same way
+plus `color, background-color, border-color` (paint) and
+`font-size, font-family` (typography), in that canonical order. Slide
+canvas size is expressed the same way
 (`<aim-slide style="width:960px; height:540px">`).
 
 **Paint values are literal sRGB, spelled `#rrggbb` in lowercase** — nothing
@@ -307,8 +310,33 @@ other, and colouring one element never requires touching a theme slot:
 <h2 style="color:#ff69b4">This heading, this colour, nothing else</h2>
 ```
 
-**Cascade is native CSS, and normative.** Inline paint outranks every class.
-`color` inherits; `background-color` and `border-color` do not.
+**Typography values are literal and minimal** (since v0.4). `font-size`
+takes a positive point length (`11pt`, `10.5pt`) — points only, no px/rem/%,
+no keywords. `font-family` takes a plain stack string in the same grammar
+as the theme font-stack slots (letters, digits, spaces, commas, apostrophes,
+hyphens; Appendix A.3) — no quoting beyond the apostrophe, no `var()`, no
+`!important`.
+
+**Literal typography and theme typography are different meanings, not two
+spellings** — the same duality as paint. The role classes
+(`font-heading`/`font-body`/`font-mono`) say *follow this document's face
+for that role*; a literal `font-family` says *this face, here*. The type
+scale (`text-xs`…`text-9xl`) is the document's rhythm; a literal
+`font-size` is an exact, local requirement — a form's 8pt legalese, an
+imported document's authored sizes. Neither is canonicalized into the
+other. Each type-scale step also carries a **normative point equivalent**
+(Appendix A.2) so point-based exporters agree on what a step means; the
+equivalence is rem × 12.
+
+```html
+<p class="font-mono">Follows the document's mono face</p>
+<p style="font-family:'Courier New'">This paragraph, this face, nothing else</p>
+<h2 style="font-size:26pt">This heading, this size, nothing else</h2>
+```
+
+**Cascade is native CSS, and normative.** Inline paint and typography
+outrank every class. `color`, `font-size` and `font-family` inherit;
+`background-color` and `border-color` do not.
 `border-color` never *creates* a border — it recolours one supplied by a
 border utility or by the stylesheet's own element layer (`hr`,
 `blockquote`, `th`/`td`), and paints nothing on an element that has none.
@@ -335,7 +363,7 @@ remains valid; renderers and exporters read each slide's own declared size.
 One static stylesheet per spec minor version — an element base layer,
 every registered utility, theme-slot defaults, and the `aim-*` chrome
 (slide canvas framing/scaling, proposal cards). It is embedded by default
-(`<style data-aim-css="0.3">`) so documents are self-contained, offline,
+(`<style data-aim-css="0.4">`) so documents are self-contained, offline,
 and archival; it is **machine-managed and derived**: tools regenerate it
 freely, and it is excluded from content hashing. Documents SHOULD embed it;
 a document without it still conforms but degrades at the raw tier.
@@ -402,19 +430,25 @@ exists to signal.
 
 That acceptance does not make newer syntax valid under an older declaration.
 A document declared below v0.3 that retains literal paint in its live body,
-pending payloads, or history payloads fails S032 until it records the upgrade.
-A writer MUST refuse an inverse version edit that would create that state;
-time travel may return a v0.2 document only when it also drops every later
-paint-bearing event.
+pending payloads, or history payloads fails S032 until it records the
+upgrade; one declared below v0.4 that retains literal typography — the
+inline properties above or a class Appendix A marks *since 0.4* — fails
+S033 likewise. A writer MUST refuse an inverse version edit that would
+create either state; time travel may return an older document only when it
+also drops every later event bearing the gated constructs.
 
-Introducing markup a document's declared version does not define — as of
-v0.3, adding paint to a v0.2 document — is a **state change and MUST be
-recorded**. `data-aim-version` sits on the `<html>` open tag, which
-`doc_hash` covers (§11.4), so bumping it silently would invalidate every
-checkpoint recorded under the old line, while leaving it would declare a
-version the document no longer conforms to. Writers therefore mutate the
-attribute AND append the matching event, addressed to the reserved target
-`aim:version` (§6.5), with the old and new versions as `before`/`after`.
+Introducing markup a document's declared version does not define — adding
+paint to a v0.2 document, or literal typography to a v0.3 one — is a
+**state change and MUST be recorded**. `data-aim-version` sits on the
+`<html>` open tag, which `doc_hash` covers (§11.4), so bumping it silently
+would invalidate every checkpoint recorded under the old line, while
+leaving it would declare a version the document no longer conforms to.
+Writers therefore mutate the attribute AND append the matching event,
+addressed to the reserved target `aim:version` (§6.5), with the old and new
+versions as `before`/`after`. The upgrade raises the declaration to the
+**construct's own floor** — paint declares 0.3, typography 0.4 — not to
+the newest version the writer implements: declaring more than the document
+uses would shrink its audience for no reason.
 The upgrade event and the edit that first needs the newer syntax share one
 batch: they are one editing intention. Replay applies the reserved event to
 the declared version as well as the body, so the old value and old hashes
@@ -890,11 +924,11 @@ embed the generated one):
 
 ```aim
 <!doctype html>
-<html data-aim-version="0.3" lang="en">
+<html data-aim-version="0.4" lang="en">
 <head>
 <meta charset="utf-8">
 <title>Minimal</title>
-<style data-aim-css="0.3">
+<style data-aim-css="0.4">
 </style>
 </head>
 <body>
@@ -913,11 +947,11 @@ resolution and a checkpoint in the log:
 
 ```aim
 <!doctype html>
-<html data-aim-version="0.3" lang="en">
+<html data-aim-version="0.4" lang="en">
 <head>
 <meta charset="utf-8">
 <title>Pending lane</title>
-<style data-aim-css="0.3">
+<style data-aim-css="0.4">
 </style>
 </head>
 <body>
@@ -928,7 +962,7 @@ resolution and a checkpoint in the log:
 <script type="application/aim-history+jsonl">
 {"action":"add","after":"<p data-aim=\"c1\">The first wording.<\/p>","anchor":{"after":null,"container":"body"},"author":{"id":"ada","type":"human"},"batch":"b1","kind":"direct_edit","seq":1,"t":"2026-07-07T12:00:00Z","target":"c1"}
 {"action":"modify","applied":"<p data-aim=\"c1\">The accepted wording.<\/p>","batch":"b2","before":"<p data-aim=\"c1\">The first wording.<\/p>","decided_by":{"id":"ada","type":"human"},"decision":"accepted","kind":"resolution","proposal":"p-0","proposed":"<p data-aim=\"c1\">The acceptable wording.<\/p>","proposed_at":"2026-07-07T12:01:00Z","proposed_by":{"model":"model-id","type":"agent"},"seq":2,"t":"2026-07-07T12:02:00Z","target":"c1"}
-{"doc_hash":"sha256:18d14bde6f9731906d08448e755af6ec09914a11614fa7b8b334e094c8fe8bf3","kind":"checkpoint","label":"reviewed","seq":3,"t":"2026-07-07T12:03:00Z"}
+{"doc_hash":"sha256:852946f7b4648469cefaebe0e577678e14fd902db8f86fb4472986b90145a5d7","kind":"checkpoint","label":"reviewed","seq":3,"t":"2026-07-07T12:03:00Z"}
 </script>
 </body>
 </html>
@@ -939,11 +973,11 @@ chunks:
 
 ```aim
 <!doctype html>
-<html data-aim-version="0.3" lang="en">
+<html data-aim-version="0.4" lang="en">
 <head>
 <meta charset="utf-8">
 <title>One slide</title>
-<style data-aim-css="0.3">
+<style data-aim-css="0.4">
 </style>
 </head>
 <body>
@@ -999,15 +1033,17 @@ stylesheet. Do not edit it by hand.*
 
 ### A.2 Class vocabulary
 
-- **Type scale** `text-*`: `xs` `sm` `base` `lg` `xl` `2xl` `3xl` `4xl` `5xl` `6xl`
+- **Type scale** `text-*`: `xs` `sm` `base` `lg` `xl` `2xl` `3xl` `4xl` `5xl` `6xl` `7xl` `8xl` `9xl`
+- **Type scale point equivalents** (normative for point-based exporters; rem × 12): `xs` `sm` `base` `lg` `xl` `2xl` `3xl` `4xl` `5xl` `6xl` `7xl` `8xl` `9xl`
 - **Weights** `font-*`: `normal` `medium` `semibold` `bold`
 - **Leading** `leading-*`: `tight` `snug` `normal` `relaxed`
-- **Alignment** `text-*`: `left` `center` `right`
+- **Alignment** `text-*`: `left` `center` `right` `justify`
+- **Since a later spec version** (gated like inline typography, S033): `text-justify` `text-7xl` `text-8xl` `text-9xl`
 - **Palette** for `text-` / `bg-` / `border-`: `gray` (50, 100, 200, 300, 400, 500, 600, 700, 800, 900); `red` (50, 600); `green` (50, 600); `amber` (50, 600); plus theme-backed `brand-1…4`. White is available only as `text-white` and `bg-white`.
 - **Spacing** `m`, `mt`, `mb`, `ml`, `mr`, `mx`, `my`, `p`, `pt`, `pb`, `pl`, `pr`, `px`, `py` × scale `0` `1` `2` `3` `4` `6` `8` `10` `12` `16`
 - **Singles**: `bg-white` `border` `border-b` `border-t` `font-body` `font-heading` `font-mono` `italic` `line-through` `list-decimal` `list-disc` `list-none` `rounded` `rounded-full` `rounded-lg` `rounded-md` `shadow` `text-white` `tracking-tight` `tracking-wide` `underline` `uppercase`
 
-Total registered utilities: **243**.
+Total registered utilities: **247**.
 
 ### A.3 Inline style properties
 
@@ -1022,6 +1058,10 @@ Total registered utilities: **243**.
 | `color` | `^#[0-9a-f]{6}$` |
 | `background-color` | `^#[0-9a-f]{6}$` |
 | `border-color` | `^#[0-9a-f]{6}$` |
+| `font-size` | `^\d+(\.\d+)?pt$` |
+| `font-family` | `^[A-Za-z0-9 ,'\-]+$` |
+
+Literal paint (`color` `background-color` `border-color`) is since spec 0.3 (S032); literal typography (`font-size` `font-family`) since 0.4 (S033).
 
 ### A.4 Theme slots
 
@@ -1098,6 +1138,7 @@ Total registered utilities: **243**.
 | S030 | warning | more than one aim-note comment in the head |
 | S031 | error | aim-slide marked as a chunk (slides are containers) |
 | S032 | error | literal paint requires a supporting spec version |
+| S033 | error | literal typography requires a supporting spec version |
 | V001 | error | element not allowed in the asset registry |
 | V002 | error | element outside the vocabulary |
 | V003 | error | attribute not allowed on this element |
@@ -1175,11 +1216,11 @@ Total registered utilities: **243**.
 
 ## Appendix C. Future extensions (informative)
 
-Planned but deliberately outside v0.3: cell-level table addressing and
+Planned but deliberately outside v0.4: cell-level table addressing and
 column operations; pagination furniture (headers/footers, page-number
 fields, per-section page setups carried on the break); slide
 masters/layouts and transitions; an `.aimx` ZIP container for asset-heavy
-documents; multi-writer merge semantics (v0.3 is single-writer; divergence
+documents; multi-writer merge semantics (v0.4 is single-writer; divergence
 is detectable via payload equality and checkpoint hashes); signing on top
 of the hash-anchored history; media-type registration; fonts as assets; an
 `aim open` reference implementation.

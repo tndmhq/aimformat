@@ -151,17 +151,28 @@ class _Linter:
                 f"document targets spec {version}, this tool implements "
                 f"{REGISTRY.spec_version} — rules it does not know are unchecked",
             )
-        if (
-            version is not None
-            and not REGISTRY.version_includes(version, REGISTRY.paint_since)
-            and self._contains_literal_paint()
+        if version is not None and not REGISTRY.version_includes(
+            version, REGISTRY.typography_since
         ):
-            self.add(
-                "S032",
-                ERROR,
-                f"literal paint requires spec {REGISTRY.paint_since} or newer, "
-                f"but the document declares {version}",
-            )
+            # only documents older than the newest gated era can violate a
+            # gate, so current-version files skip the retained-markup scan
+            floors = self._retained_feature_floors()
+            if REGISTRY.paint_since in floors and not REGISTRY.version_includes(
+                version, REGISTRY.paint_since
+            ):
+                self.add(
+                    "S032",
+                    ERROR,
+                    f"literal paint requires spec {REGISTRY.paint_since} or newer, "
+                    f"but the document declares {version}",
+                )
+            if REGISTRY.typography_since in floors:
+                self.add(
+                    "S033",
+                    ERROR,
+                    f"literal typography requires spec {REGISTRY.typography_since} "
+                    f"or newer, but the document declares {version}",
+                )
         head = self.state.head
         if not head.find(lambda e: e.tag == "meta" and e.get("charset") == "utf-8"):
             self.add("S003", ERROR, '<head> must declare <meta charset="utf-8">')
@@ -299,20 +310,20 @@ class _Linter:
             if name.startswith("on"):
                 self.add("X002", ERROR, f"event-handler attribute {name!r} is forbidden", where)
 
-    def _contains_literal_paint(self) -> bool:
-        """Paint anywhere retained by the file needs the paint-era version.
+    def _retained_feature_floors(self) -> set[str]:
+        """Gated-construct floors retained anywhere in the file (spec §3.3).
 
         The body serialization covers live constructs and pending templates.
-        Raw history scripts are inert DOM text, so inspect every markup field
-        that history retains separately as well.
+        Raw history scripts are inert DOM text, so every markup field that
+        history retains is inspected separately as well.
         """
         try:
-            return self.doc._retains_literal_paint()
+            return self.doc._retained_floors()
         except (HistoryError, ParseError):
             # The dedicated history pass reports malformed JSONL as H002 and
-            # malformed retained markup as H006. Neither can establish paint
-            # here, and neither may short-circuit lint as generic S000.
-            return False
+            # malformed retained markup as H006. Neither can establish a
+            # floor here, and neither may short-circuit lint as generic S000.
+            return set()
 
     def body_sections(self) -> None:
         seen: dict[int, int] = {}

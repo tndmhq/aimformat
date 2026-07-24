@@ -3,6 +3,28 @@
 All notable changes to the spec and the reference toolkit. The package
 version tracks the spec version it implements (0.x minors may break).
 
+## 0.4.0 — unreleased
+
+- **Literal per-element typography (spec §3.3)** — `style` now carries
+  `font-size` (points only, `^\d+(\.\d+)?pt$`) and `font-family` (a plain
+  stack string in the theme font-stack grammar) alongside geometry and
+  paint. px/rem/%, keywords, quotes beyond the apostrophe, `var()` and
+  `!important` all fail V008; unregistered properties still fail V007.
+  Same duality as paint: the role classes (`font-heading/body/mono`) and
+  the type scale say *follow this document's rhythm*; a literal says
+  *this face / this size, here*. Inline typography outranks every class;
+  `font-size` and `font-family` inherit natively.
+- **`text-justify`** joins the alignment utilities, and the type scale
+  gains `text-7xl/8xl/9xl` display steps. Each type-scale step now carries
+  a **normative point equivalent** (rem × 12, Appendix A.2) so point-based
+  exporters agree on what a step means.
+- **S033** gates the new constructs the way S032 gates paint: a document
+  declared below 0.4 that retains literal typography (or a since-gated
+  class) anywhere in body, pending payloads, or history must record the
+  version upgrade. Upgrades now raise the declaration to the **construct's
+  own floor** — paint upgrades a 0.2 document to 0.3, typography to 0.4 —
+  not to the newest version the writer implements.
+
 ## 0.3.0 — 2026-07-24
 
 Everything below shipped as 0.3.0; the 0.2.1 line was never released, and

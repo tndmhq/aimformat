@@ -1,7 +1,7 @@
 # .aim format reference (condensed)
 
 Normative source: [spec.md](https://github.com/tndmhq/aimformat/blob/main/spec.md)
-(v0.3). This is the working subset an agent needs while editing.
+(v0.4). This is the working subset an agent needs while editing.
 
 ## Anatomy
 
@@ -10,14 +10,14 @@ current document before any blob:
 
 ```
 <!doctype html>
-<html data-aim-version="0.3" lang="en">
+<html data-aim-version="0.4" lang="en">
 <head>
   <meta charset="utf-8">
   <!--\naim-note: … -->                        ← agent note (§2.5)
   <title>…</title>
   <script type="application/aim-meta+json">…   ← summary + toc cache
   <script type="application/aim-doc+json">…    ← page setup (aim:doc)
-  <style data-aim-css="0.3">…                  ← machine-managed stylesheet
+  <style data-aim-css="0.4">…                  ← machine-managed stylesheet
   <style data-aim-theme>:root{--aim-brand-1:…} ← theme slots
 </head>
 <body>
@@ -72,31 +72,38 @@ so substring checks for structural markers never false-positive on it.
 
 - **inline `style`** — one element's own value. Closed property list, closed
   grammar per property: `left/top/width/height/transform/z-index` (px, and
-  the `transform` functions) plus `color/background-color/border-color`,
-  whose only legal spelling is lowercase six-digit sRGB (`#ff69b4`). No
-  named colours, `#fff`, `rgb()`, `var()`, `transparent` or `!important`
-  (V008); an unregistered property is V007. Remove the declaration to clear.
+  the `transform` functions), `color/background-color/border-color`,
+  whose only legal spelling is lowercase six-digit sRGB (`#ff69b4`), plus
+  `font-size` (points only: `11pt`) and `font-family` (a plain stack
+  string: `Georgia, serif`). No named colours, `#fff`, `rgb()`, `var()`,
+  `transparent`, px/rem sizes or `!important` (V008); an unregistered
+  property is V007. Remove the declaration to clear.
 - **class** — a reusable role from the closed utility vocabulary
   (`text-brand-2`, `text-red-600`, `bg-amber-50`, `border`).
 - **theme slot** — a document-wide constant (`--aim-brand-1…4`), edited via
   `aim:theme`.
 
-**Colour a single element with the literal, not the theme.** A slot is
-document-global: changing it repaints every element using it, and every
+**Style a single element with the literal, not the theme.** A slot is
+document-global: changing it restyles every element using it, and every
 link. You are usually looking at part of a document, so a slot edit can
 change elements you were never shown — a literal cannot. Exact/local
-request → inline paint, one chunk edit. Reusable role → class. Genuinely
-document-wide ("our brand colour is now teal") → theme edit, and say in the
-explanation that it repaints everything using that slot. Ambiguous → literal.
+request → inline paint or typography, one chunk edit. Reusable role →
+class (`text-brand-2`, `font-mono`, `text-2xl`). Genuinely document-wide
+("our brand colour is now teal", "body face is Georgia") → theme edit, and
+say in the explanation that it restyles everything using that slot.
+Ambiguous → literal.
 
-Cascade is native CSS: inline paint beats any class on the same element (so
-you never need to strip a colour class to override it), `color` inherits,
-`background-color` and `border-color` do not, and `border-color` recolours
-an existing border rather than creating one.
+Cascade is native CSS: inline paint/typography beats any class on the same
+element (so you never need to strip a colour or size class to override it),
+`color`, `font-size` and `font-family` inherit, `background-color` and
+`border-color` do not, and `border-color` recolours an existing border
+rather than creating one.
 
-Paint in a pre-0.3 document upgrades its `data-aim-version`; the tooling
-records that as a history event so earlier checkpoints still verify. Never
-edit `data-aim-version` by hand.
+Paint in a pre-0.3 document — or literal typography (`font-size`,
+`font-family`, `text-justify`, `text-7xl`+) in a pre-0.4 one — upgrades its
+`data-aim-version` to that construct's floor; the tooling records that as a
+history event so earlier checkpoints still verify. Never edit
+`data-aim-version` by hand.
 
 ## Proposals (the pending lane)
 
