@@ -1125,6 +1125,9 @@ class _Exporter:
         )
 
     def emit_figure(self, el: Element) -> None:
+        # emit_block routes figures here before its generic alignment code,
+        # so the figure's own alignment class lands on the picture paragraph
+        align = _alignment_of(el)
         img = el.find(lambda e: e.tag == "img")
         emitted = False
         if img is not None:
@@ -1134,12 +1137,16 @@ class _Exporter:
                 try:
                     blob = base64.b64decode(m.group(1))
                     self.out.add_picture(io.BytesIO(blob), width=self._figure_width(el, img))
+                    if align is not None:
+                        self.out.paragraphs[-1].alignment = align
                     emitted = True
                 except Exception:
                     emitted = False
             if not emitted:
                 alt = img.get("alt") or "image"
                 para = self.out.add_paragraph()
+                if align is not None:
+                    para.alignment = align
                 spec = {"text": f"[image: {alt}]", "italic": True, **_ink(self.paint.of(img))}
                 _apply_runs(para, [spec])
                 emitted = True

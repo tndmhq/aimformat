@@ -227,9 +227,13 @@ class _Converter:
             elif _IMG_ONLY.fullmatch(inline):
                 # an image standing alone in its paragraph is a figure — the
                 # system idiom (from_docling, the editor's atomic figure
-                # nodes, and to_docx's figure exporter all speak <figure>)
+                # nodes, and to_docx's figure exporter all speak <figure>) —
+                # and it keeps the paragraph's alignment like any block
                 self._flush_items()
-                self._blocks.extend(f"<figure>{img}</figure>" for img in _IMG_TAG.findall(inline))
+                attr = self._class_attr(effective)
+                self._blocks.extend(
+                    f"<figure{attr}>{img}</figure>" for img in _IMG_TAG.findall(inline)
+                )
             else:
                 self._flush_items()
                 self._blocks.append(self._block("p", inline, effective))

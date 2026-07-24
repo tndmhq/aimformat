@@ -608,6 +608,31 @@ class TestImageParagraphs:
         aim.to_docx(a, str(path))
         assert "data:image/" in convert_docx(str(path)).dumps(), "image lost on export"
 
+    def test_centered_image_keeps_alignment_both_ways(self, tmp_path):
+        # a centered logo is the classic Word idiom: the figure carries the
+        # class on import, and the exporter aligns the picture paragraph
+        from docx.enum.text import WD_ALIGN_PARAGRAPH
+        from PIL import Image as PILImage
+
+        doc = Document()
+        img = io.BytesIO()
+        PILImage.new("RGB", (12, 12), (10, 120, 40)).save(img, "PNG")
+        img.seek(0)
+        doc.add_picture(img)
+        doc.paragraphs[-1].alignment = WD_ALIGN_PARAGRAPH.CENTER
+        out = io.BytesIO()
+        doc.save(out)
+        out.seek(0)
+        a = convert_docx(out)
+        assert re.search(r'<figure[^>]*class="text-center"[^>]*><img', a.dumps())
+        path = tmp_path / "centered.docx"
+        aim.to_docx(a, str(path))
+        d = Document(str(path))
+        pic_para = next(p for p in d.paragraphs if p._p.findall(".//" + qn("w:drawing")))
+        assert pic_para.alignment == WD_ALIGN_PARAGRAPH.CENTER
+        # and the re-import keeps the class
+        assert re.search(r'<figure[^>]*class="text-center"', convert_docx(str(path)).dumps())
+
 
 class TestMergedCells:
     def test_vertical_merge_becomes_rowspan_alongside_gridspan(self):
