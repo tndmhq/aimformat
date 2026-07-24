@@ -91,6 +91,7 @@ _PKG_REL_NS = "http://schemas.openxmlformats.org/package/2006/relationships"
 _W_NS = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
 _M_NS = "http://schemas.openxmlformats.org/officeDocument/2006/math"
 _W14_NS = "http://schemas.microsoft.com/office/word/2010/wordml"
+_MC_NS = "http://schemas.openxmlformats.org/markup-compatibility/2006"
 
 #: Word's fixed highlight palette (ST_HighlightColor) as lowercase hex.
 _HIGHLIGHTS = {
@@ -567,22 +568,44 @@ def paragraph_checkbox(elem: Any) -> str | None:
     return "☑" if val in ("1", "true") else "☐"
 
 
+def _effective_descendants(elem: Any) -> Any:
+    """Descendants of *elem* with Markup Compatibility (MCE) applied: inside
+    an ``mc:AlternateContent``, exactly one branch is read — the first
+    ``mc:Choice`` (the richer representation), else the ``mc:Fallback``.
+    Word emits every inserted shape as AlternateContent carrying the *same*
+    ``w:txbxContent`` in both a DrawingML Choice and a VML Fallback, so a
+    naive ``.//`` search sees all duplicated content twice."""
+    for child in elem:
+        if child.tag == f"{{{_MC_NS}}}AlternateContent":
+            branch = child.find(f"{{{_MC_NS}}}Choice")
+            if branch is None:
+                branch = child.find(f"{{{_MC_NS}}}Fallback")
+            if branch is not None:
+                yield from _effective_descendants(branch)
+            continue
+        yield child
+        yield from _effective_descendants(child)
+
+
 def paragraph_math_text(elem: Any) -> str:
     """Any OMML equations in the paragraph as their literal text (``m:t``
     joined). A text-only fallback — .aim carries no math markup — so an
     equation survives as its characters. Ordering is approximate for an
     equation interleaved mid-line (it trails the paragraph's run text)."""
-    return "".join(t.text or "" for t in elem.findall(f".//{{{_M_NS}}}t"))
+    m_t = f"{{{_M_NS}}}t"
+    return "".join(t.text or "" for t in _effective_descendants(elem) if t.tag == m_t)
 
 
 def textbox_paragraphs(elem: Any) -> list[Any]:
     """dpc Paragraphs parsed from every textbox in this paragraph
-    (``w:txbxContent``, covering DrawingML and VML), deduped by identity so
-    a nested textbox is not counted twice. One level deep: a paragraph
-    emitted from here is not itself re-scanned for textboxes."""
+    (``w:txbxContent``, covering DrawingML and VML — one representation per
+    shape, MCE-resolved), deduped by identity so a nested textbox is not
+    counted twice. One level deep: a paragraph emitted from here is not
+    itself re-scanned for textboxes."""
+    txbx_tag = f"{{{_W_NS}}}txbxContent"
     seen: set[int] = set()
     out: list[Any] = []
-    for txbx in elem.findall(f".//{{{_W_NS}}}txbxContent"):
+    for txbx in (c for c in _effective_descendants(elem) if c.tag == txbx_tag):
         for p in txbx.findall(f".//{{{_W_NS}}}p"):
             if id(p) in seen:
                 continue

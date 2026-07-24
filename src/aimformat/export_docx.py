@@ -164,7 +164,11 @@ def _run_typography(el: Element) -> dict:
             except ValueError:
                 pass
         elif prop == "font-family" and val:
-            out["font_name"] = val
+            # the grammar allows a stack ("Segoe UI, sans-serif"); Word run
+            # properties name exactly one face, so take the first family
+            family = _first_family(val)
+            if family:
+                out["font_name"] = family
     return out
 
 

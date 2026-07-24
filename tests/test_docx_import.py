@@ -367,6 +367,36 @@ class TestTextbox:
         # the textbox line sits between its anchor and the following paragraph
         assert texts == ["Before", "Anchor", "TextboxLine", "After"]
 
+    def test_alternate_content_textbox_emits_once(self):
+        # Word wraps every inserted shape in mc:AlternateContent with the SAME
+        # w:txbxContent in both the DrawingML Choice and the VML Fallback —
+        # MCE says read exactly one branch, so the text must appear once.
+        mc = "http://schemas.openxmlformats.org/markup-compatibility/2006"
+        wps = "http://schemas.microsoft.com/office/word/2010/wordprocessingShape"
+        doc = Document()
+        anchor = doc.add_paragraph("Anchor")
+        run = parse_xml(f'<w:r xmlns:w="{_W}"/>')
+        run.append(
+            parse_xml(
+                f'<mc:AlternateContent xmlns:mc="{mc}" xmlns:w="{_W}" '
+                f'xmlns:wps="{wps}" xmlns:v="urn:schemas-microsoft-com:vml">'
+                '<mc:Choice Requires="wps"><wps:wsp><wps:txbx>'
+                "<w:txbxContent><w:p><w:r><w:t>BoxLine</w:t></w:r></w:p>"
+                "</w:txbxContent></wps:txbx></wps:wsp></mc:Choice>"
+                "<mc:Fallback><v:shape><v:textbox>"
+                "<w:txbxContent><w:p><w:r><w:t>BoxLine</w:t></w:r></w:p>"
+                "</w:txbxContent></v:textbox></v:shape></mc:Fallback>"
+                "</mc:AlternateContent>"
+            )
+        )
+        anchor._p.append(run)
+        out = io.BytesIO()
+        doc.save(out)
+        out.seek(0)
+        imported = convert_docx(out)
+        texts = [c.text for c in imported.chunks]
+        assert texts == ["Anchor", "BoxLine"]
+
 
 class TestStrictOoxml:
     @staticmethod
@@ -515,6 +545,19 @@ class TestExportSymmetry:
             r.font.size.pt for p in d.paragraphs for r in p.runs if r.text == "Big" and r.font.size
         ]
         assert sizes == [18.0]
+
+    def test_font_stack_exports_its_first_family(self, tmp_path):
+        # the inline grammar allows a stack; Word run props name one face
+        doc = aim.new_document(title="Stack")
+        doc.add_chunk(
+            "<p><span style=\"font-family:'Segoe UI', Arial, sans-serif\">S</span></p>",
+            author=aim.external("t"),
+        )
+        out = tmp_path / "stack.docx"
+        aim.to_docx(doc, str(out))
+        d = Document(str(out))
+        names = [r.font.name for p in d.paragraphs for r in p.runs if r.text == "S"]
+        assert names == ["Segoe UI"]
 
     def test_inline_typography_beats_the_class_on_the_same_run(self, tmp_path):
         # inline font-size wins over a type-scale class (CSS specificity)
