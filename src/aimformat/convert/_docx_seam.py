@@ -82,6 +82,7 @@ __all__ = [
     "resolve_color",
     "shading_hex",
     "symbol_char",
+    "table_style_looks",
     "textbox_paragraphs",
     "picture_relationships",
     "twips_to_mm",
@@ -227,6 +228,9 @@ class ParsedDocx:
     content: list[tuple[Any, Any]]  # (dpc item, source w:p/w:tbl element) in body order
     resolver: StyleResolver
     numbering: Any | None
+    #: styleId → conditional look (shaded header row, banded rows). Most
+    #: Word tables carry their whole appearance here, not on the cells.
+    table_looks: dict[str, dict[str, dict[str, str]]]
     #: numId → the instance whose counters it must share. Word clones a
     #: numbering instance whenever a list is interrupted, so one visible
     #: list can span several numIds that all point at the same abstract
@@ -269,6 +273,7 @@ def parse_docx(source: str | bytes | BinaryIO) -> ParsedDocx:
         content=content,
         resolver=resolver,
         numbering=numbering,
+        table_looks=table_style_looks(zf),
         num_alias=_num_aliases(numbering),
         numbering_tracker=NumberingTracker(numbering) if numbering is not None else None,
         hyperlinks=hyperlinks,
@@ -431,6 +436,86 @@ def _load_images(zf: zipfile.ZipFile, targets: dict[str, str]) -> dict[str, tupl
 def data_uri(image: tuple[bytes, str]) -> str:
     raw, mime = image
     return f"data:{mime};base64,{base64.b64encode(raw).decode('ascii')}"
+
+
+#: The conditional formats a table style can define, in the order Word
+#: applies them (later wins). Corner conditions and vertical banding are
+#: deliberately out of scope: they need the full cell-position algebra and
+#: contribute far less to how a table reads.
+_TABLE_CONDITIONS = ("wholeTable", "band2Horz", "band1Horz", "lastRow", "firstRow")
+
+
+def table_style_looks(zf: zipfile.ZipFile) -> dict[str, dict[str, dict[str, str]]]:
+    """``{styleId: {condition: {"fill": "#rrggbb", "color": "#rrggbb"}}}``.
+
+    Word's built-in table styles ("Medium Shading 1 Accent 1" and friends)
+    carry the whole look of a table — the shaded header row, the banded body
+    rows, the white header text — in ``w:tblStylePr`` conditional formats.
+    Most real tables use one INSTEAD of shading cells directly, so reading
+    only ``w:tcPr/w:shd`` (as the typed model offers) renders every such
+    table flat and unstyled. ``basedOn`` is followed so derived styles
+    inherit their parent's look.
+    """
+    try:
+        root = etree.fromstring(zf.read("word/styles.xml"))
+    except (KeyError, etree.XMLSyntaxError):
+        return {}
+    w = f"{{{_W_NS}}}"
+    raw: dict[str, dict[str, dict[str, str]]] = {}
+    based: dict[str, str] = {}
+
+    def _look(scope: Any) -> dict[str, str]:
+        out: dict[str, str] = {}
+        shd = scope.find(f".//{w}shd")
+        if shd is not None:
+            fill = (shd.get(f"{w}fill") or "").strip()
+            if re.fullmatch(r"[0-9A-Fa-f]{6}", fill):
+                out["fill"] = f"#{fill.lower()}"
+        color = scope.find(f".//{w}rPr/{w}color")
+        if color is not None:
+            val = (color.get(f"{w}val") or "").strip()
+            if re.fullmatch(r"[0-9A-Fa-f]{6}", val):
+                out["color"] = f"#{val.lower()}"
+        return out
+
+    for style in root.iter(f"{w}style"):
+        if style.get(f"{w}type") != "table":
+            continue
+        style_id = style.get(f"{w}styleId")
+        if not style_id:
+            continue
+        parent = style.find(f"{w}basedOn")
+        if parent is not None and parent.get(f"{w}val"):
+            based[style_id] = parent.get(f"{w}val")
+        conds: dict[str, dict[str, str]] = {}
+        # the style's own tblPr/rPr is the wholeTable default
+        whole = {k: v for k, v in _look(style).items()}
+        for spr in style.findall(f"{w}tblStylePr"):
+            kind = spr.get(f"{w}type")
+            if kind in _TABLE_CONDITIONS:
+                look = _look(spr)
+                if look:
+                    conds[kind] = look
+        # _look(style) searched the whole subtree, so strip what belongs to a
+        # condition rather than to the table as a whole
+        own = style.find(f"{w}tblPr")
+        conds["wholeTable"] = _look(own) if own is not None else whole
+        raw[style_id] = {k: v for k, v in conds.items() if v}
+
+    resolved: dict[str, dict[str, dict[str, str]]] = {}
+    for style_id in raw:
+        merged: dict[str, dict[str, str]] = {}
+        chain, seen = [], set()
+        cur: str | None = style_id
+        while cur and cur in raw and cur not in seen:
+            seen.add(cur)
+            chain.append(cur)
+            cur = based.get(cur)
+        for ancestor in reversed(chain):  # parent first, child overrides
+            for cond, look in raw[ancestor].items():
+                merged.setdefault(cond, {}).update(look)
+        resolved[style_id] = merged
+    return resolved
 
 
 def _parse_theme(zf: zipfile.ZipFile) -> DocxTheme:
