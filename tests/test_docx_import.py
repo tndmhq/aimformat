@@ -466,3 +466,67 @@ class TestTableStyling:
         assert _cell_width_px({"type": "pct", "w": 5000}) is None
         assert _cell_width_px({"type": "auto"}) is None
         assert _cell_width_px(None) is None
+
+
+# --------------------------------------------------------------------------
+# Card C: to_docx export symmetry (DOCX → aim → DOCX round-trip idempotency)
+# --------------------------------------------------------------------------
+
+
+class TestExportSymmetry:
+    def _roundtrip(self, tmp_path):
+        aim_doc = convert_docx(_styled_docx())
+        out = tmp_path / "roundtrip.docx"
+        aim.to_docx(aim_doc, str(out))
+        return Document(str(out))
+
+    def test_font_size_and_family_survive(self, tmp_path):
+        d = self._roundtrip(tmp_path)
+        faces = {
+            (r.font.name, r.font.size.pt if r.font.size else None)
+            for p in d.paragraphs
+            for r in p.runs
+            if r.text.strip()
+        }
+        assert ("Georgia", 18.0) in faces
+        assert ("Courier New", 9.0) in faces
+
+    def test_alignment_survives(self, tmp_path):
+        from docx.enum.text import WD_ALIGN_PARAGRAPH
+
+        got = {p.alignment for p in self._roundtrip(tmp_path).paragraphs if p.alignment is not None}
+        assert WD_ALIGN_PARAGRAPH.CENTER in got
+        assert WD_ALIGN_PARAGRAPH.JUSTIFY in got
+
+    def test_theme_fonts_reach_the_styles(self, tmp_path):
+        d = self._roundtrip(tmp_path)
+        # the source theme (Cambria body / Calibri headings) rides the styles
+        assert d.styles["Normal"].font.name == "Cambria"
+        assert d.styles["Heading 1"].font.name == "Calibri"
+
+    def test_type_scale_class_exports_to_points(self, tmp_path):
+        # text-2xl resolves through the normative pt table to 18pt
+        doc = aim.new_document(title="Scale")
+        doc.add_chunk('<p class="text-2xl">Big</p>', author=aim.external("t"))
+        out = tmp_path / "scale.docx"
+        aim.to_docx(doc, str(out))
+        d = Document(str(out))
+        sizes = [
+            r.font.size.pt for p in d.paragraphs for r in p.runs if r.text == "Big" and r.font.size
+        ]
+        assert sizes == [18.0]
+
+    def test_inline_typography_beats_the_class_on_the_same_run(self, tmp_path):
+        # inline font-size wins over a type-scale class (CSS specificity)
+        doc = aim.new_document(title="Override")
+        doc.add_chunk(
+            '<p><span class="text-2xl" style="font-size:30pt">X</span></p>',
+            author=aim.external("t"),
+        )
+        out = tmp_path / "override.docx"
+        aim.to_docx(doc, str(out))
+        d = Document(str(out))
+        sizes = [
+            r.font.size.pt for p in d.paragraphs for r in p.runs if r.text == "X" and r.font.size
+        ]
+        assert sizes == [30.0]
