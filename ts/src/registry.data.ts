@@ -33,7 +33,7 @@ export const STYLE_PROP_PATTERNS: Readonly<Record<string, RegExp>> = {
 };
 
 // The subset of STYLE_PROP_ORDER that carries literal paint (spec §3.3);
-// the rest is slide geometry.
+// the rest is slide geometry and literal typography.
 export const STYLE_PROP_PAINT: readonly string[] = ["color", "background-color", "border-color"];
 
 // First spec version whose style grammar includes literal paint.

@@ -312,7 +312,7 @@ aim-assets{display:none}
 <p data-aim="run">One <span style="color:#ff69b4">painted run</span> only.</p>
 <aim-slide data-aim-container="s1" style="width:960px; height:540px"><h2 data-aim="st" class="text-5xl" style="left:48px; top:32px; width:450px; color:#ff69b4">Slide title</h2><p data-aim="sb" style="left:48px; top:150px; width:600px; background-color:#fff1f7; border-color:#ff69b4">Body.</p></aim-slide>
 <aim-proposals>
-<aim-proposal id="p-3hc6lktp" data-action="modify" data-at="2026-07-17T10:00:10Z" data-author="agent" data-author-model="model-x" data-batch="b2" data-explanation="Green tint instead." data-for="tint"><template><p data-aim="tint" style="background-color:#f0fdf4">Tinted paragraph.</p></template></aim-proposal>
+<aim-proposal id="p-gtq9cpan" data-action="modify" data-at="2026-07-17T10:00:10Z" data-author="agent" data-author-model="model-x" data-batch="b2" data-explanation="Green tint instead." data-for="tint"><template><p data-aim="tint" style="background-color:#f0fdf4">Tinted paragraph.</p></template></aim-proposal>
 </aim-proposals>
 <script type="application/aim-history+jsonl">
 

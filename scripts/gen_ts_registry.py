@@ -70,7 +70,7 @@ def render() -> str:
         "};",
         "",
         "// The subset of STYLE_PROP_ORDER that carries literal paint (spec §3.3);",
-        "// the rest is slide geometry.",
+        "// the rest is slide geometry and literal typography.",
         "export const STYLE_PROP_PAINT: readonly string[] = "
         f"{_ts(registry['style_props']['paint'])};",
         "",
