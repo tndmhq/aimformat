@@ -63,6 +63,7 @@ from ._docx_seam import (
     paragraph_math_text,
     paragraph_run_baseline,
     parse_docx,
+    picture_relationships,
     resolve_color,
     shading_hex,
     symbol_char,
@@ -147,6 +148,9 @@ class _Converter:
         self._blocks: list[str] = []
         # consecutive list paragraphs buffer: (num_id, ilvl, markup, li attr)
         self._items: list[tuple[int, int, str, str]] = []
+        # relationship ids the run walk already emitted for the current
+        # paragraph, so the picture recovery below stays additive
+        self._emitted_images: set[str] = set()
 
     # -- top level ---------------------------------------------------------
 
@@ -204,15 +208,44 @@ class _Converter:
             self._flush_items()
             self._blocks.append(_PAGE_BREAK)
 
+        self._emitted_images = set()
         inline, trailing_break = self._inline_markup(para, style_id)
         inline = self._with_supplements(inline, elem)
 
         num_pr = effective.get("num_pr") or {}
         heading = self._heading_level(style_id, effective)
+        # An outline style that also carries numbering is a numbered clause
+        # ("1.", "1.1", "1.1.1" — the legal-document idiom). Word draws that
+        # label; nothing in the text holds it, so it has to be materialised
+        # here or the clause structure is simply lost. The label is claimed
+        # in document order, before the heading/paragraph decision, because
+        # the counters advance per numbered paragraph either way.
+        label = ""
+        if heading is not None and num_pr.get("num_id") is not None:
+            label = self._number_label(num_pr)
+            if label:
+                # Word separates label from clause text with a tab, which
+                # the walk already emitted as a no-break space — only add
+                # a separator when the text brings none. No-break, never a
+                # plain space: "1.1.1" must not wrap away from its clause.
+                sep = "" if inline[:1] in (" ", "\xa0", "\t") else "\xa0"
+                inline = f"{escape_text(label)}{sep}{inline}"
+            # …and such a style is only a *visual* heading if it resolves to
+            # one. These clause styles are named HeadingN for the outline but
+            # resolve to plain body text; emitting <hN> renders a whole
+            # contract at heading size and weight.
+            if not self._looks_like_a_heading(effective):
+                heading = None
         if inline:
             if heading is not None:
                 self._flush_items()
                 self._blocks.append(self._block(f"h{heading}", inline, effective))
+            elif label:
+                # numbered clause that is not a visual heading: an ordinary
+                # paragraph carrying its own label (an <ol> would renumber it
+                # 1,2,3 per level and lose the "1.1.1" the document states)
+                self._flush_items()
+                self._blocks.append(self._block("p", inline, effective))
             elif num_pr.get("num_id") is not None:
                 # list items carry their alignment class like any block —
                 # a centered bullet is visible structure too
@@ -241,6 +274,33 @@ class _Converter:
             self._flush_items()
             self._blocks.append(_PAGE_BREAK)
 
+        # Pictures dpc's typed model cannot see — grouped DrawingML artwork
+        # (a row of logos) and legacy VML — follow their anchor as figures.
+        # Only what the run walk did NOT already place is emitted, so this
+        # stays additive and can never double an ordinary inline image.
+        if elem is not None:
+            recovered: list[str] = []
+            for rid, alt, width in picture_relationships(elem):
+                if rid in self._emitted_images:
+                    continue
+                image = self.p.images.get(rid)
+                if image is not None:
+                    # authored size rides the whitelisted geometry style, as
+                    # for inline drawings — without it a logo renders at its
+                    # full pixel size instead of the size Word draws
+                    wattr = f' style="width:{width}px"' if width else ""
+                    recovered.append(
+                        f'<img alt="{escape_attr(alt)}" '
+                        f'src="{escape_attr(data_uri(image))}"{wattr}>'
+                    )
+            if recovered:
+                # one figure for the whole anchor: grouped artwork (a row of
+                # logos) is a single visual unit, and images inside a figure
+                # sit next to each other the way the group draws them —
+                # a figure each would stack them down the page instead
+                self._flush_items()
+                self._blocks.append(f"<figure>{''.join(recovered)}</figure>")
+
         # textbox content (w:txbxContent) has no place in reading order, so it
         # follows its anchor paragraph as ordinary paragraphs; None element →
         # a textbox paragraph itself, which is not re-scanned (one level deep)
@@ -262,6 +322,35 @@ class _Converter:
         if math:
             suffix = " " + escape_text(math)
         return (prefix + inline + suffix).strip()
+
+    def _number_label(self, num_pr: dict) -> str:
+        """The label Word would draw for this numbered paragraph ("1.1.1"),
+        or "" when the definition yields none. Counters advance per call, so
+        this must be called exactly once per numbered paragraph, in document
+        order — which is how the walk visits them."""
+        tracker = self.p.numbering_tracker
+        if tracker is None:
+            return ""
+        try:
+            num_id = int(num_pr["num_id"])
+            # count against the abstract definition, not the instance
+            num_id = self.p.num_alias.get(num_id, num_id)
+            return str(tracker.get_number(num_id, int(num_pr.get("ilvl") or 0)))
+        except Exception:
+            return ""
+
+    def _looks_like_a_heading(self, effective: dict) -> bool:
+        """Whether a style's resolved formatting actually reads as a heading:
+        bolder or bigger than the document's own body text. Legal templates
+        routinely hang their clause numbering off Heading1-9 for the outline
+        while formatting them exactly like body copy — the name alone cannot
+        decide this, only what the reader sees."""
+        props = effective.get("r_pr") or {}
+        if props.get("b"):
+            return True
+        size = half_points_to_pt(props.get("sz"))
+        base = half_points_to_pt(self.p.baseline_run.get("sz"))
+        return size is not None and base is not None and size > base
 
     def _heading_level(self, style_id: str | None, effective: dict) -> int | None:
         if style_id == "Title":
@@ -427,6 +516,8 @@ class _Converter:
         blip = _dig(container, "graphic", "graphic_data", "pic", "blip_fill", "blip")
         rid = getattr(blip, "embed", None) if blip is not None else None
         image = self.p.images.get(rid or "")
+        if rid:
+            self._emitted_images.add(rid)
         if image is None:
             return f"<em>[picture: {escape_text(str(alt))}]</em>"
         extent = getattr(container, "extent", None)
