@@ -82,6 +82,7 @@ __all__ = [
     "resolve_color",
     "shading_hex",
     "symbol_char",
+    "table_look_val",
     "table_style_looks",
     "textbox_paragraphs",
     "picture_relationships",
@@ -445,6 +446,19 @@ def data_uri(image: tuple[bytes, str]) -> str:
 _TABLE_CONDITIONS = ("wholeTable", "band2Horz", "band1Horz", "lastRow", "firstRow")
 
 
+def table_look_val(elem: Any) -> str | None:
+    """The raw ``w:tblLook@w:val`` bitmask of a ``w:tbl`` element, or None.
+
+    dpc reads only ``tblLook``'s named attributes, but Word-2007-era files
+    (and plenty of generators) write the flags ONLY as this bitmask. With no
+    flags at all a caller cannot tell "no header row" from "unspecified".
+    """
+    if elem is None:
+        return None
+    look = elem.find(f"./{{{_W_NS}}}tblPr/{{{_W_NS}}}tblLook")
+    return look.get(f"{{{_W_NS}}}val") if look is not None else None
+
+
 def table_style_looks(zf: zipfile.ZipFile) -> dict[str, dict[str, dict[str, str]]]:
     """``{styleId: {condition: {"fill": "#rrggbb", "color": "#rrggbb"}}}``.
 
@@ -779,7 +793,7 @@ def _picture_width_px(node: Any, is_vml: bool) -> int | None:
     group_px: float | None = None
     child_space: float | None = None
     cur = pic.getparent() if pic is not None else node
-    while cur is not None:
+    while cur is not None and _local(cur) != "drawing":  # never leave this drawing
         ch = cur.find(f".//{{{_A_NS}}}chExt")
         ext = _geometry_ext(cur)
         if ch is not None and ext is not None and ch.get("cx"):
@@ -791,7 +805,7 @@ def _picture_width_px(node: Any, is_vml: bool) -> int | None:
         cur = cur.getparent()
     if group_px is None:  # ungrouped: the drawing's own extent is the size
         cur = node
-        while cur is not None:
+        while cur is not None and _local(cur) != "p":
             ext = cur.find(f".//{{{_WP_NS}}}extent")
             if ext is not None and ext.get("cx"):
                 try:
