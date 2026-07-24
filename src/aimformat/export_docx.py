@@ -153,6 +153,8 @@ def _run_typography(el: Element) -> dict:
             pt = REGISTRY.type_scale_pt.get(token[len("text-") :])
             if pt:
                 out["size_pt"] = float(pt)
+        elif token == "uppercase":
+            out["all_caps"] = True  # the importer's caps mapping, reversed
     for piece in (el.get("style") or "").split(";"):
         prop, sep, val = piece.partition(":")
         if not sep:
@@ -351,6 +353,8 @@ def _format_run(run, spec: dict) -> None:
         run.font.name = _MONO
     if spec.get("font_name"):  # explicit family wins over the mono default
         run.font.name = spec["font_name"]
+    if spec.get("all_caps"):
+        run.font.all_caps = True
     if spec.get("size_pt"):
         from docx.shared import Pt
 

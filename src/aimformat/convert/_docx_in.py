@@ -81,6 +81,8 @@ _ALIGN_CLASS = {
     "distribute": "text-justify",
 }
 _PAGE_BREAK = "<aim-page-break></aim-page-break>"
+_IMG_TAG = re.compile(r"<img\b[^>]*>")
+_IMG_ONLY = re.compile(r"(?:<img\b[^>]*>)+")
 
 
 def convert_docx(
@@ -222,6 +224,12 @@ class _Converter:
                         self._class_attr(effective),
                     )
                 )
+            elif _IMG_ONLY.fullmatch(inline):
+                # an image standing alone in its paragraph is a figure — the
+                # system idiom (from_docling, the editor's atomic figure
+                # nodes, and to_docx's figure exporter all speak <figure>)
+                self._flush_items()
+                self._blocks.extend(f"<figure>{img}</figure>" for img in _IMG_TAG.findall(inline))
             else:
                 self._flush_items()
                 self._blocks.append(self._block("p", inline, effective))

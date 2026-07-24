@@ -574,6 +574,41 @@ class TestTableStyling:
 # --------------------------------------------------------------------------
 
 
+class TestImageParagraphs:
+    def test_standalone_image_becomes_a_figure(self):
+        # the system idiom is <figure> (from_docling, the editor's atomic
+        # nodes, to_docx's figure exporter) — a paragraph that is only an
+        # image must not stay a bare <p><img></p>
+        from PIL import Image as PILImage
+
+        doc = Document()
+        img = io.BytesIO()
+        PILImage.new("RGB", (12, 12), (10, 120, 40)).save(img, "PNG")
+        img.seek(0)
+        doc.add_picture(img)
+        out = io.BytesIO()
+        doc.save(out)
+        out.seek(0)
+        body = convert_docx(out).dumps()
+        assert re.search(r"<figure[^>]*><img[^>]*data:image/png[^>]*></figure>", body), body[:400]
+
+    def test_figure_roundtrips_through_export(self, tmp_path):
+        from PIL import Image as PILImage
+
+        doc = Document()
+        img = io.BytesIO()
+        PILImage.new("RGB", (12, 12), (10, 120, 40)).save(img, "PNG")
+        img.seek(0)
+        doc.add_picture(img)
+        out = io.BytesIO()
+        doc.save(out)
+        out.seek(0)
+        a = convert_docx(out)
+        path = tmp_path / "img.docx"
+        aim.to_docx(a, str(path))
+        assert "data:image/" in convert_docx(str(path)).dumps(), "image lost on export"
+
+
 class TestMergedCells:
     def test_vertical_merge_becomes_rowspan_alongside_gridspan(self):
         # python-docx merge(): row 0 = [gridSpan-2 "wide", vMerge-restart
@@ -660,6 +695,15 @@ class TestExportSymmetry:
         para = next(p for p in d.paragraphs if "Item" in p.text)
         assert para.alignment == WD_ALIGN_PARAGRAPH.CENTER
         assert [r.font.size.pt for r in para.runs if r.text == "Item"] == [14.0]
+
+    def test_uppercase_class_exports_as_all_caps(self, tmp_path):
+        doc = aim.new_document(title="Caps")
+        doc.add_chunk('<p><span class="uppercase">shout</span></p>', author=aim.external("t"))
+        out = tmp_path / "caps.docx"
+        aim.to_docx(doc, str(out))
+        d = Document(str(out))
+        flags = [r.font.all_caps for p in d.paragraphs for r in p.runs if r.text == "shout"]
+        assert flags == [True]
 
     def test_font_stack_exports_its_first_family(self, tmp_path):
         # the inline grammar allows a stack; Word run props name one face
