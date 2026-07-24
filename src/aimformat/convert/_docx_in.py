@@ -510,6 +510,7 @@ class _Converter:
                 rowspan = spans.get((ri, col), 1)
                 if rowspan > 1:
                     attrs += f' rowspan="{rowspan}"'
+                attrs += self._cell_style(cell)
                 out.append(f"<{tag}{attrs}>{self._cell_markup(cell)}</{tag}>")
                 col += colspan
             row_html = "<tr>" + "".join(out) + "</tr>"
@@ -520,6 +521,29 @@ class _Converter:
         if body:
             html += "<tbody>" + "".join(body) + "</tbody>"
         return html + "</table>"
+
+    def _cell_style(self, cell: Any) -> str:
+        """A cell's whitelisted geometry+paint style: fixed column width and
+        shading fill. Borders are deliberately not carried — the vocabulary
+        has border utilities and border-colour paint, not the per-side border
+        geometry OOXML cells describe, so recovering them faithfully is not
+        possible and a lossy approximation would mislead."""
+        pr = getattr(cell, "tc_pr", None)
+        if pr is None:
+            return ""
+        styles: list[tuple[str, str]] = []
+        width = _cell_width_px(getattr(pr, "tc_w", None))
+        if width:
+            styles.append(("width", f"{width}px"))
+        fill = shading_hex(model_dump(getattr(pr, "shd", None)))
+        if fill:
+            styles.append(("background-color", fill))
+        if not styles:
+            return ""
+        order = {p: i for i, p in enumerate(REGISTRY.style_prop_order)}
+        styles.sort(key=lambda kv: order.get(kv[0], 99))
+        decl = "; ".join(f"{k}:{v}" for k, v in styles)
+        return f' style="{escape_attr(decl)}"'
 
     def _cell_markup(self, cell: Any) -> str:
         paras: list[str] = []
@@ -553,6 +577,19 @@ def _group_runs(items: list[tuple[int, int, str]]):
 def _underlined(props: dict) -> bool:
     underline = model_dump(props.get("u"))
     return underline.get("val") not in (None, "none")
+
+
+def _cell_width_px(tc_w: Any) -> int | None:
+    """A ``w:tcW`` measurement → integer px, or None. Only fixed ``dxa``
+    (twentieths of a point) widths carry over; ``pct``/``auto`` have no
+    px equivalent. 1px = 0.75pt, so px = (dxa / 20) / 0.75 = dxa / 15."""
+    w = model_dump(tc_w)
+    if w.get("type") != "dxa":
+        return None
+    dxa = w.get("w")
+    if not isinstance(dxa, (int, float)) or dxa <= 0:
+        return None
+    return round(dxa / 15)
 
 
 def _dig(obj: Any, *names: str) -> Any:

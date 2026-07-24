@@ -8,6 +8,7 @@ as the pagination tests — no binary files in the repo.
 from __future__ import annotations
 
 import io
+import re
 
 import pytest
 
@@ -179,8 +180,10 @@ class TestStructure:
         assert "<ul data-aim-container=" in text and "<ol data-aim-container=" in text
 
     def test_table_with_cell_formatting(self, html):
-        assert "<td>CellA</td>" in html
-        assert "<td><strong>BoldCell</strong></td>" in html
+        # cells may now carry a width style (Card B); assert content + the
+        # bold-inside-a-cell survive, robust to any cell geometry
+        assert ">CellA</td>" in html
+        assert "<strong>BoldCell</strong></td>" in html
 
     def test_page_break_chunk(self, imported):
         assert any(c.tag == "aim-page-break" for c in imported.chunks)
@@ -416,3 +419,50 @@ class TestStrictOoxml:
         assert not _is_safe_zip_member("/etc/passwd")
         assert not _is_safe_zip_member("C:/windows")
         assert _is_safe_zip_member("word/document.xml")
+
+
+# --------------------------------------------------------------------------
+# Card B: table styling (cell shading + width; borders deliberately skipped)
+# --------------------------------------------------------------------------
+
+
+class TestTableStyling:
+    @staticmethod
+    def _shaded_table_html() -> str:
+        doc = Document()
+        table = doc.add_table(rows=2, cols=2)
+        cell = table.cell(0, 0)
+        cell.text = "Shaded"
+        pr = cell._tc.get_or_add_tcPr()
+        pr.append(parse_xml(f'<w:shd xmlns:w="{_W}" w:val="clear" w:fill="D9E2F3"/>'))
+        pr.append(parse_xml(f'<w:tcW xmlns:w="{_W}" w:w="3000" w:type="dxa"/>'))
+        table.cell(0, 1).text = "Plain"
+        table.cell(1, 0).text = "A"
+        table.cell(1, 1).text = "B"
+        out = io.BytesIO()
+        doc.save(out)
+        out.seek(0)
+        imported = convert_docx(out)
+        assert [f for f in aim.lint(imported) if f.level == "error"] == []
+        return "\n".join(c.html for c in imported.chunks)
+
+    def test_cell_shading_becomes_background_paint(self):
+        assert "background-color:#d9e2f3" in self._shaded_table_html()
+
+    def test_cell_width_becomes_px_geometry(self):
+        # python-docx redistributes the table width across cells, so the exact
+        # px is its call; the conversion itself is pinned by the unit test.
+        assert re.search(r"width:\d+px", self._shaded_table_html())
+
+    def test_width_precedes_background_in_canonical_order(self):
+        html = self._shaded_table_html()
+        assert re.search(r'style="width:\d+px; background-color:#d9e2f3"', html)
+
+    def test_dxa_conversion_and_non_dxa_skip(self):
+        from aimformat.convert._docx_in import _cell_width_px
+
+        assert _cell_width_px({"type": "dxa", "w": 1500}) == 100  # 1500 / 15
+        assert _cell_width_px({"type": "dxa", "w": 3000}) == 200
+        assert _cell_width_px({"type": "pct", "w": 5000}) is None
+        assert _cell_width_px({"type": "auto"}) is None
+        assert _cell_width_px(None) is None
