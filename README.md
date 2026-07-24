@@ -1,26 +1,30 @@
 # `.aim`: an open document format for human + AI co-authoring
 
-**Status: v0.3 draft.** Spec and reference tooling are published; breaking
-changes are possible until 1.0. v0.3 added literal per-element paint —
-validated inline `color`, `background-color` and `border-color` — so one
-element can be given one exact colour without touching a document-wide
-theme slot. v0.2 added pagination: page setup (`aim:doc`) and hard page
-breaks.
-[Specification](https://github.com/tndmhq/aimformat/blob/main/spec.md) ·
-[Getting started](https://github.com/tndmhq/aimformat/blob/main/docs/guide/getting-started.md) ·
-[Examples](https://github.com/tndmhq/aimformat/blob/main/examples/)
+[![PyPI](https://img.shields.io/pypi/v/aimformat)](https://pypi.org/project/aimformat/)
+[![Python](https://img.shields.io/pypi/pyversions/aimformat)](https://pypi.org/project/aimformat/)
+[![CI](https://github.com/tndmhq/aimformat/actions/workflows/ci.yml/badge.svg)](https://github.com/tndmhq/aimformat/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue)](https://github.com/tndmhq/aimformat/blob/main/LICENSE)
+
+**[Specification](https://github.com/tndmhq/aimformat/blob/main/spec.md)** ·
+**[Getting started](https://github.com/tndmhq/aimformat/blob/main/docs/guide/getting-started.md)** ·
+**[Examples](https://github.com/tndmhq/aimformat/blob/main/examples/)**
 
 A `.aim` file is a single HTML document that is, at the same time:
 
-- the rendered artifact: open it in any browser, styled, no tooling;
-- the accepted current version: every block covered by a stable,
-  uniquely-identified *chunk* that AI and tools can address;
-- the pending-change lane: AI/human proposals carried *in the file*,
-  visible to any reader, applied only on explicit accept;
-- the full edit history: an append-only, invertible event log; any past
-  version is reconstructible and verifiable against checkpoint hashes;
-- derived caches (summary, TOC, embeddings, packed assets) that help
-  agents but are never load-bearing.
+- **The rendered artifact.** Double-click the file and any browser shows
+  the styled document. No tooling, no build step, no export.
+- **The accepted current version.** Every block is covered by a *chunk*
+  with a stable, unique id that AI and tools use to say which part of
+  the document they mean.
+- **The pending-change lane.** Proposals from AI or humans travel inside
+  the file, visible to any reader, each with its author and a one-line
+  explanation. They apply only on an explicit accept.
+- **The full edit history.** An append-only, invertible event log from
+  which any past version can be reconstructed and verified against
+  checkpoint hashes.
+- **The derived caches.** Summary, table of contents, embeddings and
+  packed assets ride along to help agents; none is load-bearing, and all
+  of them can be rebuilt.
 
 Documents are increasingly written *with* AI, in formats designed for a
 single human at a single cursor. Everyone building document workflows with
@@ -40,6 +44,9 @@ part of the file format itself: open, editor-agnostic, MIT.
 └────────────────────────────────────────────────────────────────────────┘
 ```
 
+The spec is a v0.3 draft; breaking changes are possible until 1.0. What
+each revision added: [status and roadmap](#status-and-roadmap).
+
 ## Install
 
 ```sh
@@ -54,7 +61,7 @@ The CLI installs as `aim` and as `aimformat` (same tool; the alias avoids
 the console-script collision with AimStack's `aim` experiment tracker and
 makes `uvx aimformat` work).
 
-## Sixty seconds
+## Quickstart
 
 ```python
 import aimformat as aim
@@ -85,16 +92,17 @@ aim normalize other.aim   # re-spell to canonical form (lossless, idempotent)
 
 What makes this different from "HTML with extra attributes":
 
-- Identity is part of the format. Chunk ids live in the file, edits
-  target ids (never character offsets), and identity survives any tool.
-- Byte-canonical serialization. Attribute order, class order, escaping,
+- **Identity is part of the format.** Chunk ids live in the file, not in
+  an editor's database: edits target ids (never character offsets), and
+  identity survives any tool.
+- **Byte-canonical serialization.** Attribute order, class order, escaping,
   line structure: all specified. Equality is byte equality, diffs are
   string compares, and no editor's parser is the arbiter of truth.
-- The history verifies. Every state-changing event carries enough to undo
+- **The history verifies.** Every state-changing event carries enough to undo
   it. `verify()` replays the log backwards over a copy, byte-compares
   every payload (which catches out-of-band edits), and checks every
   checkpoint hash.
-- Provenance is first-class. Every event and proposal records its actor
+- **Provenance is first-class.** Every event and proposal records its actor
   (`human` / `agent` + exact model id / `external`), timestamp, batch, and
   a one-line explanation.
 
@@ -125,7 +133,7 @@ aim.to_docx(doc, "out.docx", pending="reject-all")
 
 ## The API in one table
 
-| | |
+| Area | API |
 |---|---|
 | load / create | `load`, `loads`, `new_document`, `doc.save`, `doc.dumps` |
 | read | `doc.chunks`, `doc.chunk(id)`, `doc.containers`, `doc.proposals`, `doc.history`, `doc.meta`, `doc.theme`, `doc.doc_hash`, `doc.seq` |
@@ -184,36 +192,50 @@ The [specification](https://github.com/tndmhq/aimformat/blob/main/spec.md) is on
 is generated from the same [registry](https://github.com/tndmhq/aimformat/blob/main/src/aimformat/registry.json) that
 drives the linter and the stylesheet, and the conformance suite
 ([`tests/fixtures/`](https://github.com/tndmhq/aimformat/blob/main/tests/fixtures/)) ships `ok_*` files that must lint
-clean plus `nok_<CODE>_*` files that must trip exactly their rule —
+clean plus `nok_<CODE>_*` files that must trip exactly their rule,
 covering a growing subset of the rulebook (every rule's firing behavior
-is additionally pinned in the test suite) — for third-party
+is additionally pinned in the test suite), for third-party
 implementations to reuse.
 
 Design pillars (details and rationale in the spec):
 
-- HTML plus a closed Tailwind-vocabulary subset. Models read and write it
+- **HTML plus a closed Tailwind-vocabulary subset.** Models read and write it
   accurately, a finite vocabulary with one versioned stylesheet kills
   cross-model drift, and every browser renders it for free.
-- Styling has three tiers, and which one you reach for is decided by the
+- **Styling has three tiers.** Which one you reach for is decided by the
   *scope* of the change, not by taste: reusable roles are classes,
   document-wide constants are theme slots, and one element's own exact
-  value — a position, or since v0.3 a colour — is inline `style`, on a
+  value (a position, or since v0.3 a colour) is inline `style`, on a
   closed property list with a closed grammar per property. An editing agent
   usually sees part of a document; the literal is the only tier that cannot
   repaint something it was never shown.
-- Semantic chunking. Chunk boundaries are authorial; the chunk is the unit
+- **Semantic chunking.** Chunk boundaries are authorial; the chunk is the unit
   of meaning, retrieval, edit targeting, and explanation.
-- Propose/accept as file primitives, with persisted attribution,
+- **Propose/accept as file primitives**, with persisted attribution,
   explanations, accept-with-tweaks (`applied` vs `proposed`), and
   deterministic supersede/chain semantics.
-- Docs and slides in one format. Slides are fixed-canvas containers of
+- **Docs and slides in one format.** Slides are fixed-canvas containers of
   positioned chunks, with the same proposals and the same history.
-- Security as conformance. No script, no event handlers, no dangerous URL
+- **Security as conformance.** No script, no event handlers, no dangerous URL
   schemes, all enforced by the linter (`aim lint` is the gate).
+
+## Status and roadmap
+
+The spec and the reference tooling are published; breaking changes stay
+possible until 1.0.
+
+- **v0.3** (the current draft) added literal per-element paint: validated
+  inline `color`, `background-color` and `border-color`, so one element
+  can be given one exact colour without touching a document-wide theme
+  slot.
+- **v0.2** added pagination: page setup (`aim:doc`) and hard page breaks.
+
+Planned next, tracked in the spec's Future Extensions: reference viewer
+and PPTX import/export.
 
 ## Repository map
 
-| | |
+| Path | What it is |
 |---|---|
 | [`spec.md`](https://github.com/tndmhq/aimformat/blob/main/spec.md) | the normative specification (single file, executable snippets) |
 | [`src/aimformat/`](https://github.com/tndmhq/aimformat/blob/main/src/aimformat/) | reference SDK: document ops, verifier, canonical form, CSS generator, ingest/export |
@@ -227,9 +249,6 @@ Design pillars (details and rationale in the spec):
 | [`evals/`](https://github.com/tndmhq/aimformat/blob/main/evals/) | id-preservation eval harness (agent-note A/B) |
 | [`scripts/`](https://github.com/tndmhq/aimformat/blob/main/scripts/) | appendix/fixture/example generators |
 | [`docs/`](https://github.com/tndmhq/aimformat/blob/main/docs/README.md) | contributor + agent memory (knowledge base and decision log) |
-
-Planned next (tracked in the spec's Future Extensions): reference viewer
-and PPTX import/export.
 
 ## Relationship to Tndm
 
