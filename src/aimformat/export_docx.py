@@ -153,6 +153,8 @@ def _run_typography(el: Element) -> dict:
             pt = REGISTRY.type_scale_pt.get(token[len("text-") :])
             if pt:
                 out["size_pt"] = float(pt)
+        elif token == "uppercase":
+            out["all_caps"] = True  # the importer's caps mapping, reversed
     for piece in (el.get("style") or "").split(";"):
         prop, sep, val = piece.partition(":")
         if not sep:
@@ -351,6 +353,8 @@ def _format_run(run, spec: dict) -> None:
         run.font.name = _MONO
     if spec.get("font_name"):  # explicit family wins over the mono default
         run.font.name = spec["font_name"]
+    if spec.get("all_caps"):
+        run.font.all_caps = True
     if spec.get("size_pt"):
         from docx.shared import Pt
 
@@ -1121,6 +1125,9 @@ class _Exporter:
         )
 
     def emit_figure(self, el: Element) -> None:
+        # emit_block routes figures here before its generic alignment code,
+        # so the figure's own alignment class lands on the picture paragraph
+        align = _alignment_of(el)
         img = el.find(lambda e: e.tag == "img")
         emitted = False
         if img is not None:
@@ -1130,12 +1137,16 @@ class _Exporter:
                 try:
                     blob = base64.b64decode(m.group(1))
                     self.out.add_picture(io.BytesIO(blob), width=self._figure_width(el, img))
+                    if align is not None:
+                        self.out.paragraphs[-1].alignment = align
                     emitted = True
                 except Exception:
                     emitted = False
             if not emitted:
                 alt = img.get("alt") or "image"
                 para = self.out.add_paragraph()
+                if align is not None:
+                    para.alignment = align
                 spec = {"text": f"[image: {alt}]", "italic": True, **_ink(self.paint.of(img))}
                 _apply_runs(para, [spec])
                 emitted = True

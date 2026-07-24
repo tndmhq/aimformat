@@ -163,6 +163,20 @@ class TestStyling:
         assert any('class="text-center"' in t for t in tags)
         assert any('class="text-justify"' in t for t in tags)
 
+    def test_list_item_alignment_becomes_a_class(self):
+        # a centered bullet is visible structure, same as a centered heading
+        doc = Document()
+        p = doc.add_paragraph("centered bullet", style="List Bullet")
+        p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        doc.add_paragraph("plain bullet", style="List Bullet")
+        out = io.BytesIO()
+        doc.save(out)
+        out.seek(0)
+        body = convert_docx(out).dumps()
+        assert '<li data-aim="' in body
+        assert re.search(r'<li[^>]*class="text-center"[^>]*>centered bullet</li>', body), body[:400]
+        assert re.search(r"<li[^>]*>plain bullet</li>", body)
+
     def test_caps_combines_with_other_run_styling(self):
         # all-caps + colour on one run: one span carrying BOTH the uppercase
         # class and the literal paint — neither silently dropped
@@ -560,6 +574,93 @@ class TestTableStyling:
 # --------------------------------------------------------------------------
 
 
+class TestImageParagraphs:
+    def test_standalone_image_becomes_a_figure(self):
+        # the system idiom is <figure> (from_docling, the editor's atomic
+        # nodes, to_docx's figure exporter) — a paragraph that is only an
+        # image must not stay a bare <p><img></p>
+        from PIL import Image as PILImage
+
+        doc = Document()
+        img = io.BytesIO()
+        PILImage.new("RGB", (12, 12), (10, 120, 40)).save(img, "PNG")
+        img.seek(0)
+        doc.add_picture(img)
+        out = io.BytesIO()
+        doc.save(out)
+        out.seek(0)
+        body = convert_docx(out).dumps()
+        assert re.search(r"<figure[^>]*><img[^>]*data:image/png[^>]*></figure>", body), body[:400]
+
+    def test_figure_roundtrips_through_export(self, tmp_path):
+        from PIL import Image as PILImage
+
+        doc = Document()
+        img = io.BytesIO()
+        PILImage.new("RGB", (12, 12), (10, 120, 40)).save(img, "PNG")
+        img.seek(0)
+        doc.add_picture(img)
+        out = io.BytesIO()
+        doc.save(out)
+        out.seek(0)
+        a = convert_docx(out)
+        path = tmp_path / "img.docx"
+        aim.to_docx(a, str(path))
+        assert "data:image/" in convert_docx(str(path)).dumps(), "image lost on export"
+
+    def test_centered_image_keeps_alignment_both_ways(self, tmp_path):
+        # a centered logo is the classic Word idiom: the figure carries the
+        # class on import, and the exporter aligns the picture paragraph
+        from docx.enum.text import WD_ALIGN_PARAGRAPH
+        from PIL import Image as PILImage
+
+        doc = Document()
+        img = io.BytesIO()
+        PILImage.new("RGB", (12, 12), (10, 120, 40)).save(img, "PNG")
+        img.seek(0)
+        doc.add_picture(img)
+        doc.paragraphs[-1].alignment = WD_ALIGN_PARAGRAPH.CENTER
+        out = io.BytesIO()
+        doc.save(out)
+        out.seek(0)
+        a = convert_docx(out)
+        assert re.search(r'<figure[^>]*class="text-center"[^>]*><img', a.dumps())
+        path = tmp_path / "centered.docx"
+        aim.to_docx(a, str(path))
+        d = Document(str(path))
+        pic_para = next(p for p in d.paragraphs if p._p.findall(".//" + qn("w:drawing")))
+        assert pic_para.alignment == WD_ALIGN_PARAGRAPH.CENTER
+        # and the re-import keeps the class
+        assert re.search(r'<figure[^>]*class="text-center"', convert_docx(str(path)).dumps())
+
+
+class TestMergedCells:
+    def test_vertical_merge_becomes_rowspan_alongside_gridspan(self):
+        # python-docx merge(): row 0 = [gridSpan-2 "wide", vMerge-restart
+        # "tall"], row 1 = [x, y, vMerge-continue]. The restart cell must
+        # survive with rowspan=2 (dpc models w:vMerge as a plain string —
+        # reading .val off it silently dropped the whole merged column).
+        doc = Document()
+        t = doc.add_table(rows=2, cols=3)
+        t.cell(0, 0).merge(t.cell(0, 1))
+        t.cell(0, 2).merge(t.cell(1, 2))
+        t.cell(0, 0).text = "wide"
+        t.cell(0, 2).text = "tall"
+        t.cell(1, 0).text = "x"
+        t.cell(1, 1).text = "y"
+        out = io.BytesIO()
+        doc.save(out)
+        out.seek(0)
+        dumped = convert_docx(out).dumps()
+        table = re.search(r"<table.*?</table>", dumped, re.S)
+        assert table, dumped[:600]
+        html = table.group(0)
+        assert 'colspan="2"' in html and ">wide<" in html
+        assert 'rowspan="2"' in html and ">tall<" in html
+        # the continuation slot collapses into the restart cell
+        assert html.count("<td") + html.count("<th") == 4
+
+
 class TestExportSymmetry:
     def _roundtrip(self, tmp_path):
         aim_doc = convert_docx(_styled_docx())
@@ -619,6 +720,15 @@ class TestExportSymmetry:
         para = next(p for p in d.paragraphs if "Item" in p.text)
         assert para.alignment == WD_ALIGN_PARAGRAPH.CENTER
         assert [r.font.size.pt for r in para.runs if r.text == "Item"] == [14.0]
+
+    def test_uppercase_class_exports_as_all_caps(self, tmp_path):
+        doc = aim.new_document(title="Caps")
+        doc.add_chunk('<p><span class="uppercase">shout</span></p>', author=aim.external("t"))
+        out = tmp_path / "caps.docx"
+        aim.to_docx(doc, str(out))
+        d = Document(str(out))
+        flags = [r.font.all_caps for p in d.paragraphs for r in p.runs if r.text == "shout"]
+        assert flags == [True]
 
     def test_font_stack_exports_its_first_family(self, tmp_path):
         # the inline grammar allows a stack; Word run props name one face
