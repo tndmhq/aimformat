@@ -1,9 +1,9 @@
 <!doctype html>
-<html data-aim-version="0.2" lang="en">
+<html data-aim-version="0.3" lang="en">
 <head>
 <meta charset="utf-8">
 <!--
-aim-note: This file is an AIM document (open format, v0.2) — valid HTML plus
+aim-note: This file is an AIM document (open format, v0.3) — valid HTML plus
 chunk identity, a pending-suggestions lane, and an edit history.
 Agent docs: https://aimformat.com/llms.txt
 The reliable way to edit this file is the `aimformat` tooling, which manages
@@ -18,12 +18,12 @@ https://aimformat.com/editors
 -->
 <title>Head state — theme, settings, caches</title>
 <script type="application/aim-meta+json">
-{"summary":{"as_of_seq":4,"doc_hash":"sha256:558ce1a2a7812fcfa4193e7f31412bc834aa52472c09238d240cd0eee0c57ad2","model":"model-x","text":"A one-paragraph document about head state."},"toc":[{"chunks":["ttl","body1"],"level":1,"title":"Head state"}]}
+{"summary":{"as_of_seq":4,"doc_hash":"sha256:f7b8ce2ca678917d02bf94b17b722fad79c72ebcb071bd759500cb2af5adc6c7","model":"model-x","text":"A one-paragraph document about head state."},"toc":[{"chunks":["ttl","body1"],"level":1,"title":"Head state"}]}
 </script>
 <script type="application/aim-doc+json">
 {"page":{"margins":{"bottom":"25.4mm","left":"19mm","right":"19mm","top":"25.4mm"},"orientation":"portrait","size":"Letter"}}
 </script>
-<style data-aim-css="0.2">
+<style data-aim-css="0.3">
 :root{--aim-brand-1:#1d4ed8;--aim-brand-2:#0f766e;--aim-brand-3:#b45309;--aim-brand-4:#6d28d9;--aim-font-heading:system-ui, -apple-system, 'Segoe UI', sans-serif;--aim-font-body:system-ui, -apple-system, 'Segoe UI', sans-serif;--aim-font-mono:ui-monospace, 'SF Mono', Menlo, Consolas, monospace}
 html{-webkit-text-size-adjust:100%}
 body{margin:2rem auto;padding:0 1.5rem;max-width:52rem;font-family:var(--aim-font-body);font-size:1rem;line-height:1.6;color:#1f2937;background:#fff}
@@ -318,7 +318,7 @@ aim-assets{display:none}
 {"action":"add","after":"<h1 data-aim=\"ttl\">Head state<\/h1>","anchor":{"after":null,"container":"body"},"author":{"model":"model-x","type":"agent"},"batch":"b1","kind":"direct_edit","seq":1,"t":"2026-07-17T10:00:00Z","target":"ttl"}
 {"action":"add","after":"<p data-aim=\"body1\">One paragraph to summarize and embed.<\/p>","anchor":{"after":"ttl","container":"body"},"author":{"model":"model-x","type":"agent"},"batch":"b1","kind":"direct_edit","seq":2,"t":"2026-07-17T10:00:01Z","target":"body1"}
 {"action":"modify","after":"<script type=\"application/aim-doc+json\">\n{\"page\":{\"margins\":{\"bottom\":\"25.4mm\",\"left\":\"19mm\",\"right\":\"19mm\",\"top\":\"25.4mm\"},\"orientation\":\"portrait\",\"size\":\"Letter\"}}\n<\/script>","author":{"id":"ada","type":"human"},"batch":"b2","kind":"direct_edit","seq":3,"t":"2026-07-17T10:00:02Z","target":"aim:doc"}
-{"doc_hash":"sha256:558ce1a2a7812fcfa4193e7f31412bc834aa52472c09238d240cd0eee0c57ad2","kind":"checkpoint","label":"draft","seq":4,"t":"2026-07-17T10:00:03Z"}
+{"doc_hash":"sha256:f7b8ce2ca678917d02bf94b17b722fad79c72ebcb071bd759500cb2af5adc6c7","kind":"checkpoint","label":"draft","seq":4,"t":"2026-07-17T10:00:03Z"}
 </script>
 <script type="application/aim-embeddings+jsonl">
 {"chunk":"body1","model":"embed-model","text_hash":"sha256:9a4f54a8f5b0435dafa6ff8f1ddb167659962b257841689cdd22a714074bcfd6","vec":[0.25,-0.5,0.125]}

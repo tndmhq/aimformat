@@ -2,7 +2,7 @@
 // Source: src/aimformat/registry.json (+ the aim-note template in
 // src/aimformat/note.py). Regenerate: python3 scripts/gen_ts_registry.py
 
-export const SPEC_VERSION = "0.2";
+export const SPEC_VERSION = "0.3";
 
 export const VOID_ELEMENTS: ReadonlySet<string> = new Set(["meta", "img", "br", "hr", "link", "input"]);
 
@@ -14,7 +14,28 @@ export const ATTR_LAST: readonly string[] = ["src", "href"];
 
 export const SVG_CASE_ADJUST: Readonly<Record<string, string>> = {"viewbox": "viewBox", "preserveaspectratio": "preserveAspectRatio"};
 
-export const STYLE_PROP_ORDER: readonly string[] = ["left", "top", "width", "height", "transform", "z-index"];
+export const STYLE_PROP_ORDER: readonly string[] = ["left", "top", "width", "height", "transform", "z-index", "color", "background-color", "border-color"];
+
+// Per-property value grammars, so a consumer validates against registry
+// data instead of maintaining a third copy of the grammar.
+export const STYLE_PROP_PATTERNS: Readonly<Record<string, RegExp>> = {
+  "left": new RegExp("^-?\\p{Nd}+(\\.\\p{Nd}+)?px$", "u"),
+  "top": new RegExp("^-?\\p{Nd}+(\\.\\p{Nd}+)?px$", "u"),
+  "width": new RegExp("^\\p{Nd}+(\\.\\p{Nd}+)?px$", "u"),
+  "height": new RegExp("^\\p{Nd}+(\\.\\p{Nd}+)?px$", "u"),
+  "transform": new RegExp("^(rotate\\(-?\\p{Nd}+(\\.\\p{Nd}+)?deg\\)|translate\\(-?\\p{Nd}+(\\.\\p{Nd}+)?px, ?-?\\p{Nd}+(\\.\\p{Nd}+)?px\\)|scale\\(\\p{Nd}+(\\.\\p{Nd}+)?\\))( (rotate\\(-?\\p{Nd}+(\\.\\p{Nd}+)?deg\\)|translate\\(-?\\p{Nd}+(\\.\\p{Nd}+)?px, ?-?\\p{Nd}+(\\.\\p{Nd}+)?px\\)|scale\\(\\p{Nd}+(\\.\\p{Nd}+)?\\)))*$", "u"),
+  "z-index": new RegExp("^-?\\p{Nd}+$", "u"),
+  "color": new RegExp("^#[0-9a-f]{6}$", "u"),
+  "background-color": new RegExp("^#[0-9a-f]{6}$", "u"),
+  "border-color": new RegExp("^#[0-9a-f]{6}$", "u"),
+};
+
+// The subset of STYLE_PROP_ORDER that carries literal paint (spec §3.3);
+// the rest is slide geometry.
+export const STYLE_PROP_PAINT: readonly string[] = ["color", "background-color", "border-color"];
+
+// First spec version whose style grammar includes literal paint.
+export const STYLE_PROP_PAINT_SINCE = "0.3";
 
 export const SCRIPT_TYPES = {"meta": "application/aim-meta+json", "doc": "application/aim-doc+json", "history": "application/aim-history+jsonl", "embeddings": "application/aim-embeddings+jsonl"} as const;
 

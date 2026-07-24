@@ -1,9 +1,9 @@
 <!doctype html>
-<html data-aim-version="0.2" lang="en">
+<html data-aim-version="0.3" lang="en">
 <head>
 <meta charset="utf-8">
 <!--
-aim-note: This file is an AIM document (open format, v0.2) — valid HTML plus
+aim-note: This file is an AIM document (open format, v0.3) — valid HTML plus
 chunk identity, a pending-suggestions lane, and an edit history.
 Agent docs: https://aimformat.com/llms.txt
 The reliable way to edit this file is the `aimformat` tooling, which manages
@@ -18,12 +18,12 @@ https://aimformat.com/editors
 -->
 <title>Q3 Services Proposal — Acme GmbH</title>
 <script type="application/aim-meta+json">
-{"summary":{"as_of_seq":11,"doc_hash":"sha256:9e68bdee4c9eb5db6be98aa86d12f5aa6050618ad95764c48b6f4f10ab8df5b3","model":"claude-opus-4-8","text":"Three-year services proposal for Acme GmbH: €358k over two phases (pending: rollout line item), projected €2.1M savings. One pending pricing row and a theme swap await review."},"toc":[{"chunks":["ttl","intro","scope","4d85ok8h"],"level":1,"title":"Q3 Services Proposal — Acme GmbH"},{"chunks":["hd","dl","pr"],"level":2,"title":"Deliverables"}]}
+{"summary":{"as_of_seq":11,"doc_hash":"sha256:56c9d0617bc7f3f419ea2ce44a6c926cafa65d3670776503b6e44eabc183b3f6","model":"claude-opus-4-8","text":"Three-year services proposal for Acme GmbH: €358k over two phases (pending: rollout line item), projected €2.1M savings. One pending pricing row and a theme swap await review."},"toc":[{"chunks":["ttl","intro","scope","m2on03aj"],"level":1,"title":"Q3 Services Proposal — Acme GmbH"},{"chunks":["hd","dl","pr"],"level":2,"title":"Deliverables"}]}
 </script>
 <script type="application/aim-doc+json">
 {"page":{"margins":{"bottom":"20mm","left":"18mm","right":"18mm","top":"20mm"},"orientation":"portrait","size":"A4"}}
 </script>
-<style data-aim-css="0.2">
+<style data-aim-css="0.3">
 :root{--aim-brand-1:#1d4ed8;--aim-brand-2:#0f766e;--aim-brand-3:#b45309;--aim-brand-4:#6d28d9;--aim-font-heading:system-ui, -apple-system, 'Segoe UI', sans-serif;--aim-font-body:system-ui, -apple-system, 'Segoe UI', sans-serif;--aim-font-mono:ui-monospace, 'SF Mono', Menlo, Consolas, monospace}
 html{-webkit-text-size-adjust:100%}
 body{margin:2rem auto;padding:0 1.5rem;max-width:52rem;font-family:var(--aim-font-body);font-size:1rem;line-height:1.6;color:#1f2937;background:#fff}
@@ -312,13 +312,13 @@ aim-assets{display:none}
 <h1 data-aim="ttl" class="font-bold text-3xl text-brand-1">Q3 Services Proposal — Acme GmbH</h1>
 <p data-aim="intro" class="text-gray-700 text-lg">Acme saves €2.1M over three years by consolidating vendor tooling onto one platform.</p>
 <section data-aim="scope"><h2 class="text-2xl">Scope</h2><p>Consolidate authoring, review, and delivery onto one platform across all three business units.</p></section>
-<aim-page-break data-aim="4d85ok8h"></aim-page-break>
+<aim-page-break data-aim="m2on03aj"></aim-page-break>
 <h2 data-aim="hd" class="text-2xl">Deliverables</h2>
 <ul data-aim-container="dl"><li data-aim="d1">Discovery workshop and audit</li><li data-aim="d2">Platform implementation…</li><li data-aim="d2">…with staged rollout support</li></ul>
 <table data-aim-container="pr"><thead><tr data-aim="r0"><th>Phase</th><th>Weeks</th><th>Fee</th></tr></thead><tbody><tr data-aim="r1"><td>Discovery</td><td>4</td><td>€48,000</td></tr><tr data-aim="r2"><td>Implementation</td><td>16</td><td>€310,000</td></tr></tbody></table>
 <aim-proposals>
-<aim-proposal id="p-i1tgeruq" data-action="add" data-anchor-after="r2" data-anchor-container="pr" data-at="2026-07-07T14:00:15Z" data-author="agent" data-author-model="claude-opus-4-8" data-batch="b6" data-explanation="Client asked for rollout as its own line."><template><tr data-aim="r3"><td>Rollout &amp; training</td><td>8</td><td>€95,000</td></tr></template></aim-proposal>
-<aim-proposal id="p-t2pd611o" data-action="modify" data-at="2026-07-07T14:00:16Z" data-author="agent" data-author-model="claude-opus-4-8" data-batch="b7" data-explanation="Client brand refresh: teal primary." data-for="aim:theme"><template><style data-aim-theme>:root{--aim-brand-1:#0f766e}</style></template></aim-proposal>
+<aim-proposal id="p-v6i3drl1" data-action="add" data-anchor-after="r2" data-anchor-container="pr" data-anchor-shell="tbody" data-at="2026-07-07T14:00:15Z" data-author="agent" data-author-model="claude-opus-4-8" data-batch="b6" data-explanation="Client asked for rollout as its own line."><template><tr data-aim="r3"><td>Rollout &amp; training</td><td>8</td><td>€95,000</td></tr></template></aim-proposal>
+<aim-proposal id="p-a885t5s0" data-action="modify" data-at="2026-07-07T14:00:16Z" data-author="agent" data-author-model="claude-opus-4-8" data-batch="b7" data-explanation="Client brand refresh: teal primary." data-for="aim:theme"><template><style data-aim-theme>:root{--aim-brand-1:#0f766e}</style></template></aim-proposal>
 </aim-proposals>
 <script type="application/aim-history+jsonl">
 
@@ -337,11 +337,11 @@ aim-assets{display:none}
 {"action":"add","after":"<h2 data-aim=\"hd\" class=\"text-2xl\">Deliverables<\/h2>","anchor":{"after":"scope","container":"body"},"author":{"model":"claude-opus-4-8","type":"agent"},"batch":"b1","kind":"direct_edit","seq":4,"t":"2026-07-07T14:00:03Z","target":"hd"}
 {"action":"add","after":"<ul data-aim-container=\"dl\"><li data-aim=\"d1\">Discovery workshop and audit<\/li><li data-aim=\"d2\">Platform implementation…<\/li><li data-aim=\"d2\">…with staged rollout support<\/li><\/ul>","anchor":{"after":"hd","container":"body"},"author":{"model":"claude-opus-4-8","type":"agent"},"batch":"b1","kind":"direct_edit","seq":5,"t":"2026-07-07T14:00:04Z","target":"dl"}
 {"action":"add","after":"<table data-aim-container=\"pr\"><thead><tr data-aim=\"r0\"><th>Phase<\/th><th>Weeks<\/th><th>Fee<\/th><\/tr><\/thead><tbody><tr data-aim=\"r1\"><td>Discovery<\/td><td>4<\/td><td>€48,000<\/td><\/tr><tr data-aim=\"r2\"><td>Implementation<\/td><td>16<\/td><td>€310,000<\/td><\/tr><\/tbody><\/table>","anchor":{"after":"dl","container":"body"},"author":{"model":"claude-opus-4-8","type":"agent"},"batch":"b1","kind":"direct_edit","seq":6,"t":"2026-07-07T14:00:05Z","target":"pr"}
-{"action":"modify","batch":"b3","before":"<p data-aim=\"intro\" class=\"text-gray-700 text-lg\">We propose a three-year services engagement.<\/p>","decided_by":{"id":"ada","type":"human"},"decision":"accepted","explanation":"Lead with the outcome.","kind":"resolution","proposal":"p-p6jrq5c8","proposed":"<p data-aim=\"intro\" class=\"text-gray-700 text-lg\">Acme saves €2.1M over three years by consolidating vendor tooling onto one platform.<\/p>","proposed_at":"2026-07-07T14:00:10Z","proposed_by":{"model":"claude-opus-4-8","type":"agent"},"seq":7,"t":"2026-07-07T14:00:11Z","target":"intro"}
-{"action":"delete","batch":"b4","before":"<li data-aim=\"d1\">Discovery workshop and audit<\/li>","decided_by":{"id":"ada","type":"human"},"decision":"rejected","explanation":"Audit is table stakes; cut it.","kind":"resolution","proposal":"p-3kgpgn1d","proposed_at":"2026-07-07T14:00:12Z","proposed_by":{"model":"claude-opus-4-8","type":"agent"},"seq":8,"t":"2026-07-07T14:00:13Z","target":"d1"}
+{"action":"modify","batch":"b3","before":"<p data-aim=\"intro\" class=\"text-gray-700 text-lg\">We propose a three-year services engagement.<\/p>","decided_by":{"id":"ada","type":"human"},"decision":"accepted","explanation":"Lead with the outcome.","kind":"resolution","proposal":"p-s3pr8bah","proposed":"<p data-aim=\"intro\" class=\"text-gray-700 text-lg\">Acme saves €2.1M over three years by consolidating vendor tooling onto one platform.<\/p>","proposed_at":"2026-07-07T14:00:10Z","proposed_by":{"model":"claude-opus-4-8","type":"agent"},"seq":7,"t":"2026-07-07T14:00:11Z","target":"intro"}
+{"action":"delete","batch":"b4","before":"<li data-aim=\"d1\">Discovery workshop and audit<\/li>","decided_by":{"id":"ada","type":"human"},"decision":"rejected","explanation":"Audit is table stakes; cut it.","kind":"resolution","proposal":"p-j47vun4p","proposed_at":"2026-07-07T14:00:12Z","proposed_by":{"model":"claude-opus-4-8","type":"agent"},"seq":8,"t":"2026-07-07T14:00:13Z","target":"d1"}
 {"action":"modify","after":"<script type=\"application/aim-doc+json\">\n{\"page\":{\"margins\":{\"bottom\":\"20mm\",\"left\":\"18mm\",\"right\":\"18mm\",\"top\":\"20mm\"},\"orientation\":\"portrait\",\"size\":\"A4\"}}\n<\/script>","author":{"id":"ada","type":"human"},"batch":"b2","explanation":"Print layout for the client PDF.","kind":"direct_edit","seq":9,"t":"2026-07-07T14:00:08Z","target":"aim:doc"}
-{"action":"add","after":"<aim-page-break data-aim=\"4d85ok8h\"><\/aim-page-break>","anchor":{"after":"scope","container":"body"},"author":{"id":"ada","type":"human"},"batch":"b5","explanation":"Deliverables start on their own page.","kind":"direct_edit","seq":10,"t":"2026-07-07T14:00:09Z","target":"4d85ok8h"}
-{"doc_hash":"sha256:9e68bdee4c9eb5db6be98aa86d12f5aa6050618ad95764c48b6f4f10ab8df5b3","kind":"checkpoint","label":"sent-to-client","seq":11,"t":"2026-07-07T14:00:14Z"}
+{"action":"add","after":"<aim-page-break data-aim=\"m2on03aj\"><\/aim-page-break>","anchor":{"after":"scope","container":"body"},"author":{"id":"ada","type":"human"},"batch":"b5","explanation":"Deliverables start on their own page.","kind":"direct_edit","seq":10,"t":"2026-07-07T14:00:09Z","target":"m2on03aj"}
+{"doc_hash":"sha256:56c9d0617bc7f3f419ea2ce44a6c926cafa65d3670776503b6e44eabc183b3f6","kind":"checkpoint","label":"sent-to-client","seq":11,"t":"2026-07-07T14:00:14Z"}
 </script>
 </body>
 </html>

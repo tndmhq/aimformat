@@ -101,6 +101,43 @@ def main() -> None:
     self_closing_exceptions.flatten()
     files["ok_self_closing_exceptions.aim"] = self_closing_exceptions.dumps()
 
+    painted = aim.new_document(title="Literal paint fixture")
+    painted.add_chunk(
+        '<h1 data-aim="ttl" style="color:#ff69b4">Pink title</h1>', author=BOT, at=t(0)
+    )
+    painted.add_chunk(
+        '<p data-aim="tint" style="background-color:#fff1f7">Tinted.</p>', author=BOT, at=t(1)
+    )
+    painted.add_chunk(
+        '<p data-aim="callout" class="border" style="border-color:#ff69b4">'
+        'Callout with <span style="color:#ff69b4">one painted run</span>.</p>',
+        author=BOT,
+        at=t(2),
+    )
+    files["ok_paint.aim"] = painted.dumps()
+
+    # A previous-version document, still conforming under this toolkit: a
+    # 0.3 tool understands 0.2, so neither the version marker nor the
+    # stylesheet stamp is a finding (S002/S006 accept older).
+    prior = (
+        base_doc()
+        .dumps()
+        .replace(f'data-aim-version="{aim.SPEC_VERSION}"', 'data-aim-version="0.2"')
+        .replace(f'data-aim-css="{aim.SPEC_VERSION}"', 'data-aim-css="0.2"')
+    )
+    files["ok_prior_version.aim"] = prior
+
+    # …and the same document after paint entered it: the version marker moved
+    # and the history says so, on the reserved target aim:version (§3.7).
+    upgraded = aim.loads(prior)
+    upgraded.modify_chunk(
+        "h1",
+        '<h1 data-aim="h1" class="font-bold text-3xl" style="color:#ff69b4">Fixture</h1>',
+        author=ME,
+        at=t(4),
+    )
+    files["ok_version_upgrade.aim"] = upgraded.dumps()
+
     paginated = base_doc()
     paginated.set_page_setup(
         {
@@ -154,6 +191,9 @@ def main() -> None:
             '<aim-slide data-aim="sx" style="width:960px; height:540px">'
             '<h2 style="left:60px; top:50px; width:600px">T</h2></aim-slide>\n</body>',
         ),
+        "nok_S032_paint_under_prior_version.aim": flat.replace(
+            f'data-aim-version="{aim.SPEC_VERSION}"', 'data-aim-version="0.2"'
+        ).replace('<p data-aim="p1">', '<p data-aim="p1" style="color:#ff69b4">'),
         "nok_S016_id_reused_across_parents.aim": flat.replace(
             '<li data-aim="i1">First</li>', '<li data-aim="p1">First</li>'
         ),
@@ -180,8 +220,11 @@ def main() -> None:
         "nok_V004_arbitrary_value_class.aim": flat.replace(
             'class="font-bold text-3xl"', 'class="w-[347px]"'
         ),
+        # `opacity` is genuinely outside the whitelist. `color:red` would fire
+        # V008 instead since 0.3 registered the paint properties, so the
+        # fixture would stop testing V007 at all.
         "nok_V007_style_outside_whitelist.aim": flat.replace(
-            '<p data-aim="p1">', '<p data-aim="p1" style="color:red">'
+            '<p data-aim="p1">', '<p data-aim="p1" style="opacity:.5">'
         ),
         "nok_V011_unknown_theme_slot.aim": flat.replace(
             "--aim-brand-1:#1a73e8", "--aim-accent:#1a73e8"

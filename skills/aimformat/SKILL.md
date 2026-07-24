@@ -53,6 +53,23 @@ Always attribute yourself: pass `--author agent:<your-exact-model-id>`.
 Write explanations that stand alone — raw-tier readers see the explanation,
 not the payload.
 
+## Styling — scope picks the tier
+
+One element's own value → inline `style` (closed properties, closed
+grammars: geometry in px, and `color`/`background-color`/`border-color` as
+lowercase `#rrggbb`). A reusable role → a registered class. A document-wide
+constant → a theme slot.
+
+**"Make this heading pink" is one inline `style` on that heading, not a
+theme change.** A theme slot is document-global, so changing it repaints
+every element using it — including elements outside the chunks you were
+shown. You almost always see part of a document, so the literal is the only
+choice that cannot break something invisible to you. Reserve theme edits for
+genuinely document-wide requests, and say in the explanation that they
+repaint everything using the slot. Inline paint already beats any class on
+the same element, so overriding one never means removing it. Details:
+[references/format.md](references/format.md).
+
 ## CLI cheatsheet
 
 ```sh

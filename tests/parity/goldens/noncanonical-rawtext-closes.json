@@ -18,7 +18,7 @@
     }
   ],
   "containers": [],
-  "docHash": "sha256:29cbf523bf2c960379a77152e6c86d2f318d99abb2cbf55b495ba778f1869af1",
+  "docHash": "sha256:fed8c65c8130db7d375987886dd09d21bf942cc83ecf4f04f3bc53dd8f1c3638",
   "docSettings": {
     "page": {
       "margins": {
@@ -50,7 +50,7 @@
       "text": "Raw-text close spellings."
     }
   ],
-  "note": "\naim-note: This file is an AIM document (open format, v0.2) — valid HTML plus\nchunk identity, a pending-suggestions lane, and an edit history.\nAgent docs: https://aimformat.com/llms.txt\nThe reliable way to edit this file is the `aimformat` tooling, which manages\nids, suggestions, and history for you: `pip install aimformat` for the `aim`\nCLI (`aim --help`); `pip install 'aimformat[mcp]'` adds its MCP server\n(`aim mcp`). An Agent Skill exists: `npx skills add tndmhq/aimformat`.\nHand-editing as plain text is the fallback; if you do: keep every data-aim id\nstable (never renumber or reuse; give new content a fresh id), treat the\naim-proposals appendix and the history script as append-only tool lanes, and\nvalidate with `aim lint`. Humans review in AIM editors:\nhttps://aimformat.com/editors\n",
+  "note": "\naim-note: This file is an AIM document (open format, v0.3) — valid HTML plus\nchunk identity, a pending-suggestions lane, and an edit history.\nAgent docs: https://aimformat.com/llms.txt\nThe reliable way to edit this file is the `aimformat` tooling, which manages\nids, suggestions, and history for you: `pip install aimformat` for the `aim`\nCLI (`aim --help`); `pip install 'aimformat[mcp]'` adds its MCP server\n(`aim mcp`). An Agent Skill exists: `npx skills add tndmhq/aimformat`.\nHand-editing as plain text is the fallback; if you do: keep every data-aim id\nstable (never renumber or reuse; give new content a fresh id), treat the\naim-proposals appendix and the history script as append-only tool lanes, and\nvalidate with `aim lint`. Humans review in AIM editors:\nhttps://aimformat.com/editors\n",
   "pageSetup": {
     "contentHeightMm": 257.0,
     "contentWidthMm": 170.0,
@@ -66,10 +66,10 @@
     "size": "A4"
   },
   "proposals": [],
-  "specVersion": "0.2",
+  "specVersion": "0.3",
   "stylesheet": {
     "sha256": "sha256:3f84972f1398db99bd83981e9478ec466b2053ba367b9a17625105f8e1e1cb6a",
-    "version": "0.2"
+    "version": "0.3"
   },
   "theme": {},
   "title": "Non-canonical — raw-text end tags"

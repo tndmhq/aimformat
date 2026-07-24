@@ -1,9 +1,9 @@
 <!doctype html>
-<html data-aim-version="0.2" lang="en">
+<html data-aim-version="0.3" lang="en">
 <head>
 <meta charset="utf-8">
 <!--
-aim-note: This file is an AIM document (open format, v0.2) — valid HTML plus
+aim-note: This file is an AIM document (open format, v0.3) — valid HTML plus
 chunk identity, a pending-suggestions lane, and an edit history.
 Agent docs: https://aimformat.com/llms.txt
 The reliable way to edit this file is the `aimformat` tooling, which manages
@@ -17,7 +17,7 @@ validate with `aim lint`. Humans review in AIM editors:
 https://aimformat.com/editors
 -->
 <title>Conformance fixture</title>
-<style data-aim-css="0.2">
+<style data-aim-css="0.3">
 :root{--aim-brand-1:#1d4ed8;--aim-brand-2:#0f766e;--aim-brand-3:#b45309;--aim-brand-4:#6d28d9;--aim-font-heading:system-ui, -apple-system, 'Segoe UI', sans-serif;--aim-font-body:system-ui, -apple-system, 'Segoe UI', sans-serif;--aim-font-mono:ui-monospace, 'SF Mono', Menlo, Consolas, monospace}
 html{-webkit-text-size-adjust:100%}
 body{margin:2rem auto;padding:0 1.5rem;max-width:52rem;font-family:var(--aim-font-body);font-size:1rem;line-height:1.6;color:#1f2937;background:#fff}
@@ -307,7 +307,7 @@ aim-assets{display:none}
 <p data-aim="p1">Sneakily different.</p>
 <ul data-aim-container="l1"><li data-aim="i1">First</li><li data-aim="i2">Run…</li><li data-aim="i2">…run</li></ul>
 <aim-proposals>
-<aim-proposal id="p-bu0ug3tk" data-action="add" data-anchor-after="p1" data-anchor-container="body" data-at="2026-07-07T12:00:07Z" data-author="human" data-author-id="ada" data-batch="b4" data-explanation="More context."><template><p data-aim="dvang063">Pending addition.</p></template></aim-proposal>
+<aim-proposal id="p-fufi3ijb" data-action="add" data-anchor-after="p1" data-anchor-container="body" data-at="2026-07-07T12:00:07Z" data-author="human" data-author-id="ada" data-batch="b4" data-explanation="More context."><template><p data-aim="csn1kg0f">Pending addition.</p></template></aim-proposal>
 </aim-proposals>
 <script type="application/aim-history+jsonl">
 
@@ -318,9 +318,9 @@ aim-assets{display:none}
 {"action":"add","after":"<h1 data-aim=\"h1\" class=\"font-bold text-3xl\">Fixture<\/h1>","anchor":{"after":null,"container":"body"},"author":{"model":"claude-opus-4-8","type":"agent"},"batch":"b1","kind":"direct_edit","seq":1,"t":"2026-07-07T12:00:00Z","target":"h1"}
 {"action":"add","after":"<p data-aim=\"p1\">One paragraph &amp; some text.<\/p>","anchor":{"after":"h1","container":"body"},"author":{"model":"claude-opus-4-8","type":"agent"},"batch":"b2","kind":"direct_edit","seq":2,"t":"2026-07-07T12:00:01Z","target":"p1"}
 {"action":"add","after":"<ul data-aim-container=\"l1\"><li data-aim=\"i1\">First<\/li><li data-aim=\"i2\">Run…<\/li><li data-aim=\"i2\">…run<\/li><\/ul>","anchor":{"after":"p1","container":"body"},"author":{"model":"claude-opus-4-8","type":"agent"},"batch":"b3","kind":"direct_edit","seq":3,"t":"2026-07-07T12:00:02Z","target":"l1"}
-{"action":"modify","batch":"b5","before":"<p data-aim=\"p1\">One paragraph &amp; some text.<\/p>","decided_by":{"id":"ada","type":"human"},"decision":"accepted","explanation":"Tighter.","kind":"resolution","proposal":"p-rmq8un3p","proposed":"<p data-aim=\"p1\">Better text.<\/p>","proposed_at":"2026-07-07T12:00:03Z","proposed_by":{"model":"claude-opus-4-8","type":"agent"},"seq":4,"t":"2026-07-07T12:00:04Z","target":"p1"}
-{"action":"delete","batch":"b6","before":"<li data-aim=\"i1\">First<\/li>","decided_by":{"id":"ada","type":"human"},"decision":"rejected","explanation":"Redundant.","kind":"resolution","proposal":"p-nuvcavp3","proposed_at":"2026-07-07T12:00:05Z","proposed_by":{"model":"claude-opus-4-8","type":"agent"},"seq":5,"t":"2026-07-07T12:00:06Z","target":"i1"}
-{"doc_hash":"sha256:64facdf8aa13540aaae44dd34ed370bb7ece9e6b9454d96d673ef4add071bd70","kind":"checkpoint","label":"reviewed","seq":6,"t":"2026-07-07T12:00:08Z"}
+{"action":"modify","batch":"b5","before":"<p data-aim=\"p1\">One paragraph &amp; some text.<\/p>","decided_by":{"id":"ada","type":"human"},"decision":"accepted","explanation":"Tighter.","kind":"resolution","proposal":"p-4kk2ha0a","proposed":"<p data-aim=\"p1\">Better text.<\/p>","proposed_at":"2026-07-07T12:00:03Z","proposed_by":{"model":"claude-opus-4-8","type":"agent"},"seq":4,"t":"2026-07-07T12:00:04Z","target":"p1"}
+{"action":"delete","batch":"b6","before":"<li data-aim=\"i1\">First<\/li>","decided_by":{"id":"ada","type":"human"},"decision":"rejected","explanation":"Redundant.","kind":"resolution","proposal":"p-231gi330","proposed_at":"2026-07-07T12:00:05Z","proposed_by":{"model":"claude-opus-4-8","type":"agent"},"seq":5,"t":"2026-07-07T12:00:06Z","target":"i1"}
+{"doc_hash":"sha256:81156bad0a33faf2a78d57eae1fcd6e552da88f43265197a649071fb6675dd29","kind":"checkpoint","label":"reviewed","seq":6,"t":"2026-07-07T12:00:08Z"}
 </script>
 </body>
 </html>

@@ -1,7 +1,7 @@
 ---
 date: 2026-07-22 08:44
 type: plan
-status: active
+status: done
 related:
   - 2026-07-22_0814_report_colour-model-problem.md
 ---
@@ -285,8 +285,25 @@ Do not change implementation until these tests fail for the expected reason.
 4. Update `README.md`, `docs/for-agents.md`, the bundled Agent Skill references,
    and `CHANGELOG.md`. The agent guide should prefer theme classes when the
    user asks for a reusable document role and literal style when they ask for
-   one exact/local colour.
-5. Re-read the changed README/spec/guide prose for plain, non-marketing
+   one exact/local colour — and it should give the **reason**, not just the
+   rule: an agent editing a document usually sees part of it, and a literal
+   value is the only one of the two that cannot repaint something it was never
+   shown. That is the safety property this change buys. A rule carrying its
+   reason survives paraphrase into someone else's system prompt; a bare
+   instruction does not.
+5. **Say what the guidance must STOP saying, not only what it gains.** Any text
+   of the shape "colouring an element means setting a slot AND adding the
+   matching class" describes the mechanism this change replaces, and a guide
+   carrying the old rule beside the new one will produce both edits — a coupled
+   theme-plus-chunk proposal is precisely the reported defect. Sweep
+   `for-agents.md`, the Skill, the spec prose and the README for it, and keep
+   the shared-slot warning ("changing a slot repaints every element using it")
+   scoped to deliberate theme edits so it no longer fires on a one-off colour.
+6. `docs/for-agents.md` and the Agent Skill state these rules independently and
+   will drift apart. Make them agree on substance, and write both for **any**
+   client of the format — an MCP client, a coding agent, some editor's own
+   model — never for one consumer's edit loop.
+7. Re-read the changed README/spec/guide prose for plain, non-marketing
    language before landing. (Deliberately not a named checklist: the one this
    line used to invoke lives outside this repo, so it was a gate no reader
    here could run.)
@@ -443,6 +460,8 @@ planned here.
 - [ ] A class-based border colour resolves the same in DOCX as in the browser,
       shorthand resets included (`class="border-t border-red-600"`).
 - [ ] Literal local paint needs no theme mutation.
+- [ ] No agent-facing text anywhere in this repo still teaches the coupled
+      slot-plus-class recipe for a one-off colour.
 - [ ] Inline paint wins over classes in every renderer.
 - [ ] DOCX text colour inherits across every leaf emitter.
 - [ ] DOCX background/border mappings and Word-only degradations are tested

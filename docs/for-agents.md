@@ -65,6 +65,60 @@ for when you have no tooling at all.
 pip install aimformat    # zero runtime dependencies (stdlib only)
 ```
 
+## Styling: three tiers, chosen by scope
+
+Every styling decision picks one of three tiers, and the tier follows the
+**scope** of what you were asked to change:
+
+| Scope | Tier | Example |
+|---|---|---|
+| one element, one exact value | inline `style` | `<h1 style="color:#ff69b4">` |
+| a role used in several places | a registered class | `<h2 class="text-brand-2">` |
+| a constant for the whole document | a theme slot | `--aim-brand-2: #ff69b4` |
+
+`style` accepts a closed list of properties, each with its own closed value
+grammar: `left, top, width, height, transform, z-index` for slide geometry,
+and `color, background-color, border-color` for paint. Paint values are
+lowercase six-digit sRGB — `#ff69b4` — and nothing else: no named colours,
+no `#fff`, no `rgb()`, no `var()`, no `transparent`, no `!important`. To
+clear an override, remove the declaration.
+
+### Colour: prefer the literal, and here is why
+
+**"Make this heading pink" is one inline `style` on that heading.** It is
+not a theme change, and it does not need one.
+
+The reason matters more than the rule, because it tells you what to do in
+the cases this page does not list. **You are almost always looking at part
+of a document, not all of it.** A theme slot is document-global — every
+element carrying that slot's class repaints, and so does every link — so
+changing one to satisfy a local request means editing elements you were
+never shown. A literal value cannot do that. It is the only one of the two
+that is safe to choose without having read the whole file.
+
+So:
+
+- an exact or local request ("this title in `#ff69b4`", "tint this
+  callout") → inline paint on that element, one chunk edit;
+- a reusable role ("headings should use our secondary brand colour") → the
+  registered class, which follows whatever the slot holds;
+- a genuinely document-wide change ("our brand colour is now teal") → a
+  theme edit — and say in your explanation that it repaints every element
+  using that slot, because it does;
+- ambiguous → the literal.
+
+Inline paint outranks any class on the same element, so you never need to
+remove a colour class to override it. `color` inherits into descendants;
+`background-color` and `border-color` do not. `border-color` recolours a
+border that already exists (from a `border` utility, or from the element's
+own default like `hr` and `blockquote`); on an element with no border it
+renders nothing, exactly as in CSS.
+
+Adding paint to a document that predates v0.3 upgrades its declared
+version, and the tooling records that upgrade as a history event so earlier
+checkpoints still verify. If you hand-edit, do not touch
+`data-aim-version` yourself — let the tooling do it, or leave it alone.
+
 ## CLI cheatsheet
 
 | Verb | What it does |
@@ -186,8 +240,8 @@ invariants or you will corrupt identity and history:
   stays burned for the document's lifetime.
 - **Mint fresh ids for new content**, matching
   `^[a-z0-9][a-z0-9_-]{0,63}$`. The `p-` prefix is reserved for proposal
-  ids — never use it for chunks or containers. `body`, `aim:theme`, and
-  `aim:doc` are reserved.
+  ids — never use it for chunks or containers. `body`, `aim:theme`,
+  `aim:doc`, and `aim:version` are reserved.
 - **Treat `<aim-proposals>` and the history script
   (`<script type="application/aim-history+jsonl">`) as append-only tool
   lanes.** Do not rewrite, reorder, or delete their existing entries by

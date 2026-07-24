@@ -117,6 +117,51 @@ def nested_slides_doc() -> aim.AimDocument:
     return doc
 
 
+def paint_doc() -> aim.AimDocument:
+    """Literal per-element paint: block, inline span, mixed slide geometry
+    and paint, and a paint-only pending payload."""
+    doc = aim.new_document(title="Literal paint — colour, background, border")
+    with doc.batch():
+        doc.add_chunk(
+            '<h1 data-aim="ttl" class="font-bold" style="color:#ff69b4">Pink title</h1>',
+            author=BOT,
+            at=t(0),
+        )
+        doc.add_chunk(
+            '<p data-aim="tint" style="background-color:#fff1f7">Tinted paragraph.</p>',
+            author=BOT,
+            at=t(1),
+        )
+        doc.add_chunk(
+            '<p data-aim="callout" class="border" style="border-color:#ff69b4">Callout.</p>',
+            author=BOT,
+            at=t(2),
+        )
+        doc.add_chunk(
+            '<p data-aim="run">One <span style="color:#ff69b4">painted run</span> only.</p>',
+            author=BOT,
+            at=t(3),
+        )
+        doc.add_chunk(
+            '<aim-slide data-aim-container="s1" style="width:960px; height:540px">'
+            '<h2 data-aim="st" class="text-5xl" '
+            'style="left:48px; top:32px; width:450px; color:#ff69b4">Slide title</h2>'
+            '<p data-aim="sb" style="left:48px; top:150px; width:600px; '
+            'background-color:#fff1f7; border-color:#ff69b4">Body.</p>'
+            "</aim-slide>",
+            author=BOT,
+            at=t(4),
+        )
+    doc.propose_modify(
+        "tint",
+        '<p data-aim="tint" style="background-color:#f0fdf4">Tinted paragraph.</p>',
+        author=BOT,
+        explanation="Green tint instead.",
+        at=t(10),
+    )
+    return doc
+
+
 def proposals_doc() -> aim.AimDocument:
     """Every proposal action, chained adds, shells, and dependencies."""
     doc = aim.new_document(title="Pending lane — every action")
@@ -547,6 +592,7 @@ def noncanonical_rawtext_closes_text() -> str:
 
 FIXTURES = {
     "runs": runs_doc,
+    "paint": paint_doc,
     "nested-slides": nested_slides_doc,
     "proposals": proposals_doc,
     "theme-doc-meta": theme_doc_meta_doc,

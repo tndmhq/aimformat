@@ -1,5 +1,5 @@
 {
-  "spec_version": "0.2",
+  "spec_version": "0.3",
   "ids": {
     "chunk_pattern": "^[a-z0-9][a-z0-9_-]{0,63}$",
     "proposal_pattern": "^p-[a-z0-9][a-z0-9_-]{0,63}$",
@@ -7,7 +7,8 @@
     "reserved_targets": [
       "body",
       "aim:theme",
-      "aim:doc"
+      "aim:doc",
+      "aim:version"
     ],
     "default_length": 8
   },
@@ -290,7 +291,10 @@
       "width",
       "height",
       "transform",
-      "z-index"
+      "z-index",
+      "color",
+      "background-color",
+      "border-color"
     ],
     "patterns": {
       "left": "^-?\\d+(\\.\\d+)?px$",
@@ -298,8 +302,17 @@
       "width": "^\\d+(\\.\\d+)?px$",
       "height": "^\\d+(\\.\\d+)?px$",
       "transform": "^(rotate\\(-?\\d+(\\.\\d+)?deg\\)|translate\\(-?\\d+(\\.\\d+)?px, ?-?\\d+(\\.\\d+)?px\\)|scale\\(\\d+(\\.\\d+)?\\))( (rotate\\(-?\\d+(\\.\\d+)?deg\\)|translate\\(-?\\d+(\\.\\d+)?px, ?-?\\d+(\\.\\d+)?px\\)|scale\\(\\d+(\\.\\d+)?\\)))*$",
-      "z-index": "^-?\\d+$"
-    }
+      "z-index": "^-?\\d+$",
+      "color": "^#[0-9a-f]{6}$",
+      "background-color": "^#[0-9a-f]{6}$",
+      "border-color": "^#[0-9a-f]{6}$"
+    },
+    "paint": [
+      "color",
+      "background-color",
+      "border-color"
+    ],
+    "paint_since": "0.3"
   },
   "page": {
     "sizes_mm": {
@@ -699,7 +712,7 @@
     ],
     "S002": [
       "warning",
-      "document targets a different spec version"
+      "document targets a spec version this tool does not implement"
     ],
     "S003": [
       "error",
@@ -715,7 +728,7 @@
     ],
     "S006": [
       "warning",
-      "embedded aim.css targets a different spec version"
+      "embedded aim.css targets a spec version this tool does not implement"
     ],
     "S007": [
       "error",
@@ -813,6 +826,10 @@
       "error",
       "aim-slide marked as a chunk (slides are containers)"
     ],
+    "S032": [
+      "error",
+      "literal paint requires a supporting spec version"
+    ],
     "V001": [
       "error",
       "element not allowed in the asset registry"
@@ -839,7 +856,7 @@
     ],
     "V007": [
       "error",
-      "style property outside the geometry whitelist"
+      "style property outside the inline-style whitelist"
     ],
     "V008": [
       "error",

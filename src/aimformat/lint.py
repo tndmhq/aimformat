@@ -144,11 +144,23 @@ class _Linter:
         version = html.get("data-aim-version")
         if version is None:
             self.add("S001", ERROR, "<html> is missing data-aim-version")
-        elif version != REGISTRY.spec_version:
+        elif not REGISTRY.implements(version):
             self.add(
                 "S002",
                 WARNING,
-                f"document targets spec {version}, this tool implements {REGISTRY.spec_version}",
+                f"document targets spec {version}, this tool implements "
+                f"{REGISTRY.spec_version} — rules it does not know are unchecked",
+            )
+        if (
+            version is not None
+            and not REGISTRY.version_includes(version, REGISTRY.paint_since)
+            and self._contains_literal_paint()
+        ):
+            self.add(
+                "S032",
+                ERROR,
+                f"literal paint requires spec {REGISTRY.paint_since} or newer, "
+                f"but the document declares {version}",
             )
         head = self.state.head
         if not head.find(lambda e: e.tag == "meta" and e.get("charset") == "utf-8"):
@@ -162,12 +174,12 @@ class _Linter:
                 WARNING,
                 "no embedded aim.css (<style data-aim-css>) — raw-tier rendering degrades",
             )
-        elif css.get("data-aim-css") != REGISTRY.spec_version:
+        elif not REGISTRY.implements(css.get("data-aim-css")):
             self.add(
                 "S006",
                 WARNING,
-                f"embedded aim.css targets {css.get('data-aim-css')!r}, "
-                f"expected {REGISTRY.spec_version!r}",
+                f"embedded aim.css targets {css.get('data-aim-css')!r}, newer than the "
+                f"{REGISTRY.spec_version!r} this tool implements",
             )
         metas = [
             e
@@ -234,6 +246,15 @@ class _Linter:
         # structural chrome: no event handlers on <html>/<body>
         self._forbid_handlers(self.state.html, "html")
         self._forbid_handlers(self.state.body, "body")
+        for name, _ in self.state.body.attrs:
+            if not name.startswith("on") and not name.startswith("data-x-"):
+                self.add(
+                    "V003",
+                    ERROR,
+                    f"attribute {name!r} is not allowed on <body> "
+                    "(body state is not addressable or hashed)",
+                    "body",
+                )
 
         # <head>: closed child vocabulary + a forbidden-element / handler sweep
         # (vocabulary() never visits the head)
@@ -277,6 +298,21 @@ class _Linter:
         for name, _ in el.attrs:
             if name.startswith("on"):
                 self.add("X002", ERROR, f"event-handler attribute {name!r} is forbidden", where)
+
+    def _contains_literal_paint(self) -> bool:
+        """Paint anywhere retained by the file needs the paint-era version.
+
+        The body serialization covers live constructs and pending templates.
+        Raw history scripts are inert DOM text, so inspect every markup field
+        that history retains separately as well.
+        """
+        try:
+            return self.doc._retains_literal_paint()
+        except (HistoryError, ParseError):
+            # The dedicated history pass reports malformed JSONL as H002 and
+            # malformed retained markup as H006. Neither can establish paint
+            # here, and neither may short-circuit lint as generic S000.
+            return False
 
     def body_sections(self) -> None:
         seen: dict[int, int] = {}
@@ -539,7 +575,7 @@ class _Linter:
                 self.add(
                     "V007",
                     ERROR,
-                    f"style property {prop!r} is outside the geometry "
+                    f"style property {prop!r} is outside the inline-style "
                     f"whitelist {REGISTRY.style_prop_order}",
                     loc,
                 )

@@ -37,13 +37,17 @@ One registry drives everything; most changes touch it plus one artifact:
   style whitelist, theme slots, event schemas, rule codes). Change it and:
   - regenerate the spec appendix: `python3 scripts/gen_spec_appendix.py`
     (CI fails on a stale appendix);
-  - the linter and `aim.css` pick it up automatically (both read the
-    registry at import time).
+  - regenerate the TypeScript tables:
+    `python3 scripts/gen_ts_registry.py` (`tests/test_ts_registry.py` fails
+    on a stale `ts/src/registry.data.ts`);
+  - the linter, `aim.css` and the paint resolver pick it up automatically
+    (all three read the registry at import time).
 - `spec.md` is the normative text. Every ` ```aim ` fenced block is a
-  complete document that CI lints (`tests/test_spec.py`); intentionally
-  invalid examples must use plain ` ```html ` fences. Keep snippets
-  canonical. The C001 finding prints the exact expected line when you get
-  it wrong.
+  complete document that CI lints (`tests/test_spec.py`); anything that is
+  not one — an intentionally invalid example, or a fragment showing a single
+  element — must use plain ` ```html ` fences, and pin its conformance claim
+  in the test suite instead. Keep snippets canonical. The C001 finding
+  prints the exact expected line when you get it wrong.
 - `tests/fixtures/` is the conformance suite: `ok_*.aim` must lint clean,
   `nok_<CODE>_*.aim` must trigger exactly `<CODE>`. One rule per file.
   Regenerate with `python3 scripts/gen_fixtures.py` (which also

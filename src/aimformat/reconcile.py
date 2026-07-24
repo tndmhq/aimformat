@@ -27,6 +27,10 @@ Scope and honesty:
 - **Some damage is detectable but not repairable** append-only: a tampered
   checkpoint ``doc_hash`` line, for instance. Whatever :meth:`verify` still
   reports after reconciliation is returned as :attr:`ReconcileReport.residual`.
+- **A hand-bumped version can make a first-paint repair ambiguous.** When
+  checkpoints prove the old marker matters but no new version event was
+  synthesized, reconcile refuses before mutating the caller. Restoring the old
+  marker lets the normal paint-upgrade path record both values.
 - Reconcile makes the *history* consistent with the body; it does not make an
   invalid body valid — vocabulary or structure violations the hand edit
   introduced are declared as-is and remain the linter's to flag.
@@ -40,12 +44,14 @@ from dataclasses import dataclass, field
 from . import ids
 from .canonical import document_text, serialize
 from .document import (
+    VERSION_TARGET,
     AimDocument,
     Anchor,
     DocState,
     _apply_move_data,
     _ChainedAddCycle,
     _now_iso,
+    _payload_has_paint,
     resolution_order,
 )
 from .dom import Element, parse_fragment, parse_html
@@ -129,6 +135,11 @@ def _check_log(events: list[Event]) -> None:
 def _apply_event(state: DocState, ev: Event) -> None:
     target, action = ev.target or "", ev.action
     payload = ev.applied_payload
+    if target == VERSION_TARGET:
+        if action != "modify" or payload is None:
+            raise HistoryError("aim:version event must be a modify with an after value")
+        state.set_spec_version(payload)
+        return
     if target == "aim:theme":
         state.set_theme_markup(payload)  # None removes the block
         return
@@ -369,21 +380,23 @@ def _fixup_ids(work: AimDocument, expected_alive: set[str]) -> list[tuple[str | 
 # the same data shapes the SDK operations write, plus origin: "reconcile"
 
 
-def _base(S: AimDocument, author: Actor, at: str | None) -> dict:
+def _base(S: AimDocument, author: Actor, at: str | None, *, batch: str | None = None) -> dict:
     return {
         "seq": S.seq + 1,
         "kind": "direct_edit",
         "t": at or _now_iso(),
         "author": author.to_obj(),
-        "batch": S._batch_id(),
+        "batch": batch or S._batch_id(),
         "origin": "reconcile",
     }
 
 
 def _ev_modify(S: AimDocument, target: str, after: str, author: Actor, at: str | None) -> None:
     before = S._state.serial(target)
+    S._preflight_paint_upgrade(after, lambda trial: trial._state.replace(target, after))
+    upgrade_batch = S._ensure_paint_version(after, author=author, at=at)
     S._state.replace(target, after)
-    data = _base(S, author, at)
+    data = _base(S, author, at, batch=upgrade_batch)
     data.update({"target": target, "action": "modify", "before": before, "after": after})
     S._append_event(data)
 
@@ -400,8 +413,10 @@ def _ev_delete(S: AimDocument, target: str, author: Actor, at: str | None) -> No
 def _ev_add(S: AimDocument, serial: str, anchor: Anchor, author: Actor, at: str | None) -> None:
     nodes = [n for n in parse_fragment(serial) if isinstance(n, Element)]
     target = nodes[0].chunk_id or nodes[0].container_id or ""
+    S._preflight_paint_upgrade(serial, lambda trial: trial._state.insert(serial, anchor))
+    upgrade_batch = S._ensure_paint_version(serial, author=author, at=at)
     S._state.insert(serial, anchor)
-    data = _base(S, author, at)
+    data = _base(S, author, at, batch=upgrade_batch)
     data.update({"target": target, "action": "add", "anchor": anchor.to_obj(), "after": serial})
     S._append_event(data)
 
@@ -613,22 +628,40 @@ def reconcile_document(
     _strip_body_state(S)
     _replay(S, events)
     expected_alive = S._state.all_ids()
+    expected_has_paint = any(_payload_has_paint(unit.serial) for unit in _units(S._state).values())
 
     work = _clone(doc)  # A: the actual body, ids fixed up
     report = ReconcileReport()
     report.assigned_ids = _fixup_ids(work, expected_alive)
     _align_theme_baseline(S, events, work)
+    actual_has_paint = any(_payload_has_paint(unit.serial) for unit in _units(work._state).values())
 
     n0 = len(events)
     with S.batch():  # one reconcile = one editing intention
         _drive(S, work, actor, at)
         _reject_dangling(S, actor, at, report)
+    if any(event.target == VERSION_TARGET for event in S.history[n0:]):
+        # The actual body was authored under an older marker, but reconciling
+        # its first literal paint deliberately upgraded the repaired state.
+        # Compare against that recorded version, not the stale input marker.
+        work._state.set_spec_version(S.spec_version)
     if S._state.doc_hash() != work._state.doc_hash():
         raise HistoryError(
             "reconcile did not converge — this is a bug in aimformat, please report it"
         )
     report.events = S.history[n0:]
     report.residual = S.verify()
+    if (
+        actual_has_paint
+        and not expected_has_paint
+        and not any(event.target == VERSION_TARGET for event in report.events)
+        and any("checkpoint" in problem and "mismatch" in problem for problem in report.residual)
+    ):
+        raise HistoryError(
+            "cannot reconcile out-of-band paint after an unrecorded version marker change: "
+            "the earlier declared version cannot be recovered safely. Restore the pre-edit "
+            "version marker and reconcile again so the upgrade can be recorded"
+        )
 
     if report.changed and not dry_run:
         burned = set(S._get_history_index().burned_ids)

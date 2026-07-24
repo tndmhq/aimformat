@@ -1931,14 +1931,22 @@ class TestEveryAimCssBlockIsVerified:
         )
         assert "X006" in {f.code for f in aim.lint_text(text)}
 
-    def test_inert_stale_placeholder_stays_warning_only(self, basic_doc):
+    def _placeholder(self, basic_doc, version: str) -> dict[str, str]:
         text = re.sub(
             r'<style data-aim-css="[^"]*">.*?</style>',
-            '<style data-aim-css="0.1">/* aim.css placeholder */</style>',
+            f'<style data-aim-css="{version}">/* aim.css placeholder */</style>',
             self._text(basic_doc),
             flags=re.S,
         )
-        codes = {f.code: f.level for f in aim.lint_text(text)}
+        return {f.code: f.level for f in aim.lint_text(text)}
+
+    def test_inert_older_placeholder_is_no_finding_at_all(self, basic_doc):
+        codes = self._placeholder(basic_doc, "0.1")
+        assert "X006" not in codes and "X005" not in codes
+        assert "S006" not in codes  # this tool implements 0.1
+
+    def test_inert_future_placeholder_stays_warning_only(self, basic_doc):
+        codes = self._placeholder(basic_doc, "9.9")
         assert "X006" not in codes and "X005" not in codes
         assert codes.get("S006") == "warning"
 
@@ -3381,9 +3389,11 @@ _RULE_PROBES = {
     "P013": lambda t: _before_history(
         t, _card(_ADD_ATTRS.replace('data-at="2026-07-07T10:00:05Z"', 'data-at="yesterday"'))
     ),
+    # a NEWER stamp: S006 fires only for a version this tool does not
+    # implement, so an older stamp is deliberately silent
     "S006": lambda t: re.sub(
         r'<style data-aim-css="[^"]*">.*?</style>',
-        '<style data-aim-css="0.1">/* aim.css placeholder */</style>',
+        '<style data-aim-css="9.9">/* aim.css placeholder */</style>',
         t,
         flags=re.S,
     ),

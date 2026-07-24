@@ -1,8 +1,11 @@
 # `.aim`: an open document format for human + AI co-authoring
 
-**Status: v0.2 draft.** Spec and reference tooling are published; breaking
-changes are possible until 1.0. v0.2 added pagination: page setup
-(`aim:doc`) and hard page breaks.
+**Status: v0.3 draft.** Spec and reference tooling are published; breaking
+changes are possible until 1.0. v0.3 added literal per-element paint —
+validated inline `color`, `background-color` and `border-color` — so one
+element can be given one exact colour without touching a document-wide
+theme slot. v0.2 added pagination: page setup (`aim:doc`) and hard page
+breaks.
 [Specification](https://github.com/tndmhq/aimformat/blob/main/spec.md) ·
 [Getting started](https://github.com/tndmhq/aimformat/blob/main/docs/guide/getting-started.md) ·
 [Examples](https://github.com/tndmhq/aimformat/blob/main/examples/)
@@ -191,6 +194,13 @@ Design pillars (details and rationale in the spec):
 - HTML plus a closed Tailwind-vocabulary subset. Models read and write it
   accurately, a finite vocabulary with one versioned stylesheet kills
   cross-model drift, and every browser renders it for free.
+- Styling has three tiers, and which one you reach for is decided by the
+  *scope* of the change, not by taste: reusable roles are classes,
+  document-wide constants are theme slots, and one element's own exact
+  value — a position, or since v0.3 a colour — is inline `style`, on a
+  closed property list with a closed grammar per property. An editing agent
+  usually sees part of a document; the literal is the only tier that cannot
+  repaint something it was never shown.
 - Semantic chunking. Chunk boundaries are authorial; the chunk is the unit
   of meaning, retrieval, edit targeting, and explanation.
 - Propose/accept as file primitives, with persisted attribution,

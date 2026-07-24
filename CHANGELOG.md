@@ -3,7 +3,99 @@
 All notable changes to the spec and the reference toolkit. The package
 version tracks the spec version it implements (0.x minors may break).
 
-## 0.2.1 — unreleased
+## 0.3.0 — unreleased
+
+Everything below shipped as 0.3.0; the 0.2.1 line was never released, and
+the paint work moves the spec version, so the whole unreleased set carries
+the new number.
+
+- **Literal per-element paint (spec §3.3)** — `style` now carries
+  `color`, `background-color` and `border-color` alongside slide geometry,
+  on a closed grammar: lowercase six-digit sRGB (`^#[0-9a-f]{6}$`) and
+  nothing else. Named colours, `#rgb`, `rgb()`, `transparent`,
+  `currentColor`, `var()` and `!important` all fail V008; unregistered
+  properties still fail V007. Canonical order appends paint after geometry,
+  so body and authored-head markup that uses none keeps its previous ordering;
+  the machine-owned stylesheet cache may still refresh independently.
+
+  This is what "make only this heading pink" needed. Before it, the only
+  way to spell an arbitrary colour was to repaint one of four
+  document-global brand slots — which also recolours every link and every
+  other element using that slot, and which an agent seeing part of a
+  document cannot choose safely. Brand classes stay, and keep their own
+  meaning: a class says *follow this document's token*, a literal says
+  *use this exact paint, here*. Neither is canonicalized into the other.
+
+  Cascade is native CSS and normative: inline paint outranks every class,
+  `color` inherits, `background-color` and `border-color` do not, and
+  `border-color` recolours an existing border rather than creating one.
+
+- **`aimformat.paint`** — computed paint for content trees, resolved once per
+  live construct against the generated stylesheet and stored by object
+  identity. It implements the real cascade, descendant base rules and
+  shorthand resets included: because
+  `.border-t{border-top:1px solid #e5e7eb}` is emitted after
+  `.border-red-600{border-color:#dc2626}`, `class="border-t border-red-600"`
+  renders GREY, and a converter matching `border-color` declarations alone
+  would disagree with every browser. Structural `<body>` paint is rejected
+  (V003) and never affects export because body state is neither addressable nor
+  hashed.
+
+- **DOCX paint** — text colour now **inherits** through every leaf emitter
+  (blocks, list items, `pre`/`code`, table cells, figure captions, slides
+  after linearization, and each tracked-change path), closing the
+  documented gap where `<div class="text-red-600"><p>Child</p></div>`
+  exported in default ink, and the mixed-`pre` hole where a block holding
+  both loose text and a coloured `<code>` painted nothing. Backgrounds map
+  to run/paragraph/cell shading (`w:shd`, real RGB — not Word's 16-value
+  highlight enum) and border colour to `w:bdr`/`w:pBdr`/`w:tcBorders`.
+  Word degradations, deliberate and tested: a grouping background or border
+  is approximated on every emitted descendant rather than one contiguous box
+  (a descendant's own border wins by side); a run has one border, not four
+  sides; and `hr` keeps its em-dash rule, painted in the authored border
+  colour. Descendant base paint such as `thead th` still stops inherited
+  grouping paint without itself becoming explicit Word paint. Pending payloads
+  carry their future ancestor selector context too, including the recorded
+  table shell for a pending header row. When a base descendant background such
+  as `code` masks an authored paragraph or cell background, clean export uses
+  run shading for the visible authored area rather than leaking box shading
+  behind the base background. In tracked mode, block and cell box paint rides
+  the deleted and inserted runs because Word keeps paragraph and cell
+  properties outside revisions; `accept-all` and `reject-all` retain the exact
+  paragraph/cell mapping. An unpainted document still gains no explicit Word
+  colour, shading or border, so it follows the recipient's template as before.
+  The generated suffix for an external link uses the link's computed paint,
+  so a base link colour that stops parent-colour inheritance also clears the
+  suffix instead of painting only the URL in the parent's colour.
+
+- **Version marker semantics.** `data-aim-version` is authored state that
+  writers never rewrite, and a tool now warns (S002/S006) only for a
+  version it does **not** implement — a 0.3 toolkit reads every 0.2
+  document without complaint. Adding paint to a 0.2 document is a recorded
+  upgrade: the SDK bumps the attribute AND appends a `modify` event on the
+  new reserved target `aim:version`, so replay restores the old value and
+  every earlier checkpoint still verifies. That event shares a batch with the
+  first painted edit. A document whose history cannot record it refuses paint
+  instead, and the edit is preflighted so failure leaves the older document
+  unchanged. Registry `paint_since` metadata also drives S032: declaring a
+  pre-v0.3 version while retaining paint in the live body, pending payloads, or
+  history payloads is an error rather than a false-clean older document. Undo
+  refuses that downgrade while paint remains retained; time travel below the
+  upgrade stays valid because it trims the later paint-bearing events. An
+  amendment that first adds paint moves the proposal card into the upgrade
+  batch. Rejection, supersession, and accept-with-unpainted-tweaks inspect the
+  retained `proposed` payload and share their resolution batch with the
+  upgrade. Malformed history is reported as H002 rather than a generic S000
+  failure during the earlier S032 precheck; malformed retained markup reaches
+  H006 for the same reason. Reconcile records an out-of-band first-paint
+  upgrade when the old marker is still present. If an editor hand-bumped the
+  marker too and checkpoints show that the missing `before` value matters,
+  reconcile refuses the ambiguous repair without mutating the document.
+
+  Migration: none. Existing 0.2 documents stay 0.2, serialize with an
+  unchanged body, and lint clean.
+
+## 0.2.1 — unreleased (folded into 0.3.0)
 
 - **Canonical self-closing normalization (AF-06)**: non-void elements outside
   foreign/SVG context now always serialize with explicit open and close tags;

@@ -7,6 +7,11 @@ import {
   sortClassTokens,
 } from "../src/canonical.ts";
 import { parseFragment } from "../src/parser.ts";
+import {
+  STYLE_PROP_ORDER,
+  STYLE_PROP_PAINT_SINCE,
+  STYLE_PROP_PATTERNS,
+} from "../src/registry.data.ts";
 
 const first = (markup: string): Element => {
   const el = parseFragment(markup).find(
@@ -30,7 +35,51 @@ describe("canonical serialization", () => {
   });
 
   it("keeps unknown style properties visible at the end", () => {
-    expect(normalizeStyle("color:red; left:5px")).toBe("left:5px; color:red");
+    // `opacity`, not `color`: colour is a registered paint property since 0.3
+    expect(normalizeStyle("opacity:.5; left:5px")).toBe("left:5px; opacity:.5");
+  });
+
+  it("orders paint after geometry, in registry order", () => {
+    expect(
+      normalizeStyle(
+        "border-color:#ff69b4; color:#ff69b4; top:32px; background-color:#fff1f7; left:48px",
+      ),
+    ).toBe(
+      "left:48px; top:32px; color:#ff69b4; background-color:#fff1f7; border-color:#ff69b4",
+    );
+  });
+
+  it("keeps the last of duplicate paint declarations", () => {
+    expect(normalizeStyle("color:#111111; left:2px; color:#ff69b4")).toBe(
+      "left:2px; color:#ff69b4",
+    );
+  });
+
+  it("projects the paint grammar so consumers validate against registry data", () => {
+    expect(STYLE_PROP_PAINT_SINCE).toBe("0.3");
+    const ok = (prop: string, value: string) => {
+      const pattern = STYLE_PROP_PATTERNS[prop];
+      if (pattern === undefined) throw new Error(`no grammar for ${prop}`);
+      return pattern.test(value);
+    };
+    expect(STYLE_PROP_ORDER.slice(-3)).toEqual([
+      "color",
+      "background-color",
+      "border-color",
+    ]);
+    expect(ok("color", "#ff69b4")).toBe(true);
+    for (const bad of [
+      "red",
+      "#fff",
+      "#FF69B4",
+      "rgb(255,105,180)",
+      "var(--aim-brand-1)",
+      "transparent",
+    ]) {
+      expect(ok("color", bad)).toBe(false);
+    }
+    expect(ok("background-color", "#fff1f7")).toBe(true);
+    expect(ok("border-color", "#ff69b4")).toBe(true);
   });
 
   it("compares by code point, not UTF-16 code unit", () => {

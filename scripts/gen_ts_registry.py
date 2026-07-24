@@ -60,6 +60,23 @@ def render() -> str:
         "export const STYLE_PROP_ORDER: readonly string[] = "
         f"{_ts(registry['style_props']['order'])};",
         "",
+        "// Per-property value grammars, so a consumer validates against registry",
+        "// data instead of maintaining a third copy of the grammar.",
+        "export const STYLE_PROP_PATTERNS: Readonly<Record<string, RegExp>> = {",
+        *[
+            f"  {_ts(prop)}: {_ts_regex(pattern)},"
+            for prop, pattern in registry["style_props"]["patterns"].items()
+        ],
+        "};",
+        "",
+        "// The subset of STYLE_PROP_ORDER that carries literal paint (spec §3.3);",
+        "// the rest is slide geometry.",
+        "export const STYLE_PROP_PAINT: readonly string[] = "
+        f"{_ts(registry['style_props']['paint'])};",
+        "",
+        "// First spec version whose style grammar includes literal paint.",
+        f"export const STYLE_PROP_PAINT_SINCE = {_ts(registry['style_props']['paint_since'])};",
+        "",
         f"export const SCRIPT_TYPES = {_ts(registry['sections']['script_types'])} as const;",
         "",
         "export const PAGE_SIZES_MM: Readonly<Record<string, readonly number[]>> = "

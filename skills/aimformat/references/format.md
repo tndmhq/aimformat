@@ -1,7 +1,7 @@
 # .aim format reference (condensed)
 
 Normative source: [spec.md](https://github.com/tndmhq/aimformat/blob/main/spec.md)
-(v0.2). This is the working subset an agent needs while editing.
+(v0.3). This is the working subset an agent needs while editing.
 
 ## Anatomy
 
@@ -10,14 +10,14 @@ current document before any blob:
 
 ```
 <!doctype html>
-<html data-aim-version="0.2" lang="en">
+<html data-aim-version="0.3" lang="en">
 <head>
   <meta charset="utf-8">
   <!--\naim-note: … -->                        ← agent note (§2.5)
   <title>…</title>
   <script type="application/aim-meta+json">…   ← summary + toc cache
   <script type="application/aim-doc+json">…    ← page setup (aim:doc)
-  <style data-aim-css="0.2">…                  ← machine-managed stylesheet
+  <style data-aim-css="0.3">…                  ← machine-managed stylesheet
   <style data-aim-theme>:root{--aim-brand-1:…} ← theme slots
 </head>
 <body>
@@ -61,11 +61,42 @@ so substring checks for structural markers never false-positive on it.
   by hand).
 - **Ids**: `^[a-z0-9][a-z0-9_-]{0,63}$`, unique per document, opaque, never
   renumbered, never reused (deleted ids stay burned). `p-` prefix reserved
-  for proposals; `body`, `aim:theme`, `aim:doc` reserved. The SDK mints
+  for proposals; `body`, `aim:theme`, `aim:doc`, `aim:version` reserved.
+  The SDK mints
   8-char random ids; any valid unused id you supply is honored.
 - Every content element belongs to exactly one chunk (or is container
   shell). Vocabulary is HTML + a closed Tailwind class subset + a whitelist
-  of geometry inline styles; no scripts, no event handlers, no iframes.
+  of inline styles (§Styling); no scripts, no event handlers, no iframes.
+
+## Styling: three tiers, chosen by scope
+
+- **inline `style`** — one element's own value. Closed property list, closed
+  grammar per property: `left/top/width/height/transform/z-index` (px, and
+  the `transform` functions) plus `color/background-color/border-color`,
+  whose only legal spelling is lowercase six-digit sRGB (`#ff69b4`). No
+  named colours, `#fff`, `rgb()`, `var()`, `transparent` or `!important`
+  (V008); an unregistered property is V007. Remove the declaration to clear.
+- **class** — a reusable role from the closed utility vocabulary
+  (`text-brand-2`, `text-red-600`, `bg-amber-50`, `border`).
+- **theme slot** — a document-wide constant (`--aim-brand-1…4`), edited via
+  `aim:theme`.
+
+**Colour a single element with the literal, not the theme.** A slot is
+document-global: changing it repaints every element using it, and every
+link. You are usually looking at part of a document, so a slot edit can
+change elements you were never shown — a literal cannot. Exact/local
+request → inline paint, one chunk edit. Reusable role → class. Genuinely
+document-wide ("our brand colour is now teal") → theme edit, and say in the
+explanation that it repaints everything using that slot. Ambiguous → literal.
+
+Cascade is native CSS: inline paint beats any class on the same element (so
+you never need to strip a colour class to override it), `color` inherits,
+`background-color` and `border-color` do not, and `border-color` recolours
+an existing border rather than creating one.
+
+Paint in a pre-0.3 document upgrades its `data-aim-version`; the tooling
+records that as a history event so earlier checkpoints still verify. Never
+edit `data-aim-version` by hand.
 
 ## Proposals (the pending lane)
 
@@ -119,6 +150,7 @@ M caches · C canonical form. Most common while editing:
 | S015 | invalid id |
 | S030 | more than one aim-note (warning) |
 | V002/V005 | element/class outside the vocabulary |
+| V007/V008 | inline-style property / value outside the whitelist |
 | X002/X004 | event handler / executable script (security) |
 | P008 | proposal targets an unknown id |
 | H006 | history chain broken (hand-edited history) |

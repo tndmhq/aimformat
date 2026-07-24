@@ -376,8 +376,19 @@ class TestDeclaredVersionStability:
         round_tripped = aim.loads(old).dumps()
         assert 'data-aim-version="0.1"' in round_tripped
         findings = aim.lint_text(round_tripped)
-        assert "S002" in {f.code for f in findings if f.level == "warning"}
+        # …and an older document is not a finding either: this tool implements
+        # 0.1, so warning on it would fire on every file that predates the
+        # toolkit's own version
+        assert "S002" not in {f.code for f in findings}
         assert not [f for f in findings if f.level == "error"]
+
+    def test_a_version_this_tool_does_not_implement_warns(self, empty_doc):
+        empty_doc.flatten()
+        ahead = empty_doc.dumps().replace(
+            f'data-aim-version="{aim.SPEC_VERSION}"', 'data-aim-version="9.9"'
+        )
+        findings = aim.lint_text(ahead)
+        assert "S002" in {f.code for f in findings if f.level == "warning"}
 
     def test_old_version_checkpoints_survive_a_resave(self, basic_doc):
         basic_doc.checkpoint("pinned", at=ts(5))
