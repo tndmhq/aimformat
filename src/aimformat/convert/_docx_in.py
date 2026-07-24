@@ -143,8 +143,8 @@ class _Converter:
         self.p = parsed
         self.title_text: str | None = None
         self._blocks: list[str] = []
-        # consecutive list paragraphs buffer: (num_id, ilvl, item markup)
-        self._items: list[tuple[int, int, str]] = []
+        # consecutive list paragraphs buffer: (num_id, ilvl, markup, li attr)
+        self._items: list[tuple[int, int, str, str]] = []
 
     # -- top level ---------------------------------------------------------
 
@@ -212,7 +212,16 @@ class _Converter:
                 self._flush_items()
                 self._blocks.append(self._block(f"h{heading}", inline, effective))
             elif num_pr.get("num_id") is not None:
-                self._items.append((int(num_pr["num_id"]), int(num_pr.get("ilvl") or 0), inline))
+                # list items carry their alignment class like any block —
+                # a centered bullet is visible structure too
+                self._items.append(
+                    (
+                        int(num_pr["num_id"]),
+                        int(num_pr.get("ilvl") or 0),
+                        inline,
+                        self._class_attr(effective),
+                    )
+                )
             else:
                 self._flush_items()
                 self._blocks.append(self._block("p", inline, effective))
@@ -255,14 +264,16 @@ class _Converter:
         return None
 
     def _block(self, tag: str, inline: str, effective: dict) -> str:
-        classes = []
-        align = _ALIGN_CLASS.get(str(effective.get("jc") or ""))
-        if align:
-            classes.append(align)
-        attr = f' class="{" ".join(classes)}"' if classes else ""
+        attr = self._class_attr(effective)
         if tag == "h1" and self.title_text is None:
             self.title_text = _plain_text(inline)
         return f"<{tag}{attr}>{inline}</{tag}>"
+
+    @staticmethod
+    def _class_attr(effective: dict) -> str:
+        """The block's class attribute ('' when none): alignment classes."""
+        align = _ALIGN_CLASS.get(str(effective.get("jc") or ""))
+        return f' class="{align}"' if align else ""
 
     # -- inline content ----------------------------------------------------
 
@@ -422,20 +433,20 @@ class _Converter:
         for num_id, group in _group_runs(items):
             self._blocks.append(self._list_markup(num_id, group))
 
-    def _list_markup(self, num_id: int, items: list[tuple[int, int, str]]) -> str:
+    def _list_markup(self, num_id: int, items: list[tuple[int, int, str, str]]) -> str:
         # nest from the group's MINIMUM level, not the first item's: a list
         # that starts indented and later outdents must keep the outdented
         # items (starting deeper would drop everything below the entry
         # level when the walk returns)
-        start = min(ilvl for _, ilvl, _ in items)
+        start = min(ilvl for _, ilvl, _, _ in items)
         tag = "ol" if self._ordered(num_id, start) else "ul"
         body, _ = self._nest(items, 0, start)
         return f"<{tag}>{body}</{tag}>"
 
-    def _nest(self, items: list[tuple[int, int, str]], i: int, level: int) -> tuple[str, int]:
+    def _nest(self, items: list[tuple[int, int, str, str]], i: int, level: int) -> tuple[str, int]:
         parts: list[str] = []
         while i < len(items):
-            _, ilvl, markup = items[i]
+            _, ilvl, markup, attr = items[i]
             if ilvl < level:
                 break
             if ilvl > level:
@@ -447,7 +458,7 @@ class _Converter:
                 else:
                     parts.append(f"<li>{nested_markup}</li>")
                 continue
-            parts.append(f"<li>{markup}</li>")
+            parts.append(f"<li{attr}>{markup}</li>")
             i += 1
         return "".join(parts), i
 
@@ -571,7 +582,7 @@ class _Converter:
         return "".join(f"<p>{p}</p>" for p in paras) + "".join(nested)
 
 
-def _group_runs(items: list[tuple[int, int, str]]):
+def _group_runs(items: list[tuple[int, int, str, str]]):
     """Consecutive items sharing a num_id form one list."""
     start = 0
     for i in range(1, len(items) + 1):

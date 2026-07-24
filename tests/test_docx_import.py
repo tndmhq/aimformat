@@ -163,6 +163,20 @@ class TestStyling:
         assert any('class="text-center"' in t for t in tags)
         assert any('class="text-justify"' in t for t in tags)
 
+    def test_list_item_alignment_becomes_a_class(self):
+        # a centered bullet is visible structure, same as a centered heading
+        doc = Document()
+        p = doc.add_paragraph("centered bullet", style="List Bullet")
+        p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        doc.add_paragraph("plain bullet", style="List Bullet")
+        out = io.BytesIO()
+        doc.save(out)
+        out.seek(0)
+        body = convert_docx(out).dumps()
+        assert '<li data-aim="' in body
+        assert re.search(r'<li[^>]*class="text-center"[^>]*>centered bullet</li>', body), body[:400]
+        assert re.search(r"<li[^>]*>plain bullet</li>", body)
+
     def test_caps_combines_with_other_run_styling(self):
         # all-caps + colour on one run: one span carrying BOTH the uppercase
         # class and the literal paint — neither silently dropped
