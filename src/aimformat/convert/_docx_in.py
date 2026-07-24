@@ -27,10 +27,15 @@ One heading/paragraph/list-item/table-row per chunk, as everywhere else;
 lists and tables containerize through the same step ``from_docling`` uses.
 Explicit pagination intent (sectPr page setup, ``w:br type="page"``,
 ``pageBreakBefore``) lands inline during the walk — no post-hoc text
-anchoring. Not yet carried (deliberately, tracked for the next pass):
-textboxes, OMML equations, checkbox glyphs, field codes, footnote refs,
-table borders/shading/widths, tab-stop geometry, and the full symbol-font
-map — plus everything Word means by floating objects.
+anchoring. Content dpc's model drops is recovered from the source ``w:p``
+element (the seam pairs each with its dpc item): body-level textbox
+paragraphs, content-control checkbox state, OMML equations as literal text,
+and symbol-font glyphs (a curated Wingdings map). Not yet carried
+(deliberately, tracked for the next pass): field codes, footnote refs,
+tab-stop geometry, textboxes/equations/checkboxes *inside table cells*, and
+everything Word means by floating objects. Table cell shading and widths
+survive (§_table_markup); borders do not — the vocabulary has only border
+utilities and border-colour paint, not per-side border geometry.
 """
 
 from __future__ import annotations
@@ -54,10 +59,14 @@ from ._docx_seam import (
     half_points_to_pt,
     highlight_hex,
     model_dump,
+    paragraph_checkbox,
+    paragraph_math_text,
     paragraph_run_baseline,
     parse_docx,
     resolve_color,
     shading_hex,
+    symbol_char,
+    textbox_paragraphs,
     twips_to_mm,
 )
 
@@ -140,10 +149,10 @@ class _Converter:
     # -- top level ---------------------------------------------------------
 
     def blocks(self) -> list[str]:
-        for item in self.p.document.body.content:
+        for item, elem in self.p.content:
             kind = type(item).__name__
             if kind == "Paragraph":
-                self._paragraph(item)
+                self._paragraph(item, elem)
             elif kind == "Table":
                 self._flush_items()
                 markup = self._table_markup(item)
@@ -184,7 +193,7 @@ class _Converter:
 
     # -- paragraphs --------------------------------------------------------
 
-    def _paragraph(self, para: Any) -> None:
+    def _paragraph(self, para: Any, elem: Any = None) -> None:
         direct = model_dump(para.p_pr)
         style_id = direct.pop("p_style", None)
         effective = self.p.resolver.resolve_with_direct(style_id, direct)
@@ -194,6 +203,7 @@ class _Converter:
             self._blocks.append(_PAGE_BREAK)
 
         inline, trailing_break = self._inline_markup(para, style_id)
+        inline = self._with_supplements(inline, elem)
 
         num_pr = effective.get("num_pr") or {}
         heading = self._heading_level(style_id, effective)
@@ -209,6 +219,28 @@ class _Converter:
         if trailing_break:
             self._flush_items()
             self._blocks.append(_PAGE_BREAK)
+
+        # textbox content (w:txbxContent) has no place in reading order, so it
+        # follows its anchor paragraph as ordinary paragraphs; None element →
+        # a textbox paragraph itself, which is not re-scanned (one level deep)
+        if elem is not None:
+            for tb_para in textbox_paragraphs(elem):
+                self._paragraph(tb_para, None)
+
+    def _with_supplements(self, inline: str, elem: Any) -> str:
+        """Fold a paragraph's XML-only content into its inline markup: a
+        content-control checkbox glyph leads, OMML equation text trails."""
+        if elem is None:
+            return inline
+        prefix = ""
+        checkbox = paragraph_checkbox(elem)
+        if checkbox:
+            prefix = escape_text(checkbox) + " "
+        suffix = ""
+        math = paragraph_math_text(elem)
+        if math:
+            suffix = " " + escape_text(math)
+        return (prefix + inline + suffix).strip()
 
     def _heading_level(self, style_id: str | None, effective: dict) -> int | None:
         if style_id == "Title":
@@ -299,11 +331,9 @@ class _Converter:
             elif kind == "NoBreakHyphen":
                 text_parts.append("‑")
             elif kind == "Symbol":
-                # symbol-font glyphs live in the private-use area; without
-                # the (planned) glyph map they carry no meaning as text
-                char = getattr(piece, "char", None)
-                if char and not ("\uf000" <= char <= "\uf0ff"):
-                    text_parts.append(escape_text(char))
+                glyph = symbol_char(getattr(piece, "font", None), getattr(piece, "char", None))
+                if glyph:
+                    text_parts.append(escape_text(glyph))
             elif kind == "Drawing":
                 img = self._drawing_markup(piece)
                 if img:

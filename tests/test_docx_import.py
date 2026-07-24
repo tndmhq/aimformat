@@ -244,3 +244,175 @@ def test_a_list_starting_indented_keeps_its_outdented_items():
     text = imported.dumps()
     assert "DeepFirst" in text and "ShallowSecond" in text
     assert [f for f in aim.lint(imported) if f.level == "error"] == []
+
+
+# --------------------------------------------------------------------------
+# Card A: edge-case ports (strict-OOXML, textboxes, OMML, checkboxes, symbols)
+# --------------------------------------------------------------------------
+
+from docx.oxml import parse_xml  # noqa: E402
+
+from aimformat.convert._docx_in import convert_docx  # noqa: E402
+from aimformat.convert._docx_seam import (  # noqa: E402
+    _is_safe_zip_member,
+    _is_strict_ooxml,
+    _strict_ns_to_transitional,
+    symbol_char,
+)
+
+_W = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+_M = "http://schemas.openxmlformats.org/officeDocument/2006/math"
+_W14 = "http://schemas.microsoft.com/office/word/2010/wordml"
+
+
+def _one_para_html(builder) -> str:
+    doc = Document()
+    builder(doc)
+    out = io.BytesIO()
+    doc.save(out)
+    out.seek(0)
+    imported = convert_docx(out)
+    assert [f for f in aim.lint(imported) if f.level == "error"] == []
+    return "\n".join(c.html for c in imported.chunks)
+
+
+class TestSymbols:
+    def test_wingdings_glyphs_map_to_unicode(self):
+        def build(doc):
+            p = doc.add_paragraph()
+            for char in ("F0FC", "F0B7", "F0E0"):
+                run = p.add_run()
+                sym = OxmlElement("w:sym")
+                sym.set(qn("w:font"), "Wingdings")
+                sym.set(qn("w:char"), char)
+                run._r.append(sym)
+
+        assert "✓•→" in _one_para_html(build)
+
+    def test_unmapped_wingdings_glyph_drops_never_leaks_the_hex(self):
+        # F001 is not in the curated table: it must vanish, not print "F001"
+        assert symbol_char("Wingdings", "F001") is None
+        assert symbol_char("Wingdings", "F0FC") == "✓"
+
+    def test_non_symbol_font_passes_real_characters_and_drops_pua(self):
+        assert symbol_char("Calibri", "2022") == "•"  # real BMP char
+        assert symbol_char("SomeFont", "F0FC") is None  # private-use, no table
+
+    def test_a_bad_char_is_dropped(self):
+        assert symbol_char("Wingdings", "nothex") is None
+        assert symbol_char("Wingdings", None) is None
+
+
+class TestEquations:
+    def test_omml_survives_as_literal_text(self):
+        def build(doc):
+            p = doc.add_paragraph("Result ")
+            p._p.append(parse_xml(f'<m:oMath xmlns:m="{_M}"><m:r><m:t>x=y+1</m:t></m:r></m:oMath>'))
+
+        assert "Result x=y+1" in _one_para_html(build)
+
+
+class TestCheckbox:
+    def test_inline_content_control_checkbox_becomes_a_glyph(self):
+        def build(doc):
+            p = doc.add_paragraph()
+            p._p.append(
+                parse_xml(
+                    f'<w:sdt xmlns:w="{_W}" xmlns:w14="{_W14}"><w:sdtPr>'
+                    '<w14:checkbox><w14:checked w14:val="1"/></w14:checkbox>'
+                    "</w:sdtPr><w:sdtContent><w:r><w:t>x</w:t></w:r></w:sdtContent></w:sdt>"
+                )
+            )
+
+        assert "☑" in _one_para_html(build)
+
+    def test_unchecked_checkbox_is_the_empty_box(self):
+        def build(doc):
+            p = doc.add_paragraph("Task ")
+            p._p.append(
+                parse_xml(
+                    f'<w:sdt xmlns:w="{_W}" xmlns:w14="{_W14}"><w:sdtPr>'
+                    '<w14:checkbox><w14:checked w14:val="0"/></w14:checkbox>'
+                    "</w:sdtPr><w:sdtContent><w:r><w:t>x</w:t></w:r></w:sdtContent></w:sdt>"
+                )
+            )
+
+        html = _one_para_html(build)
+        assert "☐" in html and "Task" in html
+
+
+class TestTextbox:
+    def test_textbox_paragraph_follows_its_anchor(self):
+        def build(doc):
+            doc.add_paragraph("Before")
+            anchor = doc.add_paragraph("Anchor")
+            anchor._p.append(
+                parse_xml(
+                    f'<w:txbxContent xmlns:w="{_W}"><w:p><w:r>'
+                    "<w:t>TextboxLine</w:t></w:r></w:p></w:txbxContent>"
+                )
+            )
+            doc.add_paragraph("After")
+
+        doc = Document()
+        build(doc)
+        out = io.BytesIO()
+        doc.save(out)
+        out.seek(0)
+        imported = convert_docx(out)
+        texts = [c.text for c in imported.chunks]
+        # the textbox line sits between its anchor and the following paragraph
+        assert texts == ["Before", "Anchor", "TextboxLine", "After"]
+
+
+class TestStrictOoxml:
+    @staticmethod
+    def _to_strict(transitional: io.BytesIO) -> io.BytesIO:
+        import zipfile
+
+        repl = [
+            (f"{_W}", "http://purl.oclc.org/ooxml/wordprocessingml/main"),
+            (
+                "http://schemas.openxmlformats.org/officeDocument/2006/relationships",
+                "http://purl.oclc.org/ooxml/officeDocument/relationships",
+            ),
+        ]
+        src = zipfile.ZipFile(transitional)
+        out = io.BytesIO()
+        with zipfile.ZipFile(out, "w") as z:
+            for info in src.infolist():
+                data = src.read(info.filename)
+                if info.filename.endswith((".xml", ".rels")):
+                    text = data.decode()
+                    for a, b in repl:
+                        text = text.replace(a, b)
+                    data = text.encode()
+                z.writestr(info, data)
+        out.seek(0)
+        return out
+
+    def test_strict_package_parses_after_normalization(self):
+        doc = Document()
+        doc.add_heading("StrictTitle", level=1)
+        doc.add_paragraph("Strict body text.")
+        buf = io.BytesIO()
+        doc.save(buf)
+        buf.seek(0)
+        strict = self._to_strict(buf)
+
+        import zipfile
+
+        assert _is_strict_ooxml(zipfile.ZipFile(io.BytesIO(strict.getvalue())))
+        imported = convert_docx(io.BytesIO(strict.getvalue()))
+        text = imported.dumps()
+        assert "StrictTitle" in text and "Strict body text." in text
+        assert [f for f in aim.lint(imported) if f.level == "error"] == []
+
+    def test_namespace_mapping_reverses_transitional(self):
+        assert _strict_ns_to_transitional("http://purl.oclc.org/ooxml/wordprocessingml/main") == _W
+
+    def test_zip_slip_members_are_rejected(self):
+        assert not _is_safe_zip_member("../evil.xml")
+        assert not _is_safe_zip_member("/etc/passwd")
+        assert not _is_safe_zip_member("C:/windows")
+        assert _is_safe_zip_member("word/document.xml")

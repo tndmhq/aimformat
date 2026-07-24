@@ -26,14 +26,27 @@ direct formatting with override semantics. True OOXML *toggle* semantics
 (``w:b`` XOR-ing across style layers, ECMA-376 §17.7.3) differ only in the
 rare char-style-over-bold-para-style case; the divergence is accepted for
 now and recorded in the module tests' expectations.
+
+Content that dpc's model drops but real documents carry is recovered from
+the source XML alongside the typed parse (:func:`parse_docx` pairs each
+body item with its ``w:p``/``w:tbl`` element, so the recovery is positional
+by construction — no index guessing): textbox paragraphs (``w:txbxContent``,
+DrawingML and VML), content-control checkbox state (``w14:checkbox``), OMML
+equations as their literal text (``m:t``), and symbol-font glyphs
+(``w:sym``). The Strict-OOXML → Transitional namespace normalization (so
+Strict ``.docx`` files parse at all) is adapted from docling's MIT
+``msword_backend`` (github.com/docling-project/docling), including its
+zip-slip / zip-bomb guards.
 """
 
 from __future__ import annotations
 
 import base64
 import posixpath
+import re
 import zipfile
 from dataclasses import dataclass, field
+from io import BytesIO
 from typing import Any, BinaryIO
 
 try:
@@ -42,6 +55,9 @@ try:
         NumberingTracker,
     )
     from docx_parser_converter.converters.common.style_resolver import StyleResolver
+    from docx_parser_converter.parsers.document.paragraph_parser import parse_paragraph
+    from docx_parser_converter.parsers.document.table_parser import parse_table
+    from docx_parser_converter.parsers.utils import find_child, get_local_name
 except ImportError as exc:  # pragma: no cover - exercised without the extra
     raise ImportError(
         "DOCX import requires docx-parser-converter (extra 'docx'): pip install 'aimformat[docx]'"
@@ -59,15 +75,22 @@ __all__ = [
     "half_points_to_pt",
     "highlight_hex",
     "model_dump",
+    "paragraph_checkbox",
+    "paragraph_math_text",
     "paragraph_run_baseline",
     "parse_docx",
     "resolve_color",
     "shading_hex",
+    "symbol_char",
+    "textbox_paragraphs",
     "twips_to_mm",
 ]
 
 _A_NS = "http://schemas.openxmlformats.org/drawingml/2006/main"
 _PKG_REL_NS = "http://schemas.openxmlformats.org/package/2006/relationships"
+_W_NS = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+_M_NS = "http://schemas.openxmlformats.org/officeDocument/2006/math"
+_W14_NS = "http://schemas.microsoft.com/office/word/2010/wordml"
 
 #: Word's fixed highlight palette (ST_HighlightColor) as lowercase hex.
 _HIGHLIGHTS = {
@@ -121,6 +144,52 @@ _IMAGE_MIME = {
     ".tiff": "image/tiff",
 }
 
+#: A curated Wingdings position (low byte of ``w:sym@char``) → Unicode map.
+#: Targets are the practical BMP equivalents that render in any font — the
+#: exact Wingdings glyphs are often astral (barb arrows, bold-script ballot
+#: marks) that most fonts lack — so a check reads as ✓, not a missing box.
+#: Values follow the published Wingdings correspondence (alanwood.net); only
+#: the common bullets, arrows, checks, and ballot boxes are mapped, not all
+#: 224 glyphs. An unmapped Wingdings glyph is dropped, never leaked as its
+#: hex code.
+_WINGDINGS = {
+    0x6C: "●",  # ● black circle
+    0xA0: "▪",  # ▪ black small square
+    0xA8: "□",  # □ white square
+    0xB7: "•",  # • bullet
+    0xE0: "→",  # → rightwards arrow
+    0xE1: "↑",  # ↑ upwards arrow
+    0xE2: "↓",  # ↓ downwards arrow
+    0xEF: "⇦",  # ⇦ leftwards white arrow
+    0xF0: "⇨",  # ⇨ rightwards white arrow
+    0xF1: "⇧",  # ⇧ upwards white arrow
+    0xF2: "⇩",  # ⇩ downwards white arrow
+    0xFB: "✗",  # ✗ ballot X
+    0xFC: "✓",  # ✓ check mark
+    0xFD: "☒",  # ☒ ballot box with X
+    0xFE: "☑",  # ☑ ballot box with check
+}
+
+# Strict-OOXML → Transitional normalization (adapted from docling's MIT
+# msword_backend). Strict .docx files carry purl.oclc.org namespaces that
+# python-docx / dpc do not recognize; rewriting them to the Transitional
+# host lets the ordinary parse path handle the file.
+_STRICT_PREFIX = "http://purl.oclc.org/ooxml/"
+_TRANSITIONAL_HOST = "http://schemas.openxmlformats.org/"
+_STRICT_MARKER = b"purl.oclc.org/ooxml"
+_ROOT_RELS = "_rels/.rels"
+_STRICT_NS_RE = re.compile(r"http://purl\.oclc\.org/ooxml/[A-Za-z0-9_./-]+")
+_STRICT_NS_OVERRIDES = {
+    "http://purl.oclc.org/ooxml/officeDocument/relationships/customXml": (
+        "http://schemas.openxmlformats.org/officeDocument/2006/customXml"
+    ),
+    "http://purl.oclc.org/ooxml/officeDocument/relationships/metadata/thumbnail": (
+        "http://schemas.openxmlformats.org/package/2006/relationships/metadata/thumbnail"
+    ),
+}
+_MAX_MEMBER_BYTES = 512 * 1024 * 1024  # 512 MiB per part
+_MAX_TOTAL_BYTES = 2 * 1024 * 1024 * 1024  # 2 GiB total (zip-bomb guard)
+
 
 @dataclass
 class DocxTheme:
@@ -148,7 +217,8 @@ class DocxTheme:
 class ParsedDocx:
     """Everything the converter needs, parsed once."""
 
-    document: Any  # dpc Document (never leaves the convert package)
+    document: Any  # dpc Document (never leaves the convert package) — for sect_pr
+    content: list[tuple[Any, Any]]  # (dpc item, source w:p/w:tbl element) in body order
     resolver: StyleResolver
     numbering: Any | None
     hyperlinks: dict[str, str]  # rId → external URL
@@ -161,9 +231,14 @@ class ParsedDocx:
 def parse_docx(source: str | bytes | BinaryIO) -> ParsedDocx:
     """Open and parse *source* through the pinned parse layer + gap-fillers."""
     zf = _api.open_docx(source)
-    document = _api.parse_document(_api.extract_document_xml(zf))
+    if _is_strict_ooxml(zf):
+        zf = _api.open_docx(_normalize_strict_ooxml(zf))
+    doc_elem = _api.extract_document_xml(zf)
+    document = _api.parse_document(doc_elem)
     if document is None:
         raise ValueError("not a WordprocessingML document (no document body)")
+    body_elem = find_child(doc_elem, "body") if doc_elem is not None else None
+    content = _body_content_pairs(body_elem)
     styles = _api.parse_styles(_api.extract_styles_xml(zf))
     numbering = _api.parse_numbering(_api.extract_numbering_xml(zf))
     resolver = StyleResolver(styles, getattr(styles, "doc_defaults", None))
@@ -175,6 +250,7 @@ def parse_docx(source: str | bytes | BinaryIO) -> ParsedDocx:
     baseline = resolver.resolve_paragraph_properties(default_id).get("r_pr", {}) or {}
     return ParsedDocx(
         document=document,
+        content=content,
         resolver=resolver,
         numbering=numbering,
         hyperlinks=hyperlinks,
@@ -183,6 +259,85 @@ def parse_docx(source: str | bytes | BinaryIO) -> ParsedDocx:
         default_style_id=default_id,
         baseline_run=baseline,
     )
+
+
+def _body_content_pairs(body_elem: Any) -> list[tuple[Any, Any]]:
+    """Pair each body-level ``w:p``/``w:tbl`` with its dpc item, mirroring
+    dpc's own ``parse_body`` walk so the pairing is exact — the converter
+    needs the source element to recover content dpc drops (textboxes, OMML,
+    checkboxes). ``sectPr`` and wrappers dpc skips (``w:sdt``, ``customXml``)
+    are skipped here too, so index alignment can never drift."""
+    pairs: list[tuple[Any, Any]] = []
+    if body_elem is None:
+        return pairs
+    for child in body_elem:
+        name = get_local_name(child)
+        if name == "p":
+            item = parse_paragraph(child)
+        elif name == "tbl":
+            item = parse_table(child)
+        else:
+            continue
+        if item is not None:
+            pairs.append((item, child))
+    return pairs
+
+
+def _is_strict_ooxml(zf: zipfile.ZipFile) -> bool:
+    """Whether the archive is a Strict OOXML package — decided from the tiny
+    root relationships part only, so Transitional files pay nothing."""
+    try:
+        with zf.open(_ROOT_RELS) as rels:
+            return _STRICT_MARKER in rels.read(64 * 1024)
+    except KeyError:
+        return False
+
+
+def _is_safe_zip_member(name: str) -> bool:
+    """Guard against zip-slip: reject absolute, drive-letter, and ``..`` paths."""
+    normalized = name.replace("\\", "/")
+    if normalized.startswith("/") or (len(normalized) > 1 and normalized[1] == ":"):
+        return False
+    return not any(part == ".." for part in normalized.split("/"))
+
+
+def _strict_ns_to_transitional(strict_ns: str) -> str:
+    if strict_ns in _STRICT_NS_OVERRIDES:
+        return _STRICT_NS_OVERRIDES[strict_ns]
+    rest = strict_ns[len(_STRICT_PREFIX) :]
+    rest = rest.replace("extendedProperties", "extended-properties")
+    rest = rest.replace("customProperties", "custom-properties")
+    segment, separator, tail = rest.partition("/")
+    if not separator:
+        return f"{_TRANSITIONAL_HOST}{segment}/2006"
+    return f"{_TRANSITIONAL_HOST}{segment}/2006/{tail}"
+
+
+def _normalize_strict_ooxml(zf: zipfile.ZipFile) -> BytesIO:
+    """Rewrite a Strict OOXML package to Transitional namespaces in memory.
+    Only XML/relationship parts carrying a Strict namespace are decoded and
+    rewritten; every other member is copied through. Validated against
+    zip-slip and zip-bomb as it is read."""
+    out = BytesIO()
+    total = 0
+    with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as target:
+        for info in zf.infolist():
+            if not _is_safe_zip_member(info.filename):
+                raise ValueError(f"unsafe zip member (zip-slip): {info.filename}")
+            if info.file_size > _MAX_MEMBER_BYTES:
+                raise ValueError(f"oversized OOXML part: {info.filename}")
+            total += info.file_size
+            if total > _MAX_TOTAL_BYTES:
+                raise ValueError("OOXML package exceeds the uncompressed size limit")
+            content = zf.read(info.filename)
+            if info.filename.endswith((".xml", ".rels")) and _STRICT_MARKER in content:
+                content = _STRICT_NS_RE.sub(
+                    lambda m: _strict_ns_to_transitional(m.group(0)),
+                    content.decode("utf-8"),
+                ).encode("utf-8")
+            target.writestr(info, content)
+    out.seek(0)
+    return out
 
 
 def _relationships(zf: zipfile.ZipFile) -> tuple[dict[str, str], dict[str, str]]:
@@ -372,3 +527,67 @@ def model_dump(obj: Any) -> dict[str, Any]:
     if isinstance(obj, dict):
         return obj
     return obj.model_dump(exclude_none=True)
+
+
+# -- content dpc's model drops, recovered from the source w:p element -------
+
+
+def symbol_char(font: str | None, char: str | None) -> str | None:
+    """A ``w:sym`` (font, char-hex) → a renderable Unicode character, or None.
+
+    ``char`` is a hex string like ``"F0FC"``. Wingdings positions map through
+    the curated table (unmapped Wingdings glyphs drop — never leak the hex);
+    any other font's private-use glyph also drops, while a real BMP character
+    passes through. Dropping beats emitting a wrong glyph or raw ``"F0FC"``.
+    """
+    if not char:
+        return None
+    try:
+        code = int(str(char), 16)
+    except ValueError:
+        return None
+    if font and str(font).strip().lower() == "wingdings":
+        return _WINGDINGS.get(code & 0xFF)
+    if code < 0x20 or 0xE000 <= code <= 0xF8FF:
+        return None  # control or private-use: not meaningful without its font
+    try:
+        return chr(code)
+    except (ValueError, OverflowError):
+        return None
+
+
+def paragraph_checkbox(elem: Any) -> str | None:
+    """A ``w14:checkbox`` content control's state as ☑ / ☐, or None. The
+    plain Wingdings/□ form-field checkbox is handled by the symbol map."""
+    cb = elem.find(f".//{{{_W14_NS}}}checkbox")
+    if cb is None:
+        return None
+    checked = cb.find(f"{{{_W14_NS}}}checked")
+    val = checked.get(f"{{{_W14_NS}}}val") if checked is not None else None
+    return "☑" if val in ("1", "true") else "☐"
+
+
+def paragraph_math_text(elem: Any) -> str:
+    """Any OMML equations in the paragraph as their literal text (``m:t``
+    joined). A text-only fallback — .aim carries no math markup — so an
+    equation survives as its characters. Ordering is approximate for an
+    equation interleaved mid-line (it trails the paragraph's run text)."""
+    return "".join(t.text or "" for t in elem.findall(f".//{{{_M_NS}}}t"))
+
+
+def textbox_paragraphs(elem: Any) -> list[Any]:
+    """dpc Paragraphs parsed from every textbox in this paragraph
+    (``w:txbxContent``, covering DrawingML and VML), deduped by identity so
+    a nested textbox is not counted twice. One level deep: a paragraph
+    emitted from here is not itself re-scanned for textboxes."""
+    seen: set[int] = set()
+    out: list[Any] = []
+    for txbx in elem.findall(f".//{{{_W_NS}}}txbxContent"):
+        for p in txbx.findall(f".//{{{_W_NS}}}p"):
+            if id(p) in seen:
+                continue
+            seen.add(id(p))
+            parsed = parse_paragraph(p)
+            if parsed is not None:
+                out.append(parsed)
+    return out
