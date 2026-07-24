@@ -51,9 +51,9 @@ each revision added: [status and roadmap](#status-and-roadmap).
 
 ```sh
 pip install aimformat            # zero runtime dependencies (stdlib only)
-pip install 'aimformat[docx]'    # + DOCX export (python-docx)
+pip install 'aimformat[docx]'    # + DOCX import (styling-preserving) and export
 pip install 'aimformat[mcp]'     # + MCP server: aim mcp
-pip install 'aimformat[convert]' # + md/docx import-export, pdf import
+pip install 'aimformat[convert]' # + md import-export, DOCX both ways, PDF import
 pip install 'aimformat[pdf]'     # + PDF export (playwright + chromium)
 ```
 
@@ -108,17 +108,27 @@ What makes this different from "HTML with extra attributes":
 
 ## Interop: read almost anything, write Word
 
-Ingest whatever [docling](https://github.com/docling-project/docling) can
-read (PDF, DOCX, PPTX, images, HTML), without adding docling as a
-dependency of this package:
+**DOCX imports natively, styling preserved** — `from_docx` walks the OOXML
+itself (the `docx` extra, no docling), so fonts, sizes, colours, highlights,
+alignment, and the document's own theme survive into the `.aim`:
+
+```python
+import aimformat as aim
+
+doc = aim.from_docx("contract.docx")         # styling carried, not just structure
+doc.save("contract.aim")                     # ingestion itself is history
+```
+
+For everything else — PDF, PPTX, images, HTML — ingest whatever
+[docling](https://github.com/docling-project/docling) can read, without
+adding docling as a dependency of this package (PDF is structure-only: the
+model carries no fonts or colours):
 
 ```python
 from docling.document_converter import DocumentConverter
-import aimformat as aim
 
 result = DocumentConverter().convert("contract.pdf")
 doc = aim.from_docling(result.document)      # chunks, lists, tables, figures
-doc.save("contract.aim")                     # ingestion itself is history
 ```
 
 Export back to Word with the pending lane as real tracked changes

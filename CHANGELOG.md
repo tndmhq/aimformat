@@ -40,6 +40,22 @@ version tracks the spec version it implements (0.x minors may break).
   keeps docling for `from_pdf`/`from_docling`, whose mapper also stops
   silently dropping list-group-parented tables and stops demoting
   headings in documents without a Title.
+- **DOCX importer edge cases** — content dpc's model drops is recovered
+  from the source XML (each body item is paired with its `w:p`/`w:tbl`
+  element, so recovery is positional by construction): Strict-OOXML
+  packages are normalized to Transitional namespaces so they parse at
+  all; textbox paragraphs, content-control checkboxes (☑/☐), and OMML
+  equations (as literal text) survive; `w:sym` glyphs map through a
+  curated Wingdings→Unicode table. Table cells carry their shading fill
+  (→ `background-color`) and fixed width (→ `width:NNpx`); borders are
+  deliberately not carried (the vocabulary has no per-side border
+  geometry).
+- **`to_docx` export symmetry** — the round trip is now idempotent on
+  styling: inline `font-size`/`font-family` → run properties, type-scale
+  classes → points via the normative table, alignment classes (incl.
+  justify) → Word paragraph alignment, and theme font-stack slots → the
+  exported document's Normal/Heading style fonts (previously only colour
+  slots reached Word).
 
 ## 0.3.0 — 2026-07-24
 

@@ -135,7 +135,7 @@ checkpoints still verify. If you hand-edit, do not touch
 | `aim flatten FILE` | drop history (and embeddings) → clean file |
 | `aim reconcile FILE` | detect out-of-band edits; append reconcile events to history |
 | `aim css` | print the generated `aim.css` for this spec version |
-| `aim import IN -o F.aim` | convert md/txt/docx/pdf to `.aim` |
+| `aim import IN -o F.aim` | convert md/txt/docx/pdf to `.aim` (DOCX imports natively with styling preserved; PDF is structure-only via docling) |
 | `aim export F.aim -o OUT` | convert `.aim` to docx/md/html/pdf (chosen by output extension) |
 | `aim mcp` | run the MCP server (requires `pip install 'aimformat[mcp]'`) |
 
