@@ -26,18 +26,19 @@ classifiers = [
 dependencies = []
 
 [project.optional-dependencies]
-# DOCX export (aim.to_docx); the core package stays dependency-free
-docx = ["python-docx==1.2.0"]
+# DOCX both ways (aim.from_docx / aim.to_docx); the core stays dependency-free
+docx = ["docx-parser-converter==1.0.3", "python-docx==1.2.0"]
 # Converters (aimformat.convert): each direction pulls only what it needs
 markdown = ["markdown-it-py==4.2.0"]           # from_markdown
-ingest = ["docling==2.110.0"]                  # from_docx / from_pdf
+ingest = ["docling==2.110.0"]                  # from_pdf / from_docling sources
 pdf = ["playwright==1.61.0"]                   # to_pdf (+ playwright install chromium)
-convert = ["markdown-it-py==4.2.0", "docling==2.110.0", "python-docx==1.2.0"]
+convert = ["markdown-it-py==4.2.0", "docling==2.110.0",
+           "docx-parser-converter==1.0.3", "python-docx==1.2.0"]
 # MCP server; upstream advises staying below 2.0
 mcp = ["mcp==1.28.1"]
 dev = ["pytest==9.1.1", "python-docx==1.2.0", "docling-core==2.86.0",
-       "markdown-it-py==4.2.0", "mcp==1.28.1", "ruff==0.15.21",
-       "mypy==2.2.0", "hypothesis==6.156.4"]
+       "docx-parser-converter==1.0.3", "markdown-it-py==4.2.0",
+       "mcp==1.28.1", "ruff==0.15.21", "mypy==2.2.0", "hypothesis==6.156.4"]
 
 [project.scripts]
 aim = "aimformat.cli:main"

@@ -24,6 +24,22 @@ version tracks the spec version it implements (0.x minors may break).
   version upgrade. Upgrades now raise the declaration to the **construct's
   own floor** — paint upgrades a 0.2 document to 0.3, typography to 0.4 —
   not to the newest version the writer implements.
+- **Native DOCX importer** — `from_docx` no longer routes through docling
+  (whose document model carries only five boolean formatting flags, so
+  fonts, sizes, colours, highlights and alignment could never survive).
+  It now walks the OOXML itself via the pinned `docx-parser-converter`
+  parse layer behind a single adapter seam, and preserves styling in the
+  v0.4 vocabulary: the source theme (`theme1.xml` faces and accents)
+  becomes the document theme slots; style-driven looks stay rhythm
+  (a Heading style's bold emits no `<strong>`); local intent becomes
+  literal paint/typography, `<mark>` highlights, alignment classes, and
+  the classic marks. Images embed as data URIs, hyperlinks resolve,
+  explicit pagination lands inline. The `docx` extra now covers both
+  directions (`docx-parser-converter` + `python-docx`) — installing
+  docling/torch is no longer needed to read a DOCX; the `ingest` extra
+  keeps docling for `from_pdf`/`from_docling`, whose mapper also stops
+  silently dropping list-group-parented tables and stops demoting
+  headings in documents without a Title.
 
 ## 0.3.0 — 2026-07-24
 
