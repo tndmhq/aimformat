@@ -588,6 +588,11 @@ class _Converter:
         rows = getattr(table, "tr", []) or []
         if not rows:
             return None
+        # Word tables usually carry their whole look in a table STYLE, not on
+        # the cells: a shaded header row, banded body rows, white header text
+        tbl_pr = model_dump(getattr(table, "tbl_pr", None))
+        looks = self.p.table_looks.get(str(tbl_pr.get("tbl_style") or ""), {})
+        tbl_look = tbl_pr.get("tbl_look") or {}
         # v_merge continuation cells collapse into the restart cell's rowspan
         spans: dict[tuple[int, int], int] = {}  # (row, col) -> rowspan
         skip: set[tuple[int, int]] = set()
@@ -630,7 +635,9 @@ class _Converter:
                 rowspan = spans.get((ri, col), 1)
                 if rowspan > 1:
                     attrs += f' rowspan="{rowspan}"'
-                attrs += self._cell_style(cell)
+                attrs += self._cell_style(
+                    cell, self._style_look(looks, tbl_look, ri, header_row, len(grid))
+                )
                 out.append(f"<{tag}{attrs}>{self._cell_markup(cell)}</{tag}>")
                 col += colspan
             row_html = "<tr>" + "".join(out) + "</tr>"
@@ -642,22 +649,53 @@ class _Converter:
             html += "<tbody>" + "".join(body) + "</tbody>"
         return html + "</table>"
 
-    def _cell_style(self, cell: Any) -> str:
+    @staticmethod
+    def _style_look(
+        looks: dict, tbl_look: dict, row_index: int, header_row: bool, row_count: int
+    ) -> dict:
+        """The table style's conditional look for this row: the header band,
+        the last row, or the alternating body bands — gated by the table's
+        own ``tblLook`` flags, which is how Word decides whether a style's
+        header/banding formats apply at all."""
+        if not looks:
+            return {}
+        first = header_row or (row_index == 0 and tbl_look.get("first_row", True))
+        if first and "firstRow" in looks:
+            return looks["firstRow"]
+        if row_index == row_count - 1 and tbl_look.get("last_row") and "lastRow" in looks:
+            return looks["lastRow"]
+        if not tbl_look.get("no_h_band"):
+            # banding counts from the first body row, alternating band1/band2
+            body_index = row_index - (1 if tbl_look.get("first_row", True) else 0)
+            if body_index >= 0:
+                band = "band1Horz" if body_index % 2 == 0 else "band2Horz"
+                if band in looks:
+                    return looks[band]
+        return looks.get("wholeTable", {})
+
+    def _cell_style(self, cell: Any, style_look: dict | None = None) -> str:
         """A cell's whitelisted geometry+paint style: fixed column width and
         shading fill. Borders are deliberately not carried — the vocabulary
         has border utilities and border-colour paint, not the per-side border
         geometry OOXML cells describe, so recovering them faithfully is not
         possible and a lossy approximation would mislead."""
         pr = getattr(cell, "tc_pr", None)
-        if pr is None:
+        if pr is None and not style_look:
             return ""
         styles: list[tuple[str, str]] = []
         width = _cell_width_px(getattr(pr, "tc_w", None))
         if width:
             styles.append(("width", f"{width}px"))
         fill = shading_hex(model_dump(getattr(pr, "shd", None)))
+        look = style_look or {}
+        # a cell's OWN shading beats the table style's, as in Word
+        fill = fill or look.get("fill")
         if fill:
             styles.append(("background-color", fill))
+        if look.get("color"):
+            # a shaded header band usually recolours its text too; without it
+            # dark text lands on a dark fill and the header is unreadable
+            styles.append(("color", look["color"]))
         if not styles:
             return ""
         order = {p: i for i, p in enumerate(REGISTRY.style_prop_order)}
