@@ -9,6 +9,7 @@ import {
 import { parseFragment } from "../src/parser.ts";
 import {
   STYLE_PROP_ORDER,
+  STYLE_PROP_PAINT,
   STYLE_PROP_PAINT_SINCE,
   STYLE_PROP_PATTERNS,
 } from "../src/registry.data.ts";
@@ -62,11 +63,22 @@ describe("canonical serialization", () => {
       if (pattern === undefined) throw new Error(`no grammar for ${prop}`);
       return pattern.test(value);
     };
-    expect(STYLE_PROP_ORDER.slice(-3)).toEqual([
+    expect(STYLE_PROP_PAINT).toEqual([
       "color",
       "background-color",
       "border-color",
     ]);
+    // v0.4 appends literal typography after paint
+    expect(STYLE_PROP_ORDER.slice(-5)).toEqual([
+      "color",
+      "background-color",
+      "border-color",
+      "font-size",
+      "font-family",
+    ]);
+    expect(ok("font-size", "12pt")).toBe(true);
+    expect(ok("font-size", "12px")).toBe(false); // the grammar is pt-only
+    expect(ok("font-family", "Georgia, serif")).toBe(true);
     expect(ok("color", "#ff69b4")).toBe(true);
     for (const bad of [
       "red",

@@ -3,6 +3,60 @@
 All notable changes to the spec and the reference toolkit. The package
 version tracks the spec version it implements (0.x minors may break).
 
+## 0.4.0 — unreleased
+
+- **Literal per-element typography (spec §3.3)** — `style` now carries
+  `font-size` (points only, `^\d+(\.\d+)?pt$`) and `font-family` (a plain
+  stack string in the theme font-stack grammar) alongside geometry and
+  paint. px/rem/%, keywords, quotes beyond the apostrophe, `var()` and
+  `!important` all fail V008; unregistered properties still fail V007.
+  Same duality as paint: the role classes (`font-heading/body/mono`) and
+  the type scale say *follow this document's rhythm*; a literal says
+  *this face / this size, here*. Inline typography outranks every class;
+  `font-size` and `font-family` inherit natively.
+- **`text-justify`** joins the alignment utilities, and the type scale
+  gains `text-7xl/8xl/9xl` display steps. Each type-scale step now carries
+  a **normative point equivalent** (rem × 12, Appendix A.2) so point-based
+  exporters agree on what a step means.
+- **S033** gates the new constructs the way S032 gates paint: a document
+  declared below 0.4 that retains literal typography (or a since-gated
+  class) anywhere in body, pending payloads, or history must record the
+  version upgrade. Upgrades now raise the declaration to the **construct's
+  own floor** — paint upgrades a 0.2 document to 0.3, typography to 0.4 —
+  not to the newest version the writer implements.
+- **Native DOCX importer** — `from_docx` no longer routes through docling
+  (whose document model carries only five boolean formatting flags, so
+  fonts, sizes, colours, highlights and alignment could never survive).
+  It now walks the OOXML itself via the pinned `docx-parser-converter`
+  parse layer behind a single adapter seam, and preserves styling in the
+  v0.4 vocabulary: the source theme (`theme1.xml` faces and accents)
+  becomes the document theme slots; style-driven looks stay rhythm
+  (a Heading style's bold emits no `<strong>`); local intent becomes
+  literal paint/typography, `<mark>` highlights, alignment classes, and
+  the classic marks. Images embed as data URIs, hyperlinks resolve,
+  explicit pagination lands inline. The `docx` extra now covers both
+  directions (`docx-parser-converter` + `python-docx`) — installing
+  docling/torch is no longer needed to read a DOCX; the `ingest` extra
+  keeps docling for `from_pdf`/`from_docling`, whose mapper also stops
+  silently dropping list-group-parented tables and stops demoting
+  headings in documents without a Title.
+- **DOCX importer edge cases** — content dpc's model drops is recovered
+  from the source XML (each body item is paired with its `w:p`/`w:tbl`
+  element, so recovery is positional by construction): Strict-OOXML
+  packages are normalized to Transitional namespaces so they parse at
+  all; textbox paragraphs, content-control checkboxes (☑/☐), and OMML
+  equations (as literal text) survive; `w:sym` glyphs map through a
+  curated Wingdings→Unicode table. Table cells carry their shading fill
+  (→ `background-color`) and fixed width (→ `width:NNpx`); borders are
+  deliberately not carried (the vocabulary has no per-side border
+  geometry).
+- **`to_docx` export symmetry** — the round trip is now idempotent on
+  styling: inline `font-size`/`font-family` → run properties, type-scale
+  classes → points via the normative table, alignment classes (incl.
+  justify) → Word paragraph alignment, and theme font-stack slots → the
+  exported document's Normal/Heading style fonts (previously only colour
+  slots reached Word).
+
 ## 0.3.0 — 2026-07-24
 
 Everything below shipped as 0.3.0; the 0.2.1 line was never released, and

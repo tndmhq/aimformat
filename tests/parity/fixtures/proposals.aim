@@ -1,9 +1,9 @@
 <!doctype html>
-<html data-aim-version="0.3" lang="en">
+<html data-aim-version="0.4" lang="en">
 <head>
 <meta charset="utf-8">
 <!--
-aim-note: This file is an AIM document (open format, v0.3) — valid HTML plus
+aim-note: This file is an AIM document (open format, v0.4) — valid HTML plus
 chunk identity, a pending-suggestions lane, and an edit history.
 Agent docs: https://aimformat.com/llms.txt
 The reliable way to edit this file is the `aimformat` tooling, which manages
@@ -17,7 +17,7 @@ validate with `aim lint`. Humans review in AIM editors:
 https://aimformat.com/editors
 -->
 <title>Pending lane — every action</title>
-<style data-aim-css="0.3">
+<style data-aim-css="0.4">
 :root{--aim-brand-1:#1d4ed8;--aim-brand-2:#0f766e;--aim-brand-3:#b45309;--aim-brand-4:#6d28d9;--aim-font-heading:system-ui, -apple-system, 'Segoe UI', sans-serif;--aim-font-body:system-ui, -apple-system, 'Segoe UI', sans-serif;--aim-font-mono:ui-monospace, 'SF Mono', Menlo, Consolas, monospace}
 html{-webkit-text-size-adjust:100%}
 body{margin:2rem auto;padding:0 1.5rem;max-width:52rem;font-family:var(--aim-font-body);font-size:1rem;line-height:1.6;color:#1f2937;background:#fff}
@@ -248,6 +248,9 @@ aim-page-break{display:block;border:0;border-top:1px dashed #d1d5db;margin:2em 0
 .text-4xl{font-size:2.25rem;line-height:2.5rem}
 .text-5xl{font-size:3rem;line-height:1.15}
 .text-6xl{font-size:3.75rem;line-height:1.1}
+.text-7xl{font-size:4.5rem;line-height:1}
+.text-8xl{font-size:6rem;line-height:1}
+.text-9xl{font-size:8rem;line-height:1}
 .text-amber-50{color:#fffbeb}
 .text-amber-600{color:#d97706}
 .text-base{font-size:1rem;line-height:1.5rem}
@@ -268,6 +271,7 @@ aim-page-break{display:block;border:0;border-top:1px dashed #d1d5db;margin:2em 0
 .text-gray-900{color:#111827}
 .text-green-50{color:#f0fdf4}
 .text-green-600{color:#16a34a}
+.text-justify{text-align:justify}
 .text-left{text-align:left}
 .text-lg{font-size:1.125rem;line-height:1.75rem}
 .text-red-50{color:#fef2f2}
@@ -308,14 +312,14 @@ aim-assets{display:none}
 <p data-aim="c4">Fourth.</p>
 <table data-aim-container="tb"><tbody><tr data-aim="r1"><td>one</td></tr><tr data-aim="r2"><td>two</td></tr></tbody></table>
 <aim-proposals>
-<aim-proposal id="p-m4qgiit6" data-action="modify" data-at="2026-07-17T10:00:10Z" data-author="agent" data-author-model="model-x" data-batch="b2" data-explanation="Lead with the point." data-for="c2"><template><p data-aim="c2">Second, sharpened.</p></template></aim-proposal>
-<aim-proposal id="p-ckch68c8" data-action="delete" data-at="2026-07-17T10:00:11Z" data-author="agent" data-author-model="model-x" data-batch="b3" data-explanation="Redundant with c2." data-for="c3"></aim-proposal>
-<aim-proposal id="p-t679ktv5" data-action="move" data-anchor-container="body" data-at="2026-07-17T10:00:12Z" data-author="human" data-author-id="ada" data-batch="b4" data-for="c4"></aim-proposal>
-<aim-proposal id="p-7t45avqb" data-action="add" data-anchor-after="c1" data-anchor-container="body" data-at="2026-07-17T10:00:13Z" data-author="agent" data-author-model="model-x" data-batch="b5" data-explanation="Bridge paragraph."><template><p data-aim="add1">Inserted after the title.</p></template></aim-proposal>
-<aim-proposal id="p-fbfbsng4" data-action="add" data-anchor-after="p-7t45avqb" data-anchor-container="body" data-at="2026-07-17T10:00:14Z" data-author="agent" data-author-model="model-x" data-batch="b6"><template><p data-aim="add2">Chained onto the pending add.</p></template></aim-proposal>
-<aim-proposal id="p-d8krh1fa" data-action="add" data-anchor-container="tb" data-anchor-shell="tbody" data-at="2026-07-17T10:00:15Z" data-author="human" data-author-id="ada" data-batch="b7" data-explanation="Row at the top of the body section."><template><tr data-aim="add3"><td>three</td></tr></template></aim-proposal>
-<aim-proposal id="p-gd1r277h" data-action="modify" data-at="2026-07-17T10:00:16Z" data-author="agent" data-author-model="model-x" data-batch="b8" data-depends-on="p-m4qgiit6" data-explanation="Teal primary." data-for="aim:theme"><template><style data-aim-theme>:root{--aim-brand-1:#0f766e}</style></template></aim-proposal>
-<aim-proposal id="p-i5h74ra6" data-action="modify" data-at="2026-07-17T10:00:17Z" data-author="human" data-author-id="ada" data-batch="b9" data-explanation="Booklet trim." data-for="aim:doc"><template><script type="application/aim-doc+json">
+<aim-proposal id="p-d12a94gn" data-action="modify" data-at="2026-07-17T10:00:10Z" data-author="agent" data-author-model="model-x" data-batch="b2" data-explanation="Lead with the point." data-for="c2"><template><p data-aim="c2">Second, sharpened.</p></template></aim-proposal>
+<aim-proposal id="p-mb8itj4s" data-action="delete" data-at="2026-07-17T10:00:11Z" data-author="agent" data-author-model="model-x" data-batch="b3" data-explanation="Redundant with c2." data-for="c3"></aim-proposal>
+<aim-proposal id="p-nqb4gj00" data-action="move" data-anchor-container="body" data-at="2026-07-17T10:00:12Z" data-author="human" data-author-id="ada" data-batch="b4" data-for="c4"></aim-proposal>
+<aim-proposal id="p-1qdfssjd" data-action="add" data-anchor-after="c1" data-anchor-container="body" data-at="2026-07-17T10:00:13Z" data-author="agent" data-author-model="model-x" data-batch="b5" data-explanation="Bridge paragraph."><template><p data-aim="add1">Inserted after the title.</p></template></aim-proposal>
+<aim-proposal id="p-qctobu0h" data-action="add" data-anchor-after="p-1qdfssjd" data-anchor-container="body" data-at="2026-07-17T10:00:14Z" data-author="agent" data-author-model="model-x" data-batch="b6"><template><p data-aim="add2">Chained onto the pending add.</p></template></aim-proposal>
+<aim-proposal id="p-811vv546" data-action="add" data-anchor-container="tb" data-anchor-shell="tbody" data-at="2026-07-17T10:00:15Z" data-author="human" data-author-id="ada" data-batch="b7" data-explanation="Row at the top of the body section."><template><tr data-aim="add3"><td>three</td></tr></template></aim-proposal>
+<aim-proposal id="p-k1mvmsgl" data-action="modify" data-at="2026-07-17T10:00:16Z" data-author="agent" data-author-model="model-x" data-batch="b8" data-depends-on="p-d12a94gn" data-explanation="Teal primary." data-for="aim:theme"><template><style data-aim-theme>:root{--aim-brand-1:#0f766e}</style></template></aim-proposal>
+<aim-proposal id="p-5jdabj5p" data-action="modify" data-at="2026-07-17T10:00:17Z" data-author="human" data-author-id="ada" data-batch="b9" data-explanation="Booklet trim." data-for="aim:doc"><template><script type="application/aim-doc+json">
 {"page":{"margins":{"bottom":"10mm","left":"12mm","right":"12mm","top":"10mm"},"orientation":"landscape","size":"A5"}}
 </script></template></aim-proposal>
 </aim-proposals>

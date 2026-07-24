@@ -190,6 +190,65 @@ class TestIngest:
         texts = [c.text for c in doc.chunks]
         assert texts == ["real content"]
 
+    def test_table_parented_under_a_list_group_is_not_dropped(self):
+        """docling's msword backend sometimes parents a table that follows a
+        numbered list under the list GROUP itself (observed on real files).
+        The module guarantees a subtree with content is never silently
+        dropped, so the table nests into the preceding item — the same home
+        group-parented sub-lists already get."""
+        d = DoclingDocument(name="report")
+        lst = d.add_group(label=GroupLabel.ORDERED_LIST)
+        d.add_list_item(text="One", parent=lst, enumerated=True)
+        d.add_list_item(text="Two", parent=lst, enumerated=True)
+        td = TableData(
+            num_rows=1,
+            num_cols=1,
+            table_cells=[
+                TableCell(
+                    text="CellA",
+                    start_row_offset_idx=0,
+                    end_row_offset_idx=1,
+                    start_col_offset_idx=0,
+                    end_col_offset_idx=1,
+                )
+            ],
+        )
+        d.add_table(data=td, parent=lst)
+        doc = aim.from_docling(d)
+        items = [c for c in doc.chunks if c.tag == "li"]
+        assert any("CellA" in c.html and "<table>" in c.html for c in items)
+
+    def test_a_leading_table_in_a_list_group_gets_a_wrapper_item(self):
+        d = DoclingDocument(name="report")
+        lst = d.add_group(label=GroupLabel.LIST)
+        td = TableData(
+            num_rows=1,
+            num_cols=1,
+            table_cells=[
+                TableCell(
+                    text="Alone",
+                    start_row_offset_idx=0,
+                    end_row_offset_idx=1,
+                    start_col_offset_idx=0,
+                    end_col_offset_idx=1,
+                )
+            ],
+        )
+        d.add_table(data=td, parent=lst)
+        d.add_list_item(text="After", parent=lst)
+        doc = aim.from_docling(d)
+        assert "Alone" in doc.dumps()
+
+    def test_headings_keep_their_level_when_no_title_exists(self):
+        """Word documents rarely use the Title style: their Heading 1 must
+        stay h1 instead of shifting under a title that is not there."""
+        d = DoclingDocument(name="memo")
+        d.add_heading(text="Top", level=1)
+        d.add_text(label="text", text="Body.")
+        d.add_heading(text="Sub", level=2)
+        doc = aim.from_docling(d)
+        assert [c.tag for c in doc.chunks] == ["h1", "p", "h2"]
+
 
 def _docx_paragraphs(path):
     return [(p.style.name, p.text) for p in docx.Document(str(path)).paragraphs]

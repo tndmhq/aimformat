@@ -190,6 +190,32 @@ class Registry:
         """The first spec version whose style grammar includes literal paint."""
         return self.raw["style_props"]["paint_since"]
 
+    @cached_property
+    def typography_props(self) -> frozenset[str]:
+        """The inline-style properties that carry literal typography (spec
+        §3.3): per-element font size and font family. Split from paint the
+        same way paint is split from geometry — one table to ask "which era
+        does this declaration need"."""
+        return frozenset(self.raw["style_props"]["typography"])
+
+    @property
+    def typography_since(self) -> str:
+        """The first spec version whose grammar includes literal typography
+        (the inline props above and the since-gated classes below)."""
+        return self.raw["style_props"]["typography_since"]
+
+    @cached_property
+    def class_floors(self) -> dict[str, str]:
+        """Classes introduced after 0.1, mapped to the spec version that
+        introduced them. Absent means "since the beginning"."""
+        return self.raw["classes"].get("since", {})
+
+    @cached_property
+    def type_scale_pt(self) -> dict[str, str]:
+        """The normative pt value for each type-scale step (rem × 12) —
+        what class-based sizes mean in point-based exports (DOCX, print)."""
+        return self.raw["classes"]["type_scale_pt"]
+
     # -- page setup --------------------------------------------------------------
     @cached_property
     def page_sizes_mm(self) -> dict[str, list[float]]:

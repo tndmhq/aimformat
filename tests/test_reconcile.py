@@ -13,6 +13,7 @@ import pytest
 import aimformat as aim
 from aimformat.cli import main
 from aimformat.errors import HistoryError, TargetNotFound
+from aimformat.registry import REGISTRY
 from conftest import BOT, ME, ts
 
 
@@ -100,7 +101,7 @@ class TestContentEdits:
         report = reconciled(drifted)
 
         assert report.changed
-        assert drifted.spec_version == aim.SPEC_VERSION
+        assert drifted.spec_version == REGISTRY.paint_since
         assert drifted.chunk("p1").text == "Hand edited."
 
     def test_reconcile_records_the_upgrade_for_out_of_band_paint(self):
@@ -122,7 +123,7 @@ class TestContentEdits:
 
         upgrade = next(event for event in report.events if event.target == "aim:version")
         edit = next(event for event in report.events if event.target == "p1")
-        assert drifted.spec_version == aim.SPEC_VERSION
+        assert drifted.spec_version == REGISTRY.paint_since
         assert upgrade.batch == edit.batch
 
     def test_reconcile_refuses_paint_with_an_unrecorded_hand_bumped_version(self):

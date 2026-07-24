@@ -2,7 +2,7 @@
 // Source: src/aimformat/registry.json (+ the aim-note template in
 // src/aimformat/note.py). Regenerate: python3 scripts/gen_ts_registry.py
 
-export const SPEC_VERSION = "0.3";
+export const SPEC_VERSION = "0.4";
 
 export const VOID_ELEMENTS: ReadonlySet<string> = new Set(["meta", "img", "br", "hr", "link", "input"]);
 
@@ -14,7 +14,7 @@ export const ATTR_LAST: readonly string[] = ["src", "href"];
 
 export const SVG_CASE_ADJUST: Readonly<Record<string, string>> = {"viewbox": "viewBox", "preserveaspectratio": "preserveAspectRatio"};
 
-export const STYLE_PROP_ORDER: readonly string[] = ["left", "top", "width", "height", "transform", "z-index", "color", "background-color", "border-color"];
+export const STYLE_PROP_ORDER: readonly string[] = ["left", "top", "width", "height", "transform", "z-index", "color", "background-color", "border-color", "font-size", "font-family"];
 
 // Per-property value grammars, so a consumer validates against registry
 // data instead of maintaining a third copy of the grammar.
@@ -28,10 +28,12 @@ export const STYLE_PROP_PATTERNS: Readonly<Record<string, RegExp>> = {
   "color": new RegExp("^#[0-9a-f]{6}$", "u"),
   "background-color": new RegExp("^#[0-9a-f]{6}$", "u"),
   "border-color": new RegExp("^#[0-9a-f]{6}$", "u"),
+  "font-size": new RegExp("^\\p{Nd}+(\\.\\p{Nd}+)?pt$", "u"),
+  "font-family": new RegExp("^[A-Za-z0-9 ,'\\-]+$", "u"),
 };
 
 // The subset of STYLE_PROP_ORDER that carries literal paint (spec §3.3);
-// the rest is slide geometry.
+// the rest is slide geometry and literal typography.
 export const STYLE_PROP_PAINT: readonly string[] = ["color", "background-color", "border-color"];
 
 // First spec version whose style grammar includes literal paint.

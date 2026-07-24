@@ -1,9 +1,10 @@
 """Converters between `.aim` and the main document formats.
 
 Import: :func:`from_text` (stdlib), :func:`from_markdown` (extra
-``markdown``), :func:`from_docx` / :func:`from_pdf` (extra ``ingest`` —
-docling wrappers over :func:`aimformat.from_docling`), and the extension
-dispatcher :func:`from_path`.
+``markdown``), :func:`from_docx` (extra ``docx`` — a native OOXML importer
+that preserves styling, :mod:`._docx_in`), :func:`from_pdf` (extra
+``ingest`` — a docling wrapper over :func:`aimformat.from_docling`), and
+the extension dispatcher :func:`from_path`.
 
 Export: :func:`to_markdown` (stdlib), :func:`to_html` (stdlib),
 :func:`to_pdf` (extra ``pdf``), plus :func:`aimformat.to_docx` re-exported
@@ -39,6 +40,10 @@ __all__ = [
     "to_html",
     "to_pdf",
     "to_docx",
+    # the python-docx pagination side pass stays available for callers who
+    # run a DOCX through docling themselves (from_docling) — the native
+    # from_docx no longer needs it
+    "apply_docx_pagination",
 ]
 
 _BLANK_LINES = re.compile(r"\n\s*\n")
@@ -86,17 +91,30 @@ def from_docx(
     author: Actor | None = None,
     theme: dict[str, str] | None = None,
 ) -> AimDocument:
-    """DOCX → .aim via docling (extra ``ingest``). An explicit ``title``
-    wins; otherwise the document's own title node does (docling exports the
-    file stem as ``name``, which is the final fallback).
+    """DOCX → .aim natively (extra ``docx``), styling preserved.
 
-    Explicit pagination intent (sectPr page setup, hard page breaks) is
-    carried over in a python-docx side pass — see
-    :mod:`aimformat.convert._docx_pages`."""
-    who = author or external("docx-import")
-    doc = from_docling(_docling_document(path), title=title, lang=lang, author=who, theme=theme)
-    apply_docx_pagination(doc, path, author=who)
-    return doc
+    The importer walks the OOXML itself (docx-parser-converter parse layer
+    behind the :mod:`._docx_seam` boundary): the document theme derives
+    from ``theme1.xml`` (caller-supplied ``theme`` slots win), local run
+    intent becomes literal paint/typography and the classic marks, and
+    explicit pagination intent lands inline — see :mod:`._docx_in`.
+
+    An explicit ``title`` wins; otherwise the Title-styled paragraph, the
+    first ``h1``, and the file stem are the fallbacks in that order."""
+    try:
+        from ._docx_in import convert_docx
+    except ImportError as exc:  # pragma: no cover - exercised without extra
+        raise ImportError(
+            "DOCX import requires docx-parser-converter (extra 'docx'): "
+            "pip install 'aimformat[docx]'"
+        ) from exc
+    return convert_docx(
+        path,
+        title=title,
+        lang=lang,
+        author=author or external("docx-import"),
+        theme=theme,
+    )
 
 
 def from_pdf(

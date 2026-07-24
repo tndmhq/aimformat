@@ -31,7 +31,8 @@ Mapping (docling label → .aim):
 
 ====================  =====================================================
 ``title``             ``<h1>`` chunk (also the document title by default)
-``section_header``    ``<h2>``–``<h6>`` chunk (docling level + 1, capped)
+``section_header``    heading chunk — docling level + 1 (capped at h6) when
+                      a title claims ``<h1>``, else level as-is
 ``text``/``paragraph`` ``<p>`` chunk; ``formatting`` flags become
                       ``strong/em/u/s/sub/sup``, ``hyperlink`` becomes
                       ``<a>`` when its scheme is registry-safe
@@ -290,6 +291,19 @@ def _list_items_markup(res: _Resolver, group: dict, _stack: set[int] | None = No
                     parts[-1] = parts[-1][: -len("</li>")] + nested + "</li>"
                 else:
                     parts.append(f"<li>{nested}</li>")
+            elif label == "table":
+                # docling's msword backend sometimes parents a table that
+                # follows the list under the list GROUP (not under an item);
+                # give it the same home a group-parented sub-list gets —
+                # dropping it would violate the module's no-silent-drop
+                # guarantee
+                nested_table = _table_markup(child)
+                if not nested_table:
+                    continue
+                if parts:
+                    parts[-1] = parts[-1][: -len("</li>")] + nested_table + "</li>"
+                else:
+                    parts.append(f"<li>{nested_table}</li>")
         return "".join(parts) if parts or not cyclic_contentless else None
     finally:
         _stack.remove(identity)
@@ -376,6 +390,28 @@ def _picture_markup(res: _Resolver, pic: dict) -> str:
     return f"<figure>{body}</figure>"
 
 
+def _body_has_title(res: _Resolver, body: dict) -> bool:
+    """Whether any body-reachable node is a non-empty title. It decides the
+    heading shift: a title claims ``<h1>``, so section headers move down one
+    level; without one, Word's ubiquitous Heading 1 must stay ``<h1>``."""
+    seen: set[int] = set()  # object identity: hostile cycles may lack self_ref
+
+    def scan(node: dict) -> bool:
+        if id(node) in seen:
+            return False
+        seen.add(id(node))
+        for child in res.children(node):
+            if not _is_body(child):
+                continue
+            if child.get("label") == "title" and child.get("text"):
+                return True
+            if child.get("children") and scan(child):
+                return True
+        return False
+
+    return scan(body)
+
+
 def from_docling(
     source: Any,
     *,
@@ -394,6 +430,7 @@ def from_docling(
     who = author or external("docling-ingest")
 
     body = data.get("body") or {}
+    heading_shift = 1 if _body_has_title(res, body) else 0
     blocks: list[str] = []
     doc_title = title
     seen_caption_refs: set[str] = set()
@@ -425,7 +462,7 @@ def from_docling(
                 walk(child)
             elif label == "section_header":
                 if child.get("text"):
-                    level = min(int(child.get("level", 1)) + 1, _HEADING_CAP)
+                    level = min(max(int(child.get("level", 1)), 1) + heading_shift, _HEADING_CAP)
                     blocks.append(f"<h{level}>{_text_of(child)}</h{level}>")
                 walk(child)
             elif label in (

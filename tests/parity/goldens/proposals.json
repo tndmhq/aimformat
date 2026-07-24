@@ -84,7 +84,7 @@
   "containers": [
     "tb"
   ],
-  "docHash": "sha256:ceed15997dd51666303f0b1566b20cc1f68059a4279c66bc480759e3cd530cd9",
+  "docHash": "sha256:a76f19d3b9bf3bec70e2484f357a428e0be1c3d2a8df10e8519e01ffed4b3942",
   "docSettings": {},
   "embeddings": null,
   "hasCanonicalNote": true,
@@ -179,7 +179,7 @@
       "tag": "table"
     }
   ],
-  "note": "\naim-note: This file is an AIM document (open format, v0.3) — valid HTML plus\nchunk identity, a pending-suggestions lane, and an edit history.\nAgent docs: https://aimformat.com/llms.txt\nThe reliable way to edit this file is the `aimformat` tooling, which manages\nids, suggestions, and history for you: `pip install aimformat` for the `aim`\nCLI (`aim --help`); `pip install 'aimformat[mcp]'` adds its MCP server\n(`aim mcp`). An Agent Skill exists: `npx skills add tndmhq/aimformat`.\nHand-editing as plain text is the fallback; if you do: keep every data-aim id\nstable (never renumber or reuse; give new content a fresh id), treat the\naim-proposals appendix and the history script as append-only tool lanes, and\nvalidate with `aim lint`. Humans review in AIM editors:\nhttps://aimformat.com/editors\n",
+  "note": "\naim-note: This file is an AIM document (open format, v0.4) — valid HTML plus\nchunk identity, a pending-suggestions lane, and an edit history.\nAgent docs: https://aimformat.com/llms.txt\nThe reliable way to edit this file is the `aimformat` tooling, which manages\nids, suggestions, and history for you: `pip install aimformat` for the `aim`\nCLI (`aim --help`); `pip install 'aimformat[mcp]'` adds its MCP server\n(`aim mcp`). An Agent Skill exists: `npx skills add tndmhq/aimformat`.\nHand-editing as plain text is the fallback; if you do: keep every data-aim id\nstable (never renumber or reuse; give new content a fresh id), treat the\naim-proposals appendix and the history script as append-only tool lanes, and\nvalidate with `aim lint`. Humans review in AIM editors:\nhttps://aimformat.com/editors\n",
   "pageSetup": {
     "contentHeightMm": 267.0,
     "contentWidthMm": 180.0,
@@ -209,7 +209,7 @@
       "batch": "b2",
       "dependsOn": null,
       "explanation": "Lead with the point.",
-      "id": "p-m4qgiit6",
+      "id": "p-d12a94gn",
       "payloadHtml": "<p data-aim=\"c2\">Second, sharpened.</p>",
       "target": "c2"
     },
@@ -227,7 +227,7 @@
       "batch": "b3",
       "dependsOn": null,
       "explanation": "Redundant with c2.",
-      "id": "p-ckch68c8",
+      "id": "p-mb8itj4s",
       "payloadHtml": null,
       "target": "c3"
     },
@@ -245,7 +245,7 @@
       "batch": "b4",
       "dependsOn": null,
       "explanation": null,
-      "id": "p-t679ktv5",
+      "id": "p-nqb4gj00",
       "payloadHtml": null,
       "target": "c4"
     },
@@ -263,13 +263,13 @@
       "batch": "b5",
       "dependsOn": null,
       "explanation": "Bridge paragraph.",
-      "id": "p-7t45avqb",
+      "id": "p-1qdfssjd",
       "payloadHtml": "<p data-aim=\"add1\">Inserted after the title.</p>",
       "target": null
     },
     {
       "action": "add",
-      "anchorAfter": "p-7t45avqb",
+      "anchorAfter": "p-1qdfssjd",
       "anchorContainer": "body",
       "anchorShell": null,
       "at": "2026-07-17T10:00:14Z",
@@ -281,7 +281,7 @@
       "batch": "b6",
       "dependsOn": null,
       "explanation": null,
-      "id": "p-fbfbsng4",
+      "id": "p-qctobu0h",
       "payloadHtml": "<p data-aim=\"add2\">Chained onto the pending add.</p>",
       "target": null
     },
@@ -299,7 +299,7 @@
       "batch": "b7",
       "dependsOn": null,
       "explanation": "Row at the top of the body section.",
-      "id": "p-d8krh1fa",
+      "id": "p-811vv546",
       "payloadHtml": "<tr data-aim=\"add3\"><td>three</td></tr>",
       "target": null
     },
@@ -315,9 +315,9 @@
         "type": "agent"
       },
       "batch": "b8",
-      "dependsOn": "p-m4qgiit6",
+      "dependsOn": "p-d12a94gn",
       "explanation": "Teal primary.",
-      "id": "p-gd1r277h",
+      "id": "p-k1mvmsgl",
       "payloadHtml": "<style data-aim-theme>:root{--aim-brand-1:#0f766e}</style>",
       "target": "aim:theme"
     },
@@ -335,15 +335,15 @@
       "batch": "b9",
       "dependsOn": null,
       "explanation": "Booklet trim.",
-      "id": "p-i5h74ra6",
+      "id": "p-5jdabj5p",
       "payloadHtml": "<script type=\"application/aim-doc+json\">\n{\"page\":{\"margins\":{\"bottom\":\"10mm\",\"left\":\"12mm\",\"right\":\"12mm\",\"top\":\"10mm\"},\"orientation\":\"landscape\",\"size\":\"A5\"}}\n</script>",
       "target": "aim:doc"
     }
   ],
-  "specVersion": "0.3",
+  "specVersion": "0.4",
   "stylesheet": {
-    "sha256": "sha256:80be4f465ecd7a028d0887ef65ad9ab31378cb2bb74ba8b1c89fd9e75dcf89be",
-    "version": "0.3"
+    "sha256": "sha256:fb75617803abea27d25fdd474a8aefe63be623764992fdd911d326f7dc603522",
+    "version": "0.4"
   },
   "theme": {},
   "title": "Pending lane — every action"

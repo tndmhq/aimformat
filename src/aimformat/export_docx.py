@@ -44,6 +44,7 @@ from .dom import Element, Text, parse_fragment
 from .errors import InvalidOperation
 from .events import external
 from .paint import BorderSide, Paint, PaintResolver, brand_defaults
+from .registry import REGISTRY
 
 if TYPE_CHECKING:  # pragma: no cover
     pass
@@ -132,6 +133,61 @@ def _paint_fmt(paint: Paint, fmt: dict, *, inline: bool) -> dict:
     return out
 
 
+def _first_family(stack: str | None) -> str | None:
+    """The first concrete family of a font-stack slot ("Georgia, serif" →
+    "Georgia"), or None. Word styles name one face, not a CSS stack."""
+    if not stack:
+        return None
+    first = stack.split(",")[0].strip().strip("'\"")
+    return first or None
+
+
+def _run_typography(el: Element) -> dict:
+    """A run element's literal typography for export: font size in points and
+    font family. Class-driven size (the type scale) resolves through the
+    normative pt table; an inline ``font-size``/``font-family`` overrides it,
+    mirroring CSS specificity."""
+    out: dict = {}
+    for token in (el.get("class") or "").split():
+        if token.startswith("text-"):
+            pt = REGISTRY.type_scale_pt.get(token[len("text-") :])
+            if pt:
+                out["size_pt"] = float(pt)
+    for piece in (el.get("style") or "").split(";"):
+        prop, sep, val = piece.partition(":")
+        if not sep:
+            continue
+        prop, val = prop.strip(), val.strip()
+        if prop == "font-size" and val.endswith("pt"):
+            try:
+                out["size_pt"] = float(val[:-2])
+            except ValueError:
+                pass
+        elif prop == "font-family" and val:
+            # the grammar allows a stack ("Segoe UI, sans-serif"); Word run
+            # properties name exactly one face, so take the first family
+            family = _first_family(val)
+            if family:
+                out["font_name"] = family
+    return out
+
+
+def _alignment_of(el: Element):
+    """A block's alignment class → a Word paragraph alignment, or None."""
+    from docx.enum.text import WD_ALIGN_PARAGRAPH
+
+    mapping = {
+        "text-left": WD_ALIGN_PARAGRAPH.LEFT,
+        "text-center": WD_ALIGN_PARAGRAPH.CENTER,
+        "text-right": WD_ALIGN_PARAGRAPH.RIGHT,
+        "text-justify": WD_ALIGN_PARAGRAPH.JUSTIFY,
+    }
+    for token in (el.get("class") or "").split():
+        if token in mapping:
+            return mapping[token]
+    return None
+
+
 def _runs_of(
     el: Element,
     fmt: dict | None,
@@ -147,6 +203,9 @@ def _runs_of(
     whose paragraph carries the box, True for everything nested inside it.
     """
     fmt = _paint_fmt(paint.of(el), dict(fmt or {}), inline=inline)
+    # literal typography inherits into descendants like colour does: fold this
+    # element's own size/family over what it inherited, children then override
+    fmt.update(_run_typography(el))
     tag = el.tag
     if tag in _BOLD_TAGS:
         fmt["bold"] = True
@@ -290,6 +349,12 @@ def _format_run(run, spec: dict) -> None:
         run.font.strike = True
     if spec.get("mono"):
         run.font.name = _MONO
+    if spec.get("font_name"):  # explicit family wins over the mono default
+        run.font.name = spec["font_name"]
+    if spec.get("size_pt"):
+        from docx.shared import Pt
+
+        run.font.size = Pt(spec["size_pt"])
     if spec.get("subscript"):
         run.font.subscript = True
     if spec.get("superscript"):
@@ -687,6 +752,7 @@ class _Exporter:
         title = self.aim.title
         if title:
             self.out.core_properties.title = title
+        self._apply_theme_fonts()
         self._apply_page_setup()
         self._emit_anchored_adds("body", None)
         for construct in self.aim._state.constructs():
@@ -700,6 +766,27 @@ class _Exporter:
             for prop in props:
                 self._emit_add_paragraphs(prop)
         self.adds_by_anchor.clear()
+
+    def _apply_theme_fonts(self) -> None:
+        """The document's theme font-stack slots → the exported document's
+        style fonts: ``--aim-font-body`` becomes Normal's face, and
+        ``--aim-font-heading`` the face of every Heading/Title style. The
+        first concrete family of each stack is used (Word names one face, not
+        a CSS stack); colour slots are already handled by the paint resolver.
+        """
+        theme = dict(getattr(self.aim, "theme", None) or {})
+        body = _first_family(theme.get("--aim-font-body"))
+        heading = _first_family(theme.get("--aim-font-heading"))
+        if not body and not heading:
+            return
+        styles = self.out.styles
+        names = {s.name for s in styles}
+        if body and "Normal" in names:
+            styles["Normal"].font.name = body
+        if heading:
+            for name in names:
+                if name.startswith("Heading") or name == "Title":
+                    styles[name].font.name = heading
 
     def _apply_page_setup(self) -> None:
         """The document's page setup → Word section properties, from the
@@ -934,6 +1021,9 @@ class _Exporter:
             self.emit_list(el)
             return
         para = self.out.add_paragraph(style=style or self._safe_style(_style_for(el.tag)))
+        align = _alignment_of(el)
+        if align is not None:
+            para.alignment = align
         runs, box = _clean_runs_and_box(el, self.paint)
         _apply_runs(para, runs)
         _paint_paragraph(para, box)
@@ -1102,8 +1192,14 @@ class _Exporter:
                 content.children = [
                     c for c in li.children if not (isinstance(c, Element) and c.tag in ("ul", "ol"))
                 ]
-                # the copy is synthetic and carries no attributes, so it adopts
-                # the item's computed paint rather than a subset of its markup
+                # the copy is synthetic, so it adopts the item's computed
+                # paint rather than resolving as if it were in the tree — but
+                # class/style must ride along: alignment and literal
+                # typography are read off the element itself
+                for attr in ("class", "style"):
+                    value = li.get(attr)
+                    if value:
+                        content.set(attr, value)
                 self.paint.adopt(content, li)
                 if prop is not None:
                     self.emit_tracked_chunk(content, prop, style=style, payload=li is group[-1])

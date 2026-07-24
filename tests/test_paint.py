@@ -14,7 +14,12 @@ import pytest
 import aimformat as aim
 from aimformat.dom import parse_fragment
 from aimformat.paint import PaintResolver
+from aimformat.registry import REGISTRY
 from conftest import BOT, ME, ts
+
+# adding paint upgrades a document to the paint floor, not to the newest
+# version this build happens to write (spec §3.3)
+PAINT_SINCE = REGISTRY.paint_since
 
 
 def el(markup: str):
@@ -344,10 +349,10 @@ class TestVersionUpgrade:
         older.modify_chunk(
             "t", '<h1 data-aim="t" style="color:#ff69b4">Title</h1>', author=ME, at=ts(2)
         )
-        assert older.spec_version == aim.SPEC_VERSION
+        assert older.spec_version == PAINT_SINCE
         upgrades = [e for e in older.history if e.target == "aim:version"]
         assert len(upgrades) == 1
-        assert (upgrades[0].get("before"), upgrades[0].get("after")) == ("0.2", aim.SPEC_VERSION)
+        assert (upgrades[0].get("before"), upgrades[0].get("after")) == ("0.2", PAINT_SINCE)
         assert upgrades[0].batch == older.history[-1].batch
 
     def test_the_earlier_checkpoint_still_verifies_after_the_upgrade(self, older):
@@ -372,7 +377,7 @@ class TestVersionUpgrade:
         proposal = older.propose_modify(
             "t", '<h1 data-aim="t" style="color:#ff69b4">Title</h1>', author=BOT, at=ts(2)
         )
-        assert older.spec_version == aim.SPEC_VERSION
+        assert older.spec_version == PAINT_SINCE
         assert older.verify() == []
         upgrade = next(event for event in older.history if event.target == "aim:version")
         assert upgrade.batch == proposal.batch
@@ -424,7 +429,7 @@ class TestVersionUpgrade:
         resolution = foreign.reject(pid, decided_by=ME, at=ts(3))
 
         upgrade = next(event for event in foreign.history if event.target == "aim:version")
-        assert foreign.spec_version == aim.SPEC_VERSION
+        assert foreign.spec_version == PAINT_SINCE
         assert resolution.get("proposed") is not None and "#ff69b4" in resolution.get("proposed")
         assert upgrade.batch == resolution.batch
         assert foreign.verify() == []
@@ -474,7 +479,7 @@ class TestVersionUpgrade:
             aim.InvalidOperation, match="retained document state or history contains literal paint"
         ):
             older.undo(author=ME, at=ts(4))
-        assert older.spec_version == aim.SPEC_VERSION
+        assert older.spec_version == PAINT_SINCE
         assert older.verify() == []
         assert [
             finding for finding in aim.lint_text(older.dumps()) if finding.level == "error"
@@ -490,7 +495,7 @@ class TestVersionUpgrade:
         ):
             older.undo(author=ME, at=ts(3))
 
-        assert older.spec_version == aim.SPEC_VERSION
+        assert older.spec_version == PAINT_SINCE
         assert [
             finding for finding in aim.lint_text(older.dumps()) if finding.level == "error"
         ] == []

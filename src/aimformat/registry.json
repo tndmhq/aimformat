@@ -1,5 +1,5 @@
 {
-  "spec_version": "0.3",
+  "spec_version": "0.4",
   "ids": {
     "chunk_pattern": "^[a-z0-9][a-z0-9_-]{0,63}$",
     "proposal_pattern": "^p-[a-z0-9][a-z0-9_-]{0,63}$",
@@ -294,7 +294,9 @@
       "z-index",
       "color",
       "background-color",
-      "border-color"
+      "border-color",
+      "font-size",
+      "font-family"
     ],
     "patterns": {
       "left": "^-?\\d+(\\.\\d+)?px$",
@@ -305,14 +307,21 @@
       "z-index": "^-?\\d+$",
       "color": "^#[0-9a-f]{6}$",
       "background-color": "^#[0-9a-f]{6}$",
-      "border-color": "^#[0-9a-f]{6}$"
+      "border-color": "^#[0-9a-f]{6}$",
+      "font-size": "^\\d+(\\.\\d+)?pt$",
+      "font-family": "^[A-Za-z0-9 ,'\\-]+$"
     },
     "paint": [
       "color",
       "background-color",
       "border-color"
     ],
-    "paint_since": "0.3"
+    "paint_since": "0.3",
+    "typography": [
+      "font-size",
+      "font-family"
+    ],
+    "typography_since": "0.4"
   },
   "page": {
     "sizes_mm": {
@@ -433,7 +442,34 @@
       "6xl": [
         "3.75rem",
         "1.1"
+      ],
+      "7xl": [
+        "4.5rem",
+        "1"
+      ],
+      "8xl": [
+        "6rem",
+        "1"
+      ],
+      "9xl": [
+        "8rem",
+        "1"
       ]
+    },
+    "type_scale_pt": {
+      "xs": "9",
+      "sm": "10.5",
+      "base": "12",
+      "lg": "13.5",
+      "xl": "15",
+      "2xl": "18",
+      "3xl": "22.5",
+      "4xl": "27",
+      "5xl": "36",
+      "6xl": "45",
+      "7xl": "54",
+      "8xl": "72",
+      "9xl": "96"
     },
     "font_weights": {
       "normal": "400",
@@ -450,8 +486,15 @@
     "alignments": [
       "left",
       "center",
-      "right"
+      "right",
+      "justify"
     ],
+    "since": {
+      "text-justify": "0.4",
+      "text-7xl": "0.4",
+      "text-8xl": "0.4",
+      "text-9xl": "0.4"
+    },
     "palette": {
       "gray": {
         "50": "#f9fafb",
@@ -829,6 +872,10 @@
     "S032": [
       "error",
       "literal paint requires a supporting spec version"
+    ],
+    "S033": [
+      "error",
+      "literal typography requires a supporting spec version"
     ],
     "V001": [
       "error",
