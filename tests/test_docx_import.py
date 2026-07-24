@@ -560,6 +560,33 @@ class TestTableStyling:
 # --------------------------------------------------------------------------
 
 
+class TestMergedCells:
+    def test_vertical_merge_becomes_rowspan_alongside_gridspan(self):
+        # python-docx merge(): row 0 = [gridSpan-2 "wide", vMerge-restart
+        # "tall"], row 1 = [x, y, vMerge-continue]. The restart cell must
+        # survive with rowspan=2 (dpc models w:vMerge as a plain string —
+        # reading .val off it silently dropped the whole merged column).
+        doc = Document()
+        t = doc.add_table(rows=2, cols=3)
+        t.cell(0, 0).merge(t.cell(0, 1))
+        t.cell(0, 2).merge(t.cell(1, 2))
+        t.cell(0, 0).text = "wide"
+        t.cell(0, 2).text = "tall"
+        t.cell(1, 0).text = "x"
+        t.cell(1, 1).text = "y"
+        out = io.BytesIO()
+        doc.save(out)
+        out.seek(0)
+        dumped = convert_docx(out).dumps()
+        table = re.search(r"<table.*?</table>", dumped, re.S)
+        assert table, dumped[:600]
+        html = table.group(0)
+        assert 'colspan="2"' in html and ">wide<" in html
+        assert 'rowspan="2"' in html and ">tall<" in html
+        # the continuation slot collapses into the restart cell
+        assert html.count("<td") + html.count("<th") == 4
+
+
 class TestExportSymmetry:
     def _roundtrip(self, tmp_path):
         aim_doc = convert_docx(_styled_docx())

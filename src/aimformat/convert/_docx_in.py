@@ -484,16 +484,18 @@ class _Converter:
             for cell in getattr(row, "tc", []) or []:
                 pr = getattr(cell, "tc_pr", None)
                 colspan = int(getattr(pr, "grid_span", None) or 1)
+                # dpc models w:vMerge as a plain string: 'restart' opens a
+                # vertical span, 'continue' (its default for a bare w:vMerge)
+                # extends it
                 vmerge = getattr(pr, "v_merge", None)
-                val = getattr(vmerge, "val", None) if vmerge is not None else None
-                if vmerge is not None and val in (None, "continue"):
+                if vmerge == "restart":
+                    spans[(ri, col)] = 1
+                elif vmerge is not None:
                     for above in range(ri - 1, -1, -1):
                         if (above, col) in spans:
                             spans[(above, col)] += 1
                             break
                     skip.add((ri, col))
-                elif vmerge is not None and val == "restart":
-                    spans[(ri, col)] = 1
                 cells.append((cell, colspan))
                 col += colspan
             grid.append(cells)
