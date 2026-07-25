@@ -30,8 +30,12 @@ Documents are increasingly written *with* AI, in formats designed for a
 single human at a single cursor. Everyone building document workflows with
 AI reinvents the same primitives: addressing a region of a document,
 tracking which edits came from the model, letting a human accept or reject
-them, proving what the document said before. `.aim` makes those primitives
-part of the file format itself: open, editor-agnostic, MIT.
+them, proving what the document said before, handing work from one agent
+to the next. `.aim` makes those primitives part of the file format itself:
+open, editor-agnostic, MIT. And because proposals, reasoning, and
+rejections stay in the file, an agent in another tool or harness picks up
+the collaboration where the last one left off instead of starting from a
+bare document.
 
 ```
 ┌──────────────────────────── one .aim file ────────────────────────────┐
