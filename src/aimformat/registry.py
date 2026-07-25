@@ -336,6 +336,17 @@ class Registry:
         return floors
 
     @cached_property
+    def attr_floors(self) -> dict[str, str]:
+        """Attributes introduced after 0.1, mapped to the spec version that
+        introduced them — the same gate ``class_floors`` provides for classes.
+
+        Without this an era check reads a document's classes and inline
+        styles but not its attributes, so a 0.4 document carrying v0.5
+        numbering attributes passes, and a writer records no floor for a
+        payload whose only new construct is an attribute."""
+        return dict(self.raw["attributes"].get("since", {}))
+
+    @cached_property
     def type_scale_pt(self) -> dict[str, str]:
         """The normative pt value for each type-scale step (rem × 12) —
         what class-based sizes mean in point-based exports (DOCX, print)."""

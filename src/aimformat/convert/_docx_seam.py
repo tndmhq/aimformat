@@ -66,6 +66,8 @@ except ImportError as exc:  # pragma: no cover - exercised without the extra
 
 from lxml import etree
 
+from ..errors import AimError, ParseError
+
 __all__ = [
     "DocxTheme",
     "NumberingEngine",
@@ -253,11 +255,23 @@ class ParsedDocx:
 
 def parse_docx(source: str | bytes | BinaryIO) -> ParsedDocx:
     """Open and parse *source* through the pinned parse layer + gap-fillers."""
-    zf = _api.open_docx(source)
-    _guard_archive(zf)  # every input, not only the Strict-OOXML branch
-    if _is_strict_ooxml(zf):
-        zf = _api.open_docx(_normalize_strict_ooxml(zf))
-    doc_elem = _api.extract_document_xml(zf)
+    try:
+        zf = _api.open_docx(source)
+        _guard_archive(zf)  # every input, not only the Strict-OOXML branch
+        if _is_strict_ooxml(zf):
+            zf = _api.open_docx(_normalize_strict_ooxml(zf))
+        doc_elem = _api.extract_document_xml(zf)
+    except (AimError, ValueError):
+        # our own guards (zip-slip, oversized member) already say what is
+        # wrong in our own vocabulary
+        raise
+    except Exception as exc:
+        # Anything the archive layer raises — a truncated file, a legacy .doc
+        # renamed .docx, a zip with no word/document.xml — is a bad INPUT, not
+        # a bug. Unwrapped, callers got a KeyError or the dependency's own
+        # DocxReadError: the CLI printed a traceback, and every caller had to
+        # guess which third-party class to catch.
+        raise ParseError(f"not a readable .docx file: {exc}") from exc
     document = _api.parse_document(doc_elem)
     if document is None:
         raise ValueError("not a WordprocessingML document (no document body)")

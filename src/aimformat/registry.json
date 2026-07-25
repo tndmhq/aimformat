@@ -148,6 +148,10 @@
     ]
   },
   "attributes": {
+    "since": {
+      "data-aim-num-prefix": "0.5",
+      "start": "0.5"
+    },
     "global": [
       "class",
       "style",

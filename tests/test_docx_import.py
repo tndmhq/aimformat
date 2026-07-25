@@ -695,6 +695,21 @@ class TestNumberingVocabularyIsValid:
         codes = {f.code for f in aim.lint(aim.loads(body)) if f.level == "error"}
         assert "S034" in codes, f"a 0.5 class went unchecked under {declared}"
 
+    def test_the_v05_attributes_are_gated_against_an_older_declaration(self):
+        # The era gate reads classes and style props but never attributes, so
+        # a 0.4 document carrying v0.5 numbering ATTRIBUTES linted clean —
+        # and a writer recorded no floor for them either, so a document could
+        # be written claiming an era that cannot render it.
+        for markup in (
+            '<p data-aim-num-prefix="Article ">x</p>',
+            '<ol start="5"><li>five</li></ol>',
+        ):
+            doc = aim.new_document(title="Gate")
+            doc.add_chunk(markup, author=aim.external("t"))
+            body = doc.dumps().replace('data-aim-version="0.5"', 'data-aim-version="0.4"')
+            codes = {f.code for f in aim.lint(aim.loads(body)) if f.level == "error"}
+            assert "S034" in codes, f"{markup} went unchecked in a 0.4 document"
+
 
 class TestNumberedSchemesImportAsOneShape:
     """A numbering scheme is one thing. Emitting part of it as a list and
@@ -1529,3 +1544,33 @@ class TestThemeFontsComeFromTheStylesWordRenders:
                 z.writestr(name, data)
         out.seek(0)
         assert self._heading_slot(out) == "Baskerville"
+
+
+class TestMalformedInputFailsTyped:
+    """An unreadable file is a user error, not a crash. Without a typed
+    error the CLI prints a traceback ending in someone else's exception
+    class, and every caller has to guess what to catch."""
+
+    @staticmethod
+    def _import(data: bytes):
+        return aim.from_docx(io.BytesIO(data))
+
+    def test_an_empty_zip_raises_a_typed_error(self):
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w"):
+            pass
+        with pytest.raises(aim.ParseError):
+            self._import(buf.getvalue())
+
+    def test_a_truncated_archive_raises_a_typed_error(self):
+        doc = Document()
+        doc.add_paragraph("ok")
+        buf = io.BytesIO()
+        doc.save(buf)
+        with pytest.raises(aim.ParseError):
+            self._import(buf.getvalue()[: len(buf.getvalue()) // 2])
+
+    def test_a_file_that_is_not_a_zip_raises_a_typed_error(self):
+        # a legacy .doc renamed .docx is the everyday version of this
+        with pytest.raises(aim.ParseError):
+            self._import(b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1 legacy OLE compound file")
