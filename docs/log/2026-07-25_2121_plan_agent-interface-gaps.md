@@ -88,7 +88,32 @@ before publishing the line. Consider whether the in-file note should carry
 it too: unlike the stylesheet, note text is free to change, since existing
 files keep their own copy and nothing fails lint.
 
+## 5. Re-read the agent-facing texts for emphasis
+
+Separate from the four gaps: pass over the in-file note (spec §2.5),
+`docs/for-agents.md`, `skills/aimformat/SKILL.md` and the `llms.txt` copy in
+the landing repo, and judge two questions of weight rather than accuracy.
+
+**How prominently the tooling route is offered.** The evidence from this
+session says the current placement works — the note's `pip install`
+line produced an unprompted install within seconds. So the question is
+whether anything is gained by more prominence, or whether the real gap is
+coverage of the environments where that line fails (finding 4). Do not add
+emphasis that the transcript does not justify.
+
+**How the editors handoff is worded.** Same session: the agent found the
+link and used it, and what failed was the destination, since the page said
+"coming soon" (fixed 2026-07-25). Judge whether the current wording gives an
+agent an *action* it can hand a human, rather than a fact it can mention —
+that distinction, not volume, is what changed when the copy was fixed. Keep
+the neutrality constraint in view: this format's agent docs read as vendor
+marketing the moment they push one editor harder than the directory, and
+that neutrality is what makes other tools willing to adopt the format. The
+directory stays the pointer; a named editor earns its place by being the
+most useful next step, not by being ours.
+
 ## Sequencing
 
-One small PR covers all four: docs for 1, 2 and 4, plus the CLI verb and MCP
-tool for 3. None of it is urgent.
+One small PR covers the first four: docs for 1, 2 and 4, plus the CLI verb
+and MCP tool for 3. Item 5 is an editing pass, best done after those land so
+the texts are only rewritten once. None of it is urgent.
