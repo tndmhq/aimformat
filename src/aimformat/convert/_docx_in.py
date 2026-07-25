@@ -153,18 +153,58 @@ def _derived_theme_slots(parsed: ParsedDocx) -> dict[str, str]:
     back to the theme table where they do not.
     """
     slots = dict(parsed.theme.slots())
-    body = font_of(parsed.baseline_run or {}, parsed.theme)
+    body = font_of(parsed.baseline_run or {}, parsed.theme) or _resolved_style_font(
+        parsed, parsed.default_style_id or "", "Normal"
+    )
     if body:
         slots["--aim-font-body"] = body
-    heading = _resolved_style_font(parsed, "Heading1", "Heading 1")
+    heading = _heading_face(parsed)
     if heading:
         slots["--aim-font-heading"] = heading
     return slots
 
 
+def _heading_face(parsed: ParsedDocx) -> str | None:
+    """The face the document's headings actually render in.
+
+    The styles a document DEFINES are not the ones it uses: Word's template
+    defines all nine heading styles whether or not the author touched them,
+    so a document written entirely in Heading 2 would otherwise report
+    Heading 1's face. Used styles first, shallowest first; only then the
+    defined ones.
+    """
+    used = {
+        str(model_dump(item.p_pr).get("p_style") or "").lower()
+        for item, _ in parsed.content
+        if type(item).__name__ == "Paragraph"
+    }
+    levels = [(f"heading{n}", f"heading {n}") for n in range(1, 7)]
+    for by_id, by_name in levels:
+        for style_id in used:
+            if style_id == by_id or parsed.style_names.get(style_id) == by_name:
+                face = parsed.style_fonts.get(style_id)
+                if face:
+                    return face
+    keys = [key for pair in levels for key in pair]
+    return _resolved_style_font(parsed, *keys)
+
+
 def _resolved_style_font(parsed: ParsedDocx, *style_ids: str) -> str | None:
-    """The latin face a named style resolves to, or None if it has no say."""
+    """The latin face a named style resolves to, or None if it has no say.
+
+    ``style_fonts`` — read from styles.xml directly — answers for every
+    candidate before the typed resolver is asked for any: the typed model
+    drops a theme-referencing ``rFonts`` outright and then reports the
+    document default instead, which would win over a later candidate that
+    genuinely names a face.
+    """
     for style_id in style_ids:
+        face = parsed.style_fonts.get(style_id.lower()) if style_id else None
+        if face:
+            return face
+    for style_id in style_ids:
+        if not style_id:
+            continue
         try:
             props = parsed.resolver.resolve_paragraph_properties(style_id)
         except Exception:

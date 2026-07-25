@@ -244,6 +244,11 @@ class ParsedDocx:
     theme: DocxTheme
     default_style_id: str | None  # the default paragraph style ("Normal")
     baseline_run: dict[str, Any]  # document-default effective run props
+    #: style name AND id (lowercased) → the latin face it resolves to, read
+    #: from styles.xml so theme-referencing and localized styles still answer
+    style_fonts: dict[str, str]
+    #: styleId → w:name, lowercased: which heading level a localized style is
+    style_names: dict[str, str]
 
 
 def parse_docx(source: str | bytes | BinaryIO) -> ParsedDocx:
@@ -264,6 +269,7 @@ def parse_docx(source: str | bytes | BinaryIO) -> ParsedDocx:
     hyperlinks, image_targets = _relationships(zf)
     images = _load_images(zf, image_targets)
     theme = _parse_theme(zf)
+    _style_index = style_fonts(zf, theme)
     default = resolver.get_default_paragraph_style()
     default_id = getattr(default, "style_id", None) if default is not None else None
     baseline = resolver.resolve_paragraph_properties(default_id).get("r_pr", {}) or {}
@@ -279,6 +285,8 @@ def parse_docx(source: str | bytes | BinaryIO) -> ParsedDocx:
         theme=theme,
         default_style_id=default_id,
         baseline_run=baseline,
+        style_fonts=_style_index[0],
+        style_names=_style_index[1],
     )
 
 
@@ -1049,6 +1057,76 @@ def table_style_looks(
                 look.pop("color")
         resolved[style_id] = {k: v for k, v in merged.items() if v}
     return resolved
+
+
+def style_fonts(zf: zipfile.ZipFile, theme: DocxTheme) -> tuple[dict[str, str], dict[str, str]]:
+    """``{style name and id (lowercased): the latin face it resolves to}``.
+
+    Read from ``styles.xml`` directly, for two reasons the typed model cannot
+    cover:
+
+    * a style usually names its font *through the theme*
+      (``w:asciiTheme="majorHAnsi"``), which the parse layer drops outright —
+      the resolved run props come back empty and the caller silently falls
+      back to the theme table;
+    * the styleId is localized (a German Word writes ``berschrift1``), while
+      ``w:name`` keeps the English "heading 1". Keyed on the id alone, every
+      non-English document loses its heading face.
+
+    ``basedOn`` is followed so a style that inherits its face still answers.
+    Returns the face index and the ``{styleId: w:name}`` map beside it, both
+    lowercased — the caller needs the names to tell which localized style is
+    which heading level.
+    """
+    try:
+        root = etree.fromstring(zf.read("word/styles.xml"))
+    except (KeyError, etree.XMLSyntaxError):
+        return {}, {}
+    w = f"{{{_W_NS}}}"
+    own: dict[str, str] = {}  # styleId -> face declared on the style itself
+    based: dict[str, str] = {}  # styleId -> the style it inherits from
+    names: dict[str, str] = {}  # styleId -> w:name
+    for style in root.findall(f"{w}style"):
+        style_id = style.get(f"{w}styleId")
+        if not style_id:
+            continue
+        name = style.find(f"{w}name")
+        if name is not None and name.get(f"{w}val"):
+            names[style_id] = str(name.get(f"{w}val"))
+        parent = style.find(f"{w}basedOn")
+        if parent is not None and parent.get(f"{w}val"):
+            based[style_id] = str(parent.get(f"{w}val"))
+        fonts = style.find(f"{w}rPr/{w}rFonts")
+        if fonts is None:
+            continue
+        face = fonts.get(f"{w}ascii") or fonts.get(f"{w}hAnsi")
+        if not face:
+            ref = str(fonts.get(f"{w}asciiTheme") or fonts.get(f"{w}hAnsiTheme") or "")
+            if ref.startswith("major"):
+                face = theme.major_font
+            elif ref.startswith("minor"):
+                face = theme.minor_font
+        if face:
+            own[style_id] = str(face)
+
+    def resolve(style_id: str, depth: int = 0) -> str | None:
+        # depth-capped: a corrupt file can make basedOn a cycle
+        if depth > 8:
+            return None
+        if style_id in own:
+            return own[style_id]
+        parent = based.get(style_id)
+        return resolve(parent, depth + 1) if parent else None
+
+    out: dict[str, str] = {}
+    for style_id in set(names) | set(own) | set(based):
+        face = resolve(style_id)
+        if not face:
+            continue
+        out.setdefault(style_id.lower(), face)
+        if style_id in names:
+            out.setdefault(names[style_id].lower(), face)
+    return out, {k.lower(): v.lower() for k, v in names.items()}
 
 
 def _parse_theme(zf: zipfile.ZipFile) -> DocxTheme:

@@ -1426,3 +1426,106 @@ class TestExportedNumberingIsOneSequence:
         # four untouched clauses, plus the struck original and its
         # replacement — Word numbers a pending deletion until it is accepted
         assert len(used) == 6, f"a tracked clause lost its numbering: {len(used)} numbered of 6"
+
+
+class TestThemeFontsComeFromTheStylesWordRenders:
+    """The document's face is what the STYLE resolves to, not what the theme
+    table declares — and a style may name its font through the theme, or
+    carry a localized styleId, or not exist at all under that name.
+
+    Every miss here is the same silent failure: the whole document renders in
+    the wrong family, and a test that only asks whether the slot is non-empty
+    never notices.
+    """
+
+    @staticmethod
+    def _docx(patch_styles=None, *, major="Georgia", minor="Verdana", heading_style=True):
+        doc = Document()
+        doc.add_paragraph("Body text")
+        if heading_style:
+            doc.add_paragraph("A heading").style = "Heading 1"
+        buf = io.BytesIO()
+        doc.save(buf)
+        buf.seek(0)
+        src = zipfile.ZipFile(buf)
+        out = io.BytesIO()
+        with zipfile.ZipFile(out, "w") as z:
+            for name in src.namelist():
+                data = src.read(name)
+                if name == "word/theme/theme1.xml":
+                    s = data.decode()
+                    s = re.sub(r'(<a:majorFont>\s*<a:latin typeface=")[^"]*', r"\g<1>" + major, s)
+                    s = re.sub(r'(<a:minorFont>\s*<a:latin typeface=")[^"]*', r"\g<1>" + minor, s)
+                    data = s.encode()
+                elif name == "word/styles.xml" and patch_styles is not None:
+                    data = patch_styles(data.decode()).encode()
+                z.writestr(name, data)
+        out.seek(0)
+        return out
+
+    @staticmethod
+    def _heading_slot(source) -> str | None:
+        from aimformat.convert._docx_in import _derived_theme_slots
+        from aimformat.convert._docx_seam import parse_docx
+
+        return _derived_theme_slots(parse_docx(source)).get("--aim-font-heading")
+
+    def test_a_style_naming_its_font_through_the_theme_is_resolved(self):
+        # Word's own default heading style carries asciiTheme="majorHAnsi"
+        # rather than a literal face. The parse layer drops rFonts entirely
+        # when it is a theme reference, so the resolved props came back empty
+        # and the slot silently fell back to the theme table. Pointed at the
+        # MINOR font, the two answers differ and the bug is visible.
+        def minor_ref(s):
+            return re.sub(
+                r'(<w:style [^>]*w:styleId="Heading1">)',
+                r'\1<w:rPr><w:rFonts w:asciiTheme="minorHAnsi" w:hAnsiTheme="minorHAnsi"/></w:rPr>',
+                s,
+            )
+
+        assert self._heading_slot(self._docx(minor_ref)) == "Verdana"
+
+    def test_a_localized_style_id_is_found_by_its_english_name(self):
+        # A German Word writes w:styleId="berschrift1" and keeps
+        # <w:name w:val="heading 1"/>. Keyed on the styleId alone, every
+        # non-English document loses its heading face.
+        def localized(s):
+            s = s.replace('w:styleId="Heading1"', 'w:styleId="berschrift1"')
+            return re.sub(
+                r'(<w:style [^>]*w:styleId="berschrift1">)',
+                r'\1<w:rPr><w:rFonts w:ascii="Palatino" w:hAnsi="Palatino"/></w:rPr>',
+                s,
+            )
+
+        assert self._heading_slot(self._docx(localized)) == "Palatino"
+
+    def test_a_document_without_heading_1_falls_through_to_the_next_level(self):
+        # Plenty of documents start at Heading 2. Looking only for Heading 1
+        # leaves the slot on the theme table's word.
+        def only_h2(s):
+            return re.sub(
+                r'(<w:style [^>]*w:styleId="Heading2">)',
+                r'\1<w:rPr><w:rFonts w:ascii="Baskerville" w:hAnsi="Baskerville"/></w:rPr>',
+                s,
+            )
+
+        doc = Document()
+        doc.add_paragraph("Body")
+        doc.add_paragraph("Sub heading").style = "Heading 2"
+        buf = io.BytesIO()
+        doc.save(buf)
+        buf.seek(0)
+        src = zipfile.ZipFile(buf)
+        out = io.BytesIO()
+        with zipfile.ZipFile(out, "w") as z:
+            for name in src.namelist():
+                data = src.read(name)
+                if name == "word/theme/theme1.xml":
+                    s = data.decode()
+                    s = re.sub(r'(<a:majorFont>\s*<a:latin typeface=")[^"]*', r"\g<1>Georgia", s)
+                    data = s.encode()
+                elif name == "word/styles.xml":
+                    data = only_h2(data.decode()).encode()
+                z.writestr(name, data)
+        out.seek(0)
+        assert self._heading_slot(out) == "Baskerville"
