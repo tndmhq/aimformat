@@ -305,6 +305,12 @@ class NumberDraw:
     prefix: str = ""
     """The literal before the counter ("Article "), when the level draws one."""
 
+    chained: bool = False
+    """This level shows its ancestors' counters too ("1.1.1"). Such a
+    paragraph is a *clause*, not a list item, whatever style it carries: an
+    ``<ol>`` renders 1, 2, 3 at every depth and cannot express the chain at
+    all — which is the defect that started this."""
+
 
 @dataclass
 class NumberLevel:
@@ -470,6 +476,7 @@ class NumberingEngine:
             restarted=restarted,
             level=clause_level,
             prefix=prefix,
+            chained=(level.lvl_text or "").count("%") > 1,
         )
 
     def _dynamic_style(self, num_id: int, ilvl: int, level: NumberLevel) -> tuple[int | None, str]:

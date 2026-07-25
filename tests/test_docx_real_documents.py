@@ -221,6 +221,28 @@ class TestClauseNumbering:
         text = next(t for n, t in render_clause_numbers(legal) if n == "1.1.1")
         assert "Applicable Laws" in text
 
+    def test_clause_numbering_survives_a_docx_round_trip(self, legal, tmp_path):
+        # Since v0.5 the number is not in the text, so an exporter that
+        # ignores the clause classes writes a contract with NO numbers at
+        # all — worse than the baked labels it replaced. Word must get real
+        # numbering back, and re-importing it must land on the same clauses.
+        out = tmp_path / "clauses.docx"
+        aim.to_docx(legal, str(out))
+        back = aim.from_docx(out)
+        assert [n for n, _ in render_clause_numbers(back)] == [
+            n for n, _ in render_clause_numbers(legal)
+        ]
+
+    def test_the_exported_docx_carries_word_numbering(self, legal, tmp_path):
+        # not literal text that merely looks like a number: w:numPr, so Word
+        # itself renumbers the document after an edit
+        out = tmp_path / "clauses.docx"
+        aim.to_docx(legal, str(out))
+        body = zipfile.ZipFile(out).read("word/document.xml").decode("utf-8")
+        assert "numPr" in body, "the export lost its numbering entirely"
+        numbering = zipfile.ZipFile(out).read("word/numbering.xml").decode("utf-8")
+        assert "multilevel" in numbering
+
 
 class TestHeadingsAreOnlyRealHeadings:
     """HeadingN styles that resolve to body text must not be promoted — that

@@ -242,7 +242,11 @@ class _Converter:
         label: str = ""
         clause: list[str] = []
         prefix_attr = ""
-        if heading is not None and draw is not None:
+        # A clause is either heading-styled (the outline idiom legal
+        # templates use) or numbered with a CHAIN — "1.1.1" shows its
+        # ancestors, and an <ol> renders 1,2,3 at every depth, so a chained
+        # paragraph is a clause whatever style it carries.
+        if draw is not None and (heading is not None or draw.chained):
             if draw.level is not None:
                 # v0.5: the level is one CSS counters can draw, so the number
                 # is NOT written into the text. It is computed at render time,
