@@ -515,6 +515,14 @@ class NumberingEngine:
         deepest = self.level(num_id, max(used_levels))
         if len(used_levels) < 2 and not (deepest and (deepest.lvl_text or "").count("%") > 1):
             return False
+        # Every level the chain RENDERS must also be one the document uses.
+        # A marker shows its ancestors' counters, and a counter no block
+        # increments reads 0 — so a scheme whose level-1 headings are
+        # unnumbered, or one that skips a level, would draw "0.1" and
+        # "1.0.1". Word draws the missing level's start value instead, so
+        # the two would disagree; baking is the honest degradation.
+        if set(range(max(used_levels) + 1)) - used_levels:
+            return False
         for ilvl in used_levels:
             for depth in range(ilvl + 1):  # the level and every ancestor it draws
                 level = self.level(num_id, depth)
@@ -1336,29 +1344,57 @@ def _picture_width_px(node: Any, is_vml: bool) -> int | None:
 
 
 def _vml_width_px(node: Any) -> int | None:
-    """VML geometry lives in a CSS-ish ``@style``. A shape inside a
-    ``v:group`` is sized in that group's ``coordsize`` units, so its bare
-    number has to be scaled by the group's real width — read literally, every
-    child of a group renders at the group's own size."""
-    own_w = own_unit = None
+    """VML geometry lives in a CSS-ish ``@style``.
+
+    A shape inside a ``v:group`` is sized in that group's ``coordsize``
+    units, and groups NEST — an inner group states its own width in its
+    parent's units too, so only the outermost one carries a real
+    measurement. Reading any intermediate width as points (they look like
+    bare numbers either way) multiplies the error by that group's whole
+    coordinate space: a 50px logo two groups deep came out at 1000px.
+    """
+    sized = _nearest_vml_width(node)
+    if sized is None:
+        return None
+    element, width, unit = sized
+    if unit:  # a real measurement, no group scaling to resolve
+        return max(1, round(width * _UNIT_PX[unit]))
+    # unitless: convert through each enclosing group's coordinate space until
+    # one of them states an actual unit
+    cur = element
+    while cur is not None:
+        group = _enclosing_vml_group(cur)
+        if group is None:
+            return None  # unitless with nothing to scale against
+        span = _int_or_none((group.get("coordsize") or "").split(",")[0])
+        group_w, group_unit = _vml_width(group)
+        if not span or group_w is None:
+            return None
+        width = width * group_w / span
+        if group_unit:
+            return max(1, round(width * _UNIT_PX[group_unit]))
+        cur = group  # the group's own width was unitless too: keep climbing
+    return None  # ran out of ancestors with nothing stating a real unit
+
+
+def _nearest_vml_width(node: Any) -> tuple[Any, float, str | None] | None:
+    """The closest ancestor (or self) declaring a width, with that width."""
     cur = node
     while cur is not None:
         width, unit = _vml_width(cur)
-        if width is not None and own_w is None:
-            own_w, own_unit = width, unit
-        if _local(cur) == "group":
-            group_w, group_unit = _vml_width(cur)
-            coords = (cur.get("coordsize") or "").split(",")
-            if own_unit is None and own_w is not None and group_w is not None and coords:
-                span = _int_or_none(coords[0])
-                factor = _UNIT_PX.get(group_unit or "pt")
-                if span and factor:
-                    return max(1, round(group_w * factor * own_w / span))
+        if width is not None:
+            return cur, width, unit
         cur = cur.getparent()
-    if own_w is None:
-        return None
-    # a unitless width outside any group has no scale to resolve it against
-    return max(1, round(own_w * _UNIT_PX[own_unit])) if own_unit else None
+    return None
+
+
+def _enclosing_vml_group(el: Any) -> Any | None:
+    cur = el.getparent()
+    while cur is not None:
+        if _local(cur) == "group":
+            return cur
+        cur = cur.getparent()
+    return None
 
 
 def picture_relationships(elem: Any) -> list[tuple[str, str, int | None]]:

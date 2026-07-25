@@ -1,6 +1,6 @@
 # The `.aim` document format — specification v0.5
 
-**Status: v0.5 (draft; v0.4 plus dynamic numbering — clause-numbered blocks
+**Status: v0.5 (draft; v0.4 plus dynamic numbering — outline-numbered blocks
 and list formats whose numbers are computed at render time rather than
 written into the text, §3.8; v0.4 added literal per-element typography,
 v0.3 literal per-element paint).** This is the

@@ -408,9 +408,14 @@ class TestSchemeClassification:
         engine = self._scheme("%1.")
         assert not engine.scheme_is_outline(1, {0})
 
-    def test_a_chained_level_alone_is_still_outline(self):
+    def test_a_chain_needs_the_levels_it_renders(self):
+        # written when the rule was "a chained level is outline on its own" —
+        # which is wrong: with no level-1 block, aim-c1 is never incremented
+        # and the marker reads "0.1". The scheme must use the levels its
+        # chain shows.
         engine = self._scheme("%1.", "%1.%2")
-        assert engine.scheme_is_outline(1, {1})
+        assert not engine.scheme_is_outline(1, {1})
+        assert engine.scheme_is_outline(1, {0, 1})
 
     def test_an_unused_exotic_level_does_not_disqualify_the_scheme(self):
         # the real fixture defines a parenthesised level 5 it never reaches;
@@ -428,6 +433,18 @@ class TestSchemeClassification:
         )
         assert engine.scheme_is_outline(1, {0, 1, 2})
         assert not engine.scheme_is_outline(1, {0, 1, 2, 3}), "the exotic level must bake"
+
+    def test_a_scheme_whose_top_level_is_unnumbered_bakes(self):
+        # A marker shows its ancestors' counters, and a counter no block
+        # increments reads 0 — so a document whose level-1 headings carry no
+        # numbering would render its level-2 blocks "0.1". Word draws the
+        # missing level's start value instead, so the two would disagree.
+        engine = self._scheme("%1.", "%1.%2")
+        assert not engine.scheme_is_outline(1, {1})
+
+    def test_a_scheme_that_skips_a_level_bakes(self):
+        engine = self._scheme("%1.", "%1.%2", "%1.%2.%3")
+        assert not engine.scheme_is_outline(1, {0, 2}), "would render 1.0.1"
 
     def test_a_level_that_does_not_start_at_one_bakes(self):
         # the classes carry no start value and the CSS restart sets 1, so a

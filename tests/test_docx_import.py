@@ -947,6 +947,27 @@ class TestGroupedPictureSizing:
         # width, both render this child at the whole group's size.
         assert self._vml("position:absolute;width:600;height:600") == 40
 
+    def test_nested_vml_groups_accumulate_every_coordinate_space(self):
+        # Groups nest, and an inner group states its own width in its
+        # PARENT's units — bare numbers either way. Reading an intermediate
+        # width as points multiplies the error by that group's whole
+        # coordinate space: this shape came out at 1000px instead of 50.
+        from aimformat.convert._docx_seam import _picture_width_px
+
+        root = etree.fromstring(
+            f'<w:pict xmlns:w="{_W}" xmlns:v="{_V}" xmlns:r="{_R}">'
+            '<v:group style="width:150pt;height:150pt" coordsize="3000,3000">'
+            '<v:group style="position:absolute;width:1500;height:1500" '
+            'coordsize="1500,1500">'
+            '<v:shape style="position:absolute;width:750;height:750">'
+            '<v:imagedata r:id="rId1"/></v:shape>'
+            "</v:group></v:group></w:pict>"
+        )
+        # 150pt = 200px; the inner group is 1500/3000 of it = 100px; the
+        # shape is 750/1500 of that = 50px
+        node = root.find(f".//{{{_V}}}imagedata")
+        assert _picture_width_px(node, is_vml=True) == 50
+
     def test_a_lone_vml_shape_uses_its_own_measurement(self):
         from aimformat.convert._docx_seam import _picture_width_px
 
