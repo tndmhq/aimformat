@@ -1,8 +1,11 @@
 """The native DOCX importer (extra ``docx``): styling fidelity, the
 rhythm-vs-local-intent doctrine, structure, pagination, theme derivation.
 
-Fixtures are built with python-docx (a dev/test dependency), same pattern
-as the pagination tests — no binary files in the repo.
+Fixtures here are built with python-docx (a dev/test dependency), same
+pattern as the pagination tests: one feature per document, so a failure
+names the feature. Whole real-world documents — the combinations no
+synthetic fixture produces — live as binaries in ``tests/fixtures/docxs/``
+and are asserted in ``test_docx_real_documents.py``.
 """
 
 from __future__ import annotations
@@ -21,7 +24,8 @@ from docx import Document  # noqa: E402
 from docx.enum.text import WD_ALIGN_PARAGRAPH, WD_BREAK, WD_COLOR_INDEX  # noqa: E402
 from docx.oxml import OxmlElement  # noqa: E402
 from docx.oxml.ns import qn  # noqa: E402
-from docx.shared import Emu, Pt, RGBColor  # noqa: E402
+from docx.shared import Emu, Inches, Pt, RGBColor  # noqa: E402
+from lxml import etree  # noqa: E402
 
 from aimformat.convert import from_docx  # noqa: E402
 
@@ -297,6 +301,8 @@ from aimformat.convert._docx_seam import (  # noqa: E402
 _W = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
 _M = "http://schemas.openxmlformats.org/officeDocument/2006/math"
 _W14 = "http://schemas.microsoft.com/office/word/2010/wordml"
+_V = "urn:schemas-microsoft-com:vml"
+_R = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
 
 
 def _one_para_html(builder) -> str:
@@ -427,6 +433,60 @@ class TestTextbox:
         imported = convert_docx(out)
         texts = [c.text for c in imported.chunks]
         assert texts == ["Anchor", "BoxLine"]
+
+    # An image inside a textbox has two failure modes that pull in OPPOSITE
+    # directions, so each flavour must be pinned or a fix for one silently
+    # breaks the other — which is exactly what happened twice here:
+    #
+    #   * dpc's typed model carries DrawingML pictures, so recovering blips
+    #     from inside a textbox emits them TWICE;
+    #   * dpc has no VML model at all, so NOT recovering there loses the
+    #     image outright.
+    #
+    # These two tests are a pair. Do not "simplify" either away.
+
+    @staticmethod
+    def _textbox_with_image(flavour: str) -> str:
+        doc = Document()
+        anchor = doc.add_paragraph("Anchor")
+        rid, _ = doc.part.get_or_add_image(io.BytesIO(_PNG))
+        if flavour == "vml":
+            inner = (
+                f'<w:pict xmlns:w="{_W}" xmlns:v="{_V}" xmlns:r="{_R}">'
+                '<v:shape style="width:60pt;height:60pt">'
+                f'<v:imagedata r:id="{rid}"/></v:shape></w:pict>'
+            )
+        else:
+            scratch = Document()
+            run = scratch.add_paragraph().add_run()
+            run.add_picture(io.BytesIO(_PNG), width=Inches(1))
+            drawing = etree.tostring(run._r.find(f"{{{_W}}}drawing")).decode()
+            inner = re.sub(r'r:embed="[^"]+"', f'r:embed="{rid}"', drawing)
+        run = parse_xml(f'<w:r xmlns:w="{_W}"/>')
+        run.append(
+            parse_xml(
+                f'<w:pict xmlns:w="{_W}" xmlns:v="{_V}" xmlns:r="{_R}">'
+                "<v:shape><v:textbox><w:txbxContent><w:p>"
+                "<w:r><w:t>Caption</w:t></w:r>"
+                f"<w:r>{inner}</w:r>"
+                "</w:p></w:txbxContent></v:textbox></v:shape></w:pict>"
+            )
+        )
+        anchor._p.append(run)
+        out = io.BytesIO()
+        doc.save(out)
+        out.seek(0)
+        imported = convert_docx(out)
+        assert "Caption" in [c.text for c in imported.chunks]
+        return "\n".join(c.html for c in imported.chunks)
+
+    def test_vml_image_in_a_textbox_is_recovered_once(self):
+        # dpc cannot see VML; without the seam's recovery this image is LOST
+        assert self._textbox_with_image("vml").count("<img") == 1
+
+    def test_drawingml_image_in_a_textbox_is_not_doubled(self):
+        # dpc's own walk already emits this one, so the seam must not re-add it
+        assert self._textbox_with_image("drawingml").count("<img") == 1
 
 
 class TestArchiveGuards:
@@ -567,6 +627,81 @@ class TestTableStyling:
         assert _cell_width_px({"type": "pct", "w": 5000}) is None
         assert _cell_width_px({"type": "auto"}) is None
         assert _cell_width_px(None) is None
+
+
+class TestTableStyleResolution:
+    """A table's whole appearance usually lives in its STYLE, in conditional
+    blocks (``w:tblStylePr``) that each apply to one band. Reading those
+    wrongly is not a cosmetic miss — it repaints the entire table."""
+
+    @staticmethod
+    def _styled(style_xml: str, rows: int = 4) -> str:
+        """Import a table using a custom style injected into styles.xml."""
+        doc = Document()
+        table = doc.add_table(rows=rows, cols=2)
+        for r in range(rows):
+            for c in range(2):
+                table.cell(r, c).text = f"r{r}c{c}"
+        table._tbl.tblPr.append(parse_xml(f'<w:tblStyle xmlns:w="{_W}" w:val="Probe"/>'))
+        # tblLook: firstRow + banded rows on, so the conditional blocks apply
+        table._tbl.tblPr.append(
+            parse_xml(
+                f'<w:tblLook xmlns:w="{_W}" w:val="04A0" w:firstRow="1" '
+                'w:lastRow="0" w:firstColumn="0" w:lastColumn="0" '
+                'w:noHBand="0" w:noVBand="1"/>'
+            )
+        )
+        doc.styles.element.append(parse_xml(style_xml))
+        out = io.BytesIO()
+        doc.save(out)
+        out.seek(0)
+        imported = convert_docx(out)
+        assert [f for f in aim.lint(imported) if f.level == "error"] == []
+        return "\n".join(c.html for c in imported.chunks if c.tag == "tr")
+
+    def test_a_first_row_band_does_not_paint_every_row(self):
+        # The wholeTable look is what the style declares DIRECTLY. Reading it
+        # with a `.//` subtree search hoists the firstRow band onto every row
+        # — a table of dark blue rows with white text on white paper.
+        html = self._styled(
+            f'<w:style xmlns:w="{_W}" w:type="table" w:styleId="Probe">'
+            '<w:name w:val="Probe"/><w:tblStylePr w:type="firstRow">'
+            '<w:tcPr><w:shd w:val="clear" w:fill="203864"/></w:tcPr>'
+            '<w:rPr><w:color w:val="FFFFFF"/></w:rPr>'
+            "</w:tblStylePr></w:style>"
+        )
+        rows = html.split("\n")
+        assert "#203864" in rows[0], "the header band itself was lost"
+        assert not any("#203864" in r for r in rows[1:]), (
+            "the firstRow band leaked onto the body rows"
+        )
+
+    def test_a_band_that_sets_only_text_colour_is_dropped(self):
+        # A conditional format with a colour and no fill is meaningless on
+        # its own: the fill it was designed against is not there, so the
+        # colour paints (often white) text onto white paper.
+        html = self._styled(
+            f'<w:style xmlns:w="{_W}" w:type="table" w:styleId="Probe">'
+            '<w:name w:val="Probe"/><w:tblStylePr w:type="firstRow">'
+            '<w:rPr><w:color w:val="FFFFFF"/></w:rPr>'
+            "</w:tblStylePr></w:style>"
+        )
+        assert "color:#ffffff" not in html
+
+    def test_theme_named_fills_and_colours_resolve(self):
+        # Word's own table styles name colours through the theme far more
+        # often than they spell out hex. Literal-only reading left most real
+        # tables unstyled. accent2 is C0504D in the default theme.
+        html = self._styled(
+            f'<w:style xmlns:w="{_W}" w:type="table" w:styleId="Probe">'
+            '<w:name w:val="Probe"/><w:tblStylePr w:type="firstRow">'
+            '<w:tcPr><w:shd w:val="clear" w:themeFill="accent2"/></w:tcPr>'
+            '<w:rPr><w:color w:themeColor="background1"/></w:rPr>'
+            "</w:tblStylePr></w:style>"
+        )
+        header = html.split("\n")[0]
+        assert "#c0504d" in header, header
+        assert "#ffffff" in header, header
 
 
 # --------------------------------------------------------------------------

@@ -786,25 +786,34 @@ def paragraph_checkbox(elem: Any) -> str | None:
     return "☑" if val in ("1", "true") else "☐"
 
 
-def _effective_descendants(elem: Any, skip: str | None = None) -> Any:
+def _effective_descendants(elem: Any) -> Any:
     """Descendants of *elem* with Markup Compatibility (MCE) applied: inside
     an ``mc:AlternateContent``, exactly one branch is read — the first
     ``mc:Choice`` (the richer representation), else the ``mc:Fallback``.
     Word emits every inserted shape as AlternateContent carrying the *same*
     ``w:txbxContent`` in both a DrawingML Choice and a VML Fallback, so a
     naive ``.//`` search sees all duplicated content twice."""
+    for child, _ in _effective_descendants_scoped(elem):
+        yield child
+
+
+def _effective_descendants_scoped(elem: Any, in_textbox: bool = False) -> Any:
+    """``_effective_descendants``, each node paired with whether it sits
+    inside a ``w:txbxContent``. Textbox content is walked a second time by
+    ``textbox_paragraphs`` through dpc's typed model, so a caller that would
+    otherwise double what dpc already carries needs to know where it is."""
+    txbx = f"{{{_W_NS}}}txbxContent"
     for child in elem:
-        if skip is not None and child.tag == skip:
-            continue  # owned by another pass; descending would double it
         if child.tag == f"{{{_MC_NS}}}AlternateContent":
             branch = child.find(f"{{{_MC_NS}}}Choice")
             if branch is None:
                 branch = child.find(f"{{{_MC_NS}}}Fallback")
             if branch is not None:
-                yield from _effective_descendants(branch, skip)
+                yield from _effective_descendants_scoped(branch, in_textbox)
             continue
-        yield child
-        yield from _effective_descendants(child, skip)
+        nested = in_textbox or child.tag == txbx
+        yield child, nested
+        yield from _effective_descendants_scoped(child, nested)
 
 
 def paragraph_math_text(elem: Any) -> str:
@@ -909,10 +918,15 @@ def picture_relationships(elem: Any) -> list[tuple[str, str, int | None]]:
     embed, rel_id = f"{{{_R_NS}}}embed", f"{{{_R_NS}}}id"
     out: list[tuple[str, str, int | None]] = []
     seen: set[str] = set()
-    # textbox content belongs to textbox_paragraphs; the run walk inside it
-    # emits these images already, so descending here would double them
-    for node in _effective_descendants(elem, skip=f"{{{_W_NS}}}txbxContent"):
+    # Inside a textbox, recover only what dpc cannot model. textbox_paragraphs
+    # re-parses those w:p through dpc, which carries their DrawingML pictures
+    # but has no VML model at all — so descending for blips there doubles the
+    # image, and skipping VML there loses it outright. (Both were shipped, in
+    # turn, before a test pinned the two flavours against each other.)
+    for node, in_textbox in _effective_descendants_scoped(elem):
         if node.tag == blip:
+            if in_textbox:
+                continue
             rid, alt = node.get(embed), "image"
         elif node.tag == imagedata:
             rid = node.get(rel_id)
