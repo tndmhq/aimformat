@@ -312,6 +312,15 @@ class NumberDraw:
     ``<ol>`` renders 1, 2, 3 at every depth and cannot express the chain at
     all — which is the defect that started this."""
 
+    plain_decimal: bool = False
+    """This level's marker is its own decimal counter and nothing else
+    ("%1", "%1.") — exactly what a bare ``<ol>`` already draws.
+
+    The caller needs this to know when the list markup is *faithful*. Any
+    other marker (a chain, a literal like ``Article %1``, a parenthesised or
+    lettered form) renders as "1." inside an ``<ol>``, which is a different
+    number from the one Word draws, so it must be baked instead."""
+
 
 @dataclass
 class NumberLevel:
@@ -447,6 +456,15 @@ class NumberingEngine:
         level = self.level(num_id, ilvl)
         return level is not None and level.is_ordered
 
+    def abstract_of(self, num_id: int) -> int | None:
+        """The definition this instance draws from, or ``None`` if unknown.
+
+        Callers that decide anything per *scheme* must group by this rather
+        than by ``num_id``: Word mints a fresh instance every time a list is
+        interrupted, and the counters are shared per definition.
+        """
+        return self._abstract.get(num_id)
+
     # -- counting ----------------------------------------------------------
 
     def label(self, num_id: int, ilvl: int) -> str:
@@ -487,9 +505,15 @@ class NumberingEngine:
             level=num_level,
             prefix=prefix,
             chained=(level.lvl_text or "").count("%") > 1,
+            plain_decimal=(
+                level.num_fmt == "decimal"
+                and (level.lvl_text or "") in (f"%{ilvl + 1}", f"%{ilvl + 1}.")
+            ),
         )
 
-    def scheme_is_outline(self, num_id: int, used_levels: set[int]) -> bool:
+    def scheme_is_outline(
+        self, num_id: int, used_levels: set[int], first_level: int | None = None
+    ) -> bool:
         """Whether a whole numbering scheme should be drawn as outline-numbered
         BLOCKS rather than a list.
 
@@ -523,6 +547,15 @@ class NumberingEngine:
         # the two would disagree; baking is the honest degradation.
         if set(range(max(used_levels) + 1)) - used_levels:
             return False
+        # …and it must ENTER the scheme at the top. The used-levels set cannot
+        # see this: a document may use level 0 only after its first level-1
+        # block, and until something increments it that ancestor counter reads
+        # 0, so the first marker draws "0.1" where Word draws "1.1" (Word
+        # shows an untouched level at its start value). Seeding an ancestor
+        # from markup is not something the vocabulary can express, so this
+        # bakes rather than renders a zero.
+        if first_level is not None and first_level != min(used_levels):
+            return False
         for ilvl in used_levels:
             for depth in range(ilvl + 1):  # the level and every ancestor it draws
                 level = self.level(num_id, depth)
@@ -533,6 +566,14 @@ class NumberingEngine:
                 # a counter that only knows how to start at 1 cannot draw a
                 # level that starts anywhere else
                 if self._start_value(num_id, depth, level) != 1:
+                    return False
+                # The generated CSS zeroes every deeper counter whenever a
+                # level advances. A level declaring anything else — "never
+                # restart" (0), or restart on a level further up — would be
+                # reset anyway, and the two disagree from the second block on.
+                # `lvlRestart == depth` names the level immediately above,
+                # which is what the default already does.
+                if depth and level.lvl_restart is not None and level.lvl_restart != depth:
                     return False
         return True
 
@@ -568,7 +609,13 @@ class NumberingEngine:
         own = f"%{ilvl + 1}"
         if text.count("%") == 1 and text.endswith(own):
             prefix = text[: -len(own)]
-            if "%" not in prefix:
+            # A literal is what makes this shape drawable: the prefixed rule
+            # renders `attr(data-aim-num-prefix) counter(aim-cN)` — that level's
+            # counter ALONE. Without a literal there is no attribute, the plain
+            # rule takes over, and it draws the whole ancestor chain: "1.2"
+            # where Word draws "2". Only the top level survives that, where the
+            # chain is one counter long anyway.
+            if "%" not in prefix and (prefix or ilvl == 0):
                 return ilvl + 1, prefix
         return None, ""
 

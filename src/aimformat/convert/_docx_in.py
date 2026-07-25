@@ -201,6 +201,11 @@ class _Converter:
         self._emitted_images: set[str] = set()
         # numIds whose whole scheme draws outline-numbered blocks
         self._outline_schemes: set[int] = set()
+        # num_id -> the scheme (abstract definition) it belongs to, and the
+        # scheme the last outline block came from: two schemes share one set
+        # of CSS counters, so the second has to restart them
+        self._scheme_of: dict[int, tuple[str, int]] = {}
+        self._last_outline_scheme: tuple[str, int] | None = None
 
     # -- top level ---------------------------------------------------------
 
@@ -259,6 +264,25 @@ class _Converter:
         # w:numId="0" is OOXML for "numbering removed here"
         return {} if str(num_pr.get("num_id")) == "0" else num_pr
 
+    def _iter_paragraphs(self, content: Any = None, in_cell: bool = False):
+        """Every paragraph in document order, table cells included.
+
+        Both numbering passes need this. A paragraph inside a cell is
+        numbered by Word like any other, so a walk that stops at the table
+        both loses that number and leaves the counter unadvanced — which
+        misnumbers everything after the table, not just the cell.
+        """
+        for item in content if content is not None else (i for i, _ in self.p.content):
+            kind = type(item).__name__
+            if kind == "Paragraph":
+                yield item, in_cell
+            elif kind == "Table":
+                for row in getattr(item, "tr", []) or []:
+                    for cell in getattr(row, "tc", []) or []:
+                        yield from self._iter_paragraphs(
+                            getattr(cell, "content", []) or [], in_cell=True
+                        )
+
     def _classify_numbering(self) -> None:
         """Decide, per numbering SCHEME, whether it draws outline-numbered
         blocks or a list — before emitting anything.
@@ -268,23 +292,55 @@ class _Converter:
         would tear one scheme into both shapes: Word's stock multilevel list
         would emit its top level as ``<li>`` and everything below as blocks
         numbered against a counter nothing increments.
+
+        The grouping key is the **abstract definition**, not the instance:
+        Word mints a fresh ``w:num`` for the same definition every time a
+        list is interrupted, and the counters are shared per definition. Keyed
+        per instance, a continuation used only at deeper levels fails the
+        contiguity rule on its own, and one continuous visible sequence emits
+        as blocks and then as a list starting again at 1.
+
+        Two shapes are excluded outright, because the CSS counters advance on
+        *rendered* blocks and these cannot render as blocks throughout:
+
+        * a scheme with a paragraph inside a table cell (the cell keeps its
+          number as text, so a dynamic sibling would count one short);
+        * a scheme interleaved with another outline scheme, which would need
+          two independent counter sets where the stylesheet has one.
         """
-        used: dict[int, set[int]] = {}
-        for item, _ in self.p.content:
-            if type(item).__name__ != "Paragraph":
-                continue
-            num_pr = self._numbering_of(item)
+        engine = self.p.numbering_engine
+        used: dict[tuple[str, int], set[int]] = {}
+        first: dict[tuple[str, int], int] = {}
+        instances: dict[tuple[str, int], set[int]] = {}
+        boxed: set[tuple[str, int]] = set()
+        order: list[tuple[str, int]] = []
+        for para, in_cell in self._iter_paragraphs():
+            num_pr = self._numbering_of(para)
             try:
                 num_id = int(num_pr["num_id"])
                 ilvl = int(num_pr.get("ilvl") or 0)
             except (KeyError, TypeError, ValueError):
                 continue
-            used.setdefault(num_id, set()).add(ilvl)
-        self._outline_schemes = {
-            num_id
-            for num_id, levels in used.items()
-            if self.p.numbering_engine.scheme_is_outline(num_id, levels)
-        }
+            abstract = engine.abstract_of(num_id)
+            key = ("a", abstract) if abstract is not None else ("n", num_id)
+            used.setdefault(key, set()).add(ilvl)
+            first.setdefault(key, ilvl)
+            instances.setdefault(key, set()).add(num_id)
+            if in_cell:
+                boxed.add(key)
+            if not order or order[-1] != key:
+                order.append(key)
+        interleaved = {key for key in used if order.count(key) > 1}
+        self._scheme_of = {nid: key for key, ids in instances.items() for nid in ids}
+        self._outline_schemes = set()
+        for key, levels in used.items():
+            if key in boxed or key in interleaved:
+                continue
+            if all(
+                engine.scheme_is_outline(nid, levels, first_level=first[key])
+                for nid in instances[key]
+            ):
+                self._outline_schemes |= instances[key]
 
     # -- paragraphs --------------------------------------------------------
 
@@ -324,15 +380,38 @@ class _Converter:
         # scheme emits both shapes and the blocks count against a level
         # nothing increments.
         outline = draw is not None and int(num_pr.get("num_id", -1)) in self._outline_schemes
-        if draw is not None and (heading is not None or outline):
-            if draw.level is not None:
+        # A label the vocabulary cannot draw is baked — ALWAYS, not only on
+        # heading-styled paragraphs. Spec §3.8: "a writer that cannot express
+        # a scheme in this vocabulary MUST write the computed number as text
+        # instead". Gating that on the heading style dropped the label
+        # outright for plain-styled contracts ("Article I", "I.1"), which is
+        # the one outcome the section rules out.
+        if draw is not None and (
+            heading is not None or outline or (draw.label and not draw.plain_decimal)
+        ):
+            # …and the SCHEME decides whether it is drawn dynamically. A
+            # heading-styled paragraph is no exception: judged on its own it
+            # would emit num-N against counters the rest of its scheme never
+            # increments.
+            if outline and draw.level is not None:
                 # v0.5: the level is one CSS counters can draw, so the number
                 # is NOT written into the text. It is computed at render time,
                 # which is what makes it survive an edit — insert a clause and
                 # everything after it renumbers.
                 clause = [f"num-{draw.level}"]
-                if draw.restarted:
+                scheme = self._scheme_of.get(int(num_pr.get("num_id", -1)))
+                # Two schemes share one set of CSS counters, so a document
+                # that finishes one numbering scheme and begins another must
+                # say so: without this the second scheme's opening clause
+                # carries on from the first and renders 2. where the document
+                # says 1. Word keeps a counter per definition and needs no
+                # such marker.
+                fresh_scheme = (
+                    self._last_outline_scheme is not None and scheme != self._last_outline_scheme
+                )
+                if draw.restarted or fresh_scheme:
                     clause.append("num-restart")
+                self._last_outline_scheme = scheme
                 if draw.prefix:
                     prefix_attr = f' data-aim-num-prefix="{escape_attr(draw.prefix)}"'
             elif draw.label:
@@ -398,6 +477,15 @@ class _Converter:
             else:
                 self._flush_items()
                 self._blocks.append(self._block("p", inline, effective))
+        elif clause:
+            # An empty numbered paragraph still draws its number in Word, and
+            # the next clause carries on from it. The CSS counters advance on
+            # RENDERED blocks, not on the walk, so dropping this one shifts
+            # every label after it down by one — silently, since the document
+            # still reads as authoritative. (The baked path needs no such
+            # branch: its label is the text.)
+            self._flush_items()
+            self._blocks.append(self._block("p", "", effective, clause, prefix_attr))
         if trailing_break:
             self._flush_items()
             self._blocks.append(_PAGE_BREAK)
@@ -876,6 +964,16 @@ class _Converter:
                 direct = model_dump(item.p_pr)
                 style_id = direct.pop("p_style", None)
                 inline, _ = self._inline_markup(item, style_id)
+                # A numbered paragraph in a cell advances the same counters as
+                # one in the body — in document order, which is why this runs
+                # during the table walk rather than before or after it. Its
+                # number is baked: the cell cannot carry the dynamic shape, and
+                # _classify_numbering has already excluded the whole scheme
+                # from the dynamic path so no sibling counts one short.
+                draw = self._draw(self._numbering_of(item))
+                if draw is not None and draw.label:
+                    sep = "" if inline[:1] in (" ", "\xa0", "\t") else "\xa0"
+                    inline = f"{escape_text(draw.label)}{sep}{inline}"
                 if inline:
                     paras.append(inline)
             elif kind == "Table":

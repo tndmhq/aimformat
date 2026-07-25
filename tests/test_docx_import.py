@@ -1162,3 +1162,161 @@ class TestExportSymmetry:
             r.font.size.pt for p in d.paragraphs for r in p.runs if r.text == "X" and r.font.size
         ]
         assert sizes == [30.0]
+
+
+class TestNumberingStaysInSyncAcrossTheDocument:
+    """One numbering scheme is one continuous sequence, wherever its
+    paragraphs sit and whatever shape the vocabulary can draw.
+
+    Every failure these pin is silent: the document renders, nothing raises,
+    and the numbers are simply wrong from some point onward.
+    """
+
+    @staticmethod
+    def _with_numbering(doc, numbering: str) -> io.BytesIO:
+        buf = io.BytesIO()
+        doc.save(buf)
+        buf.seek(0)
+        source = zipfile.ZipFile(buf)
+        out = io.BytesIO()
+        with zipfile.ZipFile(out, "w") as z:
+            for name in source.namelist():
+                z.writestr(
+                    name,
+                    numbering.encode() if name == "word/numbering.xml" else source.read(name),
+                )
+        out.seek(0)
+        return out
+
+    @staticmethod
+    def _lvl(i: int, text: str, fmt: str = "decimal") -> str:
+        return (
+            f'<w:lvl w:ilvl="{i}"><w:start w:val="1"/><w:numFmt w:val="{fmt}"/>'
+            f'<w:lvlText w:val="{text}"/></w:lvl>'
+        )
+
+    @classmethod
+    def _chain(cls, num_ids=(30,), abstract: int = 30) -> str:
+        instances = "".join(
+            f'<w:num w:numId="{n}"><w:abstractNumId w:val="{abstract}"/></w:num>' for n in num_ids
+        )
+        return (
+            f'<w:numbering xmlns:w="{_W}"><w:abstractNum w:abstractNumId="{abstract}">'
+            + cls._lvl(0, "%1.")
+            + cls._lvl(1, "%1.%2")
+            + cls._lvl(2, "%1.%2.%3")
+            + f"</w:abstractNum>{instances}</w:numbering>"
+        )
+
+    @staticmethod
+    def _number(para, num_id: int, ilvl: int) -> None:
+        para._p.get_or_add_pPr().append(
+            parse_xml(
+                f'<w:numPr xmlns:w="{_W}"><w:ilvl w:val="{ilvl}"/>'
+                f'<w:numId w:val="{num_id}"/></w:numPr>'
+            )
+        )
+
+    def test_a_numbered_paragraph_in_a_table_cell_keeps_its_number(self):
+        # Word numbers paragraphs inside table cells like any other. Skipping
+        # them loses the number AND leaves the counter unadvanced, so every
+        # clause after the table is off by one — the damage outlives the table.
+        doc = Document()
+        self._number(doc.add_paragraph("Top"), 30, 0)
+        self._number(doc.add_paragraph("First clause"), 30, 1)
+        table = doc.add_table(rows=1, cols=1)
+        cell_para = table.rows[0].cells[0].paragraphs[0]
+        cell_para.add_run("Clause in a cell")
+        self._number(cell_para, 30, 1)
+        self._number(doc.add_paragraph("Clause after the table"), 30, 1)
+
+        imported = aim.from_docx(self._with_numbering(doc, self._chain()))
+        html = "\n".join(c.html for c in imported.chunks)
+        assert "1.2" in html, "the cell paragraph lost its number"
+        assert "1.3" in html, "the counter did not advance for the cell paragraph"
+
+    def test_a_continuation_instance_does_not_tear_the_scheme(self):
+        # Word mints a fresh w:num for the same definition whenever a list is
+        # interrupted. Judged per instance the continuation uses only deep
+        # levels, fails the contiguity rule alone, and emits as <li> — one
+        # visible sequence rendered as blocks and then as a fresh list at 1.
+        doc = Document()
+        self._number(doc.add_paragraph("Top"), 30, 0)
+        self._number(doc.add_paragraph("One"), 30, 1)
+        self._number(doc.add_paragraph("Deep one"), 30, 2)
+        self._number(doc.add_paragraph("Deep two"), 2, 2)  # same abstract, new instance
+
+        imported = aim.from_docx(self._with_numbering(doc, self._chain(num_ids=(30, 2))))
+        html = "\n".join(c.html for c in imported.chunks)
+        assert "<ol" not in html, "the continuation instance tore the scheme into a list"
+        assert re.findall(r'class="num-(\d)"', html) == ["1", "2", "3", "3"]
+
+    def test_a_chained_scheme_the_vocabulary_cannot_draw_bakes_its_label(self):
+        # upperRoman over decimal children on PLAIN paragraphs: not a heading,
+        # not outline-drawable. Spec §3.8 says such a writer MUST write the
+        # computed number as text; dropping it loses the numbering outright.
+        numbering = (
+            f'<w:numbering xmlns:w="{_W}"><w:abstractNum w:abstractNumId="95">'
+            + self._lvl(0, "Article %1", fmt="upperRoman")
+            + self._lvl(1, "%1.%2")
+            + '</w:abstractNum><w:num w:numId="95">'
+            '<w:abstractNumId w:val="95"/></w:num></w:numbering>'
+        )
+        doc = Document()
+        self._number(doc.add_paragraph("Definitions"), 95, 0)
+        self._number(doc.add_paragraph("means x"), 95, 1)
+        self._number(doc.add_paragraph("means y"), 95, 1)
+
+        imported = aim.from_docx(self._with_numbering(doc, numbering))
+        html = "\n".join(c.html for c in imported.chunks)
+        assert "Article I" in html, "the top-level label vanished"
+        assert "I.1" in html and "I.2" in html, "the chained labels vanished"
+
+    def test_a_second_scheme_starts_at_one_rather_than_continuing_the_first(self):
+        # Two independent outline schemes share the same CSS counters, so the
+        # second must say "restart" or it carries on from the first: its
+        # opening clause renders 2. where the document says 1.
+        doc = Document()
+        for text, ilvl in (("A top", 0), ("A sub", 1)):
+            self._number(doc.add_paragraph(text), 30, ilvl)
+        doc.add_paragraph("Interlude")
+        for text, ilvl in (("B top", 0), ("B sub", 1)):
+            self._number(doc.add_paragraph(text), 31, ilvl)
+
+        numbering = (
+            f'<w:numbering xmlns:w="{_W}"><w:abstractNum w:abstractNumId="30">'
+            + self._lvl(0, "%1.")
+            + self._lvl(1, "%1.%2")
+            + '</w:abstractNum><w:abstractNum w:abstractNumId="31">'
+            + self._lvl(0, "%1.")
+            + self._lvl(1, "%1.%2")
+            + '</w:abstractNum><w:num w:numId="30"><w:abstractNumId w:val="30"/></w:num>'
+            '<w:num w:numId="31"><w:abstractNumId w:val="31"/></w:num></w:numbering>'
+        )
+        imported = aim.from_docx(self._with_numbering(doc, numbering))
+        html = "\n".join(c.html for c in imported.chunks)
+        blocks = re.findall(r'class="([^"]*num-1[^"]*)"[^>]*>([^<]*)', html)
+        second = [cls for cls, text in blocks if "B top" in text]
+        assert second and "num-restart" in second[0], (
+            f"the second scheme continues the first's counters: {blocks}"
+        )
+
+    def test_an_empty_numbered_paragraph_still_advances_the_counter(self):
+        # Word draws a number for an empty numbered paragraph and the next one
+        # carries on from it. Dropping the paragraph without advancing shifts
+        # every label after it down by one.
+        doc = Document()
+        self._number(doc.add_paragraph("Top"), 30, 0)
+        self._number(doc.add_paragraph("One"), 30, 1)
+        self._number(doc.add_paragraph(""), 30, 1)  # empty, but numbered
+        self._number(doc.add_paragraph("Three"), 30, 1)
+
+        imported = aim.from_docx(self._with_numbering(doc, self._chain()))
+        html = "\n".join(c.html for c in imported.chunks)
+        texts = re.findall(r">([^<]*Three[^<]*)<", html)
+        assert texts, "the trailing clause vanished"
+        # three sub-clauses were numbered, so the last one is 1.3 — whether it
+        # is drawn dynamically or baked, the counter must have moved three times
+        assert html.count('class="num-2"') == 3, (
+            "the empty numbered paragraph did not consume a number"
+        )

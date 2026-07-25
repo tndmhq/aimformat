@@ -456,6 +456,84 @@ class TestSchemeClassification:
         engine = self._scheme("%1.", "", fmt="bullet")
         assert not engine.scheme_is_outline(1, {0, 1})
 
+    def test_a_level_drawing_only_its_own_counter_below_the_top_bakes(self):
+        # "%2" alone draws ONE number — Word renders "2", not "1.2". The
+        # num-N classes always draw the whole chain of ancestors, so a level
+        # that shows only its own counter cannot be one of them unless a
+        # literal prefix rule takes over (`Section %2`, which carries
+        # data-aim-num-prefix and whose rule draws that counter alone).
+        engine = self._scheme("%1.", "%2")
+        assert not engine.scheme_is_outline(1, {0, 1})
+
+    def test_a_scheme_first_used_below_its_top_level_bakes(self):
+        # Every ancestor counter reads 0 until a block increments it, so a
+        # document whose FIRST numbered paragraph sits at level 2 renders
+        # "0.1" where Word draws "1.1" — Word shows an untouched level at its
+        # start value. The used-levels set alone cannot see this: level 0 is
+        # used, just later. Seeding the ancestor would need vocabulary that
+        # does not exist, so the honest degradation is to bake.
+        engine = self._scheme("%1.", "%1.%2")
+        assert engine.scheme_is_outline(1, {0, 1}, first_level=0)
+        assert not engine.scheme_is_outline(1, {0, 1}, first_level=1)
+
+    def test_a_level_that_declares_a_non_default_restart_bakes(self):
+        # w:lvlRestart="0" is "never restart this level". The generated CSS
+        # zeroes every deeper counter unconditionally, so it would restart it
+        # anyway and the two disagree from the second top-level block on.
+        engine = NumberingEngine(
+            _numbering(
+                abstracts='<w:abstractNum w:abstractNumId="1">'
+                + _level(0, text="%1.")
+                + _level(1, text="%1.%2", restart=0)
+                + "</w:abstractNum>",
+                instances='<w:num w:numId="1"><w:abstractNumId w:val="1"/></w:num>',
+            )
+        )
+        assert not engine.scheme_is_outline(1, {0, 1})
+
+    def test_the_default_restart_spelled_out_still_counts_as_outline(self):
+        # lvlRestart naming the level immediately above is what the default
+        # already does — spelling it out must not push a scheme to baking.
+        engine = NumberingEngine(
+            _numbering(
+                abstracts='<w:abstractNum w:abstractNumId="1">'
+                + _level(0, text="%1.")
+                + _level(1, text="%1.%2", restart=1)
+                + "</w:abstractNum>",
+                instances='<w:num w:numId="1"><w:abstractNumId w:val="1"/></w:num>',
+            )
+        )
+        assert engine.scheme_is_outline(1, {0, 1})
+
+
+class TestAbstractGrouping:
+    """Classification must be keyed the way the counters are.
+
+    Word mints a fresh ``w:num`` for the same definition every time a list
+    is interrupted. The counters are shared per abstract, so the *decision*
+    must be too: judged per instance, a continuation used only at deeper
+    levels fails the contiguity rule on its own and one continuous sequence
+    emits as blocks then as list fragments.
+    """
+
+    def test_every_instance_of_one_definition_reports_that_definition(self):
+        engine = NumberingEngine(
+            _numbering(
+                abstracts='<w:abstractNum w:abstractNumId="16">'
+                + _level(0, text="%1.")
+                + _level(1)
+                + _level(2)
+                + "</w:abstractNum>",
+                instances=(
+                    '<w:num w:numId="19"><w:abstractNumId w:val="16"/></w:num>'
+                    '<w:num w:numId="2"><w:abstractNumId w:val="16"/></w:num>'
+                ),
+            )
+        )
+        assert engine.abstract_of(19) == 16
+        assert engine.abstract_of(2) == 16
+        assert engine.abstract_of(404) is None
+
 
 class TestNumberFormats:
     """Pinned because the label text depends on them and a silent change
