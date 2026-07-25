@@ -307,6 +307,27 @@ def parse_docx(source: str | bytes | BinaryIO) -> ParsedDocx:
 #: ``%1.%2.%3`` — the decimal chain that legal clause numbering is built from.
 _CHAIN = re.compile(r"^%1(?:\.%(\d))*\.?$")
 
+#: ``w:numFmt`` → the ``list-*`` class that draws it. Empty string means the
+#: browser's own default for ``<ol>`` already draws it. A format absent here
+#: (decimalZero, ordinal, cardinalText, every non-Latin numbering) is one the
+#: vocabulary cannot express — and one ``format_number`` cannot compute
+#: either, so it must not be baked as a fabricated label.
+_LIST_FORMATS = {
+    "decimal": "",
+    "lowerLetter": "list-lower-alpha",
+    "upperLetter": "list-upper-alpha",
+    "lowerRoman": "list-lower-roman",
+    "upperRoman": "list-upper-roman",
+}
+
+#: What follows the counter in ``w:lvlText`` → the suffix class. A trailing
+#: "." is the browser's own default and needs no class.
+_LIST_SUFFIXES: dict[str, tuple[str, ...]] = {
+    ".": (),
+    ")": ("list-paren",),
+    "": ("list-bare",),
+}
+
 
 @dataclass
 class NumberDraw:
@@ -339,15 +360,6 @@ class NumberDraw:
     this paragraph at its own level. A list reopened after an interruption
     needs it: the markup must say ``<ol start>`` or the fresh list renders
     1. again where the document counts on."""
-
-    plain_decimal: bool = False
-    """This level's marker is its own decimal counter and nothing else
-    ("%1", "%1.") — exactly what a bare ``<ol>`` already draws.
-
-    The caller needs this to know when the list markup is *faithful*. Any
-    other marker (a chain, a literal like ``Article %1``, a parenthesised or
-    lettered form) renders as "1." inside an ``<ol>``, which is a different
-    number from the one Word draws, so it must be baked instead."""
 
 
 @dataclass
@@ -493,6 +505,58 @@ class NumberingEngine:
         """
         return self._abstract.get(num_id)
 
+    def list_style(self, num_id: int, ilvl: int) -> tuple[str, ...] | None:
+        """The ``list-*`` classes that draw this level the way Word draws it,
+        or ``None`` when the list vocabulary cannot express it.
+
+        An empty tuple is a real answer, not a refusal: a bullet level needs
+        no class (``<ul>`` draws it) and so does a plain decimal level with a
+        trailing dot (``<ol>`` draws it).
+
+        The marker is drawn by the built-in ``list-item`` counter, which is
+        what makes ``<ol start>`` work — so the vocabulary can express a
+        level's FORMAT and its SUFFIX, but never a literal prefix
+        ("Article %1") and never a mixed-format chain. Those belong to
+        ``num-N`` or to a baked label.
+        """
+        level = self.level(num_id, ilvl)
+        if level is None:
+            return None
+        if not level.is_ordered:
+            return ()  # a bullet or a "none" level: <ul> already draws it
+        text = level.lvl_text
+        if text.count("%") > 1:
+            # ``counters(list-item, ".")`` draws the whole chain with dot
+            # separators and decimal at every depth — the only chain the
+            # stylesheet spells out, since a per-(depth × format) rule matrix
+            # is how a closed vocabulary turns into per-document CSS
+            chain = ".".join(f"%{i + 1}" for i in range(ilvl + 1))
+            if not text.startswith(chain):
+                return None
+            for ref in range(ilvl + 1):
+                ancestor = self.level(num_id, ref)
+                if ancestor is None or ancestor.num_fmt != "decimal":
+                    return None
+            suffix = _LIST_SUFFIXES.get(text[len(chain) :])
+            return None if suffix is None else ("list-multilevel", *suffix)
+        own = f"%{ilvl + 1}"
+        if text.count("%") != 1 or not text.startswith(own):
+            return None
+        fmt = _LIST_FORMATS.get(level.num_fmt)
+        suffix = _LIST_SUFFIXES.get(text[len(own) :])
+        if fmt is None or suffix is None:
+            return None
+        return tuple(name for name in (fmt, *suffix) if name)
+
+    def scheme_is_list(self, num_id: int, used_levels: set[int]) -> bool:
+        """Whether every level this scheme USES is one the list vocabulary
+        draws. Judged over the whole scheme for the same reason as
+        ``scheme_is_outline``: a per-level answer tears one list into
+        fragments."""
+        return bool(used_levels) and all(
+            self.list_style(num_id, ilvl) is not None for ilvl in used_levels
+        )
+
     # -- counting ----------------------------------------------------------
 
     def label(self, num_id: int, ilvl: int) -> str:
@@ -534,14 +598,14 @@ class NumberingEngine:
             prefix=prefix,
             value=self._counters.get((abstract, ilvl)),
             chained=(level.lvl_text or "").count("%") > 1,
-            plain_decimal=(
-                level.num_fmt == "decimal"
-                and (level.lvl_text or "") in (f"%{ilvl + 1}", f"%{ilvl + 1}.")
-            ),
         )
 
     def scheme_is_outline(
-        self, num_id: int, used_levels: set[int], first_level: int | None = None
+        self,
+        num_id: int,
+        used_levels: set[int],
+        first_level: int | None = None,
+        allow_flat: bool = False,
     ) -> bool:
         """Whether a whole numbering scheme should be drawn as outline-numbered
         BLOCKS rather than a list.
@@ -566,7 +630,16 @@ class NumberingEngine:
         # is — "1. 2. 3." is a list, and turning it into numbered blocks
         # would strip real <ol> structure from every document that has one.
         deepest = self.level(num_id, max(used_levels))
-        if len(used_levels) < 2 and not (deepest and (deepest.lvl_text or "").count("%") > 1):
+        if (
+            not allow_flat
+            and len(used_levels) < 2
+            and not (deepest and (deepest.lvl_text or "").count("%") > 1)
+        ):
+            # …unless the caller says the scheme cannot be a list at all.
+            # A heading is not an <li>, so a single-level numbered HEADING
+            # scheme has only this path and a baked label to choose between,
+            # and the depth rule — written to protect real <ol> structure —
+            # would silently drop the number and leak the label into the title.
             return False
         # Every level the chain RENDERS must also be one the document uses.
         # A marker shows its ancestors' counters, and a counter no block
@@ -703,10 +776,19 @@ class NumberingEngine:
             ref_level = self.level(num_id, ref)
             value = self._counters.get((abstract, ref))
             if value is None:
-                # referenced before that level has been used: show what it
+                # Referenced before that level has been used: show what it
                 # WOULD start at, override included — otherwise the same
-                # level reads 1 here and 5 the moment it is first used
+                # level reads 1 here and 5 the moment it is first used.
                 value = self._start_value(num_id, ref, ref_level) if ref_level else 1
+                if ref < level.ilvl:
+                    # …and INSTANTIATE it, which is what Word does: drawing an
+                    # ancestor phantom-starts it, so the next block at that
+                    # level is 2, not 1. Without this a document that enters a
+                    # scheme at level 1 draws 1.1 for its first clause and 1.1
+                    # again after the level-0 block that follows — two clauses
+                    # carrying one number, which reads as authoritative and is
+                    # not.
+                    self._counters[(abstract, ref)] = value
             fmt = ref_level.num_fmt if ref_level is not None else "decimal"
             out = out.replace(token, format_number(value, fmt))
         return out.strip()

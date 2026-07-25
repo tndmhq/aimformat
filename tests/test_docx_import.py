@@ -1236,6 +1236,12 @@ class TestNumberingStaysInSyncAcrossTheDocument:
         # Word numbers paragraphs inside table cells like any other. Skipping
         # them loses the number AND leaves the counter unadvanced, so every
         # clause after the table is off by one — the damage outlives the table.
+        #
+        # The cell paragraph takes the SAME shape as its scheme's siblings:
+        # CSS counters advance on rendered blocks in DOM order, so num-N in a
+        # <td> keeps the chain in step. Asserting the baked substrings "1.2"
+        # and "1.3" instead let this test pass against a document where the
+        # cell was baked and every clause around it had been demoted with it.
         doc = Document()
         self._number(doc.add_paragraph("Top"), 30, 0)
         self._number(doc.add_paragraph("First clause"), 30, 1)
@@ -1247,8 +1253,11 @@ class TestNumberingStaysInSyncAcrossTheDocument:
 
         imported = aim.from_docx(self._with_numbering(doc, self._chain()))
         html = "\n".join(c.html for c in imported.chunks)
-        assert "1.2" in html, "the cell paragraph lost its number"
-        assert "1.3" in html, "the counter did not advance for the cell paragraph"
+        assert re.findall(r'class="num-(\d)"', html) == ["1", "2", "2", "2"], html
+        assert '<td style="width:576px"><p class="num-2">' in html, (
+            f"the cell clause did not carry the dynamic shape: {html}"
+        )
+        assert "1.2" not in html, "the cell paragraph was baked, and its scheme with it"
 
     def test_a_continuation_instance_does_not_tear_the_scheme(self):
         # Word mints a fresh w:num for the same definition whenever a list is
@@ -1716,3 +1725,206 @@ class TestTheNumberingPathwaysAreActuallyCovered:
         assert used[0] == used[1], "the opening run must share one instance"
         assert used[2] == used[3], "a restart's instance stays in effect for what follows"
         assert len({used[0], used[2], used[4]}) == 3, f"each restart needs its own instance: {used}"
+
+
+class TestOneSchemeDrawsOneShape:
+    """A numbering scheme is one thing, and the shape decision belongs to the
+    SCHEME.
+
+    Deciding it per paragraph — as the emission gate did between 51c4b23 and
+    2e15010 — tears Word's stock multilevel list into an ``<ol>``, a run of
+    baked ``<p>``, and a second ``<ol>``: three shapes for one list. The
+    corpus cannot catch it, because all five real fixtures use level 0 only
+    for their list schemes; the trigger is one Tab keypress in Word.
+    """
+
+    @staticmethod
+    def _docx(paragraphs, levels_by_abstract, instances=None) -> io.BytesIO:
+        """A document whose numbering.xml we write ourselves.
+
+        *paragraphs* is ``(text, num_id, ilvl)``, ``num_id`` None for prose;
+        *levels_by_abstract* is ``{abstract_id: [level_xml, …]}``;
+        *instances* is ``{num_id: abstract_id}``, defaulting to the identity.
+        """
+        parts = [
+            f'<w:abstractNum w:abstractNumId="{aid}">' + "".join(levels) + "</w:abstractNum>"
+            for aid, levels in levels_by_abstract.items()
+        ]
+        for nid, aid in (instances or {a: a for a in levels_by_abstract}).items():
+            parts.append(f'<w:num w:numId="{nid}"><w:abstractNumId w:val="{aid}"/></w:num>')
+        numbering = f'<w:numbering xmlns:w="{_W}">' + "".join(parts) + "</w:numbering>"
+
+        doc = Document()
+        for text, num_id, ilvl in paragraphs:
+            para = doc.add_paragraph(text)
+            if num_id is not None:
+                para._p.get_or_add_pPr().append(
+                    parse_xml(
+                        f'<w:numPr xmlns:w="{_W}"><w:ilvl w:val="{ilvl}"/>'
+                        f'<w:numId w:val="{num_id}"/></w:numPr>'
+                    )
+                )
+        buf = io.BytesIO()
+        doc.save(buf)
+        buf.seek(0)
+        source = zipfile.ZipFile(buf)
+        out = io.BytesIO()
+        with zipfile.ZipFile(out, "w") as z:
+            for name in source.namelist():
+                z.writestr(
+                    name,
+                    numbering.encode() if name == "word/numbering.xml" else source.read(name),
+                )
+        out.seek(0)
+        return out
+
+    @staticmethod
+    def _level(ilvl: int, text: str, fmt: str = "decimal", start: int = 1) -> str:
+        return (
+            f'<w:lvl w:ilvl="{ilvl}"><w:start w:val="{start}"/>'
+            f'<w:numFmt w:val="{fmt}"/><w:lvlText w:val="{text}"/></w:lvl>'
+        )
+
+    #: Word's stock multilevel numbered list — the toolbar button's own
+    #: abstract: decimal, then lowerLetter, then lowerRoman.
+    def _stock(self):
+        return {
+            30: [
+                self._level(0, "%1."),
+                self._level(1, "%2.", "lowerLetter"),
+                self._level(2, "%3.", "lowerRoman"),
+            ]
+        }
+
+    def _body(self, stream) -> str:
+        # the whole body, not the chunk htmls: a list's container element —
+        # which is where <ol>, its classes and its start attribute live — is
+        # not part of any item chunk
+        html = convert_docx(stream).dumps()
+        return html.split("<body", 1)[1].split(">", 1)[1].split("<script", 1)[0]
+
+    def test_words_stock_multilevel_list_stays_one_nested_list(self):
+        # LibreOffice draws: 1. First / a. Sub a / b. Sub b / 2. Second
+        content = self._body(
+            self._docx(
+                [("First", 30, 0), ("Sub a", 30, 1), ("Sub b", 30, 1), ("Second", 30, 0)],
+                self._stock(),
+            )
+        )
+        assert content.count("<ol") == 2, f"one list plus one nested list, got: {content}"
+        assert "<li" in content
+        assert "<p" not in content, f"the scheme was torn into baked paragraphs: {content}"
+        assert "a. Sub a" not in content, "the label was baked into a list item's text"
+        assert 'start="2"' not in content, "the second item opened a fresh list"
+
+    def test_the_nested_levels_carry_the_format_word_draws(self):
+        # the marker style is the whole point: without the class the browser
+        # draws "1." where Word draws "a."
+        content = self._body(
+            self._docx(
+                [("First", 30, 0), ("Sub a", 30, 1), ("Deep", 30, 2)],
+                self._stock(),
+            )
+        )
+        assert "list-lower-alpha" in content, content
+        assert "list-lower-roman" in content, content
+
+    def test_a_parenthesised_level_keeps_its_list_and_its_suffix(self):
+        content = self._body(
+            self._docx(
+                [("One", 31, 0), ("Two", 31, 0)],
+                {31: [self._level(0, "%1)", "lowerLetter")]},
+            )
+        )
+        assert "<ol" in content, f"a lettered list stopped being a list: {content}"
+        assert "list-lower-alpha" in content
+        assert "list-paren" in content
+        assert "a)" not in content, "the label was baked as well as drawn"
+
+    def test_a_clause_scheme_survives_a_bulleted_interruption(self):
+        # a <ul> advances no aim-cN counter, so it cannot collide with the
+        # clause scheme's — but the interleaving test counted it anyway, and
+        # one bulleted sub-list de-dynamised a whole contract
+        clause = [self._level(0, "%1."), self._level(1, "%1.%2.")]
+        bullet = ['<w:lvl w:ilvl="0"><w:numFmt w:val="bullet"/><w:lvlText w:val="•"/></w:lvl>']
+        content = self._body(
+            self._docx(
+                [
+                    ("Purpose", 40, 0),
+                    ("Scope", 40, 1),
+                    ("bullet one", 41, 0),
+                    ("bullet two", 41, 0),
+                    ("Term", 40, 0),
+                    ("Renewal", 40, 1),
+                ],
+                {40: clause, 41: bullet},
+            )
+        )
+        levels = re.findall(r'class="num-(\d)"', content)
+        assert levels == ["1", "2", "1", "2"], f"the clause scheme lost its counters: {content}"
+        assert "<ul" in content, "the bullets stopped being a list"
+        assert "1.1." not in content, "a clause label was baked"
+
+    def test_a_numbered_paragraph_in_a_cell_keeps_the_scheme_dynamic(self):
+        # CSS counters advance in DOM order, so a num-N block inside a <td>
+        # keeps the chain in sync — excluding the whole scheme because one
+        # clause sits in a layout table demotes the entire document
+        clause = {50: [self._level(0, "%1."), self._level(1, "%1.%2.")]}
+        doc = Document()
+        para = doc.add_paragraph("Top")
+        para._p.get_or_add_pPr().append(
+            parse_xml(f'<w:numPr xmlns:w="{_W}"><w:ilvl w:val="0"/><w:numId w:val="50"/></w:numPr>')
+        )
+        table = doc.add_table(rows=1, cols=1)
+        cell_para = table.cell(0, 0).paragraphs[0]
+        cell_para.text = "Clause in a cell"
+        cell_para._p.get_or_add_pPr().append(
+            parse_xml(f'<w:numPr xmlns:w="{_W}"><w:ilvl w:val="1"/><w:numId w:val="50"/></w:numPr>')
+        )
+        after = doc.add_paragraph("Clause after the table")
+        after._p.get_or_add_pPr().append(
+            parse_xml(f'<w:numPr xmlns:w="{_W}"><w:ilvl w:val="1"/><w:numId w:val="50"/></w:numPr>')
+        )
+        buf = io.BytesIO()
+        doc.save(buf)
+        buf.seek(0)
+        source = zipfile.ZipFile(buf)
+        parts = [
+            '<w:abstractNum w:abstractNumId="50">' + "".join(clause[50]) + "</w:abstractNum>",
+            '<w:num w:numId="50"><w:abstractNumId w:val="50"/></w:num>',
+        ]
+        numbering = f'<w:numbering xmlns:w="{_W}">' + "".join(parts) + "</w:numbering>"
+        out = io.BytesIO()
+        with zipfile.ZipFile(out, "w") as z:
+            for name in source.namelist():
+                z.writestr(
+                    name,
+                    numbering.encode() if name == "word/numbering.xml" else source.read(name),
+                )
+        out.seek(0)
+        content = self._body(out)
+        assert re.findall(r'class="num-(\d)"', content) == ["1", "2", "2"], content
+        assert "1.1" not in content, f"the scheme was demoted to baked labels: {content}"
+
+    def test_a_scheme_entered_below_its_top_level_counts_like_word(self):
+        # LibreOffice draws: 1.1 / 2. / 2.1 / 2.2 — Word shows an untouched
+        # ancestor at its start value, so entering at level 1 must not leave
+        # two different clauses both labelled 1.1
+        content = self._body(
+            self._docx(
+                [
+                    ("Interpretation", 60, 1),
+                    ("Definitions", 60, 0),
+                    ("Construction", 60, 1),
+                    ("Headings", 60, 1),
+                ],
+                {60: [self._level(0, "%1."), self._level(1, "%1.%2")]},
+            )
+        )
+        # whichever shape it takes, no two clauses may carry one label: a
+        # visible "0.1" is obviously broken, a duplicated "1.1" is not
+        assert content.count("1.1") <= 1, f"two clauses drew the same label: {content}"
+        # …and the wrapper <li> _nest synthesises to hang the deeper list from
+        # is an item like any other, so seeding start from the first REAL
+        # item's counter renders everything after it one too high
+        assert 'start="2"' not in content, f"the wrapper item consumed a number: {content}"
