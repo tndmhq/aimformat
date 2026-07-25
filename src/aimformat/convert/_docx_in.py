@@ -194,8 +194,9 @@ class _Converter:
         self.p = parsed
         self.title_text: str | None = None
         self._blocks: list[str] = []
-        # consecutive list paragraphs buffer: (num_id, ilvl, markup, li attr)
-        self._items: list[tuple[int, int, str, str]] = []
+        # consecutive list paragraphs buffer:
+        # (num_id, ilvl, markup, li attr, the number Word draws for it)
+        self._items: list[tuple[int, int, str, str, int]] = []
         # relationship ids the run walk already emitted for the current
         # paragraph, so the picture recovery below stays additive
         self._emitted_images: set[str] = set()
@@ -462,6 +463,7 @@ class _Converter:
                         int(num_pr.get("ilvl") or 0),
                         inline,
                         self._class_attr(effective),
+                        (draw.value if draw is not None and draw.value else 1),
                     )
                 )
             elif _IMG_ONLY.fullmatch(inline):
@@ -796,26 +798,41 @@ class _Converter:
         for num_id, group in _group_runs(items):
             self._blocks.append(self._list_markup(num_id, group))
 
-    def _list_markup(self, num_id: int, items: list[tuple[int, int, str, str]]) -> str:
+    @staticmethod
+    def _list_start(tag: str, value: int) -> str:
+        """``start`` for a list that does not begin at 1.
+
+        Word counts across an interruption — a list resumed after a
+        paragraph carries on at 5 — but a fresh ``<ol>`` renders 1. again, so
+        the document would hold two item 1s and no item 3. The counter is
+        the built-in ``list-item`` one, which is exactly what ``start``
+        seeds."""
+        return f' start="{value}"' if tag == "ol" and value > 1 else ""
+
+    def _list_markup(self, num_id: int, items: list[tuple[int, int, str, str, int]]) -> str:
         # nest from the group's MINIMUM level, not the first item's: a list
         # that starts indented and later outdents must keep the outdented
         # items (starting deeper would drop everything below the entry
         # level when the walk returns)
-        start = min(ilvl for _, ilvl, _, _ in items)
+        start = min(ilvl for _, ilvl, _, _, _ in items)
         tag = "ol" if self._ordered(num_id, start) else "ul"
+        first = next(value for _, ilvl, _, _, value in items if ilvl == start)
         body, _ = self._nest(items, 0, start)
-        return f"<{tag}>{body}</{tag}>"
+        return f"<{tag}{self._list_start(tag, first)}>{body}</{tag}>"
 
-    def _nest(self, items: list[tuple[int, int, str, str]], i: int, level: int) -> tuple[str, int]:
+    def _nest(
+        self, items: list[tuple[int, int, str, str, int]], i: int, level: int
+    ) -> tuple[str, int]:
         parts: list[str] = []
         while i < len(items):
-            _, ilvl, markup, attr = items[i]
+            _, ilvl, markup, attr, _value = items[i]
             if ilvl < level:
                 break
             if ilvl > level:
+                opening = items[i][4]
                 nested, i = self._nest(items, i, ilvl)
                 tag = "ol" if self._ordered(items[i - 1][0], ilvl) else "ul"
-                nested_markup = f"<{tag}>{nested}</{tag}>"
+                nested_markup = f"<{tag}{self._list_start(tag, opening)}>{nested}</{tag}>"
                 if parts:
                     parts[-1] = parts[-1][: -len("</li>")] + nested_markup + "</li>"
                 else:
@@ -985,7 +1002,7 @@ class _Converter:
         return "".join(f"<p>{p}</p>" for p in paras) + "".join(nested)
 
 
-def _group_runs(items: list[tuple[int, int, str, str]]):
+def _group_runs(items: list[tuple[int, int, str, str, int]]):
     """Consecutive items sharing a num_id form one list."""
     start = 0
     for i in range(1, len(items) + 1):

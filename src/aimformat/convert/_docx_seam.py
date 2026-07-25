@@ -312,6 +312,12 @@ class NumberDraw:
     ``<ol>`` renders 1, 2, 3 at every depth and cannot express the chain at
     all — which is the defect that started this."""
 
+    value: int | None = None
+    """This level's counter after the advance — the number Word draws for
+    this paragraph at its own level. A list reopened after an interruption
+    needs it: the markup must say ``<ol start>`` or the fresh list renders
+    1. again where the document counts on."""
+
     plain_decimal: bool = False
     """This level's marker is its own decimal counter and nothing else
     ("%1", "%1.") — exactly what a bare ``<ol>`` already draws.
@@ -504,6 +510,7 @@ class NumberingEngine:
             restarted=restarted,
             level=num_level,
             prefix=prefix,
+            value=self._counters.get((abstract, ilvl)),
             chained=(level.lvl_text or "").count("%") > 1,
             plain_decimal=(
                 level.num_fmt == "decimal"

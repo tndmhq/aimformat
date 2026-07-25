@@ -1320,3 +1320,26 @@ class TestNumberingStaysInSyncAcrossTheDocument:
         assert html.count('class="num-2"') == 3, (
             "the empty numbered paragraph did not consume a number"
         )
+
+    def test_a_list_reopened_after_prose_continues_its_numbering(self):
+        # Word keeps counting across the interruption — the fifth item is 5,
+        # not 1. A fresh <ol> with no start renders 1. again, so the document
+        # silently contains two item 1s and no item 3.
+        numbering = (
+            f'<w:numbering xmlns:w="{_W}"><w:abstractNum w:abstractNumId="40">'
+            + self._lvl(0, "%1.")
+            + '</w:abstractNum><w:num w:numId="40">'
+            '<w:abstractNumId w:val="40"/></w:num></w:numbering>'
+        )
+        doc = Document()
+        self._number(doc.add_paragraph("One"), 40, 0)
+        self._number(doc.add_paragraph("Two"), 40, 0)
+        doc.add_paragraph("An interrupting paragraph.")
+        self._number(doc.add_paragraph("Three"), 40, 0)
+        self._number(doc.add_paragraph("Four"), 40, 0)
+
+        imported = aim.from_docx(self._with_numbering(doc, numbering))
+        # the rendered document only — the history log repeats every markup
+        content = imported.dumps().split("<body", 1)[1].split("<script", 1)[0]
+        assert content.count("<ol") == 2, "the interruption should split the list"
+        assert 'start="3"' in content, f"the reopened list restarts at 1: {content}"
