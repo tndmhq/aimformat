@@ -611,7 +611,6 @@
       "list-disc": "list-style:disc",
       "list-decimal": "list-style:decimal"
     },
-    "clause_levels": 9,
     "list_formats": {
       "list-lower-alpha": "lower-alpha",
       "list-upper-alpha": "upper-alpha",
@@ -623,9 +622,10 @@
       "list-bare": "\\a0"
     },
     "markers": [
-      "clause-restart",
+      "num-restart",
       "list-multilevel"
-    ]
+    ],
+    "num_levels": 9
   },
   "events": {
     "kinds": [

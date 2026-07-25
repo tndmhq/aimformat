@@ -23,7 +23,7 @@ def version_key(value: str) -> tuple[int, ...] | None:
     return tuple(int(p) for p in parts)
 
 
-#: The spec version that introduced dynamic numbering (clause classes, list
+#: The spec version that introduced dynamic numbering (outline-number classes,
 #: formats and suffixes, the multi-level chain). One constant, because these
 #: names are generated from several tables and every one of them shares a
 #: floor.
@@ -167,32 +167,33 @@ class Registry:
         for prefix, props in c["spacing_props"].items():
             for k, v in c["spacing_scale"].items():
                 out[f"{prefix}-{k}"] = ";".join(f"{p}:{v}" for p in props)
-        for i in range(1, c.get("clause_levels", 0) + 1):
-            # A clause advances its own level and zeroes every deeper one, so
+        for i in range(1, c.get("num_levels", 0) + 1):
+            # A numbered block advances its own level and zeroes every deeper
+            # one, so
             # 1.2.1 follows 1.1.9. counter-SET, not counter-reset: a reset
             # instantiates a counter scoped to the element and its following
             # siblings, and instantiating again on a later sibling does not
             # reset the one already in scope — deeper levels keep climbing,
             # and only from the SECOND occurrence, so short documents look
             # fine. Verified in-engine before this shipped.
-            deeper = " ".join(f"aim-c{j} 0" for j in range(i + 1, c["clause_levels"] + 1))
+            deeper = " ".join(f"aim-c{j} 0" for j in range(i + 1, c["num_levels"] + 1))
             decl = f"counter-increment:aim-c{i}"
             if deeper:
                 decl += f";counter-set:{deeper}"
             # hanging indent: the marker sits in the gutter, wrapped text
             # aligns to the clause body the way legal documents set it
-            out[f"clause-{i}"] = decl + ";padding-left:3.2em;text-indent:-3.2em"
+            out[f"num-{i}"] = decl + ";padding-left:3.2em;text-indent:-3.2em"
         for name, style in c.get("list_formats", {}).items():
             out[name] = f"list-style-type:{style}"
         out.update(c["singles"])
         return out
 
     @cached_property
-    def clause_levels(self) -> int:
-        """How many flat clause-numbering levels the vocabulary defines.
+    def num_levels(self) -> int:
+        """How many flat outline-numbering levels the vocabulary defines.
         Nine, because that is Word's own depth cap — which is what makes the
         set closed rather than arbitrary."""
-        return int(self.raw["classes"].get("clause_levels", 0))
+        return int(self.raw["classes"].get("num_levels", 0))
 
     @cached_property
     def class_rules(self) -> list[tuple[str, str]]:
@@ -201,20 +202,20 @@ class Registry:
         :attr:`class_declarations` because the stylesheet needs both and only
         the flat table answers "what does this class mean on its own"."""
         c = self.raw["classes"]
-        levels = c.get("clause_levels", 0)
+        levels = c.get("num_levels", 0)
         rules: list[tuple[str, str]] = []
         for i in range(1, levels + 1):
             chain = ' "." '.join(f"counter(aim-c{j})" for j in range(1, i + 1))
             # level 1 draws "1." and deeper levels "1.1" — the legal idiom,
             # and what every fixture's lvlText declares
             tail = ' ".\\a0"' if i == 1 else ' "\\a0"'
-            rules.append((f".clause-{i}::before", f"content:{chain}{tail}"))
+            rules.append((f".num-{i}::before", f"content:{chain}{tail}"))
             # a prefix ("Article %1") shows its own level alone, never the
             # chain — the literal is data, so it rides an attribute and the
             # stylesheet stays closed
             rules.append(
                 (
-                    f".clause-{i}[data-aim-num-prefix]::before",
+                    f".num-{i}[data-aim-num-prefix]::before",
                     f'content:attr(data-aim-num-prefix) counter(aim-c{i}) "\\a0"',
                 )
             )
@@ -223,11 +224,11 @@ class Registry:
             # value around it: counter-set and counter-increment apply in a
             # fixed order that this must not depend on.
             restart = f"counter-increment:none;counter-set:aim-c{i} 1"
-            rules.append((f".clause-{i}.clause-restart", f"{restart} {deeper}".rstrip()))
+            rules.append((f".num-{i}.num-restart", f"{restart} {deeper}".rstrip()))
         if levels:
             # the marker sits in the gutter the clause's negative text-indent
             # opens, so wrapped lines align to the body rather than the number
-            markers = ",".join(f".clause-{i}::before" for i in range(1, levels + 1))
+            markers = ",".join(f".num-{i}::before" for i in range(1, levels + 1))
             rules.append((markers, "display:inline-block;min-width:3.2em;text-indent:0"))
         # multi-level lists chain the built-in list-item counter, which is
         # also what makes <ol start> work — a custom counter would ignore it
@@ -297,7 +298,7 @@ class Registry:
         c = self.raw["classes"]
         floors = dict(c.get("since", {}))
         for name in (
-            [f"clause-{i}" for i in range(1, c.get("clause_levels", 0) + 1)]
+            [f"num-{i}" for i in range(1, c.get("num_levels", 0) + 1)]
             + list(c.get("list_formats", {}))
             + list(c.get("list_suffixes", {}))
             + c.get("markers", [])

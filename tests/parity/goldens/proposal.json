@@ -4,7 +4,7 @@
     "ttl",
     "intro",
     "scope",
-    "tsgb10lp",
+    "vv7njn37",
     "hd",
     "dl",
     "pr"
@@ -48,8 +48,8 @@
     },
     {
       "container": "body",
-      "html": "<aim-page-break data-aim=\"tsgb10lp\"></aim-page-break>",
-      "id": "tsgb10lp",
+      "html": "<aim-page-break data-aim=\"vv7njn37\"></aim-page-break>",
+      "id": "vv7njn37",
       "isRun": false,
       "kind": "chunk",
       "tag": "aim-page-break",
@@ -136,7 +136,7 @@
     "dl",
     "pr"
   ],
-  "docHash": "sha256:b7937229392395cbbb0366bd694f67d005e0126b294d56a1d8057dde241b17c4",
+  "docHash": "sha256:d364690ec69a5b1054dc669b25c9e682b5846e926426e82f738ffff75eeb7452",
   "docSettings": {
     "page": {
       "margins": {
@@ -153,13 +153,13 @@
   "hasCanonicalNote": true,
   "history": {
     "lines": 11,
-    "sha256": "sha256:1896448730571170e5e374f3c3bb4b1afdf234f93de5181cfcb2c02b3d5b52ec"
+    "sha256": "sha256:af994d5582fed5f92ca9cd305be53bf7271449b43467e12f23f4cfb1f8ef7ac2"
   },
   "lang": "en",
   "meta": {
     "summary": {
       "as_of_seq": 11,
-      "doc_hash": "sha256:b7937229392395cbbb0366bd694f67d005e0126b294d56a1d8057dde241b17c4",
+      "doc_hash": "sha256:d364690ec69a5b1054dc669b25c9e682b5846e926426e82f738ffff75eeb7452",
       "model": "claude-opus-4-8",
       "text": "Three-year services proposal for Acme GmbH: €358k over two phases (pending: rollout line item), projected €2.1M savings. One pending pricing row and a theme swap await review."
     },
@@ -169,7 +169,7 @@
           "ttl",
           "intro",
           "scope",
-          "tsgb10lp"
+          "vv7njn37"
         ],
         "level": 1,
         "title": "Q3 Services Proposal — Acme GmbH"
@@ -224,8 +224,8 @@
     },
     {
       "container": "body",
-      "html": "<aim-page-break data-aim=\"tsgb10lp\"></aim-page-break>",
-      "id": "tsgb10lp",
+      "html": "<aim-page-break data-aim=\"vv7njn37\"></aim-page-break>",
+      "id": "vv7njn37",
       "isRun": false,
       "kind": "chunk",
       "tag": "aim-page-break",
@@ -360,7 +360,7 @@
       "batch": "b6",
       "dependsOn": null,
       "explanation": "Client asked for rollout as its own line.",
-      "id": "p-7ep4o7sm",
+      "id": "p-465d0hbu",
       "payloadHtml": "<tr data-aim=\"r3\"><td>Rollout &amp; training</td><td>8</td><td>€95,000</td></tr>",
       "target": null
     },
@@ -378,14 +378,14 @@
       "batch": "b7",
       "dependsOn": null,
       "explanation": "Client brand refresh: teal primary.",
-      "id": "p-jje2mm7k",
+      "id": "p-hfumb901",
       "payloadHtml": "<style data-aim-theme>:root{--aim-brand-1:#0f766e}</style>",
       "target": "aim:theme"
     }
   ],
   "specVersion": "0.5",
   "stylesheet": {
-    "sha256": "sha256:288260b06519d45ebb723281a57b989b0270dc821c6d822b3d9d328c094e1346",
+    "sha256": "sha256:3138043dae7e6cf690ebaf45469bbc695240989bcdd8a2f5fb159068d9e44d4d",
     "version": "0.5"
   },
   "theme": {

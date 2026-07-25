@@ -719,21 +719,25 @@ def _has_class(el: Element, name: str) -> bool:
     return name in (el.get("class") or "").split()
 
 
-def _clause_level(el: Element) -> int | None:
-    """The 1-based clause level a block declares, or None."""
+_NUM_CLASS = re.compile(r"^num-([1-9])$")
+
+
+def _num_level(el: Element) -> int | None:
+    """The 1-based outline-numbering level a block declares, or None."""
     for name in (el.get("class") or "").split():
-        if name.startswith("clause-") and name[7:].isdigit():
-            level = int(name[7:])
-            if 1 <= level <= REGISTRY.clause_levels:
+        match = _NUM_CLASS.match(name)
+        if match:
+            level = int(match.group(1))
+            if level <= REGISTRY.num_levels:
                 return level
     return None
 
 
-#: One abstract definition covering every clause level: decimal, chained
+#: One abstract definition covering every level: decimal, chained
 #: (%1.%2.%3…), each level restarting under its parent — the scheme the
-#: clause classes describe. Word draws the labels from this, so an exported
+#: num-N classes describe. Word draws the labels from this, so an exported
 #: document renumbers on edit exactly as the .aim did.
-def _clause_abstract_xml(abstract_id: int, levels: int) -> str:
+def _num_abstract_xml(abstract_id: int, levels: int) -> str:
     from docx.oxml.ns import nsmap
 
     w = nsmap["w"]
@@ -775,7 +779,7 @@ class _Exporter:
         # numbering instances created on demand for clause blocks:
         # (restart, level) → numId. A restart needs its own w:num carrying a
         # startOverride, which is how Word expresses "restart numbering here".
-        self._clause_nums: dict[tuple[bool, int], int] = {}
+        self._num_instances: dict[tuple[bool, int], int] = {}
         # Set after a slide: True means accepted structure owns the next
         # break; a Proposal means the pending slide owns it.
         self._break_before_next: bool | Proposal = False
@@ -1074,16 +1078,16 @@ class _Exporter:
         _apply_runs(para, runs)
         _paint_paragraph(para, box)
 
-    def _clause_num_id(self, *, restart: bool, level: int) -> int | None:
-        """A ``w:num`` id for clause numbering, created once per shape.
+    def _num_instance_id(self, *, restart: bool, level: int) -> int | None:
+        """A ``w:num`` id for outline numbering, created once per shape.
 
-        One shared instance carries the whole document's clause sequence; a
+        One shared instance carries the whole document's number sequence; a
         restart gets its own instance with a ``startOverride`` at that level,
         which is Word's own way of saying "begin again here" and exactly what
         the importer reads back."""
         key = (restart, level if restart else 0)
-        if key in self._clause_nums:
-            return self._clause_nums[key]
+        if key in self._num_instances:
+            return self._num_instances[key]
         try:
             from docx.oxml import parse_xml
             from docx.oxml.ns import nsmap
@@ -1092,11 +1096,11 @@ class _Exporter:
         except Exception:  # a template without a numbering part: skip, do not fail
             return None
         w = nsmap["w"]
-        levels = REGISTRY.clause_levels
+        levels = REGISTRY.num_levels
         abstract_id = 9000  # far above anything python-docx's template ships
-        if not self._clause_nums:
-            numbering.insert(0, parse_xml(_clause_abstract_xml(abstract_id, levels)))
-        num_id = 9000 + len(self._clause_nums) + 1
+        if not self._num_instances:
+            numbering.insert(0, parse_xml(_num_abstract_xml(abstract_id, levels)))
+        num_id = 9000 + len(self._num_instances) + 1
         override = (
             f'<w:lvlOverride w:ilvl="{level - 1}"><w:startOverride w:val="1"/></w:lvlOverride>'
             if restart
@@ -1108,20 +1112,20 @@ class _Exporter:
                 f'<w:abstractNumId w:val="{abstract_id}"/>{override}</w:num>'
             )
         )
-        self._clause_nums[key] = num_id
+        self._num_instances[key] = num_id
         return num_id
 
     def _number_paragraph(self, para, el: Element) -> None:
-        """Give a ``clause-N`` block real Word numbering.
+        """Give a ``num-N`` block real Word numbering.
 
         Since v0.5 the number is not in the text, so without this the export
         loses it altogether — worse than the baked label it replaced. Word
         draws it from ``numbering.xml`` the same way the source document did,
         which also means it renumbers in Word after an edit."""
-        level = _clause_level(el)
+        level = _num_level(el)
         if level is None:
             return
-        num_id = self._clause_num_id(restart=_has_class(el, "clause-restart"), level=level)
+        num_id = self._num_instance_id(restart=_has_class(el, "num-restart"), level=level)
         if num_id is None:
             return
         from docx.oxml.ns import qn

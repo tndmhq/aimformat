@@ -480,28 +480,32 @@ invalid (P008).
 ### 3.8 Numbering (since v0.5)
 
 **A number that is written into the text is wrong the moment the document
-is edited.** Insert a clause into a contract and every clause below it is
-misnumbered, while still reading as authoritative — and any cross-reference
-to "clause 1.1.7" now points somewhere else. So `.aim` does not store
-computed numbers: it states an element's *place* in a numbering scheme, and
-the stylesheet (§3.4) draws the number.
+is edited.** Insert a section into a numbered document and everything below
+it is misnumbered while still reading as authoritative — and any
+cross-reference to "1.1.7" now points somewhere else. So `.aim` does not
+store computed numbers: it states an element's *place* in a numbering
+scheme, and the stylesheet (§3.4) draws the number.
 
 Two shapes, because documents have two:
 
-**Clause numbering** — `clause-1` … `clause-9` on a block (`p`, `h1`–`h6`).
+**Outline numbering** — `num-1` … `num-9` on a block (`p`, `h1`–`h6`).
 The block advances its own level and zeroes every deeper one; the marker is
 generated content showing the chain of ancestor counters (`1.`, `1.1`,
-`1.1.1`). Blocks stay flat siblings, so **prose between clauses changes
-nothing** — which a list cannot express without either swallowing that prose
+`1.1.1`). This is the numbered-section structure of standards, policies,
+technical manuals, statutes, academic papers and contracts alike — anywhere
+a document numbers its sections rather than listing items.
+
+Blocks stay flat siblings, so **body text between numbered blocks changes
+nothing** — which a list cannot express without either swallowing that text
 into an item or fragmenting into separate lists. Nine levels because that is
 the depth cap of the numbering models this maps from.
 
-- `clause-restart` on the same block restarts that level (the "restart
+- `num-restart` on the same block restarts that level (the "restart
   numbering" a source document may declare).
 - `data-aim-num-prefix` supplies a literal before the counter
-  (`Article 1`, `Schedule 2`). The attribute value is **data** — the same
-  kind of thing as `alt` on an image — and the rule that renders it is
-  fixed, so no per-document CSS is generated.
+  (`Article 1`, `Section 2`, `Requirement 3`). The attribute value is
+  **data** — the same kind of thing as `alt` on an image — and the rule
+  that renders it is fixed, so no per-document CSS is generated.
 
 **List numbering** — `<ol>`/`<ul>` as before, with the format of the marker
 named by a class (`list-lower-alpha`, `list-upper-alpha`,
@@ -520,7 +524,7 @@ and a rule per (depth × format) pair is how a closed vocabulary turns into
 per-document CSS.
 
 **Renderer requirements.** The generated stylesheet uses `counter-set` (not
-`counter-reset`) for the deeper levels a clause zeroes, and `::before` (not
+`counter-reset`) for the deeper levels a numbered block zeroes, and `::before` (not
 `::marker`) for every generated marker. Both are load-bearing:
 `counter-reset` on flat siblings instantiates a *new* counter rather than
 resetting the one in scope, so deeper levels keep climbing from the second

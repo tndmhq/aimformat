@@ -83,15 +83,6 @@ aim-page-break{display:block;border:0;border-top:1px dashed #d1d5db;margin:2em 0
 .border-red-50{border-color:#fef2f2}
 .border-red-600{border-color:#dc2626}
 .border-t{border-top:1px solid #e5e7eb}
-.clause-1{counter-increment:aim-c1;counter-set:aim-c2 0 aim-c3 0 aim-c4 0 aim-c5 0 aim-c6 0 aim-c7 0 aim-c8 0 aim-c9 0;padding-left:3.2em;text-indent:-3.2em}
-.clause-2{counter-increment:aim-c2;counter-set:aim-c3 0 aim-c4 0 aim-c5 0 aim-c6 0 aim-c7 0 aim-c8 0 aim-c9 0;padding-left:3.2em;text-indent:-3.2em}
-.clause-3{counter-increment:aim-c3;counter-set:aim-c4 0 aim-c5 0 aim-c6 0 aim-c7 0 aim-c8 0 aim-c9 0;padding-left:3.2em;text-indent:-3.2em}
-.clause-4{counter-increment:aim-c4;counter-set:aim-c5 0 aim-c6 0 aim-c7 0 aim-c8 0 aim-c9 0;padding-left:3.2em;text-indent:-3.2em}
-.clause-5{counter-increment:aim-c5;counter-set:aim-c6 0 aim-c7 0 aim-c8 0 aim-c9 0;padding-left:3.2em;text-indent:-3.2em}
-.clause-6{counter-increment:aim-c6;counter-set:aim-c7 0 aim-c8 0 aim-c9 0;padding-left:3.2em;text-indent:-3.2em}
-.clause-7{counter-increment:aim-c7;counter-set:aim-c8 0 aim-c9 0;padding-left:3.2em;text-indent:-3.2em}
-.clause-8{counter-increment:aim-c8;counter-set:aim-c9 0;padding-left:3.2em;text-indent:-3.2em}
-.clause-9{counter-increment:aim-c9;padding-left:3.2em;text-indent:-3.2em}
 .font-body{font-family:var(--aim-font-body)}
 .font-bold{font-weight:700}
 .font-heading{font-family:var(--aim-font-heading)}
@@ -182,6 +173,15 @@ aim-page-break{display:block;border:0;border-top:1px dashed #d1d5db;margin:2em 0
 .my-4{margin-top:1rem;margin-bottom:1rem}
 .my-6{margin-top:1.5rem;margin-bottom:1.5rem}
 .my-8{margin-top:2rem;margin-bottom:2rem}
+.num-1{counter-increment:aim-c1;counter-set:aim-c2 0 aim-c3 0 aim-c4 0 aim-c5 0 aim-c6 0 aim-c7 0 aim-c8 0 aim-c9 0;padding-left:3.2em;text-indent:-3.2em}
+.num-2{counter-increment:aim-c2;counter-set:aim-c3 0 aim-c4 0 aim-c5 0 aim-c6 0 aim-c7 0 aim-c8 0 aim-c9 0;padding-left:3.2em;text-indent:-3.2em}
+.num-3{counter-increment:aim-c3;counter-set:aim-c4 0 aim-c5 0 aim-c6 0 aim-c7 0 aim-c8 0 aim-c9 0;padding-left:3.2em;text-indent:-3.2em}
+.num-4{counter-increment:aim-c4;counter-set:aim-c5 0 aim-c6 0 aim-c7 0 aim-c8 0 aim-c9 0;padding-left:3.2em;text-indent:-3.2em}
+.num-5{counter-increment:aim-c5;counter-set:aim-c6 0 aim-c7 0 aim-c8 0 aim-c9 0;padding-left:3.2em;text-indent:-3.2em}
+.num-6{counter-increment:aim-c6;counter-set:aim-c7 0 aim-c8 0 aim-c9 0;padding-left:3.2em;text-indent:-3.2em}
+.num-7{counter-increment:aim-c7;counter-set:aim-c8 0 aim-c9 0;padding-left:3.2em;text-indent:-3.2em}
+.num-8{counter-increment:aim-c8;counter-set:aim-c9 0;padding-left:3.2em;text-indent:-3.2em}
+.num-9{counter-increment:aim-c9;padding-left:3.2em;text-indent:-3.2em}
 .p-0{padding:0}
 .p-1{padding:0.25rem}
 .p-10{padding:2.5rem}
@@ -299,34 +299,34 @@ aim-page-break{display:block;border:0;border-top:1px dashed #d1d5db;margin:2em 0
 .tracking-wide{letter-spacing:.025em}
 .underline{text-decoration:underline}
 .uppercase{text-transform:uppercase}
-.clause-1::before{content:counter(aim-c1) ".\a0"}
-.clause-1[data-aim-num-prefix]::before{content:attr(data-aim-num-prefix) counter(aim-c1) "\a0"}
-.clause-1.clause-restart{counter-increment:none;counter-set:aim-c1 1 aim-c2 0 aim-c3 0 aim-c4 0 aim-c5 0 aim-c6 0 aim-c7 0 aim-c8 0 aim-c9 0}
-.clause-2::before{content:counter(aim-c1) "." counter(aim-c2) "\a0"}
-.clause-2[data-aim-num-prefix]::before{content:attr(data-aim-num-prefix) counter(aim-c2) "\a0"}
-.clause-2.clause-restart{counter-increment:none;counter-set:aim-c2 1 aim-c3 0 aim-c4 0 aim-c5 0 aim-c6 0 aim-c7 0 aim-c8 0 aim-c9 0}
-.clause-3::before{content:counter(aim-c1) "." counter(aim-c2) "." counter(aim-c3) "\a0"}
-.clause-3[data-aim-num-prefix]::before{content:attr(data-aim-num-prefix) counter(aim-c3) "\a0"}
-.clause-3.clause-restart{counter-increment:none;counter-set:aim-c3 1 aim-c4 0 aim-c5 0 aim-c6 0 aim-c7 0 aim-c8 0 aim-c9 0}
-.clause-4::before{content:counter(aim-c1) "." counter(aim-c2) "." counter(aim-c3) "." counter(aim-c4) "\a0"}
-.clause-4[data-aim-num-prefix]::before{content:attr(data-aim-num-prefix) counter(aim-c4) "\a0"}
-.clause-4.clause-restart{counter-increment:none;counter-set:aim-c4 1 aim-c5 0 aim-c6 0 aim-c7 0 aim-c8 0 aim-c9 0}
-.clause-5::before{content:counter(aim-c1) "." counter(aim-c2) "." counter(aim-c3) "." counter(aim-c4) "." counter(aim-c5) "\a0"}
-.clause-5[data-aim-num-prefix]::before{content:attr(data-aim-num-prefix) counter(aim-c5) "\a0"}
-.clause-5.clause-restart{counter-increment:none;counter-set:aim-c5 1 aim-c6 0 aim-c7 0 aim-c8 0 aim-c9 0}
-.clause-6::before{content:counter(aim-c1) "." counter(aim-c2) "." counter(aim-c3) "." counter(aim-c4) "." counter(aim-c5) "." counter(aim-c6) "\a0"}
-.clause-6[data-aim-num-prefix]::before{content:attr(data-aim-num-prefix) counter(aim-c6) "\a0"}
-.clause-6.clause-restart{counter-increment:none;counter-set:aim-c6 1 aim-c7 0 aim-c8 0 aim-c9 0}
-.clause-7::before{content:counter(aim-c1) "." counter(aim-c2) "." counter(aim-c3) "." counter(aim-c4) "." counter(aim-c5) "." counter(aim-c6) "." counter(aim-c7) "\a0"}
-.clause-7[data-aim-num-prefix]::before{content:attr(data-aim-num-prefix) counter(aim-c7) "\a0"}
-.clause-7.clause-restart{counter-increment:none;counter-set:aim-c7 1 aim-c8 0 aim-c9 0}
-.clause-8::before{content:counter(aim-c1) "." counter(aim-c2) "." counter(aim-c3) "." counter(aim-c4) "." counter(aim-c5) "." counter(aim-c6) "." counter(aim-c7) "." counter(aim-c8) "\a0"}
-.clause-8[data-aim-num-prefix]::before{content:attr(data-aim-num-prefix) counter(aim-c8) "\a0"}
-.clause-8.clause-restart{counter-increment:none;counter-set:aim-c8 1 aim-c9 0}
-.clause-9::before{content:counter(aim-c1) "." counter(aim-c2) "." counter(aim-c3) "." counter(aim-c4) "." counter(aim-c5) "." counter(aim-c6) "." counter(aim-c7) "." counter(aim-c8) "." counter(aim-c9) "\a0"}
-.clause-9[data-aim-num-prefix]::before{content:attr(data-aim-num-prefix) counter(aim-c9) "\a0"}
-.clause-9.clause-restart{counter-increment:none;counter-set:aim-c9 1}
-.clause-1::before,.clause-2::before,.clause-3::before,.clause-4::before,.clause-5::before,.clause-6::before,.clause-7::before,.clause-8::before,.clause-9::before{display:inline-block;min-width:3.2em;text-indent:0}
+.num-1::before{content:counter(aim-c1) ".\a0"}
+.num-1[data-aim-num-prefix]::before{content:attr(data-aim-num-prefix) counter(aim-c1) "\a0"}
+.num-1.num-restart{counter-increment:none;counter-set:aim-c1 1 aim-c2 0 aim-c3 0 aim-c4 0 aim-c5 0 aim-c6 0 aim-c7 0 aim-c8 0 aim-c9 0}
+.num-2::before{content:counter(aim-c1) "." counter(aim-c2) "\a0"}
+.num-2[data-aim-num-prefix]::before{content:attr(data-aim-num-prefix) counter(aim-c2) "\a0"}
+.num-2.num-restart{counter-increment:none;counter-set:aim-c2 1 aim-c3 0 aim-c4 0 aim-c5 0 aim-c6 0 aim-c7 0 aim-c8 0 aim-c9 0}
+.num-3::before{content:counter(aim-c1) "." counter(aim-c2) "." counter(aim-c3) "\a0"}
+.num-3[data-aim-num-prefix]::before{content:attr(data-aim-num-prefix) counter(aim-c3) "\a0"}
+.num-3.num-restart{counter-increment:none;counter-set:aim-c3 1 aim-c4 0 aim-c5 0 aim-c6 0 aim-c7 0 aim-c8 0 aim-c9 0}
+.num-4::before{content:counter(aim-c1) "." counter(aim-c2) "." counter(aim-c3) "." counter(aim-c4) "\a0"}
+.num-4[data-aim-num-prefix]::before{content:attr(data-aim-num-prefix) counter(aim-c4) "\a0"}
+.num-4.num-restart{counter-increment:none;counter-set:aim-c4 1 aim-c5 0 aim-c6 0 aim-c7 0 aim-c8 0 aim-c9 0}
+.num-5::before{content:counter(aim-c1) "." counter(aim-c2) "." counter(aim-c3) "." counter(aim-c4) "." counter(aim-c5) "\a0"}
+.num-5[data-aim-num-prefix]::before{content:attr(data-aim-num-prefix) counter(aim-c5) "\a0"}
+.num-5.num-restart{counter-increment:none;counter-set:aim-c5 1 aim-c6 0 aim-c7 0 aim-c8 0 aim-c9 0}
+.num-6::before{content:counter(aim-c1) "." counter(aim-c2) "." counter(aim-c3) "." counter(aim-c4) "." counter(aim-c5) "." counter(aim-c6) "\a0"}
+.num-6[data-aim-num-prefix]::before{content:attr(data-aim-num-prefix) counter(aim-c6) "\a0"}
+.num-6.num-restart{counter-increment:none;counter-set:aim-c6 1 aim-c7 0 aim-c8 0 aim-c9 0}
+.num-7::before{content:counter(aim-c1) "." counter(aim-c2) "." counter(aim-c3) "." counter(aim-c4) "." counter(aim-c5) "." counter(aim-c6) "." counter(aim-c7) "\a0"}
+.num-7[data-aim-num-prefix]::before{content:attr(data-aim-num-prefix) counter(aim-c7) "\a0"}
+.num-7.num-restart{counter-increment:none;counter-set:aim-c7 1 aim-c8 0 aim-c9 0}
+.num-8::before{content:counter(aim-c1) "." counter(aim-c2) "." counter(aim-c3) "." counter(aim-c4) "." counter(aim-c5) "." counter(aim-c6) "." counter(aim-c7) "." counter(aim-c8) "\a0"}
+.num-8[data-aim-num-prefix]::before{content:attr(data-aim-num-prefix) counter(aim-c8) "\a0"}
+.num-8.num-restart{counter-increment:none;counter-set:aim-c8 1 aim-c9 0}
+.num-9::before{content:counter(aim-c1) "." counter(aim-c2) "." counter(aim-c3) "." counter(aim-c4) "." counter(aim-c5) "." counter(aim-c6) "." counter(aim-c7) "." counter(aim-c8) "." counter(aim-c9) "\a0"}
+.num-9[data-aim-num-prefix]::before{content:attr(data-aim-num-prefix) counter(aim-c9) "\a0"}
+.num-9.num-restart{counter-increment:none;counter-set:aim-c9 1}
+.num-1::before,.num-2::before,.num-3::before,.num-4::before,.num-5::before,.num-6::before,.num-7::before,.num-8::before,.num-9::before{display:inline-block;min-width:3.2em;text-indent:0}
 .list-multilevel{list-style:none}
 .list-multilevel > li::before{content:counters(list-item, ".") "\a0"}
 .list-paren{list-style:none}
@@ -368,14 +368,14 @@ aim-assets{display:none}
 <p data-aim="c4">Fourth.</p>
 <table data-aim-container="tb"><tbody><tr data-aim="r1"><td>one</td></tr><tr data-aim="r2"><td>two</td></tr></tbody></table>
 <aim-proposals>
-<aim-proposal id="p-7hova40g" data-action="modify" data-at="2026-07-17T10:00:10Z" data-author="agent" data-author-model="model-x" data-batch="b2" data-explanation="Lead with the point." data-for="c2"><template><p data-aim="c2">Second, sharpened.</p></template></aim-proposal>
-<aim-proposal id="p-0fjtuum7" data-action="delete" data-at="2026-07-17T10:00:11Z" data-author="agent" data-author-model="model-x" data-batch="b3" data-explanation="Redundant with c2." data-for="c3"></aim-proposal>
-<aim-proposal id="p-fkfe8phu" data-action="move" data-anchor-container="body" data-at="2026-07-17T10:00:12Z" data-author="human" data-author-id="ada" data-batch="b4" data-for="c4"></aim-proposal>
-<aim-proposal id="p-fo8im164" data-action="add" data-anchor-after="c1" data-anchor-container="body" data-at="2026-07-17T10:00:13Z" data-author="agent" data-author-model="model-x" data-batch="b5" data-explanation="Bridge paragraph."><template><p data-aim="add1">Inserted after the title.</p></template></aim-proposal>
-<aim-proposal id="p-elheg1ae" data-action="add" data-anchor-after="p-fo8im164" data-anchor-container="body" data-at="2026-07-17T10:00:14Z" data-author="agent" data-author-model="model-x" data-batch="b6"><template><p data-aim="add2">Chained onto the pending add.</p></template></aim-proposal>
-<aim-proposal id="p-dh2j07u3" data-action="add" data-anchor-container="tb" data-anchor-shell="tbody" data-at="2026-07-17T10:00:15Z" data-author="human" data-author-id="ada" data-batch="b7" data-explanation="Row at the top of the body section."><template><tr data-aim="add3"><td>three</td></tr></template></aim-proposal>
-<aim-proposal id="p-cnfn40at" data-action="modify" data-at="2026-07-17T10:00:16Z" data-author="agent" data-author-model="model-x" data-batch="b8" data-depends-on="p-7hova40g" data-explanation="Teal primary." data-for="aim:theme"><template><style data-aim-theme>:root{--aim-brand-1:#0f766e}</style></template></aim-proposal>
-<aim-proposal id="p-jflf0gil" data-action="modify" data-at="2026-07-17T10:00:17Z" data-author="human" data-author-id="ada" data-batch="b9" data-explanation="Booklet trim." data-for="aim:doc"><template><script type="application/aim-doc+json">
+<aim-proposal id="p-bq2umavu" data-action="modify" data-at="2026-07-17T10:00:10Z" data-author="agent" data-author-model="model-x" data-batch="b2" data-explanation="Lead with the point." data-for="c2"><template><p data-aim="c2">Second, sharpened.</p></template></aim-proposal>
+<aim-proposal id="p-o2rc5t56" data-action="delete" data-at="2026-07-17T10:00:11Z" data-author="agent" data-author-model="model-x" data-batch="b3" data-explanation="Redundant with c2." data-for="c3"></aim-proposal>
+<aim-proposal id="p-vmo8u3au" data-action="move" data-anchor-container="body" data-at="2026-07-17T10:00:12Z" data-author="human" data-author-id="ada" data-batch="b4" data-for="c4"></aim-proposal>
+<aim-proposal id="p-sn9jue55" data-action="add" data-anchor-after="c1" data-anchor-container="body" data-at="2026-07-17T10:00:13Z" data-author="agent" data-author-model="model-x" data-batch="b5" data-explanation="Bridge paragraph."><template><p data-aim="add1">Inserted after the title.</p></template></aim-proposal>
+<aim-proposal id="p-3fh75ti9" data-action="add" data-anchor-after="p-sn9jue55" data-anchor-container="body" data-at="2026-07-17T10:00:14Z" data-author="agent" data-author-model="model-x" data-batch="b6"><template><p data-aim="add2">Chained onto the pending add.</p></template></aim-proposal>
+<aim-proposal id="p-ua8iniua" data-action="add" data-anchor-container="tb" data-anchor-shell="tbody" data-at="2026-07-17T10:00:15Z" data-author="human" data-author-id="ada" data-batch="b7" data-explanation="Row at the top of the body section."><template><tr data-aim="add3"><td>three</td></tr></template></aim-proposal>
+<aim-proposal id="p-7eg9jhkd" data-action="modify" data-at="2026-07-17T10:00:16Z" data-author="agent" data-author-model="model-x" data-batch="b8" data-depends-on="p-bq2umavu" data-explanation="Teal primary." data-for="aim:theme"><template><style data-aim-theme>:root{--aim-brand-1:#0f766e}</style></template></aim-proposal>
+<aim-proposal id="p-nm1mo370" data-action="modify" data-at="2026-07-17T10:00:17Z" data-author="human" data-author-id="ada" data-batch="b9" data-explanation="Booklet trim." data-for="aim:doc"><template><script type="application/aim-doc+json">
 {"page":{"margins":{"bottom":"10mm","left":"12mm","right":"12mm","top":"10mm"},"orientation":"landscape","size":"A5"}}
 </script></template></aim-proposal>
 </aim-proposals>

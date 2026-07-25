@@ -129,15 +129,15 @@ def _numbered_paragraphs(path: Path) -> list[tuple[int, int]]:
     return out
 
 
-def render_clause_numbers(doc: aim.AimDocument) -> list[tuple[str, str]]:
-    """``[(rendered number, text)]`` for every clause-numbered block, by
+def render_outline_numbers(doc: aim.AimDocument) -> list[tuple[str, str]]:
+    """``[(rendered number, text)]`` for every outline-numbered block, by
     running the counter arithmetic the generated stylesheet declares.
 
     Since v0.5 the number is NOT in the document — it is computed at render
     time, which is what makes it survive an edit. That leaves a test with no
     string to assert, so this stands in for the browser: same rules as the
     CSS (a level increments its own counter and zeroes every deeper one;
-    ``clause-restart`` sets it to 1), no engine involvement, so the two can
+    ``num-restart`` sets it to 1), no engine involvement, so the two can
     actually disagree.
     """
     counters = [0] * 10
@@ -146,12 +146,12 @@ def render_clause_numbers(doc: aim.AimDocument) -> list[tuple[str, str]]:
         match = re.search(r'class="([^"]*)"', chunk.html)
         classes = (match.group(1) if match else "").split()
         level = next(
-            (int(c.split("-")[1]) for c in classes if re.fullmatch(r"clause-[1-9]", c)),
+            (int(c.split("-")[1]) for c in classes if re.fullmatch(r"num-[1-9]", c)),
             None,
         )
         if level is None:
             continue
-        if "clause-restart" in classes:
+        if "num-restart" in classes:
             counters[level] = 1
         else:
             counters[level] += 1
@@ -167,30 +167,30 @@ def render_clause_numbers(doc: aim.AimDocument) -> list[tuple[str, str]]:
     return out
 
 
-class TestClauseNumbering:
+class TestOutlineNumbering:
     """The legal document's whole structure is its numbering."""
 
     def test_every_level_is_numbered_dynamically(self, legal):
         # each level pinned on its own: a check for the deepest label alone
         # would not notice the top level going missing
-        rendered = {number for number, _ in render_clause_numbers(legal)}
+        rendered = {number for number, _ in render_outline_numbers(legal)}
         for label in ("1", "1.1", "1.1.1", "1.1.2", "1.1.10.1"):
-            assert label in rendered, f"clause {label} lost"
+            assert label in rendered, f"number {label} lost"
 
     def test_the_numbers_are_not_written_into_the_text(self, legal, legal_body):
         # the point of v0.5: nothing stores the number, so an edit cannot
         # leave a stale one behind
         assert not any(re.match(r"^\d+(\.\d+)*\.?\s", c.text) for c in legal.chunks), (
-            "a clause label is baked into the text"
+            "a number is baked into the text"
         )
-        assert 'class="clause-' in legal_body
+        assert 'class="num-' in legal_body
 
     def test_numbering_continues_across_word_num_instances(self, legal):
         # Word starts a fresh w:num whenever a list is interrupted (here the
         # nested 1.1.10.1/.2), so this sequence spans two numIds over one
         # abstract definition. Counting per instance restarted it at 1.1.1
         # mid-contract; the definitions must run 1.1.1 … 1.1.14 unbroken.
-        seen = [n for n, _ in render_clause_numbers(legal) if re.fullmatch(r"1\.1\.\d+", n)]
+        seen = [n for n, _ in render_outline_numbers(legal) if re.fullmatch(r"1\.1\.\d+", n)]
         numbers = [int(n.rsplit(".", 1)[1]) for n in seen]
         assert numbers == list(range(1, len(numbers) + 1)), seen
         assert len(numbers) >= 14, "the definitions list is truncated"
@@ -212,16 +212,16 @@ class TestClauseNumbering:
             drawn = oracle.draw(num_id, ilvl)
             if drawn.level is not None:
                 expected.append(drawn.label.rstrip("."))
-        rendered = [n for n, _ in render_clause_numbers(legal)]
+        rendered = [n for n, _ in render_outline_numbers(legal)]
         assert rendered == expected, (
             f"stylesheet and engine disagree\n  css: {rendered[:8]}\n  word: {expected[:8]}"
         )
 
     def test_a_numbered_clause_keeps_its_text(self, legal):
-        text = next(t for n, t in render_clause_numbers(legal) if n == "1.1.1")
+        text = next(t for n, t in render_outline_numbers(legal) if n == "1.1.1")
         assert "Applicable Laws" in text
 
-    def test_clause_numbering_survives_a_docx_round_trip(self, legal, tmp_path):
+    def test_outline_numbering_survives_a_docx_round_trip(self, legal, tmp_path):
         # Since v0.5 the number is not in the text, so an exporter that
         # ignores the clause classes writes a contract with NO numbers at
         # all — worse than the baked labels it replaced. Word must get real
@@ -229,8 +229,8 @@ class TestClauseNumbering:
         out = tmp_path / "clauses.docx"
         aim.to_docx(legal, str(out))
         back = aim.from_docx(out)
-        assert [n for n, _ in render_clause_numbers(back)] == [
-            n for n, _ in render_clause_numbers(legal)
+        assert [n for n, _ in render_outline_numbers(back)] == [
+            n for n, _ in render_outline_numbers(legal)
         ]
 
     def test_the_exported_docx_carries_word_numbering(self, legal, tmp_path):

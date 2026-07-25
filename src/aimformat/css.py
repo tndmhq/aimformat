@@ -17,9 +17,9 @@ from .registry import REGISTRY
 
 def _base_layer() -> list[str]:
     slots = ";".join(f"{k}:{v['default']}" for k, v in REGISTRY.theme_slots.items())
-    levels = REGISTRY.clause_levels
-    # The clause counters are instantiated ONCE, on the body, so every clause
-    # in the document shares one scope. Instantiating them per element is the
+    levels = REGISTRY.num_levels
+    # The outline counters are instantiated ONCE, on the body, so every
+    # numbered block in the document shares one scope. Instantiating them per element is the
     # counter-reset trap: a second instance does not reset the first.
     counters = (
         "body{counter-reset:" + " ".join(f"aim-c{i}" for i in range(1, levels + 1)) + "}"

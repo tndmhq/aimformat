@@ -252,9 +252,9 @@ class _Converter:
                 # is NOT written into the text. It is computed at render time,
                 # which is what makes it survive an edit — insert a clause and
                 # everything after it renumbers.
-                clause = [f"clause-{draw.level}"]
+                clause = [f"num-{draw.level}"]
                 if draw.restarted:
-                    clause.append("clause-restart")
+                    clause.append("num-restart")
                 if draw.prefix:
                     prefix_attr = f' data-aim-num-prefix="{escape_attr(draw.prefix)}"'
             elif draw.label:

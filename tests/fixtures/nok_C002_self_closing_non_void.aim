@@ -83,15 +83,6 @@ aim-page-break{display:block;border:0;border-top:1px dashed #d1d5db;margin:2em 0
 .border-red-50{border-color:#fef2f2}
 .border-red-600{border-color:#dc2626}
 .border-t{border-top:1px solid #e5e7eb}
-.clause-1{counter-increment:aim-c1;counter-set:aim-c2 0 aim-c3 0 aim-c4 0 aim-c5 0 aim-c6 0 aim-c7 0 aim-c8 0 aim-c9 0;padding-left:3.2em;text-indent:-3.2em}
-.clause-2{counter-increment:aim-c2;counter-set:aim-c3 0 aim-c4 0 aim-c5 0 aim-c6 0 aim-c7 0 aim-c8 0 aim-c9 0;padding-left:3.2em;text-indent:-3.2em}
-.clause-3{counter-increment:aim-c3;counter-set:aim-c4 0 aim-c5 0 aim-c6 0 aim-c7 0 aim-c8 0 aim-c9 0;padding-left:3.2em;text-indent:-3.2em}
-.clause-4{counter-increment:aim-c4;counter-set:aim-c5 0 aim-c6 0 aim-c7 0 aim-c8 0 aim-c9 0;padding-left:3.2em;text-indent:-3.2em}
-.clause-5{counter-increment:aim-c5;counter-set:aim-c6 0 aim-c7 0 aim-c8 0 aim-c9 0;padding-left:3.2em;text-indent:-3.2em}
-.clause-6{counter-increment:aim-c6;counter-set:aim-c7 0 aim-c8 0 aim-c9 0;padding-left:3.2em;text-indent:-3.2em}
-.clause-7{counter-increment:aim-c7;counter-set:aim-c8 0 aim-c9 0;padding-left:3.2em;text-indent:-3.2em}
-.clause-8{counter-increment:aim-c8;counter-set:aim-c9 0;padding-left:3.2em;text-indent:-3.2em}
-.clause-9{counter-increment:aim-c9;padding-left:3.2em;text-indent:-3.2em}
 .font-body{font-family:var(--aim-font-body)}
 .font-bold{font-weight:700}
 .font-heading{font-family:var(--aim-font-heading)}
@@ -182,6 +173,15 @@ aim-page-break{display:block;border:0;border-top:1px dashed #d1d5db;margin:2em 0
 .my-4{margin-top:1rem;margin-bottom:1rem}
 .my-6{margin-top:1.5rem;margin-bottom:1.5rem}
 .my-8{margin-top:2rem;margin-bottom:2rem}
+.num-1{counter-increment:aim-c1;counter-set:aim-c2 0 aim-c3 0 aim-c4 0 aim-c5 0 aim-c6 0 aim-c7 0 aim-c8 0 aim-c9 0;padding-left:3.2em;text-indent:-3.2em}
+.num-2{counter-increment:aim-c2;counter-set:aim-c3 0 aim-c4 0 aim-c5 0 aim-c6 0 aim-c7 0 aim-c8 0 aim-c9 0;padding-left:3.2em;text-indent:-3.2em}
+.num-3{counter-increment:aim-c3;counter-set:aim-c4 0 aim-c5 0 aim-c6 0 aim-c7 0 aim-c8 0 aim-c9 0;padding-left:3.2em;text-indent:-3.2em}
+.num-4{counter-increment:aim-c4;counter-set:aim-c5 0 aim-c6 0 aim-c7 0 aim-c8 0 aim-c9 0;padding-left:3.2em;text-indent:-3.2em}
+.num-5{counter-increment:aim-c5;counter-set:aim-c6 0 aim-c7 0 aim-c8 0 aim-c9 0;padding-left:3.2em;text-indent:-3.2em}
+.num-6{counter-increment:aim-c6;counter-set:aim-c7 0 aim-c8 0 aim-c9 0;padding-left:3.2em;text-indent:-3.2em}
+.num-7{counter-increment:aim-c7;counter-set:aim-c8 0 aim-c9 0;padding-left:3.2em;text-indent:-3.2em}
+.num-8{counter-increment:aim-c8;counter-set:aim-c9 0;padding-left:3.2em;text-indent:-3.2em}
+.num-9{counter-increment:aim-c9;padding-left:3.2em;text-indent:-3.2em}
 .p-0{padding:0}
 .p-1{padding:0.25rem}
 .p-10{padding:2.5rem}
@@ -299,34 +299,34 @@ aim-page-break{display:block;border:0;border-top:1px dashed #d1d5db;margin:2em 0
 .tracking-wide{letter-spacing:.025em}
 .underline{text-decoration:underline}
 .uppercase{text-transform:uppercase}
-.clause-1::before{content:counter(aim-c1) ".\a0"}
-.clause-1[data-aim-num-prefix]::before{content:attr(data-aim-num-prefix) counter(aim-c1) "\a0"}
-.clause-1.clause-restart{counter-increment:none;counter-set:aim-c1 1 aim-c2 0 aim-c3 0 aim-c4 0 aim-c5 0 aim-c6 0 aim-c7 0 aim-c8 0 aim-c9 0}
-.clause-2::before{content:counter(aim-c1) "." counter(aim-c2) "\a0"}
-.clause-2[data-aim-num-prefix]::before{content:attr(data-aim-num-prefix) counter(aim-c2) "\a0"}
-.clause-2.clause-restart{counter-increment:none;counter-set:aim-c2 1 aim-c3 0 aim-c4 0 aim-c5 0 aim-c6 0 aim-c7 0 aim-c8 0 aim-c9 0}
-.clause-3::before{content:counter(aim-c1) "." counter(aim-c2) "." counter(aim-c3) "\a0"}
-.clause-3[data-aim-num-prefix]::before{content:attr(data-aim-num-prefix) counter(aim-c3) "\a0"}
-.clause-3.clause-restart{counter-increment:none;counter-set:aim-c3 1 aim-c4 0 aim-c5 0 aim-c6 0 aim-c7 0 aim-c8 0 aim-c9 0}
-.clause-4::before{content:counter(aim-c1) "." counter(aim-c2) "." counter(aim-c3) "." counter(aim-c4) "\a0"}
-.clause-4[data-aim-num-prefix]::before{content:attr(data-aim-num-prefix) counter(aim-c4) "\a0"}
-.clause-4.clause-restart{counter-increment:none;counter-set:aim-c4 1 aim-c5 0 aim-c6 0 aim-c7 0 aim-c8 0 aim-c9 0}
-.clause-5::before{content:counter(aim-c1) "." counter(aim-c2) "." counter(aim-c3) "." counter(aim-c4) "." counter(aim-c5) "\a0"}
-.clause-5[data-aim-num-prefix]::before{content:attr(data-aim-num-prefix) counter(aim-c5) "\a0"}
-.clause-5.clause-restart{counter-increment:none;counter-set:aim-c5 1 aim-c6 0 aim-c7 0 aim-c8 0 aim-c9 0}
-.clause-6::before{content:counter(aim-c1) "." counter(aim-c2) "." counter(aim-c3) "." counter(aim-c4) "." counter(aim-c5) "." counter(aim-c6) "\a0"}
-.clause-6[data-aim-num-prefix]::before{content:attr(data-aim-num-prefix) counter(aim-c6) "\a0"}
-.clause-6.clause-restart{counter-increment:none;counter-set:aim-c6 1 aim-c7 0 aim-c8 0 aim-c9 0}
-.clause-7::before{content:counter(aim-c1) "." counter(aim-c2) "." counter(aim-c3) "." counter(aim-c4) "." counter(aim-c5) "." counter(aim-c6) "." counter(aim-c7) "\a0"}
-.clause-7[data-aim-num-prefix]::before{content:attr(data-aim-num-prefix) counter(aim-c7) "\a0"}
-.clause-7.clause-restart{counter-increment:none;counter-set:aim-c7 1 aim-c8 0 aim-c9 0}
-.clause-8::before{content:counter(aim-c1) "." counter(aim-c2) "." counter(aim-c3) "." counter(aim-c4) "." counter(aim-c5) "." counter(aim-c6) "." counter(aim-c7) "." counter(aim-c8) "\a0"}
-.clause-8[data-aim-num-prefix]::before{content:attr(data-aim-num-prefix) counter(aim-c8) "\a0"}
-.clause-8.clause-restart{counter-increment:none;counter-set:aim-c8 1 aim-c9 0}
-.clause-9::before{content:counter(aim-c1) "." counter(aim-c2) "." counter(aim-c3) "." counter(aim-c4) "." counter(aim-c5) "." counter(aim-c6) "." counter(aim-c7) "." counter(aim-c8) "." counter(aim-c9) "\a0"}
-.clause-9[data-aim-num-prefix]::before{content:attr(data-aim-num-prefix) counter(aim-c9) "\a0"}
-.clause-9.clause-restart{counter-increment:none;counter-set:aim-c9 1}
-.clause-1::before,.clause-2::before,.clause-3::before,.clause-4::before,.clause-5::before,.clause-6::before,.clause-7::before,.clause-8::before,.clause-9::before{display:inline-block;min-width:3.2em;text-indent:0}
+.num-1::before{content:counter(aim-c1) ".\a0"}
+.num-1[data-aim-num-prefix]::before{content:attr(data-aim-num-prefix) counter(aim-c1) "\a0"}
+.num-1.num-restart{counter-increment:none;counter-set:aim-c1 1 aim-c2 0 aim-c3 0 aim-c4 0 aim-c5 0 aim-c6 0 aim-c7 0 aim-c8 0 aim-c9 0}
+.num-2::before{content:counter(aim-c1) "." counter(aim-c2) "\a0"}
+.num-2[data-aim-num-prefix]::before{content:attr(data-aim-num-prefix) counter(aim-c2) "\a0"}
+.num-2.num-restart{counter-increment:none;counter-set:aim-c2 1 aim-c3 0 aim-c4 0 aim-c5 0 aim-c6 0 aim-c7 0 aim-c8 0 aim-c9 0}
+.num-3::before{content:counter(aim-c1) "." counter(aim-c2) "." counter(aim-c3) "\a0"}
+.num-3[data-aim-num-prefix]::before{content:attr(data-aim-num-prefix) counter(aim-c3) "\a0"}
+.num-3.num-restart{counter-increment:none;counter-set:aim-c3 1 aim-c4 0 aim-c5 0 aim-c6 0 aim-c7 0 aim-c8 0 aim-c9 0}
+.num-4::before{content:counter(aim-c1) "." counter(aim-c2) "." counter(aim-c3) "." counter(aim-c4) "\a0"}
+.num-4[data-aim-num-prefix]::before{content:attr(data-aim-num-prefix) counter(aim-c4) "\a0"}
+.num-4.num-restart{counter-increment:none;counter-set:aim-c4 1 aim-c5 0 aim-c6 0 aim-c7 0 aim-c8 0 aim-c9 0}
+.num-5::before{content:counter(aim-c1) "." counter(aim-c2) "." counter(aim-c3) "." counter(aim-c4) "." counter(aim-c5) "\a0"}
+.num-5[data-aim-num-prefix]::before{content:attr(data-aim-num-prefix) counter(aim-c5) "\a0"}
+.num-5.num-restart{counter-increment:none;counter-set:aim-c5 1 aim-c6 0 aim-c7 0 aim-c8 0 aim-c9 0}
+.num-6::before{content:counter(aim-c1) "." counter(aim-c2) "." counter(aim-c3) "." counter(aim-c4) "." counter(aim-c5) "." counter(aim-c6) "\a0"}
+.num-6[data-aim-num-prefix]::before{content:attr(data-aim-num-prefix) counter(aim-c6) "\a0"}
+.num-6.num-restart{counter-increment:none;counter-set:aim-c6 1 aim-c7 0 aim-c8 0 aim-c9 0}
+.num-7::before{content:counter(aim-c1) "." counter(aim-c2) "." counter(aim-c3) "." counter(aim-c4) "." counter(aim-c5) "." counter(aim-c6) "." counter(aim-c7) "\a0"}
+.num-7[data-aim-num-prefix]::before{content:attr(data-aim-num-prefix) counter(aim-c7) "\a0"}
+.num-7.num-restart{counter-increment:none;counter-set:aim-c7 1 aim-c8 0 aim-c9 0}
+.num-8::before{content:counter(aim-c1) "." counter(aim-c2) "." counter(aim-c3) "." counter(aim-c4) "." counter(aim-c5) "." counter(aim-c6) "." counter(aim-c7) "." counter(aim-c8) "\a0"}
+.num-8[data-aim-num-prefix]::before{content:attr(data-aim-num-prefix) counter(aim-c8) "\a0"}
+.num-8.num-restart{counter-increment:none;counter-set:aim-c8 1 aim-c9 0}
+.num-9::before{content:counter(aim-c1) "." counter(aim-c2) "." counter(aim-c3) "." counter(aim-c4) "." counter(aim-c5) "." counter(aim-c6) "." counter(aim-c7) "." counter(aim-c8) "." counter(aim-c9) "\a0"}
+.num-9[data-aim-num-prefix]::before{content:attr(data-aim-num-prefix) counter(aim-c9) "\a0"}
+.num-9.num-restart{counter-increment:none;counter-set:aim-c9 1}
+.num-1::before,.num-2::before,.num-3::before,.num-4::before,.num-5::before,.num-6::before,.num-7::before,.num-8::before,.num-9::before{display:inline-block;min-width:3.2em;text-indent:0}
 .list-multilevel{list-style:none}
 .list-multilevel > li::before{content:counters(list-item, ".") "\a0"}
 .list-paren{list-style:none}

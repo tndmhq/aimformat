@@ -299,7 +299,7 @@ class NumberDraw:
     """This paragraph reset its level's counter (Word's "Restart at 1")."""
 
     level: int | None = None
-    """1-based clause level when this paragraph can be numbered dynamically,
+    """1-based outline level when this paragraph can be numbered dynamically,
     None when it must carry a baked label."""
 
     prefix: str = ""
@@ -307,7 +307,8 @@ class NumberDraw:
 
     chained: bool = False
     """This level shows its ancestors' counters too ("1.1.1"). Such a
-    paragraph is a *clause*, not a list item, whatever style it carries: an
+    paragraph is a numbered SECTION, not a list item, whatever style it
+    carries: an
     ``<ol>`` renders 1, 2, 3 at every depth and cannot express the chain at
     all — which is the defect that started this."""
 
@@ -470,11 +471,11 @@ class NumberingEngine:
             # draws nothing — but the counter above still moved, so the
             # numbered siblings around it stay correct
             return NumberDraw(label="", restarted=restarted)
-        clause_level, prefix = self._dynamic_style(num_id, ilvl, level)
+        num_level, prefix = self._dynamic_style(num_id, ilvl, level)
         return NumberDraw(
             label=self._render(abstract, num_id, level),
             restarted=restarted,
-            level=clause_level,
+            level=num_level,
             prefix=prefix,
             chained=(level.lvl_text or "").count("%") > 1,
         )
