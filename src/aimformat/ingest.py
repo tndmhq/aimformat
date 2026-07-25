@@ -532,7 +532,11 @@ def from_docling(
 def _containerize(markup: str) -> str:
     """Lists/tables arrive as plain markup; mark them as .aim containers with
     item chunks (ids get assigned by the document operations)."""
-    if markup.startswith(("<ul>", "<ol>", "<table>")):
+    # matched on the TAG, not on the literal string: a list that carries an
+    # attribute (<ol start="6">) is still a list, and reading it as anything
+    # else silently turns the whole thing into one atomic chunk whose items
+    # lose their ids — nothing to address a proposal at
+    if re.match(r"<(?:ul|ol|table)[\s>]", markup):
         from .canonical import serialize
         from .dom import parse_fragment
 

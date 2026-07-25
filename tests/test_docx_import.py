@@ -1574,3 +1574,34 @@ class TestMalformedInputFailsTyped:
         # a legacy .doc renamed .docx is the everyday version of this
         with pytest.raises(aim.ParseError):
             self._import(b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1 legacy OLE compound file")
+
+
+class TestListsStayAddressable:
+    """A list is a CONTAINER whose items carry their own ids — that is what
+    lets a proposal target one item. The rule that decides this matched the
+    literal string "<ol>", so the moment a list carried an attribute it
+    silently became one atomic chunk and every item lost its id."""
+
+    @staticmethod
+    def _containerize(markup: str) -> str:
+        from aimformat.ingest import _containerize
+
+        return _containerize(markup)
+
+    def test_a_list_with_an_attribute_is_still_a_container(self):
+        out = self._containerize('<ol start="6"><li>six</li><li>seven</li></ol>')
+        assert "data-aim-container" in out, out
+        assert out.count('<li data-aim=""') == 2, out
+
+    def test_the_plain_list_is_unchanged(self):
+        out = self._containerize("<ol><li>one</li></ol>")
+        assert "data-aim-container" in out
+        assert out.count('<li data-aim=""') == 1
+
+    def test_the_real_document_keeps_its_items_addressable(self):
+        # sample3's reopened list is the one that grew a start attribute
+        imported = aim.from_docx("tests/fixtures/docxs/sample3.docx")
+        content = imported.dumps().split("<body", 1)[1].split("<script", 1)[0]
+        for ol in re.findall(r"<ol[^>]*>.*?</ol>", content, re.S):
+            assert "data-aim-container" in ol, ol[:160]
+            assert "<li data-aim=" in ol, ol[:160]
