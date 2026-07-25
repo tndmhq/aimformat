@@ -163,10 +163,13 @@ class _Converter:
         # relationship ids the run walk already emitted for the current
         # paragraph, so the picture recovery below stays additive
         self._emitted_images: set[str] = set()
+        # numIds whose whole scheme draws outline-numbered blocks
+        self._outline_schemes: set[int] = set()
 
     # -- top level ---------------------------------------------------------
 
     def blocks(self) -> list[str]:
+        self._classify_numbering()
         for item, elem in self.p.content:
             kind = type(item).__name__
             if kind == "Paragraph":
@@ -209,6 +212,44 @@ class _Converter:
             },
         }
 
+    # -- numbering ---------------------------------------------------------
+
+    def _numbering_of(self, para: Any) -> dict:
+        """A paragraph's effective ``numPr`` — direct, else inherited from its
+        style, which is how templates carry outline numbering."""
+        direct = model_dump(para.p_pr)
+        style_id = direct.pop("p_style", None)
+        num_pr = self.p.resolver.resolve_with_direct(style_id, direct).get("num_pr") or {}
+        # w:numId="0" is OOXML for "numbering removed here"
+        return {} if str(num_pr.get("num_id")) == "0" else num_pr
+
+    def _classify_numbering(self) -> None:
+        """Decide, per numbering SCHEME, whether it draws outline-numbered
+        blocks or a list — before emitting anything.
+
+        This needs a pass of its own because the answer depends on every
+        level the document uses, and a converter that decided per paragraph
+        would tear one scheme into both shapes: Word's stock multilevel list
+        would emit its top level as ``<li>`` and everything below as blocks
+        numbered against a counter nothing increments.
+        """
+        used: dict[int, set[int]] = {}
+        for item, _ in self.p.content:
+            if type(item).__name__ != "Paragraph":
+                continue
+            num_pr = self._numbering_of(item)
+            try:
+                num_id = int(num_pr["num_id"])
+                ilvl = int(num_pr.get("ilvl") or 0)
+            except (KeyError, TypeError, ValueError):
+                continue
+            used.setdefault(num_id, set()).add(ilvl)
+        self._outline_schemes = {
+            num_id
+            for num_id, levels in used.items()
+            if self.p.numbering_engine.scheme_is_outline(num_id, levels)
+        }
+
     # -- paragraphs --------------------------------------------------------
 
     def _paragraph(self, para: Any, elem: Any = None) -> None:
@@ -242,11 +283,12 @@ class _Converter:
         label: str = ""
         clause: list[str] = []
         prefix_attr = ""
-        # A clause is either heading-styled (the outline idiom legal
-        # templates use) or numbered with a CHAIN — "1.1.1" shows its
-        # ancestors, and an <ol> renders 1,2,3 at every depth, so a chained
-        # paragraph is a clause whatever style it carries.
-        if draw is not None and (heading is not None or draw.chained):
+        # Outline-numbered or a list item? Ask the SCHEME, decided once in
+        # _classify_numbering — never this paragraph in isolation, or one
+        # scheme emits both shapes and the blocks count against a level
+        # nothing increments.
+        outline = draw is not None and int(num_pr.get("num_id", -1)) in self._outline_schemes
+        if draw is not None and (heading is not None or outline):
             if draw.level is not None:
                 # v0.5: the level is one CSS counters can draw, so the number
                 # is NOT written into the text. It is computed at render time,

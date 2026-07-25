@@ -161,6 +161,30 @@
       "a": [
         "href"
       ],
+      "p": [
+        "data-aim-num-prefix"
+      ],
+      "h1": [
+        "data-aim-num-prefix"
+      ],
+      "h2": [
+        "data-aim-num-prefix"
+      ],
+      "h3": [
+        "data-aim-num-prefix"
+      ],
+      "h4": [
+        "data-aim-num-prefix"
+      ],
+      "h5": [
+        "data-aim-num-prefix"
+      ],
+      "h6": [
+        "data-aim-num-prefix"
+      ],
+      "ol": [
+        "start"
+      ],
       "img": [
         "src",
         "alt"
@@ -906,6 +930,10 @@
     "S033": [
       "error",
       "literal typography requires a supporting spec version"
+    ],
+    "S034": [
+      "error",
+      "markup from a spec era newer than the declared version"
     ],
     "V001": [
       "error",

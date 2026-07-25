@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import io
 import re
+import zipfile
 
 import pytest
 
@@ -22,12 +23,13 @@ docx = pytest.importorskip("docx")
 
 from docx import Document  # noqa: E402
 from docx.enum.text import WD_ALIGN_PARAGRAPH, WD_BREAK, WD_COLOR_INDEX  # noqa: E402
-from docx.oxml import OxmlElement  # noqa: E402
+from docx.oxml import OxmlElement, parse_xml  # noqa: E402
 from docx.oxml.ns import qn  # noqa: E402
 from docx.shared import Emu, Inches, Pt, RGBColor  # noqa: E402
 from lxml import etree  # noqa: E402
 
 from aimformat.convert import from_docx  # noqa: E402
+from aimformat.registry import REGISTRY  # noqa: E402
 
 # a valid 1×1 red PNG
 _PNG = bytes.fromhex(
@@ -650,6 +652,132 @@ class TestTableStyling:
         assert _cell_width_px({"type": "pct", "w": 5000}) is None
         assert _cell_width_px({"type": "auto"}) is None
         assert _cell_width_px(None) is None
+
+
+class TestNumberingVocabularyIsValid:
+    """The importer's own output must lint. Twice now a v0.5 construct was
+    emitted before the registry admitted it — and since the editor rejects
+    non-conforming uploads, that turns a real contract into a 422 rather
+    than anything visible in a test of the markup alone."""
+
+    def test_a_numbering_prefix_lints_on_the_blocks_that_carry_it(self):
+        doc = aim.new_document(title="Prefix")
+        for tag in ("p", "h1", "h2", "h6"):
+            doc.add_chunk(
+                f'<{tag} class="num-1" data-aim-num-prefix="Article ">Scope</{tag}>',
+                author=aim.external("t"),
+            )
+        assert [f for f in aim.lint(doc) if f.level == "error"] == []
+
+    def test_a_list_start_lints(self):
+        doc = aim.new_document(title="Start")
+        doc.add_chunk(
+            '<ol class="list-multilevel" start="5"><li>five</li></ol>',
+            author=aim.external("t"),
+        )
+        assert [f for f in aim.lint(doc) if f.level == "error"] == []
+
+    def test_every_numbering_class_the_importer_emits_is_admitted(self):
+        # the whole vocabulary at once, so adding a class without registering
+        # its placement fails here rather than on a customer's upload
+        doc = aim.new_document(title="All")
+        for level in range(1, REGISTRY.num_levels + 1):
+            doc.add_chunk(f'<p class="num-{level}">x</p>', author=aim.external("t"))
+        doc.add_chunk('<p class="num-2 num-restart">x</p>', author=aim.external("t"))
+        assert [f for f in aim.lint(doc) if f.level == "error"] == []
+
+    @pytest.mark.parametrize("declared", ["0.4", "0.3", "0.1"])
+    def test_a_05_class_is_gated_against_an_older_declaration(self, declared):
+        # the gate named two eras explicitly, so every era added after them
+        # went unchecked: a num-3 in a 0.4 document linted clean
+        doc = aim.new_document(title="Gate")
+        doc.add_chunk('<p class="num-3">x</p>', author=aim.external("t"))
+        body = doc.dumps().replace('data-aim-version="0.5"', f'data-aim-version="{declared}"')
+        codes = {f.code for f in aim.lint(aim.loads(body)) if f.level == "error"}
+        assert "S034" in codes, f"a 0.5 class went unchecked under {declared}"
+
+
+class TestNumberedSchemesImportAsOneShape:
+    """A numbering scheme is one thing. Emitting part of it as a list and
+    part as blocks leaves the blocks counting against a level nothing
+    increments — they render 0.1, 0.2."""
+
+    @staticmethod
+    def _multilevel_docx(texts_and_levels) -> io.BytesIO:
+        def lvl(i: int, text: str) -> str:
+            return (
+                f'<w:lvl w:ilvl="{i}"><w:start w:val="1"/><w:numFmt w:val="decimal"/>'
+                f'<w:lvlText w:val="{text}"/></w:lvl>'
+            )
+
+        numbering = (
+            f'<w:numbering xmlns:w="{_W}"><w:abstractNum w:abstractNumId="30">'
+            + lvl(0, "%1.")
+            + lvl(1, "%1.%2.")
+            + lvl(2, "%1.%2.%3.")
+            + '</w:abstractNum><w:num w:numId="30">'
+            '<w:abstractNumId w:val="30"/></w:num></w:numbering>'
+        )
+        doc = Document()
+        for text, ilvl in texts_and_levels:
+            para = doc.add_paragraph(text)
+            para._p.get_or_add_pPr().append(
+                parse_xml(
+                    f'<w:numPr xmlns:w="{_W}"><w:ilvl w:val="{ilvl}"/>'
+                    '<w:numId w:val="30"/></w:numPr>'
+                )
+            )
+        buf = io.BytesIO()
+        doc.save(buf)
+        buf.seek(0)
+        source = zipfile.ZipFile(buf)
+        out = io.BytesIO()
+        with zipfile.ZipFile(out, "w") as z:
+            for name in source.namelist():
+                z.writestr(
+                    name,
+                    numbering.encode() if name == "word/numbering.xml" else source.read(name),
+                )
+        out.seek(0)
+        return out
+
+    def test_word_stock_multilevel_list_emits_one_shape(self):
+        imported = convert_docx(
+            self._multilevel_docx(
+                [("First", 0), ("Sub a", 1), ("Sub b", 1), ("Second", 0), ("Sub c", 1)]
+            )
+        )
+        content = "\n".join(c.html for c in imported.chunks)
+        assert "<ol" not in content, "the scheme was torn into list fragments"
+        levels = re.findall(r'class="num-(\d)"', content)
+        assert levels == ["1", "2", "2", "1", "2"], levels
+
+    def test_the_rendered_numbers_match_what_word_draws(self):
+        imported = convert_docx(
+            self._multilevel_docx(
+                [("First", 0), ("Sub a", 1), ("Sub b", 1), ("Second", 0), ("Sub c", 1)]
+            )
+        )
+        counters = [0] * 10
+        rendered = []
+        for chunk in imported.chunks:
+            match = re.search(r'class="num-(\d)"', chunk.html)
+            if not match:
+                continue
+            level = int(match.group(1))
+            counters[level] += 1
+            for deeper in range(level + 1, 10):
+                counters[deeper] = 0
+            rendered.append(".".join(str(counters[i]) for i in range(1, level + 1)))
+        assert rendered == ["1", "1.1", "1.2", "2", "2.1"], rendered
+
+    def test_a_flat_numbered_list_is_still_a_list(self):
+        imported = convert_docx(self._multilevel_docx([("One", 0), ("Two", 0), ("Three", 0)]))
+        body = imported.dumps()
+        assert "<ol" in body, "a plain numbered list lost its <ol>"
+        # search the CONTENT, not the document: the embedded stylesheet
+        # carries a .num-1 rule, so a whole-file search always matches
+        assert not any("num-" in c.html for c in imported.chunks)
 
 
 class TestTableStyleResolution:

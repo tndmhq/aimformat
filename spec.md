@@ -1194,6 +1194,7 @@ Literal paint (`color` `background-color` `border-color`) is since spec 0.3 (S03
 | S031 | error | aim-slide marked as a chunk (slides are containers) |
 | S032 | error | literal paint requires a supporting spec version |
 | S033 | error | literal typography requires a supporting spec version |
+| S034 | error | markup from a spec era newer than the declared version |
 | V001 | error | element not allowed in the asset registry |
 | V002 | error | element outside the vocabulary |
 | V003 | error | attribute not allowed on this element |

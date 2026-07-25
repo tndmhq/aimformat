@@ -123,6 +123,24 @@ class TestStartOverrideResetsOnFirstEncounter:
         assert before == ["1.1.1", "1.1.2", "1.1.3"]
         assert after == ["1.1.1", "1.1.2", "1.1.3"], "a deliberate restart was ignored"
 
+    def test_seeding_a_fresh_counter_is_not_a_restart(self):
+        # Word writes startOverride on fresh instances routinely, so treating
+        # every pending override as a restart marks the FIRST block of a level
+        # `num-restart`. Harmless until someone inserts a block before it —
+        # then the document shows two clauses numbered 1.1.1, after exactly
+        # the edit dynamic numbering exists to survive.
+        engine = NumberingEngine(_CLAUSES)
+        engine.label(2, 0)
+        engine.label(2, 1)
+        assert engine.draw(19, 2).restarted is False, "seeding was reported as a restart"
+
+    def test_a_restart_over_a_running_sequence_is_reported(self):
+        engine = NumberingEngine(_CLAUSES)
+        engine.label(2, 0)
+        engine.label(2, 1)
+        [engine.label(2, 2) for _ in range(3)]  # the sequence is running
+        assert engine.draw(33, 2).restarted is True
+
     def test_it_resets_once_not_on_every_paragraph(self):
         # "first encountered" is the whole rule: applying the override on
         # each paragraph would peg the list at 1.1.1 forever
@@ -357,6 +375,69 @@ class TestUnknownDefinitions:
                 out.writestr(name, b"<w:numbering unclosed" if "numbering" in name else payload)
         broken.seek(0)
         assert "the body survives" in aim.from_docx(broken).dumps()
+
+
+class TestSchemeClassification:
+    """Outline-numbered blocks or a list? The answer belongs to the SCHEME.
+
+    Deciding per paragraph tore Word's stock multilevel list in half — its
+    top level (``%1.``) looked like a list item and everything below it
+    (``%1.%2.``) like an outline block, so one list emitted both shapes and
+    the blocks counted against a level nothing incremented. They rendered
+    ``0.1, 0.2, 0.3``.
+    """
+
+    @staticmethod
+    def _scheme(*levels: str, fmt: str = "decimal", start: int = 1) -> NumberingEngine:
+        body = "".join(_level(i, text=text, fmt=fmt, start=start) for i, text in enumerate(levels))
+        return NumberingEngine(
+            _numbering(
+                abstracts=f'<w:abstractNum w:abstractNumId="1">{body}</w:abstractNum>',
+                instances='<w:num w:numId="1"><w:abstractNumId w:val="1"/></w:num>',
+            )
+        )
+
+    def test_a_multilevel_list_is_one_scheme_not_two_shapes(self):
+        # Word's stock gallery list: "%1." then "%1.%2."
+        engine = self._scheme("%1.", "%1.%2.", "%1.%2.%3.")
+        assert engine.scheme_is_outline(1, {0, 1})
+
+    def test_a_flat_numbered_list_stays_a_list(self):
+        # "1. 2. 3." is a list, not outline numbering — treating it as blocks
+        # would strip real <ol> structure from every document that has one
+        engine = self._scheme("%1.")
+        assert not engine.scheme_is_outline(1, {0})
+
+    def test_a_chained_level_alone_is_still_outline(self):
+        engine = self._scheme("%1.", "%1.%2")
+        assert engine.scheme_is_outline(1, {1})
+
+    def test_an_unused_exotic_level_does_not_disqualify_the_scheme(self):
+        # the real fixture defines a parenthesised level 5 it never reaches;
+        # judging by DEFINED levels would bake the whole contract
+        engine = NumberingEngine(
+            _numbering(
+                abstracts='<w:abstractNum w:abstractNumId="1">'
+                + _level(0, text="%1.")
+                + _level(1, text="%1.%2")
+                + _level(2, text="%1.%2.%3")
+                + _level(3, text="(%4)", fmt="lowerLetter")
+                + "</w:abstractNum>",
+                instances='<w:num w:numId="1"><w:abstractNumId w:val="1"/></w:num>',
+            )
+        )
+        assert engine.scheme_is_outline(1, {0, 1, 2})
+        assert not engine.scheme_is_outline(1, {0, 1, 2, 3}), "the exotic level must bake"
+
+    def test_a_level_that_does_not_start_at_one_bakes(self):
+        # the classes carry no start value and the CSS restart sets 1, so a
+        # scheme starting at 3 would render 1, 2 where Word draws 3., 4.
+        engine = self._scheme("%1.", "%1.%2", start=3)
+        assert not engine.scheme_is_outline(1, {0, 1})
+
+    def test_a_bullet_level_bakes(self):
+        engine = self._scheme("%1.", "", fmt="bullet")
+        assert not engine.scheme_is_outline(1, {0, 1})
 
 
 class TestNumberFormats:

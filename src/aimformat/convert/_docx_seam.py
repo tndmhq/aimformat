@@ -464,7 +464,16 @@ class NumberingEngine:
         abstract = self._abstract.get(num_id)
         if level is None or abstract is None:
             return NumberDraw(label="", restarted=False)
-        restarted = (num_id, ilvl) in self._pending
+        # A startOverride RESTARTS only if the sequence was already running.
+        # Word writes one on fresh instances as a matter of course, so
+        # treating every pending override as a restart marks the first block
+        # of a level `num-restart` — harmless until someone inserts a block
+        # before it, at which point the document shows two clauses numbered
+        # 1.1.1. Seeding a counter that does not exist yet is not a restart.
+        restarted = (num_id, ilvl) in self._pending and (
+            self._abstract.get(num_id),
+            ilvl,
+        ) in self._counters
         self._advance(abstract, num_id, ilvl, level)
         if not level.is_ordered:
             # a bullet level draws a glyph we do not carry, a "none" level
@@ -479,6 +488,45 @@ class NumberingEngine:
             prefix=prefix,
             chained=(level.lvl_text or "").count("%") > 1,
         )
+
+    def scheme_is_outline(self, num_id: int, used_levels: set[int]) -> bool:
+        """Whether a whole numbering scheme should be drawn as outline-numbered
+        BLOCKS rather than a list.
+
+        The decision belongs to the scheme, not the paragraph. Word's stock
+        multilevel list defines ``%1.`` at its top level and ``%1.%2.`` below
+        — judged per paragraph the first looks like a list item and the second
+        like an outline block, so one list is torn into ``<li>`` fragments
+        interleaved with blocks whose ancestor counter nothing ever
+        increments. They render ``0.1, 0.2, 0.3``.
+
+        So: every level the document actually USES must be drawable, and its
+        ancestors with it — then the whole scheme is outline. Judging by the
+        levels merely *defined* fails the opposite way, since real templates
+        define exotic deep levels they never use (the legal fixture defines a
+        parenthesised level 5 and never reaches it).
+        """
+        if not used_levels:
+            return False
+        # Outline numbering means DEPTH. A scheme used at one level, drawing
+        # only its own counter, is a plain ordered list however drawable it
+        # is — "1. 2. 3." is a list, and turning it into numbered blocks
+        # would strip real <ol> structure from every document that has one.
+        deepest = self.level(num_id, max(used_levels))
+        if len(used_levels) < 2 and not (deepest and (deepest.lvl_text or "").count("%") > 1):
+            return False
+        for ilvl in used_levels:
+            for depth in range(ilvl + 1):  # the level and every ancestor it draws
+                level = self.level(num_id, depth)
+                if level is None or not level.is_ordered:
+                    return False
+                if self._dynamic_style(num_id, depth, level) == (None, ""):
+                    return False
+                # a counter that only knows how to start at 1 cannot draw a
+                # level that starts anywhere else
+                if self._start_value(num_id, depth, level) != 1:
+                    return False
+        return True
 
     def _dynamic_style(self, num_id: int, ilvl: int, level: NumberLevel) -> tuple[int | None, str]:
         """Whether this level is one CSS counters can draw, and its literal
