@@ -139,11 +139,47 @@ def convert_docx(
     return doc
 
 
+def _derived_theme_slots(parsed: ParsedDocx) -> dict[str, str]:
+    """The document's typographic identity, as it actually renders.
+
+    ``theme1.xml`` names a major and a minor face, but a style may override
+    them outright — every python-docx document, and many Word templates, set
+    ``Normal`` to a literal face while the theme still says something else.
+    Word renders the style, so taking the theme table at its word puts the
+    whole document in the wrong family: these fixtures declare a Cambria
+    minor font and render in Calibri.
+
+    So the slots come from the RESOLVED styles where those exist, and fall
+    back to the theme table where they do not.
+    """
+    slots = dict(parsed.theme.slots())
+    body = font_of(parsed.baseline_run or {}, parsed.theme)
+    if body:
+        slots["--aim-font-body"] = body
+    heading = _resolved_style_font(parsed, "Heading1", "Heading 1")
+    if heading:
+        slots["--aim-font-heading"] = heading
+    return slots
+
+
+def _resolved_style_font(parsed: ParsedDocx, *style_ids: str) -> str | None:
+    """The latin face a named style resolves to, or None if it has no say."""
+    for style_id in style_ids:
+        try:
+            props = parsed.resolver.resolve_paragraph_properties(style_id)
+        except Exception:
+            continue
+        face = font_of(props.get("r_pr") or {}, parsed.theme)
+        if face:
+            return face
+    return None
+
+
 def _safe_theme_slots(parsed: ParsedDocx) -> dict[str, str]:
     """The derived theme, minus any value the slot grammar cannot hold
     (a non-latin face name must degrade the slot, not fail the ingest)."""
     out: dict[str, str] = {}
-    for slot, value in parsed.theme.slots().items():
+    for slot, value in _derived_theme_slots(parsed).items():
         kind = REGISTRY.theme_slots.get(slot, {}).get("type")
         pattern = REGISTRY.theme_patterns.get(kind or "")
         if pattern is not None and pattern.fullmatch(value):

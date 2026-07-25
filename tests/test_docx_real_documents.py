@@ -324,6 +324,24 @@ class TestStylingSurvives:
     def test_source_theme_is_derived(self, legal):
         assert (legal.theme or {}).get("--aim-font-body")
 
+    def test_the_body_font_is_what_the_document_renders(self, legal):
+        # theme1.xml names Calibri Light / Calibri, but the Normal style
+        # overrides it outright and Word renders the STYLE — the whole
+        # contract is Times New Roman. Reading the theme table at its word
+        # put every document in the wrong family, which is the largest
+        # possible fidelity miss and the least likely to be noticed in a
+        # test that only checks the slot is non-empty.
+        theme = legal.theme or {}
+        assert theme["--aim-font-body"] == "Times New Roman"
+        assert theme["--aim-font-heading"] == "Times New Roman"
+
+    def test_a_theme_font_survives_when_no_style_overrides_it(self, sample):
+        # the other direction: sample3's styles defer to the theme, so the
+        # theme table is still what the slots must carry
+        theme = sample.theme or {}
+        assert theme["--aim-font-heading"] == "Cambria"
+        assert theme["--aim-font-body"] == "Calibri"
+
     def test_pagination_intent_is_kept(self, legal):
         assert any(c.tag == "aim-page-break" for c in legal.chunks)
 
