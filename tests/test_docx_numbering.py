@@ -559,3 +559,37 @@ class TestNumberFormats:
     )
     def test_format(self, value, fmt, expected):
         assert format_number(value, fmt) == expected
+
+
+class TestAnAncestorDrawnBeforeItsFirstUse:
+    """Word phantom-instantiates a level the moment a marker DRAWS it, so a
+    document that enters a scheme at level 1 numbers 1.1, then 2., then 2.1.
+
+    Rendering the ancestor's start value without instantiating it left the
+    counter unset, so the level-0 block that followed advanced from nothing
+    to 1 — and the next sub-clause drew 1.1 a second time. Two clauses, one
+    number, and nothing on screen to say so.
+    """
+
+    _SCHEME = _numbering(
+        abstracts=(
+            '<w:abstractNum w:abstractNumId="70">'
+            + _level(0, text="%1.")
+            + _level(1)
+            + "</w:abstractNum>"
+        ),
+        instances='<w:num w:numId="70"><w:abstractNumId w:val="70"/></w:num>',
+    )
+
+    def test_the_ancestor_is_instantiated_not_merely_shown(self):
+        engine = NumberingEngine(self._SCHEME)
+        assert engine.label(70, 1) == "1.1"
+        # LibreOffice draws 2. here: drawing "1" above instantiated it
+        assert engine.label(70, 0) == "2."
+        assert engine.label(70, 1) == "2.1"
+        assert engine.label(70, 1) == "2.2"
+
+    def test_no_two_clauses_share_a_label(self):
+        engine = NumberingEngine(self._SCHEME)
+        seen = [engine.label(70, 1), engine.label(70, 0), engine.label(70, 1)]
+        assert len(set(seen)) == len(seen), f"a label repeated: {seen}"

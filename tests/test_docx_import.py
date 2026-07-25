@@ -2188,3 +2188,83 @@ class TestAListSurvivesTheRoundTripWithItsMarkers:
         with zipfile.ZipFile(str(out)) as z:
             numbering = z.read("word/numbering.xml").decode()
         assert '<w:startOverride w:val="6"/>' in numbering, "start was dropped on export"
+
+
+class TestTheVerdictHoldsWhereTheWalkDoesNotReach:
+    """Three fixes with nothing pinning them, found by mutating a green
+    suite. Each is a place where the scheme verdict is decided somewhere the
+    obvious test does not look."""
+
+    @staticmethod
+    def _numbering(levels: str, num_id: int = 80, abstract: int = 80) -> str:
+        return (
+            f'<w:numbering xmlns:w="{_W}"><w:abstractNum w:abstractNumId="{abstract}">'
+            f'{levels}</w:abstractNum><w:num w:numId="{num_id}">'
+            f'<w:abstractNumId w:val="{abstract}"/></w:num></w:numbering>'
+        )
+
+    @staticmethod
+    def _level(ilvl: int, text: str, fmt: str = "decimal") -> str:
+        return (
+            f'<w:lvl w:ilvl="{ilvl}"><w:start w:val="1"/><w:numFmt w:val="{fmt}"/>'
+            f'<w:lvlText w:val="{text}"/></w:lvl>'
+        )
+
+    @staticmethod
+    def _rewrite(doc, numbering: str) -> io.BytesIO:
+        buf = io.BytesIO()
+        doc.save(buf)
+        buf.seek(0)
+        source = zipfile.ZipFile(buf)
+        out = io.BytesIO()
+        with zipfile.ZipFile(out, "w") as z:
+            for name in source.namelist():
+                z.writestr(
+                    name,
+                    numbering.encode() if name == "word/numbering.xml" else source.read(name),
+                )
+        out.seek(0)
+        return out
+
+    def test_a_numbered_heading_scheme_used_at_one_level_stays_dynamic(self):
+        # The depth guard keeps a flat ordered list out of the block path. A
+        # heading has no list path to be kept out of — <li> is not <h1> — so
+        # applying it there dropped the number entirely and leaked the label
+        # into the document title.
+        doc = Document()
+        for text in ("Definitions", "Payment", "Term"):
+            para = doc.add_paragraph(text, style="Heading 1")
+            para._p.get_or_add_pPr().append(
+                parse_xml(
+                    f'<w:numPr xmlns:w="{_W}"><w:ilvl w:val="0"/><w:numId w:val="80"/></w:numPr>'
+                )
+            )
+        imported = convert_docx(self._rewrite(doc, self._numbering(self._level(0, "%1."))))
+        html = "\n".join(c.html for c in imported.chunks)
+        assert re.findall(r'class="num-(\d)"', html) == ["1", "1", "1"], html
+        assert imported.title == "Definitions", (
+            f"the clause label leaked into the title: {imported.title!r}"
+        )
+
+    def test_a_numbered_paragraph_in_a_textbox_still_keeps_its_number(self):
+        # The classification pass does not walk textboxes; the emission walk
+        # does. So this paragraph reaches the gate with NO verdict — and the
+        # default has to be BAKED, or the number vanishes rather than
+        # degrading to text. (Walking textboxes in both passes is the better
+        # fix; this pins the floor until then.)
+        doc = Document()
+        anchor = doc.add_paragraph("Anchor.")
+        anchor._p.append(
+            parse_xml(
+                f'<w:r xmlns:w="{_W}" xmlns:v="urn:schemas-microsoft-com:vml">'
+                "<w:pict><v:shape><v:textbox><w:txbxContent>"
+                '<w:p><w:pPr><w:numPr><w:ilvl w:val="1"/><w:numId w:val="80"/></w:numPr>'
+                "</w:pPr><w:r><w:t>Boxed clause</w:t></w:r></w:p>"
+                "</w:txbxContent></v:textbox></v:shape></w:pict></w:r>"
+            )
+        )
+        levels = self._level(0, "%1.") + self._level(1, "%1.%2")
+        imported = convert_docx(self._rewrite(doc, self._numbering(levels)))
+        html = "\n".join(c.html for c in imported.chunks)
+        assert "Boxed clause" in html, html
+        assert "1.1" in html, f"the textbox clause lost its number outright: {html}"
