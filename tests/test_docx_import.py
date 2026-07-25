@@ -1605,3 +1605,114 @@ class TestListsStayAddressable:
         for ol in re.findall(r"<ol[^>]*>.*?</ol>", content, re.S):
             assert "data-aim-container" in ol, ol[:160]
             assert "<li data-aim=" in ol, ol[:160]
+
+
+class TestTheNumberingPathwaysAreActuallyCovered:
+    """Four deliberate mutations survived a fully green suite: the importer
+    could stop emitting num-restart, advance the counters twice, drop
+    data-aim-num-prefix, or reuse one numbering instance across restarts, and
+    nothing went red. Each test here fails against one of those mutations.
+
+    They assert the LABEL — what a reader sees — rather than the markup, so
+    an implementation that produces the right shape with the wrong numbers
+    cannot pass.
+    """
+
+    _num = staticmethod(TestNumberingStaysInSyncAcrossTheDocument._number)
+    _with_numbering = staticmethod(TestNumberingStaysInSyncAcrossTheDocument._with_numbering)
+    _lvl = staticmethod(TestNumberingStaysInSyncAcrossTheDocument._lvl)
+
+    def test_a_restart_over_a_running_sequence_is_marked(self):
+        # kills "never emit num-restart": a second instance carrying
+        # startOverride over a sequence already running IS Word's "restart
+        # numbering", and without the class the counters climb straight past it
+        numbering = (
+            f'<w:numbering xmlns:w="{_W}"><w:abstractNum w:abstractNumId="50">'
+            + self._lvl(0, "%1.")
+            + self._lvl(1, "%1.%2")
+            + "</w:abstractNum>"
+            '<w:num w:numId="50"><w:abstractNumId w:val="50"/></w:num>'
+            '<w:num w:numId="51"><w:abstractNumId w:val="50"/>'
+            '<w:lvlOverride w:ilvl="1"><w:startOverride w:val="1"/></w:lvlOverride></w:num>'
+            "</w:numbering>"
+        )
+        doc = Document()
+        self._num(doc.add_paragraph("Top"), 50, 0)
+        self._num(doc.add_paragraph("One"), 50, 1)
+        self._num(doc.add_paragraph("Two"), 50, 1)
+        self._num(doc.add_paragraph("Restarted"), 51, 1)
+
+        imported = aim.from_docx(self._with_numbering(doc, numbering))
+        content = imported.dumps().split("<body", 1)[1].split("<script", 1)[0]
+        restarted = re.search(r'class="([^"]*)"[^>]*>Restarted', content)
+        assert restarted and "num-restart" in restarted.group(1), content
+
+    def test_the_baked_labels_are_exactly_what_word_draws(self):
+        # kills "advance twice" and "skip an advance": the baked path writes
+        # the number into the text, so a counter that moved the wrong number
+        # of times is visible character by character
+        numbering = (
+            f'<w:numbering xmlns:w="{_W}"><w:abstractNum w:abstractNumId="60">'
+            + self._lvl(0, "%1.", fmt="upperRoman")
+            + self._lvl(1, "%1-%2")  # mixed separator: not drawable, so baked
+            + '</w:abstractNum><w:num w:numId="60">'
+            '<w:abstractNumId w:val="60"/></w:num></w:numbering>'
+        )
+        doc = Document()
+        for text, ilvl in (
+            ("First part", 0),
+            ("sub one", 1),
+            ("sub two", 1),
+            ("Second part", 0),
+            ("sub three", 1),
+        ):
+            self._num(doc.add_paragraph(text), 60, ilvl)
+
+        imported = aim.from_docx(self._with_numbering(doc, numbering))
+        text = re.sub(r"<[^>]+>", " ", imported.dumps().split("<body", 1)[1].split("<script", 1)[0])
+        for want in ("I-1 sub one", "I-2 sub two", "II-1 sub three"):
+            assert want in re.sub(r"[\s\xa0]+", " ", text), f"missing {want!r} in {text[:400]}"
+
+    def test_a_literal_prefix_survives_import(self):
+        # kills "drop data-aim-num-prefix": without the attribute the block
+        # falls back to the plain rule and renders "1" where Word draws
+        # "Article 1" — the class alone cannot tell you which happened
+        numbering = (
+            f'<w:numbering xmlns:w="{_W}"><w:abstractNum w:abstractNumId="70">'
+            + self._lvl(0, "Article %1")
+            + self._lvl(1, "%1.%2")
+            + '</w:abstractNum><w:num w:numId="70">'
+            '<w:abstractNumId w:val="70"/></w:num></w:numbering>'
+        )
+        doc = Document()
+        self._num(doc.add_paragraph("Scope"), 70, 0)
+        self._num(doc.add_paragraph("A clause"), 70, 1)
+
+        imported = aim.from_docx(self._with_numbering(doc, numbering))
+        content = imported.dumps().split("<body", 1)[1].split("<script", 1)[0]
+        assert 'data-aim-num-prefix="Article "' in content, content
+
+    def test_a_restart_exports_as_its_own_instance_and_stays_in_effect(self, tmp_path):
+        # kills "reuse one instance for every restart": a startOverride applies
+        # on an instance's FIRST use only, so two restarts sharing an instance
+        # leave the second counting straight on. Asserts the numId sequence,
+        # not merely that some override exists.
+        doc = aim.new_document(title="Restarts")
+        who = aim.external("t")
+        for markup in (
+            '<p class="num-1">One</p>',
+            '<p class="num-1">Two</p>',
+            '<p class="num-1 num-restart">Fresh one</p>',
+            '<p class="num-1">Fresh two</p>',
+            '<p class="num-1 num-restart">Fresher one</p>',
+        ):
+            doc.add_chunk(markup, author=who)
+        out = aim.to_docx(doc, tmp_path / "restarts.docx")
+        with zipfile.ZipFile(str(out)) as z:
+            document = etree.fromstring(z.read("word/document.xml"))
+        w = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
+        used = [int(e.get(f"{w}val")) for e in document.iter(f"{w}numId") if e.get(f"{w}val")]
+        assert len(used) == 5, used
+        assert used[0] == used[1], "the opening run must share one instance"
+        assert used[2] == used[3], "a restart's instance stays in effect for what follows"
+        assert len({used[0], used[2], used[4]}) == 3, f"each restart needs its own instance: {used}"
