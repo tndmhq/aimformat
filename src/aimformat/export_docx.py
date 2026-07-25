@@ -795,6 +795,8 @@ class _Exporter:
         self._num_abstracts: dict[tuple[tuple[int, str], ...], int] = {}
         self._num_instances: dict[int, int] = {}
         self._num_serial = 0
+        # the literal each numbering level carries, for the WHOLE document
+        self._num_prefixes: dict[int, str] = {}
         # Set after a slide: True means accepted structure owns the next
         # break; a Proposal means the pending slide owns it.
         self._break_before_next: bool | Proposal = False
@@ -818,6 +820,7 @@ class _Exporter:
             self.out.core_properties.title = title
         self._apply_theme_fonts()
         self._apply_page_setup()
+        self._collect_num_prefixes()
         self._emit_anchored_adds("body", None)
         for construct in self.aim._state.constructs():
             self.emit_construct(construct)
@@ -909,6 +912,7 @@ class _Exporter:
                 para = self.out.add_paragraph(
                     style=style or self._safe_style(_style_for(block.tag))
                 )
+                self._number_paragraph(para, block)
                 self.rev.ins(
                     para,
                     _tracked_block_runs(block, self.paint),
@@ -1030,6 +1034,11 @@ class _Exporter:
         label, date = _actor_label(prop.author), prop.at
         for block in _block_children(el, self.paint):
             para = self.out.add_paragraph(style=style or self._safe_style(_style_for(block.tag)))
+            # A revision paragraph is still a numbered clause. Word numbers a
+            # pending deletion until it is accepted, so leaving these bare
+            # shifted every following clause up by one in the delivered file —
+            # and tracked is the DEFAULT export.
+            self._number_paragraph(para, block)
             self.rev.dele(para, _tracked_block_runs(block, self.paint), label, date)
         if payload and prop.action == "modify":
             for new_el in self._payload_elements(prop):
@@ -1037,6 +1046,7 @@ class _Exporter:
                     para = self.out.add_paragraph(
                         style=style or self._safe_style(_style_for(block.tag))
                     )
+                    self._number_paragraph(para, block)
                     self.rev.ins(para, _tracked_block_runs(block, self.paint), label, date)
 
     def emit_tracked_list_container(self, el: Element, prop: Proposal) -> None:
@@ -1092,6 +1102,42 @@ class _Exporter:
         runs, box = _clean_runs_and_box(el, self.paint)
         _apply_runs(para, runs)
         _paint_paragraph(para, box)
+
+    def _collect_num_prefixes(self) -> None:
+        """The literal each numbering level carries, across the whole document.
+
+        A literal lives in its level's ``lvlText``, so it belongs to the
+        DEFINITION, not to the block. Read per block it minted one definition
+        for the prefixed shape and another for the plain one — and OOXML
+        counters belong to the definition, so the sub-clauses counted against
+        a level-0 counter nothing ever advanced: Word drew ``Article 2 / 1.3``
+        where the document says ``Article 2 / 2.1``.
+        """
+
+        def scan(el: Element) -> None:
+            for block in _block_children(el, self.paint):
+                level = _num_level(block)
+                prefix = block.get("data-aim-num-prefix")
+                if level is not None and prefix:
+                    self._num_prefixes.setdefault(level, prefix)
+
+        for construct in self.aim._state.constructs():
+            scan(construct)
+        for prop in self.aim.proposals:
+            if prop.action in ("add", "modify"):
+                for el in self._payload_elements(prop):
+                    scan(el)
+
+    def _num_prefix_key(self, level: int, prefix: str | None) -> tuple[tuple[int, str], ...]:
+        """The definition key for one block: the document's prefix map, so
+        every block of the scheme shares one definition. A block whose
+        literal disagrees with its level's gets a definition of its own —
+        Word cannot express two literals on one level otherwise, and it
+        cannot share a counter across definitions either."""
+        prefixes = dict(self._num_prefixes)
+        if prefix:
+            prefixes[level] = prefix
+        return tuple(sorted(prefixes.items()))
 
     def _num_abstract_id(self, prefixes: tuple[tuple[int, str], ...]) -> int | None:
         """The abstract definition for a set of per-level literal prefixes.
@@ -1177,10 +1223,10 @@ class _Exporter:
         level = _num_level(el)
         if level is None:
             return
-        prefix = el.get("data-aim-num-prefix")
-        prefixes = ((level, prefix),) if prefix else ()
         num_id = self._num_instance_id(
-            restart=_has_class(el, "num-restart"), level=level, prefixes=prefixes
+            restart=_has_class(el, "num-restart"),
+            level=level,
+            prefixes=self._num_prefix_key(level, el.get("data-aim-num-prefix")),
         )
         if num_id is None:
             return

@@ -1343,3 +1343,86 @@ class TestNumberingStaysInSyncAcrossTheDocument:
         content = imported.dumps().split("<body", 1)[1].split("<script", 1)[0]
         assert content.count("<ol") == 2, "the interruption should split the list"
         assert 'start="3"' in content, f"the reopened list restarts at 1: {content}"
+
+
+class TestExportedNumberingIsOneSequence:
+    """What Word draws from the exported file must be what the .aim draws.
+
+    Both defects here were invisible to a test that reads the XML: the parts
+    are all present and well-formed, they just belong to different counter
+    streams or to no numbering at all.
+    """
+
+    @staticmethod
+    def _contract() -> aim.AimDocument:
+        doc = aim.new_document(title="Contract")
+        who = aim.external("t")
+        for markup in (
+            '<h1 class="num-1" data-aim-num-prefix="Article ">Scope</h1>',
+            '<p class="num-2">First sub-clause.</p>',
+            '<p class="num-2">Second sub-clause.</p>',
+            '<h1 class="num-1" data-aim-num-prefix="Article ">Term</h1>',
+            '<p class="num-2">Third sub-clause.</p>',
+        ):
+            doc.add_chunk(markup, author=who)
+        return doc
+
+    @staticmethod
+    def _numbering_of(path) -> tuple[dict[int, int], list[int]]:
+        """``{numId: abstractNumId}`` and the numIds document.xml actually uses."""
+        with zipfile.ZipFile(str(path)) as z:
+            numbering = etree.fromstring(z.read("word/numbering.xml"))
+            document = etree.fromstring(z.read("word/document.xml"))
+        w = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
+        mapping = {
+            int(n.get(f"{w}numId")): int(n.find(f"{w}abstractNumId").get(f"{w}val"))
+            for n in numbering.findall(f"{w}num")
+        }
+        used = [int(e.get(f"{w}val")) for e in document.iter(f"{w}numId") if e.get(f"{w}val")]
+        return mapping, used
+
+    def test_a_prefixed_scheme_stays_one_counter_stream(self, tmp_path):
+        # A literal lives in the level's lvlText, so a per-block prefix set
+        # minted an abstract per shape: the "Article" headings counted in one
+        # definition and their sub-clauses in another, whose level-0 counter
+        # nothing ever advanced. Word renders Article 2 / 1.3 where the
+        # document says Article 2 / 2.1 — and OOXML cannot share a counter
+        # across two definitions, so this has to be one.
+        out = aim.to_docx(self._contract(), tmp_path / "contract.docx")
+        mapping, used = self._numbering_of(out)
+        abstracts = {mapping[n] for n in used if n in mapping}
+        assert len(abstracts) == 1, f"the scheme was split across {abstracts}"
+
+    def test_the_exported_prefix_rides_the_level_it_belongs_to(self, tmp_path):
+        out = aim.to_docx(self._contract(), tmp_path / "contract.docx")
+        with zipfile.ZipFile(str(out)) as z:
+            numbering = z.read("word/numbering.xml").decode()
+        assert 'w:val="Article %1"' in numbering, numbering[:400]
+
+    def test_the_export_reimports_as_the_same_shape(self, tmp_path):
+        # the round trip is where a split shows up structurally: the
+        # sub-clauses come back as a plain <ol> because their scheme no
+        # longer uses level 0
+        out = aim.to_docx(self._contract(), tmp_path / "contract.docx")
+        back = aim.from_docx(str(out))
+        content = back.dumps().split("<body", 1)[1].split("<script", 1)[0]
+        assert content.count("<ol") == 0, "the sub-clauses degraded to a list"
+        assert re.findall(r'class="num-(\d)', content) == ["1", "2", "2", "1", "2"]
+
+    def test_a_pending_change_keeps_the_clause_numbered(self, tmp_path):
+        # tracked export is the DEFAULT, and it built its revision paragraphs
+        # without ever numbering them: every clause touched by a pending
+        # proposal lost its w:numPr, so the delivered file showed the rest of
+        # the contract shifted up by one.
+        doc = self._contract()
+        doc.propose_modify(
+            doc.chunks[1].id,
+            '<p class="num-2">First sub-clause, amended.</p>',
+            author=aim.external("bot"),
+            explanation="tighter",
+        )
+        out = aim.to_docx(doc, tmp_path / "tracked.docx", pending="tracked")
+        _, used = self._numbering_of(out)
+        # four untouched clauses, plus the struck original and its
+        # replacement — Word numbers a pending deletion until it is accepted
+        assert len(used) == 6, f"a tracked clause lost its numbering: {len(used)} numbered of 6"
