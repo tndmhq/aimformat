@@ -768,6 +768,52 @@ def _xml_attr(value: str) -> str:
     )
 
 
+#: the ``list-*`` format class → the ``w:numFmt`` that draws it
+_LIST_CLASS_FMT = {
+    "list-lower-alpha": "lowerLetter",
+    "list-upper-alpha": "upperLetter",
+    "list-lower-roman": "lowerRoman",
+    "list-upper-roman": "upperRoman",
+}
+#: the suffix class → what follows the counter in ``w:lvlText``. No class is
+#: the browser's own default for ``<ol>``, a trailing dot.
+_LIST_CLASS_SUFFIX = {"list-paren": ")", "list-bare": ""}
+
+
+def _list_abstract_xml(abstract_id: int, specs: dict[int, tuple[str, str, bool]]) -> str:
+    """A numbering definition for ONE list tree, from its ``list-*`` classes.
+
+    Without this the exporter leaned on Word's "List Number" style, which
+    carries the template's own numbering: every ordered list in the document
+    shared one counter (so independent lists continued each other), every
+    level drew decimal (so a lettered sub-list came out "1."), and ``start``
+    had nowhere to go.
+    """
+    from docx.oxml.ns import nsmap
+
+    lvls = []
+    for i in range(REGISTRY.num_levels):
+        fmt, suffix, multilevel = specs.get(i, ("decimal", ".", False))
+        if fmt == "bullet":
+            text, num_fmt = "", "bullet"
+        elif multilevel:
+            # the chain the stylesheet draws with counters(list-item, "."):
+            # dot separators, decimal at every depth, by construction
+            text = ".".join(f"%{j + 1}" for j in range(i + 1)) + suffix
+            num_fmt = "decimal"
+        else:
+            text, num_fmt = f"%{i + 1}{suffix}", fmt
+        lvls.append(
+            f'<w:lvl w:ilvl="{i}"><w:start w:val="1"/><w:numFmt w:val="{num_fmt}"/>'
+            f'<w:lvlText w:val="{_xml_attr(text)}"/><w:lvlJc w:val="left"/>'
+            f'<w:pPr><w:ind w:left="{720 * (i + 1)}" w:hanging="720"/></w:pPr></w:lvl>'
+        )
+    return (
+        f'<w:abstractNum xmlns:w="{nsmap["w"]}" w:abstractNumId="{abstract_id}">'
+        f'<w:multiLevelType w:val="multilevel"/>{"".join(lvls)}</w:abstractNum>'
+    )
+
+
 def _num_abstract_xml(abstract_id: int, levels: int, prefixes: dict[int, str] | None = None) -> str:
     from docx.oxml.ns import nsmap
 
@@ -821,6 +867,8 @@ class _Exporter:
         # the literal each numbering level carries, for the scheme being
         # emitted — cut at each scheme boundary, never document-wide
         self._num_prefixes: dict[int, str] = {}
+        # (num id, depth) of the list whose item is being emitted, if any
+        self._list_item_num: tuple[int, int] | None = None
         # Set after a slide: True means accepted structure owns the next
         # break; a Proposal means the pending slide owns it.
         self._break_before_next: bool | Proposal = False
@@ -1240,6 +1288,8 @@ class _Exporter:
         which also means it renumbers in Word after an edit."""
         level = _num_level(el)
         if level is None:
+            if self._list_item_num is not None:
+                self._apply_num_pr(para, *self._list_item_num)
             return
         restart = _has_class(el, "num-restart")
         if restart and level == 1:
@@ -1253,11 +1303,15 @@ class _Exporter:
         )
         if num_id is None:
             return
+        self._apply_num_pr(para, num_id, level - 1)
+
+    @staticmethod
+    def _apply_num_pr(para, num_id: int, ilvl: int) -> None:
         from docx.oxml.ns import qn
 
         props = para._p.get_or_add_pPr()
         num_pr = _fresh_child(props, "w:numPr", ordered_in="pPr")
-        _fresh_child(num_pr, "w:ilvl").set(qn("w:val"), str(level - 1))
+        _fresh_child(num_pr, "w:ilvl").set(qn("w:val"), str(ilvl))
         _fresh_child(num_pr, "w:numId").set(qn("w:val"), str(num_id))
 
     def emit_pre(self, el: Element) -> None:
@@ -1407,11 +1461,66 @@ class _Exporter:
         return Inches(max(0.25, min(inches, avail)))
 
     # -- lists ---------------------------------------------------------------------
-    def emit_list(self, el: Element, level: int = 0) -> None:
+    def _list_specs(
+        self, el: Element, depth: int = 0, out: dict[int, tuple[str, str, bool]] | None = None
+    ) -> dict[int, tuple[str, str, bool]]:
+        """``{depth: (numFmt, lvlText suffix, is a chain)}`` for a list tree.
+
+        Collected over the whole tree because an OOXML definition declares
+        every level at once, while the classes sit on each ``<ol>``.
+        """
+        specs = {} if out is None else out
+        classes = set((el.get("class") or "").split())
+        fmt = "bullet" if el.tag == "ul" else "decimal"
+        if el.tag == "ol":
+            fmt = next((v for k, v in _LIST_CLASS_FMT.items() if k in classes), "decimal")
+        suffix = next((v for k, v in _LIST_CLASS_SUFFIX.items() if k in classes), ".")
+        specs.setdefault(depth, (fmt, suffix, "list-multilevel" in classes))
+        for item in el.elements():
+            for sub in item.elements():
+                if sub.tag in ("ul", "ol"):
+                    self._list_specs(sub, depth + 1, specs)
+        return specs
+
+    def _list_num_id(self, el: Element) -> int | None:
+        """A ``w:num`` of this list's own, so it draws its own markers and
+        starts where it says. One instance per top-level list: sharing the
+        template's numbering is what made two independent lists continue
+        each other."""
+        numbering = self._numbering_part()
+        if numbering is None:
+            return None
+        from docx.oxml import parse_xml
+        from docx.oxml.ns import nsmap
+
+        specs = self._list_specs(el)
+        key = tuple(sorted(specs.items()))
+        abstract_id = self._num_abstracts.get(key)
+        if abstract_id is None:
+            abstract_id = 9000 + len(self._num_abstracts)
+            numbering.insert(0, parse_xml(_list_abstract_xml(abstract_id, specs)))
+            self._num_abstracts[key] = abstract_id  # type: ignore[index]
+        raw = el.get("start") or "1"
+        start = int(raw) if raw.lstrip("+-").isdigit() and int(raw) > 0 else 1
+        self._num_serial += 1
+        num_id = 9100 + self._num_serial
+        numbering.append(
+            parse_xml(
+                f'<w:num xmlns:w="{nsmap["w"]}" w:numId="{num_id}">'
+                f'<w:abstractNumId w:val="{abstract_id}"/>'
+                f'<w:lvlOverride w:ilvl="0"><w:startOverride w:val="{start}"/></w:lvlOverride>'
+                "</w:num>"
+            )
+        )
+        return num_id
+
+    def emit_list(self, el: Element, level: int = 0, num_id: int | None = None) -> None:
         base = "List Bullet" if el.tag == "ul" else "List Number"
         style = base if level == 0 else f"{base} {min(level + 1, 3)}"
         if not self._has_style(style):
             style = base if self._has_style(base) else None
+        if level == 0:
+            num_id = self._list_num_id(el)
         container_id = el.container_id
         if container_id:
             self._emit_list_adds(container_id, None, style)
@@ -1440,12 +1549,19 @@ class _Exporter:
                     if value:
                         content.set(attr, value)
                 self.paint.adopt(content, li)
-                if prop is not None:
-                    self.emit_tracked_chunk(content, prop, style=style, payload=li is group[-1])
-                else:
-                    self.emit_block(content, cid, style=style)
+                # the item's own paragraph draws from the list's definition at
+                # this depth; set for the emit call and cleared straight after,
+                # so nothing else picks it up
+                self._list_item_num = (num_id, level) if num_id is not None else None
+                try:
+                    if prop is not None:
+                        self.emit_tracked_chunk(content, prop, style=style, payload=li is group[-1])
+                    else:
+                        self.emit_block(content, cid, style=style)
+                finally:
+                    self._list_item_num = None
                 for sub in nested:
-                    self.emit_list(sub, level + 1)
+                    self.emit_list(sub, level + 1, num_id)
             if container_id and cid:
                 self._emit_list_adds(container_id, cid, style)
 

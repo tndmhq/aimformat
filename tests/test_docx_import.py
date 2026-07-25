@@ -2070,3 +2070,121 @@ class TestTrackedParagraphsSurviveAcceptInWord:
         out = aim.to_docx(doc, tmp_path / "del.docx")
         marks = dict((text, mark) for mark, text in self._marks(out))
         assert marks.get("Doomed clause.") == "del", self._marks(out)
+
+
+class TestAListSurvivesTheRoundTripWithItsMarkers:
+    """DOCX → .aim → DOCX must draw the same markers Word drew.
+
+    The exporter leaned on Word's "List Number" style, which carries the
+    template's own numbering: every ordered list in the document shared one
+    counter, every level drew decimal, and ``start`` had nowhere to go. So a
+    lettered sub-list came back as "1.", and two independent lists continued
+    each other.
+    """
+
+    @staticmethod
+    def _stock_docx() -> io.BytesIO:
+        def lvl(i: int, text: str, fmt: str = "decimal") -> str:
+            return (
+                f'<w:lvl w:ilvl="{i}"><w:start w:val="1"/><w:numFmt w:val="{fmt}"/>'
+                f'<w:lvlText w:val="{text}"/></w:lvl>'
+            )
+
+        numbering = (
+            f'<w:numbering xmlns:w="{_W}"><w:abstractNum w:abstractNumId="30">'
+            + lvl(0, "%1.")
+            + lvl(1, "%2.", "lowerLetter")
+            + lvl(2, "%3.", "lowerRoman")
+            + '</w:abstractNum><w:num w:numId="30">'
+            '<w:abstractNumId w:val="30"/></w:num></w:numbering>'
+        )
+        doc = Document()
+        for text, ilvl in [("First", 0), ("Sub a", 1), ("Sub b", 1), ("Deep", 2), ("Second", 0)]:
+            para = doc.add_paragraph(text)
+            para._p.get_or_add_pPr().append(
+                parse_xml(
+                    f'<w:numPr xmlns:w="{_W}"><w:ilvl w:val="{ilvl}"/>'
+                    '<w:numId w:val="30"/></w:numPr>'
+                )
+            )
+        buf = io.BytesIO()
+        doc.save(buf)
+        buf.seek(0)
+        source = zipfile.ZipFile(buf)
+        out = io.BytesIO()
+        with zipfile.ZipFile(out, "w") as z:
+            for name in source.namelist():
+                z.writestr(
+                    name,
+                    numbering.encode() if name == "word/numbering.xml" else source.read(name),
+                )
+        out.seek(0)
+        return out
+
+    @staticmethod
+    def _exported_levels(path) -> list[tuple[int, str, str]]:
+        """``(ilvl, numFmt, lvlText)`` for each numbered paragraph, resolved
+        through the instance to its definition — the shape Word draws from."""
+        with zipfile.ZipFile(str(path)) as z:
+            numbering = etree.fromstring(z.read("word/numbering.xml"))
+            document = etree.fromstring(z.read("word/document.xml"))
+        w = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
+        abstracts = {
+            int(a.get(f"{w}abstractNumId")): {
+                int(lv.get(f"{w}ilvl")): (
+                    lv.find(f"{w}numFmt").get(f"{w}val"),
+                    lv.find(f"{w}lvlText").get(f"{w}val"),
+                )
+                for lv in a.findall(f"{w}lvl")
+            }
+            for a in numbering.findall(f"{w}abstractNum")
+        }
+        instance = {
+            int(n.get(f"{w}numId")): int(n.find(f"{w}abstractNumId").get(f"{w}val"))
+            for n in numbering.findall(f"{w}num")
+        }
+        out = []
+        for num_pr in document.iter(f"{w}numPr"):
+            num_id, ilvl = num_pr.find(f"{w}numId"), num_pr.find(f"{w}ilvl")
+            if num_id is None:
+                continue
+            depth = int(ilvl.get(f"{w}val")) if ilvl is not None else 0
+            fmt, text = abstracts.get(instance.get(int(num_id.get(f"{w}val")), -1), {}).get(
+                depth, ("?", "?")
+            )
+            out.append((depth, fmt, text))
+        return out
+
+    def test_each_level_exports_the_format_word_drew(self, tmp_path):
+        imported = aim.from_docx(self._stock_docx())
+        out = aim.to_docx(imported, tmp_path / "roundtrip.docx")
+        levels = self._exported_levels(out)
+        assert [d for d, _, _ in levels] == [0, 1, 1, 2, 0], levels
+        assert [f for _, f, _ in levels] == [
+            "decimal",
+            "lowerLetter",
+            "lowerLetter",
+            "lowerRoman",
+            "decimal",
+        ], f"the markers were flattened to decimal: {levels}"
+
+    def test_two_independent_lists_do_not_continue_each_other(self, tmp_path):
+        doc = aim.new_document(title="T")
+        who = aim.external("t")
+        doc.add_chunk("<ol><li>One</li><li>Two</li></ol>", author=who)
+        doc.add_chunk("<p>Prose between them.</p>", author=who)
+        doc.add_chunk("<ol><li>Fresh one</li><li>Fresh two</li></ol>", author=who)
+        out = aim.to_docx(doc, tmp_path / "two-lists.docx")
+        with zipfile.ZipFile(str(out)) as z:
+            document = etree.fromstring(z.read("word/document.xml"))
+        w = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
+        used = [int(e.get(f"{w}val")) for e in document.iter(f"{w}numId") if e.get(f"{w}val")]
+        assert len(set(used)) == 2, f"both lists shared one counter: {used}"
+
+    def test_a_resumed_list_exports_its_start(self, tmp_path):
+        doc = aim.new_document(title="T")
+        doc.add_chunk('<ol start="6"><li>Sixth</li></ol>', author=aim.external("t"))
+        out = aim.to_docx(doc, tmp_path / "start.docx")
+        with zipfile.ZipFile(str(out)) as z:
+            numbering = z.read("word/numbering.xml").decode()
+        assert '<w:startOverride w:val="6"/>' in numbering, "start was dropped on export"
