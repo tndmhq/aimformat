@@ -30,10 +30,18 @@ Explicit pagination intent (sectPr page setup, ``w:br type="page"``,
 anchoring. Content dpc's model drops is recovered from the source ``w:p``
 element (the seam pairs each with its dpc item): body-level textbox
 paragraphs, content-control checkbox state, OMML equations as literal text,
-and symbol-font glyphs (a curated Wingdings map). Not yet carried
-(deliberately, tracked for the next pass): field codes, footnote refs,
-tab-stop geometry, textboxes/equations/checkboxes *inside table cells*, and
-everything Word means by floating objects. Table cell shading and widths
+and symbol-font glyphs (a curated Wingdings map).
+
+**Not carried, deliberately, and worth stating plainly because each is a
+whole part of the document that silently disappears:** footnotes and
+endnotes (``word/footnotes.xml`` / ``endnotes.xml`` — their reference marks
+survive in the body, their text does not), headers and footers
+(``header*.xml`` / ``footer*.xml``, including page-number fields, which have
+no meaning in a format with no page furniture), field codes, tab-stop
+geometry, textboxes/equations/checkboxes *inside table cells*, and
+everything Word means by floating objects. The footnote and header gaps are
+recorded as xfail tests over a real document in the editor repo, so they
+announce themselves the day support lands. Table cell shading and widths
 survive (§_table_markup); borders do not — the vocabulary has only border
 utilities and border-colour paint, not per-side border geometry.
 """

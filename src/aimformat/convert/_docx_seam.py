@@ -274,7 +274,7 @@ def parse_docx(source: str | bytes | BinaryIO) -> ParsedDocx:
         content=content,
         resolver=resolver,
         numbering=numbering,
-        table_looks=table_style_looks(zf),
+        table_looks=table_style_looks(zf, theme),
         num_alias=_num_aliases(numbering),
         numbering_tracker=NumberingTracker(numbering) if numbering is not None else None,
         hyperlinks=hyperlinks,
@@ -459,7 +459,9 @@ def table_look_val(elem: Any) -> str | None:
     return look.get(f"{{{_W_NS}}}val") if look is not None else None
 
 
-def table_style_looks(zf: zipfile.ZipFile) -> dict[str, dict[str, dict[str, str]]]:
+def table_style_looks(
+    zf: zipfile.ZipFile, theme: DocxTheme | None = None
+) -> dict[str, dict[str, dict[str, str]]]:
     """``{styleId: {condition: {"fill": "#rrggbb", "color": "#rrggbb"}}}``.
 
     Word's built-in table styles ("Medium Shading 1 Accent 1" and friends)
@@ -478,19 +480,81 @@ def table_style_looks(zf: zipfile.ZipFile) -> dict[str, dict[str, dict[str, str]
     raw: dict[str, dict[str, dict[str, str]]] = {}
     based: dict[str, str] = {}
 
+    palette = theme or DocxTheme()
+
+    def _fill_of(shd: Any) -> str | None:
+        """A w:shd fill as hex — literal, or resolved through the theme.
+        Built-in Word table styles name fills indirectly far more often than
+        they spell out hex, so literal-only reading leaves most real tables
+        unstyled."""
+        if shd is None:
+            return None
+        literal = (shd.get(f"{w}fill") or "").strip()
+        if re.fullmatch(r"[0-9A-Fa-f]{6}", literal):
+            return f"#{literal.lower()}"
+        name = shd.get(f"{w}themeFill")
+        if not name:
+            return None
+        return resolve_color(
+            {
+                "theme_color": name,
+                "theme_tint": shd.get(f"{w}themeFillTint"),
+                "theme_shade": shd.get(f"{w}themeFillShade"),
+            },
+            palette,
+        )
+
+    def _color_of(color: Any) -> str | None:
+        if color is None:
+            return None
+        literal = (color.get(f"{w}val") or "").strip()
+        if re.fullmatch(r"[0-9A-Fa-f]{6}", literal):
+            return f"#{literal.lower()}"
+        name = color.get(f"{w}themeColor")
+        if not name:
+            return None
+        return resolve_color(
+            {
+                "theme_color": name,
+                "theme_tint": color.get(f"{w}themeTint"),
+                "theme_shade": color.get(f"{w}themeShade"),
+            },
+            palette,
+        )
+
+    def _finish(out: dict[str, str]) -> dict[str, str]:
+        if "color" in out and "fill" not in out:
+            # a band recolours its text BECAUSE it shades its background;
+            # colour alone paints white text on white paper
+            out.pop("color")
+        return out
+
+    def _look_direct(scope: Any) -> dict[str, str]:
+        """What a scope declares directly — never inherited from a nested
+        conditional block."""
+        out: dict[str, str] = {}
+        shd = scope.find(f"{w}shd")
+        if shd is None:
+            tc = scope.find(f"{w}tcPr")
+            shd = tc.find(f"{w}shd") if tc is not None else None
+        fill = _fill_of(shd)
+        if fill:
+            out["fill"] = fill
+        rpr = scope.find(f"{w}rPr")
+        color = _color_of(rpr.find(f"{w}color") if rpr is not None else None)
+        if color:
+            out["color"] = color
+        return _finish(out)
+
     def _look(scope: Any) -> dict[str, str]:
         out: dict[str, str] = {}
-        shd = scope.find(f".//{w}shd")
-        if shd is not None:
-            fill = (shd.get(f"{w}fill") or "").strip()
-            if re.fullmatch(r"[0-9A-Fa-f]{6}", fill):
-                out["fill"] = f"#{fill.lower()}"
-        color = scope.find(f".//{w}rPr/{w}color")
-        if color is not None:
-            val = (color.get(f"{w}val") or "").strip()
-            if re.fullmatch(r"[0-9A-Fa-f]{6}", val):
-                out["color"] = f"#{val.lower()}"
-        return out
+        fill = _fill_of(scope.find(f".//{w}shd"))
+        if fill:
+            out["fill"] = fill
+        color = _color_of(scope.find(f".//{w}rPr/{w}color"))
+        if color:
+            out["color"] = color
+        return _finish(out)
 
     for style in root.iter(f"{w}style"):
         if style.get(f"{w}type") != "table":
@@ -502,18 +566,22 @@ def table_style_looks(zf: zipfile.ZipFile) -> dict[str, dict[str, dict[str, str]
         if parent is not None and parent.get(f"{w}val"):
             based[style_id] = parent.get(f"{w}val")
         conds: dict[str, dict[str, str]] = {}
-        # the style's own tblPr/rPr is the wholeTable default
-        whole = {k: v for k, v in _look(style).items()}
         for spr in style.findall(f"{w}tblStylePr"):
             kind = spr.get(f"{w}type")
             if kind in _TABLE_CONDITIONS:
                 look = _look(spr)
                 if look:
-                    conds[kind] = look
-        # _look(style) searched the whole subtree, so strip what belongs to a
-        # condition rather than to the table as a whole
-        own = style.find(f"{w}tblPr")
-        conds["wholeTable"] = _look(own) if own is not None else whole
+                    conds.setdefault(kind, {}).update(look)
+        # The table-wide look is ONLY what the style declares directly. A
+        # subtree search here hoists a conditional block's formatting — a
+        # dark firstRow band — onto every row of every table using the style.
+        whole: dict[str, str] = {}
+        for scope in (style.find(f"{w}tblPr"), style.find(f"{w}tcPr"), style):
+            if scope is not None:
+                whole.update(_look_direct(scope))
+        if whole:
+            # an explicit tblStylePr type="wholeTable" refines these
+            conds["wholeTable"] = {**whole, **conds.get("wholeTable", {})}
         raw[style_id] = {k: v for k, v in conds.items() if v}
 
     resolved: dict[str, dict[str, dict[str, str]]] = {}
@@ -718,7 +786,7 @@ def paragraph_checkbox(elem: Any) -> str | None:
     return "☑" if val in ("1", "true") else "☐"
 
 
-def _effective_descendants(elem: Any) -> Any:
+def _effective_descendants(elem: Any, skip: str | None = None) -> Any:
     """Descendants of *elem* with Markup Compatibility (MCE) applied: inside
     an ``mc:AlternateContent``, exactly one branch is read — the first
     ``mc:Choice`` (the richer representation), else the ``mc:Fallback``.
@@ -726,15 +794,17 @@ def _effective_descendants(elem: Any) -> Any:
     ``w:txbxContent`` in both a DrawingML Choice and a VML Fallback, so a
     naive ``.//`` search sees all duplicated content twice."""
     for child in elem:
+        if skip is not None and child.tag == skip:
+            continue  # owned by another pass; descending would double it
         if child.tag == f"{{{_MC_NS}}}AlternateContent":
             branch = child.find(f"{{{_MC_NS}}}Choice")
             if branch is None:
                 branch = child.find(f"{{{_MC_NS}}}Fallback")
             if branch is not None:
-                yield from _effective_descendants(branch)
+                yield from _effective_descendants(branch, skip)
             continue
         yield child
-        yield from _effective_descendants(child)
+        yield from _effective_descendants(child, skip)
 
 
 def paragraph_math_text(elem: Any) -> str:
@@ -839,7 +909,9 @@ def picture_relationships(elem: Any) -> list[tuple[str, str, int | None]]:
     embed, rel_id = f"{{{_R_NS}}}embed", f"{{{_R_NS}}}id"
     out: list[tuple[str, str, int | None]] = []
     seen: set[str] = set()
-    for node in _effective_descendants(elem):
+    # textbox content belongs to textbox_paragraphs; the run walk inside it
+    # emits these images already, so descending here would double them
+    for node in _effective_descendants(elem, skip=f"{{{_W_NS}}}txbxContent"):
         if node.tag == blip:
             rid, alt = node.get(embed), "image"
         elif node.tag == imagedata:
