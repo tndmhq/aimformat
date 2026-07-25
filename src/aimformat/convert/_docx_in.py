@@ -348,25 +348,12 @@ class _Converter:
         or "" when the definition yields none. Counters advance per call, so
         this must be called exactly once per numbered paragraph, in document
         order — which is how the walk visits them."""
-        tracker = self.p.numbering_tracker
-        if tracker is None:
-            return ""
         try:
             num_id = int(num_pr["num_id"])
-            # count against the abstract definition, not the instance
-            num_id = self.p.num_alias.get(num_id, num_id)
             ilvl = int(num_pr.get("ilvl") or 0)
-            label = str(tracker.get_number(num_id, ilvl))
-            level = tracker.get_level(num_id, ilvl)
-            fmt = getattr(level, "num_fmt", None) if level is not None else None
-            if fmt in ("none", "bullet"):
-                # Word draws nothing for these levels (or a font-private
-                # bullet glyph); the counter still advanced above so the
-                # numbered siblings around them stay correct
-                return ""
-            return label
-        except Exception:
+        except (KeyError, TypeError, ValueError):
             return ""
+        return self.p.numbering_engine.label(num_id, ilvl)
 
     def _looks_like_a_heading(self, style_id: str | None, effective: dict) -> bool:
         """Whether a style actually reads as a heading to a human.
@@ -628,21 +615,7 @@ class _Converter:
         return "".join(parts), i
 
     def _ordered(self, num_id: int, ilvl: int) -> bool:
-        numbering = self.p.numbering
-        if numbering is None:
-            return False
-        abstract_id = next(
-            (n.abstract_num_id for n in getattr(numbering, "num", []) if n.num_id == num_id),
-            None,
-        )
-        if abstract_id is None:
-            return False
-        for ab in getattr(numbering, "abstract_num", []):
-            if getattr(ab, "abstract_num_id", None) == abstract_id:
-                for lvl in getattr(ab, "lvl", []) or []:
-                    if getattr(lvl, "ilvl", None) == ilvl:
-                        return getattr(lvl, "num_fmt", None) not in (None, "bullet", "none")
-        return False
+        return self.p.numbering_engine.is_ordered(num_id, ilvl)
 
     # -- tables ------------------------------------------------------------
 

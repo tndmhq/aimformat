@@ -20,6 +20,10 @@ Beside the re-exports, this module fills the gaps the dependency leaves:
 - **colour math** — OOXML ``themeTint``/``themeShade`` are hex fractions
   applied against white/black; Word's highlight enum is a fixed named
   palette.
+- **numbering** — :class:`NumberingEngine` parses ``numbering.xml`` and
+  counts the way Word counts: per shared *definition*, not per instance.
+  Upstream's tracker keys counters per instance and drops the ``w:lvl``
+  bodies inside a ``w:lvlOverride``, either of which misnumbers a contract.
 
 Style resolution note: the resolver merges docDefaults → basedOn chain →
 direct formatting with override semantics. True OOXML *toggle* semantics
@@ -51,9 +55,6 @@ from typing import Any, BinaryIO
 
 try:
     from docx_parser_converter import api as _api
-    from docx_parser_converter.converters.common.numbering_tracker import (
-        NumberingTracker,
-    )
     from docx_parser_converter.converters.common.style_resolver import StyleResolver
     from docx_parser_converter.parsers.document.paragraph_parser import parse_paragraph
     from docx_parser_converter.parsers.document.table_parser import parse_table
@@ -67,7 +68,8 @@ from lxml import etree
 
 __all__ = [
     "DocxTheme",
-    "NumberingTracker",
+    "NumberingEngine",
+    "NumberLevel",
     "ParsedDocx",
     "data_uri",
     "effective_run_props",
@@ -82,6 +84,7 @@ __all__ = [
     "resolve_color",
     "shading_hex",
     "symbol_char",
+    "format_number",
     "table_look_val",
     "table_style_looks",
     "textbox_paragraphs",
@@ -232,15 +235,10 @@ class ParsedDocx:
     #: styleId → conditional look (shaded header row, banded rows). Most
     #: Word tables carry their whole appearance here, not on the cells.
     table_looks: dict[str, dict[str, dict[str, str]]]
-    #: numId → the instance whose counters it must share. Word clones a
-    #: numbering instance whenever a list is interrupted, so one visible
-    #: list can span several numIds that all point at the same abstract
-    #: definition; counting per numId restarts it mid-document.
-    num_alias: dict[int, int]
     #: Stateful label generator for numbered paragraphs ("1.1.1"): its
     #: counters advance per call, so it is shared for one walk in document
     #: order and never reused across documents.
-    numbering_tracker: Any | None
+    numbering_engine: NumberingEngine
     hyperlinks: dict[str, str]  # rId → external URL
     images: dict[str, tuple[bytes, str]]  # rId → (bytes, mime)
     theme: DocxTheme
@@ -275,8 +273,7 @@ def parse_docx(source: str | bytes | BinaryIO) -> ParsedDocx:
         resolver=resolver,
         numbering=numbering,
         table_looks=table_style_looks(zf, theme),
-        num_alias=_num_aliases(numbering),
-        numbering_tracker=NumberingTracker(numbering) if numbering is not None else None,
+        numbering_engine=NumberingEngine(_part_bytes(zf, "word/numbering.xml")),
         hyperlinks=hyperlinks,
         images=images,
         theme=theme,
@@ -285,31 +282,250 @@ def parse_docx(source: str | bytes | BinaryIO) -> ParsedDocx:
     )
 
 
-def _num_aliases(numbering: Any) -> dict[int, int]:
-    """numId → the lowest numId sharing its abstract definition.
+@dataclass
+class NumberLevel:
+    """One level of a numbering definition, as Word declares it."""
 
-    Word emits a fresh ``w:num`` whenever a numbered list is interrupted, so
-    a single visible sequence ("1.1.1 … 1.1.14") routinely arrives as two or
-    three numIds over one ``abstractNumId``. Counters therefore belong to the
-    abstract definition, not the instance — keying them per numId restarts
-    the numbering mid-list. Instances carrying their own level overrides
-    (``w:lvlOverride``, i.e. a deliberate restart) are left alone.
+    ilvl: int
+    num_fmt: str  # decimal, lowerLetter, upperRoman, bullet, none, …
+    lvl_text: str  # the template: "%1.%2.%3", "Article %1", "(%3)"
+    start: int
+    lvl_restart: int | None  # 0 = never restart; None = default (any shallower)
+
+    @property
+    def is_ordered(self) -> bool:
+        return self.num_fmt not in ("bullet", "none")
+
+
+class NumberingEngine:
+    """Word's numbering counters, keyed the way Word keys them.
+
+    ``numbering.xml`` is parsed here rather than through the dependency's
+    tracker for two reasons: that tracker keys counters by numbering
+    *instance* (``w:num``) where Word keys them by the shared *definition*
+    (``w:abstractNum``), and it discards the ``w:lvl`` bodies inside a
+    ``w:lvlOverride``, which redefine a level's format for one instance.
+
+    The rule, which took three wrong heuristics and two documents to pin
+    down — see ``tests/test_docx_numbering.py`` for the evidence:
+
+        Counters are shared per ``(abstract definition, level)``. A
+        ``startOverride`` resets that shared counter to the given value when
+        its instance is FIRST ENCOUNTERED in the document — it does not open
+        a separate sequence.
+
+    So a single visible run of clauses ("1.1.1 … 1.1.14") stays unbroken
+    across the fresh ``w:num`` Word emits every time a list is interrupted,
+    while a deliberate "Restart at 1" still restarts.
+
+    Counters advance on every :meth:`label` call, so an engine belongs to one
+    walk in document order and is never reused across documents.
+
+    Deliberately unsettled: whether a ``startOverride`` applies on the
+    instance's first use at ANY level or per level on first use at THAT
+    level. This implements per level; both readings explain every fixture we
+    have. A Word-authored document that separates them would decide it.
     """
-    canonical: dict[int, int] = {}
-    for inst in getattr(numbering, "num", None) or []:
-        num_id = getattr(inst, "num_id", None)
-        abstract = getattr(inst, "abstract_num_id", None)
-        if num_id is None or abstract is None or getattr(inst, "lvl_override", None):
-            continue
-        first = canonical.setdefault(abstract, num_id)
-        canonical[abstract] = min(first, num_id)
-    out: dict[int, int] = {}
-    for inst in getattr(numbering, "num", None) or []:
-        num_id = getattr(inst, "num_id", None)
-        abstract = getattr(inst, "abstract_num_id", None)
-        if num_id is not None and abstract in canonical:
-            out[num_id] = canonical[abstract]
-    return out
+
+    def __init__(self, numbering_xml: bytes | None) -> None:
+        self._levels: dict[int, dict[int, NumberLevel]] = {}  # abstract → ilvl → level
+        self._abstract: dict[int, int] = {}  # num_id → abstract id
+        self._overrides: dict[tuple[int, int], NumberLevel] = {}  # (num, ilvl) → level
+        self._start_overrides: dict[tuple[int, int], int] = {}
+        self._pending: set[tuple[int, int]] = set()  # start overrides not yet applied
+        self._counters: dict[tuple[int, int], int] = {}  # (abstract, ilvl) → value
+        if numbering_xml:
+            self._parse(numbering_xml)
+
+    # -- definitions -------------------------------------------------------
+
+    def _parse(self, xml: bytes) -> None:
+        root = etree.fromstring(xml)
+        w = f"{{{_W_NS}}}"
+        for ab in root.iter(f"{w}abstractNum"):
+            aid = _int_or_none(ab.get(f"{w}abstractNumId"))
+            if aid is None:
+                continue
+            self._levels[aid] = {
+                lvl.ilvl: lvl
+                for lvl in (_parse_level(el, w) for el in ab.findall(f"{w}lvl"))
+                if lvl
+            }
+        for num in root.iter(f"{w}num"):
+            nid = _int_or_none(num.get(f"{w}numId"))
+            ref = num.find(f"{w}abstractNumId")
+            aid = _int_or_none(ref.get(f"{w}val")) if ref is not None else None
+            if nid is None or aid is None:
+                continue
+            self._abstract[nid] = aid
+            for ov in num.findall(f"{w}lvlOverride"):
+                ilvl = _int_or_none(ov.get(f"{w}ilvl"))
+                if ilvl is None:
+                    continue
+                start = ov.find(f"{w}startOverride")
+                if start is not None:
+                    value = _int_or_none(start.get(f"{w}val"))
+                    if value is not None:
+                        self._start_overrides[(nid, ilvl)] = value
+                        self._pending.add((nid, ilvl))
+                # a lvlOverride may also REDEFINE the level (format, template)
+                # for this instance alone, which is not a restart at all
+                body = ov.find(f"{w}lvl")
+                if body is not None:
+                    redefined = _parse_level(body, w)
+                    if redefined is not None:
+                        self._overrides[(nid, ilvl)] = redefined
+
+    def level(self, num_id: int, ilvl: int) -> NumberLevel | None:
+        """The level definition in force for this instance, override first."""
+        own = self._overrides.get((num_id, ilvl))
+        if own is not None:
+            return own
+        abstract = self._abstract.get(num_id)
+        if abstract is None:
+            return None
+        return self._levels.get(abstract, {}).get(ilvl)
+
+    def is_ordered(self, num_id: int, ilvl: int) -> bool:
+        """Whether this level draws numbers (``<ol>``) or bullets (``<ul>``)."""
+        level = self.level(num_id, ilvl)
+        return level is not None and level.is_ordered
+
+    # -- counting ----------------------------------------------------------
+
+    def label(self, num_id: int, ilvl: int) -> str:
+        """Advance the counters for one numbered paragraph and return the
+        label Word would draw ("1.1.1", "(a)", "Article 3"), or "" when the
+        level draws none. Call exactly once per numbered paragraph, in
+        document order."""
+        level = self.level(num_id, ilvl)
+        abstract = self._abstract.get(num_id)
+        if level is None or abstract is None:
+            return ""
+        self._advance(abstract, num_id, ilvl, level)
+        if not level.is_ordered:
+            # a bullet level draws a glyph we do not carry, a "none" level
+            # draws nothing — but the counter above still moved, so the
+            # numbered siblings around it stay correct
+            return ""
+        return self._render(abstract, num_id, level)
+
+    def _advance(self, abstract: int, num_id: int, ilvl: int, level: NumberLevel) -> None:
+        key = (abstract, ilvl)
+        pending = (num_id, ilvl) in self._pending
+        if pending:
+            # Word's "Restart at 1": it resets the SHARED counter the first
+            # time this instance is seen, rather than opening a sequence of
+            # its own — which is why a later instance on the same definition
+            # carries on from here instead of starting over.
+            self._pending.discard((num_id, ilvl))
+            self._counters[key] = self._start_overrides[(num_id, ilvl)]
+        elif key in self._counters:
+            self._counters[key] += 1
+        else:
+            self._counters[key] = level.start
+        self._reset_deeper(abstract, ilvl)
+
+    def _reset_deeper(self, abstract: int, ilvl: int) -> None:
+        """A level moving on restarts the levels below it — 1.2.1 follows
+        1.1.9 — unless a level declares otherwise (``w:lvlRestart``)."""
+        for deeper, level in self._levels.get(abstract, {}).items():
+            if deeper <= ilvl:
+                continue
+            restart = level.lvl_restart
+            if restart == 0:  # explicitly never
+                continue
+            if restart is not None and ilvl != restart - 1:
+                # restarts only when THAT level (1-based) advances
+                continue
+            self._counters.pop((abstract, deeper), None)
+
+    def _render(self, abstract: int, num_id: int, level: NumberLevel) -> str:
+        """Fill a level's ``lvlText`` template ("%1.%2.%3") with the current
+        counter of each referenced level, in that level's own format."""
+        out = level.lvl_text or f"%{level.ilvl + 1}"
+        for ref in range(9):
+            token = f"%{ref + 1}"
+            if token not in out:
+                continue
+            ref_level = self.level(num_id, ref)
+            value = self._counters.get((abstract, ref))
+            if value is None:
+                value = ref_level.start if ref_level is not None else 1
+            fmt = ref_level.num_fmt if ref_level is not None else "decimal"
+            out = out.replace(token, format_number(value, fmt))
+        return out.strip()
+
+
+def _parse_level(el: Any, w: str) -> NumberLevel | None:
+    ilvl = _int_or_none(el.get(f"{w}ilvl"))
+    if ilvl is None:
+        return None
+
+    def val(tag: str) -> str | None:
+        node = el.find(f"{w}{tag}")
+        return node.get(f"{w}val") if node is not None else None
+
+    return NumberLevel(
+        ilvl=ilvl,
+        num_fmt=val("numFmt") or "decimal",
+        lvl_text=val("lvlText") or "",
+        start=_int_or_none(val("start")) or 1,
+        lvl_restart=_int_or_none(val("lvlRestart")),
+    )
+
+
+def _part_bytes(zf: zipfile.ZipFile, name: str) -> bytes | None:
+    """A package part's bytes, or None when the document has no such part
+    (a document with no lists carries no ``numbering.xml`` at all)."""
+    try:
+        return zf.read(name)
+    except KeyError:
+        return None
+
+
+def _int_or_none(value: Any) -> int | None:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def format_number(value: int, num_fmt: str) -> str:
+    """One counter value in an OOXML ``numFmt``. Formats beyond these degrade
+    to decimal rather than vanish — a wrong glyph is recoverable, a missing
+    clause number is not."""
+    if num_fmt in ("bullet", "none"):
+        return ""
+    if num_fmt in ("lowerLetter", "upperLetter"):
+        out = ""
+        n = value
+        while n > 0:
+            n, rem = divmod(n - 1, 26)
+            out = chr(ord("a") + rem) + out
+        return out if num_fmt == "lowerLetter" else out.upper()
+    if num_fmt in ("lowerRoman", "upperRoman"):
+        numerals = (
+            (1000, "m"),
+            (900, "cm"),
+            (500, "d"),
+            (400, "cd"),
+            (100, "c"),
+            (90, "xc"),
+            (50, "l"),
+            (40, "xl"),
+            (10, "x"),
+            (9, "ix"),
+            (5, "v"),
+            (4, "iv"),
+            (1, "i"),
+        )
+        out, n = "", value
+        for size, glyph in numerals:
+            count, n = divmod(n, size)
+            out += glyph * count
+        return out if num_fmt == "lowerRoman" else out.upper()
+    return str(value)
 
 
 def _body_content_pairs(body_elem: Any) -> list[tuple[Any, Any]]:
