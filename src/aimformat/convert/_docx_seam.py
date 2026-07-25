@@ -82,7 +82,10 @@ __all__ = [
     "resolve_color",
     "shading_hex",
     "symbol_char",
+    "table_look_val",
+    "table_style_looks",
     "textbox_paragraphs",
+    "picture_relationships",
     "twips_to_mm",
 ]
 
@@ -92,6 +95,10 @@ _W_NS = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
 _M_NS = "http://schemas.openxmlformats.org/officeDocument/2006/math"
 _W14_NS = "http://schemas.microsoft.com/office/word/2010/wordml"
 _MC_NS = "http://schemas.openxmlformats.org/markup-compatibility/2006"
+_V_NS = "urn:schemas-microsoft-com:vml"
+_O_NS = "urn:schemas-microsoft-com:office:office"
+_R_NS = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
+_WP_NS = "http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing"
 
 #: Word's fixed highlight palette (ST_HighlightColor) as lowercase hex.
 _HIGHLIGHTS = {
@@ -222,6 +229,18 @@ class ParsedDocx:
     content: list[tuple[Any, Any]]  # (dpc item, source w:p/w:tbl element) in body order
     resolver: StyleResolver
     numbering: Any | None
+    #: styleId → conditional look (shaded header row, banded rows). Most
+    #: Word tables carry their whole appearance here, not on the cells.
+    table_looks: dict[str, dict[str, dict[str, str]]]
+    #: numId → the instance whose counters it must share. Word clones a
+    #: numbering instance whenever a list is interrupted, so one visible
+    #: list can span several numIds that all point at the same abstract
+    #: definition; counting per numId restarts it mid-document.
+    num_alias: dict[int, int]
+    #: Stateful label generator for numbered paragraphs ("1.1.1"): its
+    #: counters advance per call, so it is shared for one walk in document
+    #: order and never reused across documents.
+    numbering_tracker: Any | None
     hyperlinks: dict[str, str]  # rId → external URL
     images: dict[str, tuple[bytes, str]]  # rId → (bytes, mime)
     theme: DocxTheme
@@ -255,12 +274,42 @@ def parse_docx(source: str | bytes | BinaryIO) -> ParsedDocx:
         content=content,
         resolver=resolver,
         numbering=numbering,
+        table_looks=table_style_looks(zf),
+        num_alias=_num_aliases(numbering),
+        numbering_tracker=NumberingTracker(numbering) if numbering is not None else None,
         hyperlinks=hyperlinks,
         images=images,
         theme=theme,
         default_style_id=default_id,
         baseline_run=baseline,
     )
+
+
+def _num_aliases(numbering: Any) -> dict[int, int]:
+    """numId → the lowest numId sharing its abstract definition.
+
+    Word emits a fresh ``w:num`` whenever a numbered list is interrupted, so
+    a single visible sequence ("1.1.1 … 1.1.14") routinely arrives as two or
+    three numIds over one ``abstractNumId``. Counters therefore belong to the
+    abstract definition, not the instance — keying them per numId restarts
+    the numbering mid-list. Instances carrying their own level overrides
+    (``w:lvlOverride``, i.e. a deliberate restart) are left alone.
+    """
+    canonical: dict[int, int] = {}
+    for inst in getattr(numbering, "num", None) or []:
+        num_id = getattr(inst, "num_id", None)
+        abstract = getattr(inst, "abstract_num_id", None)
+        if num_id is None or abstract is None or getattr(inst, "lvl_override", None):
+            continue
+        first = canonical.setdefault(abstract, num_id)
+        canonical[abstract] = min(first, num_id)
+    out: dict[int, int] = {}
+    for inst in getattr(numbering, "num", None) or []:
+        num_id = getattr(inst, "num_id", None)
+        abstract = getattr(inst, "abstract_num_id", None)
+        if num_id is not None and abstract in canonical:
+            out[num_id] = canonical[abstract]
+    return out
 
 
 def _body_content_pairs(body_elem: Any) -> list[tuple[Any, Any]]:
@@ -388,6 +437,99 @@ def _load_images(zf: zipfile.ZipFile, targets: dict[str, str]) -> dict[str, tupl
 def data_uri(image: tuple[bytes, str]) -> str:
     raw, mime = image
     return f"data:{mime};base64,{base64.b64encode(raw).decode('ascii')}"
+
+
+#: The conditional formats a table style can define, in the order Word
+#: applies them (later wins). Corner conditions and vertical banding are
+#: deliberately out of scope: they need the full cell-position algebra and
+#: contribute far less to how a table reads.
+_TABLE_CONDITIONS = ("wholeTable", "band2Horz", "band1Horz", "lastRow", "firstRow")
+
+
+def table_look_val(elem: Any) -> str | None:
+    """The raw ``w:tblLook@w:val`` bitmask of a ``w:tbl`` element, or None.
+
+    dpc reads only ``tblLook``'s named attributes, but Word-2007-era files
+    (and plenty of generators) write the flags ONLY as this bitmask. With no
+    flags at all a caller cannot tell "no header row" from "unspecified".
+    """
+    if elem is None:
+        return None
+    look = elem.find(f"./{{{_W_NS}}}tblPr/{{{_W_NS}}}tblLook")
+    return look.get(f"{{{_W_NS}}}val") if look is not None else None
+
+
+def table_style_looks(zf: zipfile.ZipFile) -> dict[str, dict[str, dict[str, str]]]:
+    """``{styleId: {condition: {"fill": "#rrggbb", "color": "#rrggbb"}}}``.
+
+    Word's built-in table styles ("Medium Shading 1 Accent 1" and friends)
+    carry the whole look of a table — the shaded header row, the banded body
+    rows, the white header text — in ``w:tblStylePr`` conditional formats.
+    Most real tables use one INSTEAD of shading cells directly, so reading
+    only ``w:tcPr/w:shd`` (as the typed model offers) renders every such
+    table flat and unstyled. ``basedOn`` is followed so derived styles
+    inherit their parent's look.
+    """
+    try:
+        root = etree.fromstring(zf.read("word/styles.xml"))
+    except (KeyError, etree.XMLSyntaxError):
+        return {}
+    w = f"{{{_W_NS}}}"
+    raw: dict[str, dict[str, dict[str, str]]] = {}
+    based: dict[str, str] = {}
+
+    def _look(scope: Any) -> dict[str, str]:
+        out: dict[str, str] = {}
+        shd = scope.find(f".//{w}shd")
+        if shd is not None:
+            fill = (shd.get(f"{w}fill") or "").strip()
+            if re.fullmatch(r"[0-9A-Fa-f]{6}", fill):
+                out["fill"] = f"#{fill.lower()}"
+        color = scope.find(f".//{w}rPr/{w}color")
+        if color is not None:
+            val = (color.get(f"{w}val") or "").strip()
+            if re.fullmatch(r"[0-9A-Fa-f]{6}", val):
+                out["color"] = f"#{val.lower()}"
+        return out
+
+    for style in root.iter(f"{w}style"):
+        if style.get(f"{w}type") != "table":
+            continue
+        style_id = style.get(f"{w}styleId")
+        if not style_id:
+            continue
+        parent = style.find(f"{w}basedOn")
+        if parent is not None and parent.get(f"{w}val"):
+            based[style_id] = parent.get(f"{w}val")
+        conds: dict[str, dict[str, str]] = {}
+        # the style's own tblPr/rPr is the wholeTable default
+        whole = {k: v for k, v in _look(style).items()}
+        for spr in style.findall(f"{w}tblStylePr"):
+            kind = spr.get(f"{w}type")
+            if kind in _TABLE_CONDITIONS:
+                look = _look(spr)
+                if look:
+                    conds[kind] = look
+        # _look(style) searched the whole subtree, so strip what belongs to a
+        # condition rather than to the table as a whole
+        own = style.find(f"{w}tblPr")
+        conds["wholeTable"] = _look(own) if own is not None else whole
+        raw[style_id] = {k: v for k, v in conds.items() if v}
+
+    resolved: dict[str, dict[str, dict[str, str]]] = {}
+    for style_id in raw:
+        merged: dict[str, dict[str, str]] = {}
+        chain, seen = [], set()
+        cur: str | None = style_id
+        while cur and cur in raw and cur not in seen:
+            seen.add(cur)
+            chain.append(cur)
+            cur = based.get(cur)
+        for ancestor in reversed(chain):  # parent first, child overrides
+            for cond, look in raw[ancestor].items():
+                merged.setdefault(cond, {}).update(look)
+        resolved[style_id] = merged
+    return resolved
 
 
 def _parse_theme(zf: zipfile.ZipFile) -> DocxTheme:
@@ -602,6 +744,116 @@ def paragraph_math_text(elem: Any) -> str:
     equation interleaved mid-line (it trails the paragraph's run text)."""
     m_t = f"{{{_M_NS}}}t"
     return "".join(t.text or "" for t in _effective_descendants(elem) if t.tag == m_t)
+
+
+_EMU_PER_PX = 9525
+
+
+def _local(node: Any) -> str:
+    tag = getattr(node, "tag", "")
+    return tag.rsplit("}", 1)[-1] if isinstance(tag, str) else ""
+
+
+def _geometry_ext(root: Any) -> Any | None:
+    """The first ``a:ext`` under *root* that carries geometry (``@cx``).
+    Plain ``.//a:ext`` also matches the ``a:extLst`` extension elements,
+    which have a uri and no size."""
+    for el in root.iter():
+        if _local(el) == "ext" and el.get("cx"):
+            return el
+    return None
+
+
+def _picture_width_px(node: Any, is_vml: bool) -> int | None:
+    """The width Word draws this picture at, in CSS px, or None.
+
+    A picture inside a group is authored in the GROUP's coordinate space, so
+    its real width is ``group_px * own_ext / group_child_ext``. Without that
+    scaling a 1.5-inch logo lands at its full pixel size and swamps the page.
+    """
+    if is_vml:
+        cur = node  # v:shape / v:group carry CSS-ish geometry in @style
+        while cur is not None:
+            m = re.search(r"width:\s*([\d.]+)pt", cur.get("style") or "")
+            if m:
+                return max(1, round(float(m.group(1)) / 0.75))
+            cur = cur.getparent()
+        return None
+
+    # this picture's own extent (pic → pic:spPr/a:xfrm/a:ext)
+    pic = node
+    while pic is not None and _local(pic) != "pic":
+        pic = pic.getparent()
+    # NB: a:extLst holds unrelated <a:ext uri="…"> extension elements, so
+    # only an ext that actually carries geometry (@cx) counts
+    own_ext = _geometry_ext(pic) if pic is not None else None
+
+    # the drawing/group that gives the extent in real units, plus the child
+    # coordinate space the picture's own extent is expressed in
+    group_px: float | None = None
+    child_space: float | None = None
+    cur = pic.getparent() if pic is not None else node
+    while cur is not None and _local(cur) != "drawing":  # never leave this drawing
+        ch = cur.find(f".//{{{_A_NS}}}chExt")
+        ext = _geometry_ext(cur)
+        if ch is not None and ext is not None and ch.get("cx"):
+            try:
+                group_px, child_space = int(ext.get("cx")) / _EMU_PER_PX, float(ch.get("cx"))
+            except (TypeError, ValueError):
+                return None
+            break
+        cur = cur.getparent()
+    if group_px is None:  # ungrouped: the drawing's own extent is the size
+        cur = node
+        while cur is not None and _local(cur) != "p":
+            ext = cur.find(f".//{{{_WP_NS}}}extent")
+            if ext is not None and ext.get("cx"):
+                try:
+                    return max(1, round(int(ext.get("cx")) / _EMU_PER_PX))
+                except (TypeError, ValueError):
+                    return None
+            cur = cur.getparent()
+        return None
+    if own_ext is not None and child_space and own_ext.get("cx"):
+        try:
+            return max(1, round(group_px * int(own_ext.get("cx")) / child_space))
+        except (TypeError, ValueError, ZeroDivisionError):
+            return None
+    return max(1, round(group_px))
+
+
+def picture_relationships(elem: Any) -> list[tuple[str, str, int | None]]:
+    """[(relationship id, alt text)] for EVERY picture in this paragraph, in
+    document order and MCE-resolved — both DrawingML (``a:blip``) and legacy
+    VML (``v:imagedata``).
+
+    dpc's typed model exposes only the common shape: one ``w:drawing``
+    wrapping a single ``pic:pic``. Real documents also carry grouped artwork
+    (a ``wpg:wgp`` of several pictures — a row of logos on a title page) and
+    VML pictures, and both vanish silently from that model. The converter
+    uses this to emit whatever the typed walk did not already place, so the
+    recovery is additive rather than a second source of truth.
+    """
+    blip = f"{{{_A_NS}}}blip"
+    imagedata = f"{{{_V_NS}}}imagedata"
+    embed, rel_id = f"{{{_R_NS}}}embed", f"{{{_R_NS}}}id"
+    out: list[tuple[str, str, int | None]] = []
+    seen: set[str] = set()
+    for node in _effective_descendants(elem):
+        if node.tag == blip:
+            rid, alt = node.get(embed), "image"
+        elif node.tag == imagedata:
+            rid = node.get(rel_id)
+            alt = node.get(f"{{{_O_NS}}}title") or node.get("alt") or "image"
+        else:
+            continue
+        # one relationship can legitimately repeat (the Choice and Fallback of
+        # the same shape); dedupe so a logo is not emitted several times
+        if not rid or rid in seen:
+            continue
+        seen.add(rid)
+        out.append((rid, alt, _picture_width_px(node, node.tag == imagedata)))
+    return out
 
 
 def textbox_paragraphs(elem: Any) -> list[Any]:

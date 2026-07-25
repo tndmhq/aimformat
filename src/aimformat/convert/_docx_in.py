@@ -63,9 +63,11 @@ from ._docx_seam import (
     paragraph_math_text,
     paragraph_run_baseline,
     parse_docx,
+    picture_relationships,
     resolve_color,
     shading_hex,
     symbol_char,
+    table_look_val,
     textbox_paragraphs,
     twips_to_mm,
 )
@@ -83,6 +85,7 @@ _ALIGN_CLASS = {
 _PAGE_BREAK = "<aim-page-break></aim-page-break>"
 _IMG_TAG = re.compile(r"<img\b[^>]*>")
 _IMG_ONLY = re.compile(r"(?:<img\b[^>]*>)+")
+_NUM_LABEL = re.compile(r"^[0-9]+(?:\.[0-9]+)*\.?[\s\xa0]+")
 
 
 def convert_docx(
@@ -147,6 +150,9 @@ class _Converter:
         self._blocks: list[str] = []
         # consecutive list paragraphs buffer: (num_id, ilvl, markup, li attr)
         self._items: list[tuple[int, int, str, str]] = []
+        # relationship ids the run walk already emitted for the current
+        # paragraph, so the picture recovery below stays additive
+        self._emitted_images: set[str] = set()
 
     # -- top level ---------------------------------------------------------
 
@@ -157,7 +163,7 @@ class _Converter:
                 self._paragraph(item, elem)
             elif kind == "Table":
                 self._flush_items()
-                markup = self._table_markup(item)
+                markup = self._table_markup(item, elem)
                 if markup:
                     self._blocks.append(markup)
         self._flush_items()
@@ -204,16 +210,55 @@ class _Converter:
             self._flush_items()
             self._blocks.append(_PAGE_BREAK)
 
+        self._emitted_images = set()
         inline, trailing_break = self._inline_markup(para, style_id)
         inline = self._with_supplements(inline, elem)
 
         num_pr = effective.get("num_pr") or {}
+        # w:numId="0" is OOXML for "numbering removed here" — the standard way
+        # a template un-numbers one paragraph inside a numbered scheme. Read
+        # literally it is a valid id, and the paragraph became a bullet.
+        if str(num_pr.get("num_id")) == "0":
+            num_pr = {}
         heading = self._heading_level(style_id, effective)
+        # An outline style that also carries numbering is a numbered clause
+        # ("1.", "1.1", "1.1.1" — the legal-document idiom). Word draws that
+        # label; nothing in the text holds it, so it has to be materialised
+        # here or the clause structure is simply lost. The label is claimed
+        # in document order, before the heading/paragraph decision, because
+        # the counters advance per numbered paragraph either way.
+        label = ""
+        if heading is not None and num_pr.get("num_id") is not None:
+            label = self._number_label(num_pr)
+            if label:
+                # Word separates label from clause text with a tab, which
+                # the walk already emitted as a no-break space — only add
+                # a separator when the text brings none. No-break, never a
+                # plain space: "1.1.1" must not wrap away from its clause.
+                sep = "" if inline[:1] in (" ", "\xa0", "\t") else "\xa0"
+                inline = f"{escape_text(label)}{sep}{inline}"
+        # …and such a style is only a *visual* heading if it resolves to one.
+        # Clause styles are named HeadingN for the outline but resolve to
+        # plain body text; emitting <hN> renders a whole contract at heading
+        # size and weight. Checked for every heading-styled paragraph, not
+        # only numbered ones — the same template un-numbers some of them.
+        if heading is not None and not self._looks_like_a_heading(style_id, effective):
+            heading = None
         if inline:
             if heading is not None:
                 self._flush_items()
                 self._blocks.append(self._block(f"h{heading}", inline, effective))
+            elif label:
+                # numbered clause that is not a visual heading: an ordinary
+                # paragraph carrying its own label (an <ol> would renumber it
+                # 1,2,3 per level and lose the "1.1.1" the document states)
+                self._flush_items()
+                self._blocks.append(self._block("p", inline, effective))
             elif num_pr.get("num_id") is not None:
+                # claim this item's number too: the counters are shared with
+                # any heading-styled clause on the same definition, and
+                # skipping list items desyncs every label after them
+                self._number_label(num_pr)
                 # list items carry their alignment class like any block —
                 # a centered bullet is visible structure too
                 self._items.append(
@@ -241,6 +286,33 @@ class _Converter:
             self._flush_items()
             self._blocks.append(_PAGE_BREAK)
 
+        # Pictures dpc's typed model cannot see — grouped DrawingML artwork
+        # (a row of logos) and legacy VML — follow their anchor as figures.
+        # Only what the run walk did NOT already place is emitted, so this
+        # stays additive and can never double an ordinary inline image.
+        if elem is not None:
+            recovered: list[str] = []
+            for rid, alt, width in picture_relationships(elem):
+                if rid in self._emitted_images:
+                    continue
+                image = self.p.images.get(rid)
+                if image is not None:
+                    # authored size rides the whitelisted geometry style, as
+                    # for inline drawings — without it a logo renders at its
+                    # full pixel size instead of the size Word draws
+                    wattr = f' style="width:{width}px"' if width else ""
+                    recovered.append(
+                        f'<img alt="{escape_attr(alt)}" '
+                        f'src="{escape_attr(data_uri(image))}"{wattr}>'
+                    )
+            if recovered:
+                # one figure for the whole anchor: grouped artwork (a row of
+                # logos) is a single visual unit, and images inside a figure
+                # sit next to each other the way the group draws them —
+                # a figure each would stack them down the page instead
+                self._flush_items()
+                self._blocks.append(f"<figure>{''.join(recovered)}</figure>")
+
         # textbox content (w:txbxContent) has no place in reading order, so it
         # follows its anchor paragraph as ordinary paragraphs; None element →
         # a textbox paragraph itself, which is not re-scanned (one level deep)
@@ -263,6 +335,76 @@ class _Converter:
             suffix = " " + escape_text(math)
         return (prefix + inline + suffix).strip()
 
+    def _number_label(self, num_pr: dict) -> str:
+        """The label Word would draw for this numbered paragraph ("1.1.1"),
+        or "" when the definition yields none. Counters advance per call, so
+        this must be called exactly once per numbered paragraph, in document
+        order — which is how the walk visits them."""
+        tracker = self.p.numbering_tracker
+        if tracker is None:
+            return ""
+        try:
+            num_id = int(num_pr["num_id"])
+            # count against the abstract definition, not the instance
+            num_id = self.p.num_alias.get(num_id, num_id)
+            ilvl = int(num_pr.get("ilvl") or 0)
+            label = str(tracker.get_number(num_id, ilvl))
+            level = tracker.get_level(num_id, ilvl)
+            fmt = getattr(level, "num_fmt", None) if level is not None else None
+            if fmt in ("none", "bullet"):
+                # Word draws nothing for these levels (or a font-private
+                # bullet glyph); the counter still advanced above so the
+                # numbered siblings around them stay correct
+                return ""
+            return label
+        except Exception:
+            return ""
+
+    def _looks_like_a_heading(self, style_id: str | None, effective: dict) -> bool:
+        """Whether a style actually reads as a heading to a human.
+
+        Legal templates hang clause numbering off Heading1-9 for the outline
+        while formatting those clauses exactly like body copy, so the style
+        NAME cannot decide this — but neither can bold and size alone: Word's
+        own Heading 4 and 5 are distinguished by italic and colour at body
+        size, and demoting those would erase both the outline and (since
+        style-driven looks emit no markup) every trace of their appearance.
+
+        Judged on the paragraph style's OWN resolved run properties, not the
+        effective ones: direct formatting on the paragraph mark (the pilcrow,
+        a routine editing artifact) never changes how the text looks, yet it
+        merges into the effective props and would flip this decision.
+        """
+        candidates = [effective.get("r_pr") or {}]
+        if style_id:
+            try:
+                own = self.p.resolver.resolve_paragraph_properties(style_id)
+                candidates.append(own.get("r_pr") or {})
+            except Exception:
+                pass
+        base = self.p.baseline_run
+        base_size = half_points_to_pt(base.get("sz")) or 11.0
+        # EITHER view may carry the distinction, and a heading only has to
+        # look like one in one of them: direct formatting on the paragraph
+        # mark can flatten the effective props of a heading whose style is
+        # emphatic, while a style can be plain and the paragraph itself
+        # emphatic. Demote only when NEITHER view shows anything visible.
+        for props in candidates:
+            if props.get("b") or props.get("i") or props.get("caps"):
+                return True
+            if props.get("smallCaps") or props.get("u"):
+                return True
+            if resolve_color(props.get("color"), self.p.theme) != resolve_color(
+                base.get("color"), self.p.theme
+            ):
+                return True
+            if font_of(props, self.p.theme) != font_of(base, self.p.theme):
+                return True
+            size = half_points_to_pt(props.get("sz"))
+            if size is not None and size > base_size:
+                return True
+        return False
+
     def _heading_level(self, style_id: str | None, effective: dict) -> int | None:
         if style_id == "Title":
             return 1
@@ -278,7 +420,8 @@ class _Converter:
     def _block(self, tag: str, inline: str, effective: dict) -> str:
         attr = self._class_attr(effective)
         if tag == "h1" and self.title_text is None:
-            self.title_text = _plain_text(inline)
+            # a clause label is not part of the title ("1. Definitions")
+            self.title_text = _NUM_LABEL.sub("", _plain_text(inline)).strip() or None
         return f"<{tag}{attr}>{inline}</{tag}>"
 
     @staticmethod
@@ -427,6 +570,8 @@ class _Converter:
         blip = _dig(container, "graphic", "graphic_data", "pic", "blip_fill", "blip")
         rid = getattr(blip, "embed", None) if blip is not None else None
         image = self.p.images.get(rid or "")
+        if rid:
+            self._emitted_images.add(rid)
         if image is None:
             return f"<em>[picture: {escape_text(str(alt))}]</em>"
         extent = getattr(container, "extent", None)
@@ -493,10 +638,21 @@ class _Converter:
 
     # -- tables ------------------------------------------------------------
 
-    def _table_markup(self, table: Any) -> str | None:
+    def _table_markup(self, table: Any, elem: Any = None) -> str | None:
         rows = getattr(table, "tr", []) or []
         if not rows:
             return None
+        # Word tables usually carry their whole look in a table STYLE, not on
+        # the cells: a shaded header row, banded body rows, white header text
+        tbl_pr = model_dump(getattr(table, "tbl_pr", None))
+        looks = self.p.table_looks.get(str(tbl_pr.get("tbl_style") or ""), {})
+        tbl_look = tbl_pr.get("tbl_look") or {}
+        if not tbl_look:
+            # Word-2007-era files (and many generators) write the flags ONLY
+            # as the w:val bitmask, which the typed model does not read. With
+            # no flags at all we would default to "has a header row" and band
+            # a table Word draws plain.
+            tbl_look = _tbl_look_bits(table_look_val(elem))
         # v_merge continuation cells collapse into the restart cell's rowspan
         spans: dict[tuple[int, int], int] = {}  # (row, col) -> rowspan
         skip: set[tuple[int, int]] = set()
@@ -539,7 +695,9 @@ class _Converter:
                 rowspan = spans.get((ri, col), 1)
                 if rowspan > 1:
                     attrs += f' rowspan="{rowspan}"'
-                attrs += self._cell_style(cell)
+                attrs += self._cell_style(
+                    cell, self._style_look(looks, tbl_look, ri, header_row, len(grid))
+                )
                 out.append(f"<{tag}{attrs}>{self._cell_markup(cell)}</{tag}>")
                 col += colspan
             row_html = "<tr>" + "".join(out) + "</tr>"
@@ -551,22 +709,53 @@ class _Converter:
             html += "<tbody>" + "".join(body) + "</tbody>"
         return html + "</table>"
 
-    def _cell_style(self, cell: Any) -> str:
+    @staticmethod
+    def _style_look(
+        looks: dict, tbl_look: dict, row_index: int, header_row: bool, row_count: int
+    ) -> dict:
+        """The table style's conditional look for this row: the header band,
+        the last row, or the alternating body bands — gated by the table's
+        own ``tblLook`` flags, which is how Word decides whether a style's
+        header/banding formats apply at all."""
+        if not looks:
+            return {}
+        first = header_row or (row_index == 0 and tbl_look.get("first_row", True))
+        if first and "firstRow" in looks:
+            return looks["firstRow"]
+        if row_index == row_count - 1 and tbl_look.get("last_row") and "lastRow" in looks:
+            return looks["lastRow"]
+        if not tbl_look.get("no_h_band"):
+            # banding counts from the first body row, alternating band1/band2
+            body_index = row_index - (1 if tbl_look.get("first_row", True) else 0)
+            if body_index >= 0:
+                band = "band1Horz" if body_index % 2 == 0 else "band2Horz"
+                if band in looks:
+                    return looks[band]
+        return looks.get("wholeTable", {})
+
+    def _cell_style(self, cell: Any, style_look: dict | None = None) -> str:
         """A cell's whitelisted geometry+paint style: fixed column width and
         shading fill. Borders are deliberately not carried — the vocabulary
         has border utilities and border-colour paint, not the per-side border
         geometry OOXML cells describe, so recovering them faithfully is not
         possible and a lossy approximation would mislead."""
         pr = getattr(cell, "tc_pr", None)
-        if pr is None:
+        if pr is None and not style_look:
             return ""
         styles: list[tuple[str, str]] = []
         width = _cell_width_px(getattr(pr, "tc_w", None))
         if width:
             styles.append(("width", f"{width}px"))
         fill = shading_hex(model_dump(getattr(pr, "shd", None)))
+        look = style_look or {}
+        # a cell's OWN shading beats the table style's, as in Word
+        fill = fill or look.get("fill")
         if fill:
             styles.append(("background-color", fill))
+        if look.get("color"):
+            # a shaded header band usually recolours its text too; without it
+            # dark text lands on a dark fill and the header is unreadable
+            styles.append(("color", look["color"]))
         if not styles:
             return ""
         order = {p: i for i, p in enumerate(REGISTRY.style_prop_order)}
@@ -601,6 +790,26 @@ def _group_runs(items: list[tuple[int, int, str, str]]):
         if i == len(items) or items[i][0] != items[start][0]:
             yield items[start][0], items[start:i]
             start = i
+
+
+def _tbl_look_bits(val: Any) -> dict[str, bool]:
+    """A ``w:tblLook@w:val`` bitmask decoded into the named flags
+    (ECMA-376 §17.4.56): 0x0020 firstRow, 0x0040 lastRow, 0x0080 firstColumn,
+    0x0100 lastColumn, 0x0200 noHBand, 0x0400 noVBand."""
+    if not val:
+        return {}
+    try:
+        bits = int(str(val), 16)
+    except ValueError:
+        return {}
+    return {
+        "first_row": bool(bits & 0x0020),
+        "last_row": bool(bits & 0x0040),
+        "first_column": bool(bits & 0x0080),
+        "last_column": bool(bits & 0x0100),
+        "no_h_band": bool(bits & 0x0200),
+        "no_v_band": bool(bits & 0x0400),
+    }
 
 
 def _underlined(props: dict) -> bool:
