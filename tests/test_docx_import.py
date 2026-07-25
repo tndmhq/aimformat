@@ -1928,3 +1928,145 @@ class TestOneSchemeDrawsOneShape:
         # is an item like any other, so seeding start from the first REAL
         # item's counter renders everything after it one too high
         assert 'start="2"' not in content, f"the wrapper item consumed a number: {content}"
+
+
+class TestOneSchemesLiteralStaysInItsOwnScheme:
+    """The literal ("Article ") lives in a level's ``lvlText``, so it belongs
+    to the numbering DEFINITION. Collected document-wide it stops describing
+    a scheme and starts describing the file: every later scheme inherits it,
+    and a scheme that never carried a literal is exported with one.
+    """
+
+    @staticmethod
+    def _doc(markups) -> aim.AimDocument:
+        doc = aim.new_document(title="Contract")
+        who = aim.external("t")
+        for markup in markups:
+            doc.add_chunk(markup, author=who)
+        return doc
+
+    @staticmethod
+    def _levels(path) -> tuple[dict[int, dict[int, str]], list[tuple[int, int]]]:
+        """``{abstractId: {ilvl: lvlText}}`` and the (numId, ilvl) each
+        numbered paragraph uses, paired with its abstract by the caller."""
+        with zipfile.ZipFile(str(path)) as z:
+            numbering = etree.fromstring(z.read("word/numbering.xml"))
+            document = etree.fromstring(z.read("word/document.xml"))
+        w = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
+        abstracts = {
+            int(a.get(f"{w}abstractNumId")): {
+                int(lvl.get(f"{w}ilvl")): (
+                    lvl.find(f"{w}lvlText").get(f"{w}val")
+                    if lvl.find(f"{w}lvlText") is not None
+                    else ""
+                )
+                for lvl in a.findall(f"{w}lvl")
+            }
+            for a in numbering.findall(f"{w}abstractNum")
+        }
+        instance = {
+            int(n.get(f"{w}numId")): int(n.find(f"{w}abstractNumId").get(f"{w}val"))
+            for n in numbering.findall(f"{w}num")
+        }
+        used = []
+        for num_pr in document.iter(f"{w}numPr"):
+            num_id = num_pr.find(f"{w}numId")
+            ilvl = num_pr.find(f"{w}ilvl")
+            if num_id is None:
+                continue
+            used.append(
+                (
+                    instance.get(int(num_id.get(f"{w}val")), -1),
+                    int(ilvl.get(f"{w}val")) if ilvl is not None else 0,
+                )
+            )
+        return abstracts, used
+
+    def test_a_literal_is_not_fabricated_into_a_scheme_that_never_had_one(self, tmp_path):
+        # the commoner shape: a prefixed scheme, then Word's stock "1." list.
+        # The stock scheme's blocks carry no literal of their own, inherit
+        # "Article " from the document-wide map, and Word draws
+        # "Article 1 Payment" where the document says "1. Payment".
+        out = aim.to_docx(
+            self._doc(
+                [
+                    '<p class="num-1" data-aim-num-prefix="Article ">Scope</p>',
+                    '<p class="num-2">A sub-clause.</p>',
+                    '<p class="num-1 num-restart">Payment</p>',
+                    '<p class="num-2">Another sub-clause.</p>',
+                ]
+            ),
+            tmp_path / "two.docx",
+        )
+        abstracts, used = self._levels(out)
+        drawn = [abstracts.get(aid, {}).get(ilvl, "") for aid, ilvl in used]
+        assert drawn[0] == "Article %1", drawn
+        assert "Article" not in drawn[2], (
+            f"the second scheme was exported with a literal it never had: {drawn}"
+        )
+
+    def test_a_prefixed_scheme_still_keeps_one_definition(self, tmp_path):
+        # …and the fix must not undo what it replaced: within ONE scheme the
+        # prefixed level and its un-prefixed sub-levels share a definition,
+        # because OOXML cannot share a counter across two.
+        out = aim.to_docx(
+            self._doc(
+                [
+                    '<p class="num-1" data-aim-num-prefix="Article ">Scope</p>',
+                    '<p class="num-2">First.</p>',
+                    '<p class="num-2">Second.</p>',
+                ]
+            ),
+            tmp_path / "one.docx",
+        )
+        _abstracts, used = self._levels(out)
+        assert len({aid for aid, _ in used}) == 1, f"the scheme was split: {used}"
+
+
+class TestTrackedParagraphsSurviveAcceptInWord:
+    """A revision paragraph the exporter creates whole needs its PARAGRAPH
+    MARK marked too. Marking only the runs leaves the mark unrevised, so
+    accepting an insertion in Word keeps an empty numbered clause behind and
+    every following clause shifts by one — in the delivered file, on the
+    reviewer's screen, and tracked export is the default.
+    """
+
+    @staticmethod
+    def _marks(path) -> list[tuple[str, str]]:
+        """``(what the paragraph's mark is marked as, its text)``."""
+        with zipfile.ZipFile(str(path)) as z:
+            document = etree.fromstring(z.read("word/document.xml"))
+        w = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
+        out = []
+        for para in document.iter(f"{w}p"):
+            mark = ""
+            p_pr = para.find(f"{w}pPr")
+            if p_pr is not None:
+                r_pr = p_pr.find(f"{w}rPr")
+                if r_pr is not None:
+                    if r_pr.find(f"{w}ins") is not None:
+                        mark = "ins"
+                    elif r_pr.find(f"{w}del") is not None:
+                        mark = "del"
+            text = "".join(t.text or "" for t in para.iter(f"{w}t"))
+            text += "".join(t.text or "" for t in para.iter(f"{w}delText"))
+            out.append((mark, text))
+        return out
+
+    def test_an_inserted_paragraph_marks_its_paragraph_mark(self, tmp_path):
+        doc = aim.new_document(title="T")
+        who = aim.external("t")
+        doc.add_chunk('<p data-aim="p1">Anchor.</p>', author=who)
+        doc.propose_add("<p>Inserted clause.</p>", after="p1", author=who)
+        out = aim.to_docx(doc, tmp_path / "ins.docx")
+        marks = dict((text, mark) for mark, text in self._marks(out))
+        assert marks.get("Inserted clause.") == "ins", self._marks(out)
+
+    def test_a_deleted_paragraph_marks_its_paragraph_mark(self, tmp_path):
+        doc = aim.new_document(title="T")
+        who = aim.external("t")
+        doc.add_chunk('<p data-aim="p1">Doomed clause.</p>', author=who)
+        doc.propose_delete("p1", author=who)
+        out = aim.to_docx(doc, tmp_path / "del.docx")
+        marks = dict((text, mark) for mark, text in self._marks(out))
+        assert marks.get("Doomed clause.") == "del", self._marks(out)

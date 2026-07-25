@@ -504,6 +504,29 @@ class _Revisions:
         el.set(qn("w:date"), date or "2026-01-01T00:00:00Z")
         self._next += 1
 
+    def mark_paragraph(self, paragraph, tag: str, author: str, date: str) -> None:
+        """Mark the paragraph MARK itself as inserted or deleted.
+
+        A paragraph the exporter creates whole as a revision needs this as
+        well as its runs. Word treats the mark as the thing that ENDS a
+        paragraph, so an unmarked mark survives accept/reject: accepting an
+        insertion keeps an empty paragraph behind, and because that paragraph
+        still carries its ``w:numPr``, it keeps a number too — every clause
+        after it shifts by one, in the delivered file.
+        """
+        from docx.oxml import OxmlElement
+        from docx.oxml.ns import qn
+
+        p_pr = paragraph._p.get_or_add_pPr()
+        r_pr = p_pr.find(qn("w:rPr"))
+        if r_pr is None:
+            r_pr = OxmlElement("w:rPr")
+            # w:rPr is the first child of w:pPr in the OOXML content model
+            p_pr.insert(0, r_pr)
+        revision = OxmlElement(tag)
+        self._attrs(revision, author, date)
+        r_pr.append(revision)
+
     def ins(self, paragraph, runs: list[dict], author: str, date: str) -> None:
         from docx.oxml import OxmlElement
 
@@ -795,7 +818,8 @@ class _Exporter:
         self._num_abstracts: dict[tuple[tuple[int, str], ...], int] = {}
         self._num_instances: dict[int, int] = {}
         self._num_serial = 0
-        # the literal each numbering level carries, for the WHOLE document
+        # the literal each numbering level carries, for the scheme being
+        # emitted — cut at each scheme boundary, never document-wide
         self._num_prefixes: dict[int, str] = {}
         # Set after a slide: True means accepted structure owns the next
         # break; a Proposal means the pending slide owns it.
@@ -820,7 +844,6 @@ class _Exporter:
             self.out.core_properties.title = title
         self._apply_theme_fonts()
         self._apply_page_setup()
-        self._collect_num_prefixes()
         self._emit_anchored_adds("body", None)
         for construct in self.aim._state.constructs():
             self.emit_construct(construct)
@@ -913,6 +936,7 @@ class _Exporter:
                     style=style or self._safe_style(_style_for(block.tag))
                 )
                 self._number_paragraph(para, block)
+                self.rev.mark_paragraph(para, "w:ins", _actor_label(prop.author), prop.at)
                 self.rev.ins(
                     para,
                     _tracked_block_runs(block, self.paint),
@@ -1039,6 +1063,7 @@ class _Exporter:
             # shifted every following clause up by one in the delivered file —
             # and tracked is the DEFAULT export.
             self._number_paragraph(para, block)
+            self.rev.mark_paragraph(para, "w:del", label, date)
             self.rev.dele(para, _tracked_block_runs(block, self.paint), label, date)
         if payload and prop.action == "modify":
             for new_el in self._payload_elements(prop):
@@ -1047,6 +1072,7 @@ class _Exporter:
                         style=style or self._safe_style(_style_for(block.tag))
                     )
                     self._number_paragraph(para, block)
+                    self.rev.mark_paragraph(para, "w:ins", label, date)
                     self.rev.ins(para, _tracked_block_runs(block, self.paint), label, date)
 
     def emit_tracked_list_container(self, el: Element, prop: Proposal) -> None:
@@ -1103,41 +1129,33 @@ class _Exporter:
         _apply_runs(para, runs)
         _paint_paragraph(para, box)
 
-    def _collect_num_prefixes(self) -> None:
-        """The literal each numbering level carries, across the whole document.
+    def _num_prefix_key(self, level: int, prefix: str | None) -> tuple[tuple[int, str], ...]:
+        """The definition key for one block: the literals of the SCHEME it
+        belongs to.
 
         A literal lives in its level's ``lvlText``, so it belongs to the
-        DEFINITION, not to the block. Read per block it minted one definition
-        for the prefixed shape and another for the plain one — and OOXML
-        counters belong to the definition, so the sub-clauses counted against
-        a level-0 counter nothing ever advanced: Word drew ``Article 2 / 1.3``
-        where the document says ``Article 2 / 2.1``.
+        DEFINITION. Read per block it minted one definition for the prefixed
+        shape and another for the plain one — and OOXML counters belong to
+        the definition, so the sub-clauses counted against a level-0 counter
+        nothing ever advanced: Word drew ``Article 2 / 1.3`` where the
+        document says ``Article 2 / 2.1``.
+
+        Read per DOCUMENT it stopped describing a scheme at all. Every later
+        scheme inherited the first one's literals, so a plain "1." list that
+        followed an "Article" scheme was exported as "Article 1", "Article 2"
+        — a literal fabricated into a scheme that never carried one.
+
+        So the map is accumulated forward and cut at each scheme boundary,
+        which the importer already marks: ``num-restart`` on a top-level
+        block. Within a scheme the level-1 block carrying the literal
+        precedes its sub-clauses, so they key against it and share its
+        definition; a scheme with no literal keys the empty map and gets its
+        own. A mid-scheme restart re-derives the same literals from the block
+        that carries it, so its key — and its definition — are unchanged.
         """
-
-        def scan(el: Element) -> None:
-            for block in _block_children(el, self.paint):
-                level = _num_level(block)
-                prefix = block.get("data-aim-num-prefix")
-                if level is not None and prefix:
-                    self._num_prefixes.setdefault(level, prefix)
-
-        for construct in self.aim._state.constructs():
-            scan(construct)
-        for prop in self.aim.proposals:
-            if prop.action in ("add", "modify"):
-                for el in self._payload_elements(prop):
-                    scan(el)
-
-    def _num_prefix_key(self, level: int, prefix: str | None) -> tuple[tuple[int, str], ...]:
-        """The definition key for one block: the document's prefix map, so
-        every block of the scheme shares one definition. A block whose
-        literal disagrees with its level's gets a definition of its own —
-        Word cannot express two literals on one level otherwise, and it
-        cannot share a counter across definitions either."""
-        prefixes = dict(self._num_prefixes)
         if prefix:
-            prefixes[level] = prefix
-        return tuple(sorted(prefixes.items()))
+            self._num_prefixes[level] = prefix
+        return tuple(sorted(self._num_prefixes.items()))
 
     def _num_abstract_id(self, prefixes: tuple[tuple[int, str], ...]) -> int | None:
         """The abstract definition for a set of per-level literal prefixes.
@@ -1223,8 +1241,13 @@ class _Exporter:
         level = _num_level(el)
         if level is None:
             return
+        restart = _has_class(el, "num-restart")
+        if restart and level == 1:
+            # a fresh scheme: its literals are its own, and a scheme with none
+            # must not inherit the previous one's
+            self._num_prefixes.clear()
         num_id = self._num_instance_id(
-            restart=_has_class(el, "num-restart"),
+            restart=restart,
             level=level,
             prefixes=self._num_prefix_key(level, el.get("data-aim-num-prefix")),
         )
