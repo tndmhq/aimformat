@@ -209,7 +209,7 @@
       "batch": "b2",
       "dependsOn": null,
       "explanation": "Lead with the point.",
-      "id": "p-5i4go26u",
+      "id": "p-1bpkk4vv",
       "payloadHtml": "<p data-aim=\"c2\">Second, sharpened.</p>",
       "target": "c2"
     },
@@ -227,7 +227,7 @@
       "batch": "b3",
       "dependsOn": null,
       "explanation": "Redundant with c2.",
-      "id": "p-f8g1p3r9",
+      "id": "p-db44sef8",
       "payloadHtml": null,
       "target": "c3"
     },
@@ -245,7 +245,7 @@
       "batch": "b4",
       "dependsOn": null,
       "explanation": null,
-      "id": "p-9b5k451m",
+      "id": "p-ufuk5ouj",
       "payloadHtml": null,
       "target": "c4"
     },
@@ -263,13 +263,13 @@
       "batch": "b5",
       "dependsOn": null,
       "explanation": "Bridge paragraph.",
-      "id": "p-bsd05hsr",
+      "id": "p-lvdj2b52",
       "payloadHtml": "<p data-aim=\"add1\">Inserted after the title.</p>",
       "target": null
     },
     {
       "action": "add",
-      "anchorAfter": "p-bsd05hsr",
+      "anchorAfter": "p-lvdj2b52",
       "anchorContainer": "body",
       "anchorShell": null,
       "at": "2026-07-17T10:00:14Z",
@@ -281,7 +281,7 @@
       "batch": "b6",
       "dependsOn": null,
       "explanation": null,
-      "id": "p-qp3bgt5u",
+      "id": "p-j2raauhp",
       "payloadHtml": "<p data-aim=\"add2\">Chained onto the pending add.</p>",
       "target": null
     },
@@ -299,7 +299,7 @@
       "batch": "b7",
       "dependsOn": null,
       "explanation": "Row at the top of the body section.",
-      "id": "p-46clf1ff",
+      "id": "p-s8j7anbf",
       "payloadHtml": "<tr data-aim=\"add3\"><td>three</td></tr>",
       "target": null
     },
@@ -315,9 +315,9 @@
         "type": "agent"
       },
       "batch": "b8",
-      "dependsOn": "p-5i4go26u",
+      "dependsOn": "p-1bpkk4vv",
       "explanation": "Teal primary.",
-      "id": "p-cda5ng6o",
+      "id": "p-abudmj8g",
       "payloadHtml": "<style data-aim-theme>:root{--aim-brand-1:#0f766e}</style>",
       "target": "aim:theme"
     },
@@ -335,14 +335,14 @@
       "batch": "b9",
       "dependsOn": null,
       "explanation": "Booklet trim.",
-      "id": "p-0s5mfkg7",
+      "id": "p-v05pcof4",
       "payloadHtml": "<script type=\"application/aim-doc+json\">\n{\"page\":{\"margins\":{\"bottom\":\"10mm\",\"left\":\"12mm\",\"right\":\"12mm\",\"top\":\"10mm\"},\"orientation\":\"landscape\",\"size\":\"A5\"}}\n</script>",
       "target": "aim:doc"
     }
   ],
   "specVersion": "0.5",
   "stylesheet": {
-    "sha256": "sha256:3138043dae7e6cf690ebaf45469bbc695240989bcdd8a2f5fb159068d9e44d4d",
+    "sha256": "sha256:de54c7dd7c879ba0b6fbeb1115b2264bab9f4914bb2e413348fe3987e791ee10",
     "version": "0.5"
   },
   "theme": {},

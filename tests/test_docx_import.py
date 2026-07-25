@@ -290,7 +290,6 @@ def test_a_list_starting_indented_keeps_its_outdented_items():
 # Card A: edge-case ports (strict-OOXML, textboxes, OMML, checkboxes, symbols)
 # --------------------------------------------------------------------------
 
-from docx.oxml import parse_xml  # noqa: E402
 
 from aimformat.convert._docx_in import convert_docx  # noqa: E402
 from aimformat.convert._docx_seam import (  # noqa: E402

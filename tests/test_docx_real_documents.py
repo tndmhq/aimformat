@@ -233,6 +233,33 @@ class TestOutlineNumbering:
             n for n, _ in render_outline_numbers(legal)
         ]
 
+    def test_each_restart_gets_its_own_numbering_instance(self, tmp_path):
+        # A startOverride applies on an instance's FIRST use only, so two
+        # restarts sharing one instance leave the second counting straight
+        # on: 1 2 1 2 3 4 where the document says 1 2 1 2 1 2.
+        doc = aim.new_document(title="Restarts")
+        for i, cls in enumerate(["num-1", "num-1", "num-1 num-restart", "num-1"]):
+            doc.add_chunk(f'<p class="{cls}">block {i}</p>', author=aim.external("t"))
+        doc.add_chunk('<p class="num-1 num-restart">again</p>', author=aim.external("t"))
+        out = tmp_path / "restarts.docx"
+        aim.to_docx(doc, str(out))
+        numbering = zipfile.ZipFile(out).read("word/numbering.xml").decode("utf-8")
+        assert numbering.count("startOverride") == 2, "the restarts share an instance"
+
+    def test_a_numbering_prefix_survives_export(self, tmp_path):
+        # the literal has nowhere to live in Word but the level's lvlText, so
+        # an exporter that ignores it turns "Article 1" into "1." — undoing
+        # what the importer just preserved
+        doc = aim.new_document(title="Prefixed")
+        doc.add_chunk(
+            '<h2 class="num-1" data-aim-num-prefix="Article ">Scope</h2>',
+            author=aim.external("t"),
+        )
+        out = tmp_path / "prefixed.docx"
+        aim.to_docx(doc, str(out))
+        numbering = zipfile.ZipFile(out).read("word/numbering.xml").decode("utf-8")
+        assert "Article %1" in numbering, "the prefix never reached the numbering"
+
     def test_the_exported_docx_carries_word_numbering(self, legal, tmp_path):
         # not literal text that merely looks like a number: w:numPr, so Word
         # itself renumbers the document after an edit

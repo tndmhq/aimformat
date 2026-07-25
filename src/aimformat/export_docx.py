@@ -737,14 +737,28 @@ def _num_level(el: Element) -> int | None:
 #: (%1.%2.%3…), each level restarting under its parent — the scheme the
 #: num-N classes describe. Word draws the labels from this, so an exported
 #: document renumbers on edit exactly as the .aim did.
-def _num_abstract_xml(abstract_id: int, levels: int) -> str:
+def _xml_attr(value: str) -> str:
+    """Escape a literal for an XML attribute value — a prefix is authored
+    text and may carry & or <."""
+    return (
+        value.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;")
+    )
+
+
+def _num_abstract_xml(abstract_id: int, levels: int, prefixes: dict[int, str] | None = None) -> str:
     from docx.oxml.ns import nsmap
 
     w = nsmap["w"]
     lvls = []
     for i in range(levels):
-        chain = ".".join(f"%{j + 1}" for j in range(i + 1))
-        text = f"{chain}." if i == 0 else chain
+        literal = (prefixes or {}).get(i + 1)
+        if literal:
+            # a prefixed level shows its own counter alone ("Article 1"),
+            # never the chain — the same rule the stylesheet applies
+            text = f"{_xml_attr(literal)}%{i + 1}"
+        else:
+            chain = ".".join(f"%{j + 1}" for j in range(i + 1))
+            text = f"{chain}." if i == 0 else chain
         lvls.append(
             f'<w:lvl w:ilvl="{i}"><w:start w:val="1"/><w:numFmt w:val="decimal"/>'
             f'<w:lvlText w:val="{text}"/><w:lvlJc w:val="left"/>'
@@ -776,10 +790,11 @@ class _Exporter:
             self.paint.resolve(construct)
         self.out = docx_mod.Document()
         self.rev = _Revisions()
-        # numbering instances created on demand for clause blocks:
-        # (restart, level) → numId. A restart needs its own w:num carrying a
-        # startOverride, which is how Word expresses "restart numbering here".
-        self._num_instances: dict[tuple[bool, int], int] = {}
+        # numbering definitions created on demand: per-level literal prefixes
+        # → abstractNumId, and the plain (non-restarting) instance for each
+        self._num_abstracts: dict[tuple[tuple[int, str], ...], int] = {}
+        self._num_instances: dict[int, int] = {}
+        self._num_serial = 0
         # Set after a slide: True means accepted structure owns the next
         # break; a Proposal means the pending slide owns it.
         self._break_before_next: bool | Proposal = False
@@ -1078,29 +1093,66 @@ class _Exporter:
         _apply_runs(para, runs)
         _paint_paragraph(para, box)
 
-    def _num_instance_id(self, *, restart: bool, level: int) -> int | None:
-        """A ``w:num`` id for outline numbering, created once per shape.
+    def _num_abstract_id(self, prefixes: tuple[tuple[int, str], ...]) -> int | None:
+        """The abstract definition for a set of per-level literal prefixes.
 
-        One shared instance carries the whole document's number sequence; a
-        restart gets its own instance with a ``startOverride`` at that level,
-        which is Word's own way of saying "begin again here" and exactly what
-        the importer reads back."""
-        key = (restart, level if restart else 0)
-        if key in self._num_instances:
-            return self._num_instances[key]
-        try:
-            from docx.oxml import parse_xml
-            from docx.oxml.ns import nsmap
-
-            numbering = self.out.part.numbering_part.element
-        except Exception:  # a template without a numbering part: skip, do not fail
+        The plain chain is one definition shared by the whole document; a
+        block carrying ``data-aim-num-prefix`` needs its own, because the
+        literal lives in the level's ``lvlText`` — Word has nowhere else to
+        put it. Without this an "Article 1" heading exports as "1.", so a
+        DOCX → aim → DOCX trip destroys the prefix the importer preserved.
+        """
+        if prefixes in self._num_abstracts:
+            return self._num_abstracts[prefixes]
+        numbering = self._numbering_part()
+        if numbering is None:
             return None
-        w = nsmap["w"]
-        levels = REGISTRY.num_levels
-        abstract_id = 9000  # far above anything python-docx's template ships
-        if not self._num_instances:
-            numbering.insert(0, parse_xml(_num_abstract_xml(abstract_id, levels)))
-        num_id = 9000 + len(self._num_instances) + 1
+        from docx.oxml import parse_xml
+
+        abstract_id = 9000 + len(self._num_abstracts)
+        numbering.insert(
+            0, parse_xml(_num_abstract_xml(abstract_id, REGISTRY.num_levels, dict(prefixes)))
+        )
+        self._num_abstracts[prefixes] = abstract_id
+        return abstract_id
+
+    def _numbering_part(self):
+        """The document's numbering part. Absent only for a template that
+        ships without one — which the exporter's own template does not, so a
+        None here means numbering is lost and the caller bakes instead."""
+        try:
+            return self.out.part.numbering_part.element
+        except (AttributeError, KeyError, ValueError):
+            return None
+
+    def _num_instance_id(
+        self, *, restart: bool, level: int, prefixes: tuple[tuple[int, str], ...]
+    ) -> int | None:
+        """A ``w:num`` id for outline numbering.
+
+        One shared instance carries the document's sequence. Each RESTART
+        gets an instance of its own — not one per level — because a
+        startOverride applies on an instance's first use only (§17.9.27), so
+        two restarts sharing an instance leave the second one counting
+        straight on: 1 2 1 2 3 4 where the document says 1 2 1 2 1 2.
+        """
+        abstract_id = self._num_abstract_id(prefixes)
+        if abstract_id is None:
+            return None
+        # A restart mints a new instance and that instance stays IN EFFECT:
+        # the blocks after it continue its sequence. Sending them back to the
+        # original instance would restart the numbering a second time, and on
+        # re-import fragment one list into three.
+        if not restart and abstract_id in self._num_instances:
+            return self._num_instances[abstract_id]
+        numbering = self._numbering_part()
+        if numbering is None:
+            return None
+        from docx.oxml import parse_xml
+        from docx.oxml.ns import nsmap
+
+        self._num_serial += 1
+        num_id = 9100 + self._num_serial
         override = (
             f'<w:lvlOverride w:ilvl="{level - 1}"><w:startOverride w:val="1"/></w:lvlOverride>'
             if restart
@@ -1108,11 +1160,11 @@ class _Exporter:
         )
         numbering.append(
             parse_xml(
-                f'<w:num xmlns:w="{w}" w:numId="{num_id}">'
+                f'<w:num xmlns:w="{nsmap["w"]}" w:numId="{num_id}">'
                 f'<w:abstractNumId w:val="{abstract_id}"/>{override}</w:num>'
             )
         )
-        self._num_instances[key] = num_id
+        self._num_instances[abstract_id] = num_id
         return num_id
 
     def _number_paragraph(self, para, el: Element) -> None:
@@ -1125,7 +1177,11 @@ class _Exporter:
         level = _num_level(el)
         if level is None:
             return
-        num_id = self._num_instance_id(restart=_has_class(el, "num-restart"), level=level)
+        prefix = el.get("data-aim-num-prefix")
+        prefixes = ((level, prefix),) if prefix else ()
+        num_id = self._num_instance_id(
+            restart=_has_class(el, "num-restart"), level=level, prefixes=prefixes
+        )
         if num_id is None:
             return
         from docx.oxml.ns import qn

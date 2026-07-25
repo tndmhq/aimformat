@@ -328,6 +328,8 @@ aim-page-break{display:block;border:0;border-top:1px dashed #d1d5db;margin:2em 0
 .num-1::before,.num-2::before,.num-3::before,.num-4::before,.num-5::before,.num-6::before,.num-7::before,.num-8::before,.num-9::before{display:inline-block;min-width:3.2em;text-indent:0}
 .list-multilevel{list-style:none}
 .list-multilevel > li::before{content:counters(list-item, ".") "\a0"}
+.list-multilevel.list-paren > li::before{content:counters(list-item, ".") ")\a0"}
+.list-multilevel.list-bare > li::before{content:counters(list-item, ".") "\a0"}
 .list-paren{list-style:none}
 .list-paren > li::before{content:counter(list-item, decimal) ")\a0"}
 .list-lower-alpha.list-paren > li::before{content:counter(list-item, lower-alpha) ")\a0"}

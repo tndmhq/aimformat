@@ -332,6 +332,13 @@ class _Converter:
                 self._flush_items()
                 self._blocks.append(self._block("p", inline, effective, clause, prefix_attr))
             elif num_pr.get("num_id") is not None:
+                if draw is not None and draw.restarted and self._items:
+                    # Word's "restart numbering" mid-list: close the run so a
+                    # fresh <ol> begins at 1. Without this the items coalesce
+                    # into one list and the restart disappears — the numbers
+                    # simply keep climbing past where the document says begin
+                    # again.
+                    self._flush_items()
                 # list items carry their alignment class like any block —
                 # a centered bullet is visible structure too
                 self._items.append(

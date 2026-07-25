@@ -532,6 +532,15 @@ occurrence onward; `::marker` content has a narrower support floor, and its
 failure mode is a wrong number rather than an unstyled one. A conforming
 renderer needs `counter-set` and `counters()` in `::before`.
 
+A renderer that does not mount the document under `<body>` — an editor
+canvas, an embedded preview, anything re-scoping the stylesheet — MUST
+instantiate the numbering counters **once on its own root**, and once per
+document. A counter that is never instantiated is created implicitly by each
+element that increments it, so a document whose blocks sit in separate
+wrappers numbers each wrapper independently: `1.`, `0.1`, `0.0.1`. Two
+documents sharing one root leak counters into each other for the same
+reason.
+
 ---
 
 ## 4. Chunks

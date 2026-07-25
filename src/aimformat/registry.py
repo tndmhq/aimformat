@@ -252,6 +252,17 @@ class Registry:
         # also what makes <ol start> work — a custom counter would ignore it
         rules.append((".list-multilevel", "list-style:none"))
         rules.append((".list-multilevel > li::before", 'content:counters(list-item, ".") "\\a0"'))
+        # A chain combined with a suffix has to be spelled out. Without these
+        # the suffix rule below matches on its own and renders "1)" flat —
+        # the chain gone, nothing on screen to say so. Two classes outrank
+        # one, so these win on specificity wherever they are emitted.
+        for suffix, tail in c.get("list_suffixes", {}).items():
+            rules.append(
+                (
+                    f".list-multilevel.{suffix} > li::before",
+                    f'content:counters(list-item, ".") "{tail}"',
+                )
+            )
         formats = {"": "decimal", **{k: v for k, v in c.get("list_formats", {}).items()}}
         for suffix, tail in c.get("list_suffixes", {}).items():
             rules.append((f".{suffix}", "list-style:none"))
