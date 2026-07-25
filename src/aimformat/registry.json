@@ -1,5 +1,5 @@
 {
-  "spec_version": "0.4",
+  "spec_version": "0.5",
   "ids": {
     "chunk_pattern": "^[a-z0-9][a-z0-9_-]{0,63}$",
     "proposal_pattern": "^p-[a-z0-9][a-z0-9_-]{0,63}$",
@@ -610,7 +610,22 @@
       "list-none": "list-style:none;padding-left:0",
       "list-disc": "list-style:disc",
       "list-decimal": "list-style:decimal"
-    }
+    },
+    "clause_levels": 9,
+    "list_formats": {
+      "list-lower-alpha": "lower-alpha",
+      "list-upper-alpha": "upper-alpha",
+      "list-lower-roman": "lower-roman",
+      "list-upper-roman": "upper-roman"
+    },
+    "list_suffixes": {
+      "list-paren": ")\\a0",
+      "list-bare": "\\a0"
+    },
+    "markers": [
+      "clause-restart",
+      "list-multilevel"
+    ]
   },
   "events": {
     "kinds": [

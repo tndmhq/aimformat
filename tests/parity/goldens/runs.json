@@ -123,7 +123,7 @@
     "lst",
     "tbl"
   ],
-  "docHash": "sha256:c9abb4e0919936039b2726218322c002c847553d62b4842ffcb45a51f3f3b59e",
+  "docHash": "sha256:582c7fd845ad4cf1e8bda300b6e5e2ac7a492311f28d662ec2d2ac5f877a968d",
   "docSettings": {},
   "embeddings": null,
   "hasCanonicalNote": true,
@@ -267,7 +267,7 @@
       "text": "def f():\n    return 42\n"
     }
   ],
-  "note": "\naim-note: This file is an AIM document (open format, v0.4) — valid HTML plus\nchunk identity, a pending-suggestions lane, and an edit history.\nAgent docs: https://aimformat.com/llms.txt\nThe reliable way to edit this file is the `aimformat` tooling, which manages\nids, suggestions, and history for you: `pip install aimformat` for the `aim`\nCLI (`aim --help`); `pip install 'aimformat[mcp]'` adds its MCP server\n(`aim mcp`). An Agent Skill exists: `npx skills add tndmhq/aimformat`.\nHand-editing as plain text is the fallback; if you do: keep every data-aim id\nstable (never renumber or reuse; give new content a fresh id), treat the\naim-proposals appendix and the history script as append-only tool lanes, and\nvalidate with `aim lint`. Humans review in AIM editors:\nhttps://aimformat.com/editors\n",
+  "note": "\naim-note: This file is an AIM document (open format, v0.5) — valid HTML plus\nchunk identity, a pending-suggestions lane, and an edit history.\nAgent docs: https://aimformat.com/llms.txt\nThe reliable way to edit this file is the `aimformat` tooling, which manages\nids, suggestions, and history for you: `pip install aimformat` for the `aim`\nCLI (`aim --help`); `pip install 'aimformat[mcp]'` adds its MCP server\n(`aim mcp`). An Agent Skill exists: `npx skills add tndmhq/aimformat`.\nHand-editing as plain text is the fallback; if you do: keep every data-aim id\nstable (never renumber or reuse; give new content a fresh id), treat the\naim-proposals appendix and the history script as append-only tool lanes, and\nvalidate with `aim lint`. Humans review in AIM editors:\nhttps://aimformat.com/editors\n",
   "pageSetup": {
     "contentHeightMm": 267.0,
     "contentWidthMm": 180.0,
@@ -283,10 +283,10 @@
     "size": "A4"
   },
   "proposals": [],
-  "specVersion": "0.4",
+  "specVersion": "0.5",
   "stylesheet": {
-    "sha256": "sha256:fb75617803abea27d25fdd474a8aefe63be623764992fdd911d326f7dc603522",
-    "version": "0.4"
+    "sha256": "sha256:288260b06519d45ebb723281a57b989b0270dc821c6d822b3d9d328c094e1346",
+    "version": "0.5"
   },
   "theme": {},
   "title": "Runs — lists, tables, multi-block chunks"

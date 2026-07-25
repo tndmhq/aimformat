@@ -49,6 +49,7 @@ utilities and border-colour paint, not per-side border geometry.
 from __future__ import annotations
 
 import re
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any, BinaryIO
 
@@ -60,6 +61,7 @@ from ..pagesetup import _fmt_mm
 from ..registry import REGISTRY
 from ._docx_pages import _match_named_size
 from ._docx_seam import (
+    NumberDraw,
     ParsedDocx,
     data_uri,
     effective_run_props,
@@ -229,16 +231,33 @@ class _Converter:
         if str(num_pr.get("num_id")) == "0":
             num_pr = {}
         heading = self._heading_level(style_id, effective)
+        # Counters advance exactly ONCE per numbered paragraph, here, in
+        # document order — before any decision about how to render it. Both
+        # the clause path and the list path below depend on that, and
+        # advancing twice (or skipping one) desyncs every label after it.
+        draw = self._draw(num_pr)
         # An outline style that also carries numbering is a numbered clause
         # ("1.", "1.1", "1.1.1" — the legal-document idiom). Word draws that
-        # label; nothing in the text holds it, so it has to be materialised
-        # here or the clause structure is simply lost. The label is claimed
-        # in document order, before the heading/paragraph decision, because
-        # the counters advance per numbered paragraph either way.
-        label = ""
-        if heading is not None and num_pr.get("num_id") is not None:
-            label = self._number_label(num_pr)
-            if label:
+        # label; nothing in the text holds it.
+        label: str = ""
+        clause: list[str] = []
+        prefix_attr = ""
+        if heading is not None and draw is not None:
+            if draw.level is not None:
+                # v0.5: the level is one CSS counters can draw, so the number
+                # is NOT written into the text. It is computed at render time,
+                # which is what makes it survive an edit — insert a clause and
+                # everything after it renumbers.
+                clause = [f"clause-{draw.level}"]
+                if draw.restarted:
+                    clause.append("clause-restart")
+                if draw.prefix:
+                    prefix_attr = f' data-aim-num-prefix="{escape_attr(draw.prefix)}"'
+            elif draw.label:
+                # a level fixed CSS cannot express (mixed formats down one
+                # chain, parenthesised sub-items): bake what Word draws. The
+                # document reads correctly and simply does not renumber.
+                label = draw.label
                 # Word separates label from clause text with a tab, which
                 # the walk already emitted as a no-break space — only add
                 # a separator when the text brings none. No-break, never a
@@ -255,18 +274,18 @@ class _Converter:
         if inline:
             if heading is not None:
                 self._flush_items()
-                self._blocks.append(self._block(f"h{heading}", inline, effective))
-            elif label:
-                # numbered clause that is not a visual heading: an ordinary
-                # paragraph carrying its own label (an <ol> would renumber it
-                # 1,2,3 per level and lose the "1.1.1" the document states)
+                self._blocks.append(
+                    self._block(f"h{heading}", inline, effective, clause, prefix_attr)
+                )
+            elif label or clause:
+                # A numbered clause that is not a visual heading stays an
+                # ordinary paragraph carrying its number — as a class when
+                # CSS can draw it, baked otherwise. Never an <ol>: the
+                # clauses of a contract are interleaved with prose, and a
+                # list would either swallow that prose or fragment.
                 self._flush_items()
-                self._blocks.append(self._block("p", inline, effective))
+                self._blocks.append(self._block("p", inline, effective, clause, prefix_attr))
             elif num_pr.get("num_id") is not None:
-                # claim this item's number too: the counters are shared with
-                # any heading-styled clause on the same definition, and
-                # skipping list items desyncs every label after them
-                self._number_label(num_pr)
                 # list items carry their alignment class like any block —
                 # a centered bullet is visible structure too
                 self._items.append(
@@ -343,6 +362,17 @@ class _Converter:
             suffix = " " + escape_text(math)
         return (prefix + inline + suffix).strip()
 
+    def _draw(self, num_pr: dict) -> NumberDraw | None:
+        """Advance the numbering counters for this paragraph and describe how
+        to render it. Exactly once per numbered paragraph, in document order
+        — which is how the walk visits them."""
+        try:
+            num_id = int(num_pr["num_id"])
+            ilvl = int(num_pr.get("ilvl") or 0)
+        except (KeyError, TypeError, ValueError):
+            return None
+        return self.p.numbering_engine.draw(num_id, ilvl)
+
     def _number_label(self, num_pr: dict) -> str:
         """The label Word would draw for this numbered paragraph ("1.1.1"),
         or "" when the definition yields none. Counters advance per call, so
@@ -412,18 +442,22 @@ class _Converter:
                 return min(int(m.group(1)), 6)
         return None
 
-    def _block(self, tag: str, inline: str, effective: dict) -> str:
-        attr = self._class_attr(effective)
+    def _block(
+        self, tag: str, inline: str, effective: dict, extra: Sequence[str] = (), attrs: str = ""
+    ) -> str:
+        attr = self._class_attr(effective, extra)
         if tag == "h1" and self.title_text is None:
             # a clause label is not part of the title ("1. Definitions")
             self.title_text = _NUM_LABEL.sub("", _plain_text(inline)).strip() or None
-        return f"<{tag}{attr}>{inline}</{tag}>"
+        return f"<{tag}{attr}{attrs}>{inline}</{tag}>"
 
     @staticmethod
-    def _class_attr(effective: dict) -> str:
-        """The block's class attribute ('' when none): alignment classes."""
+    def _class_attr(effective: dict, extra: Sequence[str] = ()) -> str:
+        """The block's class attribute ('' when none): alignment, plus any
+        structural classes the caller adds (clause numbering)."""
         align = _ALIGN_CLASS.get(str(effective.get("jc") or ""))
-        return f' class="{align}"' if align else ""
+        names = [*extra] + ([align] if align else [])
+        return f' class="{" ".join(names)}"' if names else ""
 
     # -- inline content ----------------------------------------------------
 

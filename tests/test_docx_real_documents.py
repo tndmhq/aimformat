@@ -30,6 +30,7 @@ Provenance and redaction of every fixture: ``tests/fixtures/docxs/README.md``.
 from __future__ import annotations
 
 import re
+import zipfile
 from pathlib import Path
 
 import pytest
@@ -77,33 +78,148 @@ class TestRealDocumentsIngestCleanly:
         assert len(sample.chunks) > 30
 
 
+def _numbered_paragraphs(path: Path) -> list[tuple[int, int]]:
+    """``(numId, ilvl)`` for every effectively-numbered paragraph in document
+    order, read straight from the XML — including the numbering a paragraph
+    inherits from its style, which is how legal templates carry it."""
+    from lxml import etree
+
+    w = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
+    z = zipfile.ZipFile(path)
+    styles = etree.fromstring(z.read("word/styles.xml"))
+    style_num: dict[str, tuple[str | None, str | None]] = {}
+    based: dict[str, str] = {}
+    for style in styles.iter(f"{w}style"):
+        sid = style.get(f"{w}styleId")
+        num_pr = style.find(f"{w}pPr/{w}numPr")
+        if num_pr is not None:
+            num = num_pr.find(f"{w}numId")
+            lvl = num_pr.find(f"{w}ilvl")
+            style_num[sid] = (
+                num.get(f"{w}val") if num is not None else None,
+                lvl.get(f"{w}val") if lvl is not None else None,
+            )
+        parent = style.find(f"{w}basedOn")
+        if parent is not None:
+            based[sid] = parent.get(f"{w}val")
+
+    def inherited(sid: str | None) -> tuple[str | None, str | None]:
+        seen: set[str] = set()
+        while sid and sid not in seen:
+            seen.add(sid)
+            if sid in style_num:
+                return style_num[sid]
+            sid = based.get(sid)
+        return (None, None)
+
+    out: list[tuple[int, int]] = []
+    for para in etree.fromstring(z.read("word/document.xml")).iter(f"{w}p"):
+        num_pr = para.find(f"{w}pPr/{w}numPr")
+        if num_pr is not None:
+            num = num_pr.find(f"{w}numId")
+            lvl = num_pr.find(f"{w}ilvl")
+            num_id = num.get(f"{w}val") if num is not None else None
+            ilvl = lvl.get(f"{w}val") if lvl is not None else "0"
+        else:
+            style = para.find(f"{w}pPr/{w}pStyle")
+            num_id, ilvl = inherited(style.get(f"{w}val") if style is not None else None)
+        if num_id is None or num_id == "0":
+            continue  # numId 0 is OOXML for "numbering removed here"
+        out.append((int(num_id), int(ilvl or 0)))
+    return out
+
+
+def render_clause_numbers(doc: aim.AimDocument) -> list[tuple[str, str]]:
+    """``[(rendered number, text)]`` for every clause-numbered block, by
+    running the counter arithmetic the generated stylesheet declares.
+
+    Since v0.5 the number is NOT in the document — it is computed at render
+    time, which is what makes it survive an edit. That leaves a test with no
+    string to assert, so this stands in for the browser: same rules as the
+    CSS (a level increments its own counter and zeroes every deeper one;
+    ``clause-restart`` sets it to 1), no engine involvement, so the two can
+    actually disagree.
+    """
+    counters = [0] * 10
+    out: list[tuple[str, str]] = []
+    for chunk in doc.chunks:
+        match = re.search(r'class="([^"]*)"', chunk.html)
+        classes = (match.group(1) if match else "").split()
+        level = next(
+            (int(c.split("-")[1]) for c in classes if re.fullmatch(r"clause-[1-9]", c)),
+            None,
+        )
+        if level is None:
+            continue
+        if "clause-restart" in classes:
+            counters[level] = 1
+        else:
+            counters[level] += 1
+        for deeper in range(level + 1, 10):
+            counters[deeper] = 0
+        prefix = re.search(r'data-aim-num-prefix="([^"]*)"', chunk.html)
+        number = (
+            prefix.group(1) + str(counters[level])
+            if prefix
+            else ".".join(str(counters[i]) for i in range(1, level + 1))
+        )
+        out.append((number, chunk.text))
+    return out
+
+
 class TestClauseNumbering:
     """The legal document's whole structure is its numbering."""
 
-    def test_multilevel_labels_are_materialised(self, legal):
-        # each level pinned on its own: "startswith" alone is satisfied by a
-        # deeper label, so losing the top-level "1." would go unnoticed
-        starts = {c.text.split("\xa0")[0].strip() for c in legal.chunks}
-        for label in ("1.", "1.1", "1.1.1", "1.1.2", "1.1.10.1"):
-            assert label in starts, f"clause {label} lost"
+    def test_every_level_is_numbered_dynamically(self, legal):
+        # each level pinned on its own: a check for the deepest label alone
+        # would not notice the top level going missing
+        rendered = {number for number, _ in render_clause_numbers(legal)}
+        for label in ("1", "1.1", "1.1.1", "1.1.2", "1.1.10.1"):
+            assert label in rendered, f"clause {label} lost"
+
+    def test_the_numbers_are_not_written_into_the_text(self, legal, legal_body):
+        # the point of v0.5: nothing stores the number, so an edit cannot
+        # leave a stale one behind
+        assert not any(re.match(r"^\d+(\.\d+)*\.?\s", c.text) for c in legal.chunks), (
+            "a clause label is baked into the text"
+        )
+        assert 'class="clause-' in legal_body
 
     def test_numbering_continues_across_word_num_instances(self, legal):
         # Word starts a fresh w:num whenever a list is interrupted (here the
         # nested 1.1.10.1/.2), so this sequence spans two numIds over one
         # abstract definition. Counting per instance restarted it at 1.1.1
         # mid-contract; the definitions must run 1.1.1 … 1.1.14 unbroken.
-        seen = [
-            m.group(0)
-            for c in legal.chunks
-            if (m := re.match(r"^1\.1\.(\d+)$", c.text.split("\xa0")[0] + "")) and m
-        ]
-        numbers = [int(s.rsplit(".", 1)[1]) for s in seen]
+        seen = [n for n, _ in render_clause_numbers(legal) if re.fullmatch(r"1\.1\.\d+", n)]
+        numbers = [int(n.rsplit(".", 1)[1]) for n in seen]
         assert numbers == list(range(1, len(numbers) + 1)), seen
         assert len(numbers) >= 14, "the definitions list is truncated"
 
+    def test_the_rendered_numbers_are_the_ones_word_draws(self, legal):
+        # The engine and the stylesheet are two independent implementations
+        # of the same arithmetic — the engine walks numbering.xml, the CSS
+        # counts classes. This checks they agree on the real document, which
+        # is the only thing that makes the class emission trustworthy.
+        from aimformat.convert._docx_seam import NumberingEngine, parse_docx
+
+        parsed = parse_docx(str(LEGAL))
+        oracle = NumberingEngine(
+            zipfile.ZipFile(LEGAL).read("word/numbering.xml")
+        )  # a second, untouched engine
+        del parsed
+        expected: list[str] = []
+        for num_id, ilvl in _numbered_paragraphs(LEGAL):
+            drawn = oracle.draw(num_id, ilvl)
+            if drawn.level is not None:
+                expected.append(drawn.label.rstrip("."))
+        rendered = [n for n, _ in render_clause_numbers(legal)]
+        assert rendered == expected, (
+            f"stylesheet and engine disagree\n  css: {rendered[:8]}\n  word: {expected[:8]}"
+        )
+
     def test_a_numbered_clause_keeps_its_text(self, legal):
-        clause = next(c for c in legal.chunks if c.text.startswith("1.1.1"))
-        assert "Applicable Laws" in clause.text
+        text = next(t for n, t in render_clause_numbers(legal) if n == "1.1.1")
+        assert "Applicable Laws" in text
 
 
 class TestHeadingsAreOnlyRealHeadings:
@@ -120,7 +236,7 @@ class TestHeadingsAreOnlyRealHeadings:
 
     def test_clause_bodies_carry_no_size_override(self, legal):
         # body text must inherit the theme, not a literal heading size
-        clause = next(c for c in legal.chunks if c.text.startswith("1.1.1"))
+        clause = next(c for c in legal.chunks if "Applicable Laws" in c.text)
         assert "font-size" not in clause.html
 
 

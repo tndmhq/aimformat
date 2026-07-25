@@ -23,6 +23,13 @@ def version_key(value: str) -> tuple[int, ...] | None:
     return tuple(int(p) for p in parts)
 
 
+#: The spec version that introduced dynamic numbering (clause classes, list
+#: formats and suffixes, the multi-level chain). One constant, because these
+#: names are generated from several tables and every one of them shares a
+#: floor.
+_NUMBERING_SINCE = "0.5"
+
+
 class Registry:
     """Typed accessors over the raw registry tables."""
 
@@ -160,12 +167,86 @@ class Registry:
         for prefix, props in c["spacing_props"].items():
             for k, v in c["spacing_scale"].items():
                 out[f"{prefix}-{k}"] = ";".join(f"{p}:{v}" for p in props)
+        for i in range(1, c.get("clause_levels", 0) + 1):
+            # A clause advances its own level and zeroes every deeper one, so
+            # 1.2.1 follows 1.1.9. counter-SET, not counter-reset: a reset
+            # instantiates a counter scoped to the element and its following
+            # siblings, and instantiating again on a later sibling does not
+            # reset the one already in scope — deeper levels keep climbing,
+            # and only from the SECOND occurrence, so short documents look
+            # fine. Verified in-engine before this shipped.
+            deeper = " ".join(f"aim-c{j} 0" for j in range(i + 1, c["clause_levels"] + 1))
+            decl = f"counter-increment:aim-c{i}"
+            if deeper:
+                decl += f";counter-set:{deeper}"
+            # hanging indent: the marker sits in the gutter, wrapped text
+            # aligns to the clause body the way legal documents set it
+            out[f"clause-{i}"] = decl + ";padding-left:3.2em;text-indent:-3.2em"
+        for name, style in c.get("list_formats", {}).items():
+            out[name] = f"list-style-type:{style}"
         out.update(c["singles"])
         return out
 
     @cached_property
+    def clause_levels(self) -> int:
+        """How many flat clause-numbering levels the vocabulary defines.
+        Nine, because that is Word's own depth cap — which is what makes the
+        set closed rather than arbitrary."""
+        return int(self.raw["classes"].get("clause_levels", 0))
+
+    @cached_property
+    def class_rules(self) -> list[tuple[str, str]]:
+        """Rules that are not one class → one declaration: generated markers
+        (``::before``) and compound selectors. Kept apart from
+        :attr:`class_declarations` because the stylesheet needs both and only
+        the flat table answers "what does this class mean on its own"."""
+        c = self.raw["classes"]
+        levels = c.get("clause_levels", 0)
+        rules: list[tuple[str, str]] = []
+        for i in range(1, levels + 1):
+            chain = ' "." '.join(f"counter(aim-c{j})" for j in range(1, i + 1))
+            # level 1 draws "1." and deeper levels "1.1" — the legal idiom,
+            # and what every fixture's lvlText declares
+            tail = ' ".\\a0"' if i == 1 else ' "\\a0"'
+            rules.append((f".clause-{i}::before", f"content:{chain}{tail}"))
+            # a prefix ("Article %1") shows its own level alone, never the
+            # chain — the literal is data, so it rides an attribute and the
+            # stylesheet stays closed
+            rules.append(
+                (
+                    f".clause-{i}[data-aim-num-prefix]::before",
+                    f'content:attr(data-aim-num-prefix) counter(aim-c{i}) "\\a0"',
+                )
+            )
+            deeper = " ".join(f"aim-c{j} 0" for j in range(i + 1, levels + 1))
+            # A restart cancels the increment outright rather than setting a
+            # value around it: counter-set and counter-increment apply in a
+            # fixed order that this must not depend on.
+            restart = f"counter-increment:none;counter-set:aim-c{i} 1"
+            rules.append((f".clause-{i}.clause-restart", f"{restart} {deeper}".rstrip()))
+        if levels:
+            # the marker sits in the gutter the clause's negative text-indent
+            # opens, so wrapped lines align to the body rather than the number
+            markers = ",".join(f".clause-{i}::before" for i in range(1, levels + 1))
+            rules.append((markers, "display:inline-block;min-width:3.2em;text-indent:0"))
+        # multi-level lists chain the built-in list-item counter, which is
+        # also what makes <ol start> work — a custom counter would ignore it
+        rules.append((".list-multilevel", "list-style:none"))
+        rules.append((".list-multilevel > li::before", 'content:counters(list-item, ".") "\\a0"'))
+        formats = {"": "decimal", **{k: v for k, v in c.get("list_formats", {}).items()}}
+        for suffix, tail in c.get("list_suffixes", {}).items():
+            rules.append((f".{suffix}", "list-style:none"))
+            for cls, style in formats.items():
+                sel = f".{cls}.{suffix} > li::before" if cls else f".{suffix} > li::before"
+                rules.append((sel, f'content:counter(list-item, {style}) "{tail}"'))
+        return rules
+
+    @cached_property
     def allowed_classes(self) -> frozenset[str]:
-        return frozenset(self.class_declarations)
+        c = self.raw["classes"]
+        return frozenset(self.class_declarations) | frozenset(
+            c.get("markers", []) + list(c.get("list_suffixes", {}))
+        )
 
     # -- inline styles ---------------------------------------------------------
     @cached_property
@@ -207,8 +288,22 @@ class Registry:
     @cached_property
     def class_floors(self) -> dict[str, str]:
         """Classes introduced after 0.1, mapped to the spec version that
-        introduced them. Absent means "since the beginning"."""
-        return self.raw["classes"].get("since", {})
+        introduced them. Absent means "since the beginning".
+
+        The numbering vocabulary derives its floor from the tables that
+        define it rather than repeating every name in ``since`` — seventeen
+        hand-listed entries is seventeen chances to forget one, and a class
+        with no floor silently claims to have existed since 0.1."""
+        c = self.raw["classes"]
+        floors = dict(c.get("since", {}))
+        for name in (
+            [f"clause-{i}" for i in range(1, c.get("clause_levels", 0) + 1)]
+            + list(c.get("list_formats", {}))
+            + list(c.get("list_suffixes", {}))
+            + c.get("markers", [])
+        ):
+            floors.setdefault(name, _NUMBERING_SINCE)
+        return floors
 
     @cached_property
     def type_scale_pt(self) -> dict[str, str]:

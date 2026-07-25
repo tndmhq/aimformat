@@ -1,7 +1,7 @@
 # .aim format reference (condensed)
 
 Normative source: [spec.md](https://github.com/tndmhq/aimformat/blob/main/spec.md)
-(v0.4). This is the working subset an agent needs while editing.
+(v0.5). This is the working subset an agent needs while editing.
 
 ## Anatomy
 
@@ -10,14 +10,14 @@ current document before any blob:
 
 ```
 <!doctype html>
-<html data-aim-version="0.4" lang="en">
+<html data-aim-version="0.5" lang="en">
 <head>
   <meta charset="utf-8">
   <!--\naim-note: … -->                        ← agent note (§2.5)
   <title>…</title>
   <script type="application/aim-meta+json">…   ← summary + toc cache
   <script type="application/aim-doc+json">…    ← page setup (aim:doc)
-  <style data-aim-css="0.4">…                  ← machine-managed stylesheet
+  <style data-aim-css="0.5">…                  ← machine-managed stylesheet
   <style data-aim-theme>:root{--aim-brand-1:…} ← theme slots
 </head>
 <body>

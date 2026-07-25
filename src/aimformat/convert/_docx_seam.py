@@ -282,6 +282,30 @@ def parse_docx(source: str | bytes | BinaryIO) -> ParsedDocx:
     )
 
 
+#: ``%1.%2.%3`` — the decimal chain that legal clause numbering is built from.
+_CHAIN = re.compile(r"^%1(?:\.%(\d))*\.?$")
+
+
+@dataclass
+class NumberDraw:
+    """Everything needed to render one numbered paragraph, from one advance
+    of the counters — so a caller cannot accidentally count twice."""
+
+    label: str
+    """What Word draws ("1.1.11"), always computed: it is the baked fallback
+    and the oracle the dynamic rendering is checked against."""
+
+    restarted: bool
+    """This paragraph reset its level's counter (Word's "Restart at 1")."""
+
+    level: int | None = None
+    """1-based clause level when this paragraph can be numbered dynamically,
+    None when it must carry a baked label."""
+
+    prefix: str = ""
+    """The literal before the counter ("Article "), when the level draws one."""
+
+
 @dataclass
 class NumberLevel:
     """One level of a numbering definition, as Word declares it."""
@@ -423,17 +447,66 @@ class NumberingEngine:
         label Word would draw ("1.1.1", "(a)", "Article 3"), or "" when the
         level draws none. Call exactly once per numbered paragraph, in
         document order."""
+        return self.draw(num_id, ilvl).label
+
+    def draw(self, num_id: int, ilvl: int) -> NumberDraw:
+        """Advance the counters once and describe how to render this
+        paragraph — the label Word draws, whether it restarts, and whether
+        the level can be expressed dynamically instead of baked."""
         level = self.level(num_id, ilvl)
         abstract = self._abstract.get(num_id)
         if level is None or abstract is None:
-            return ""
+            return NumberDraw(label="", restarted=False)
+        restarted = (num_id, ilvl) in self._pending
         self._advance(abstract, num_id, ilvl, level)
         if not level.is_ordered:
             # a bullet level draws a glyph we do not carry, a "none" level
             # draws nothing — but the counter above still moved, so the
             # numbered siblings around it stay correct
-            return ""
-        return self._render(abstract, num_id, level)
+            return NumberDraw(label="", restarted=restarted)
+        clause_level, prefix = self._dynamic_style(num_id, ilvl, level)
+        return NumberDraw(
+            label=self._render(abstract, num_id, level),
+            restarted=restarted,
+            level=clause_level,
+            prefix=prefix,
+        )
+
+    def _dynamic_style(self, num_id: int, ilvl: int, level: NumberLevel) -> tuple[int | None, str]:
+        """Whether this level is one CSS counters can draw, and its literal
+        prefix if so.
+
+        Two shapes qualify, and only these two:
+
+        * the decimal chain ``%1.%2.%3`` — this level plus every ancestor,
+          uniform ``.`` separators, every referenced level decimal;
+        * ``Article %1`` — a literal followed by this level's own counter,
+          decimal, at the top level.
+
+        Everything else (mixed formats down one chain, mixed separators,
+        parenthesised sub-items) keeps a baked label. ``content:`` cannot
+        read an ancestor level's *format* from a fixed stylesheet, and a
+        per-(depth × format) rule matrix is how a closed vocabulary turns
+        into per-document CSS.
+        """
+        text = level.lvl_text
+        if not text or level.num_fmt != "decimal":
+            return None, ""
+        chain = _CHAIN.match(text)
+        if chain and text.count("%") == ilvl + 1:
+            # every referenced ancestor must be decimal too, or the chain
+            # renders one style where the source draws another
+            for ref in range(ilvl + 1):
+                ancestor = self.level(num_id, ref)
+                if ancestor is None or ancestor.num_fmt != "decimal":
+                    return None, ""
+            return ilvl + 1, ""
+        own = f"%{ilvl + 1}"
+        if text.count("%") == 1 and text.endswith(own):
+            prefix = text[: -len(own)]
+            if "%" not in prefix:
+                return ilvl + 1, prefix
+        return None, ""
 
     def _advance(self, abstract: int, num_id: int, ilvl: int, level: NumberLevel) -> None:
         key = (abstract, ilvl)
