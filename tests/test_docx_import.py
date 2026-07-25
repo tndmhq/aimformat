@@ -305,6 +305,9 @@ _V = "urn:schemas-microsoft-com:vml"
 _R = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
 _MC = "http://schemas.openxmlformats.org/markup-compatibility/2006"
 _WPS = "http://schemas.microsoft.com/office/word/2010/wordprocessingShape"
+_A = "http://schemas.openxmlformats.org/drawingml/2006/main"
+_PIC = "http://schemas.openxmlformats.org/drawingml/2006/picture"
+_WPG = "http://schemas.microsoft.com/office/word/2010/wordprocessingGroup"
 
 
 def _one_para_html(builder) -> str:
@@ -750,6 +753,82 @@ class TestTableStyleResolution:
 # --------------------------------------------------------------------------
 # Card C: to_docx export symmetry (DOCX → aim → DOCX round-trip idempotency)
 # --------------------------------------------------------------------------
+
+
+class TestGroupedPictureSizing:
+    """A picture inside a group is authored in the GROUP's coordinate space.
+    Read literally it renders at its full authored size — a 1.5-inch logo
+    arriving 600px wide — so the scaling is what makes grouped artwork
+    usable at all. Groups nest, and VML expresses the same idea in a
+    completely different way; both are covered here because the real
+    fixture only exercises one flat DrawingML group."""
+
+    @staticmethod
+    def _drawingml(depth: int) -> int | None:
+        """A picture 100000 EMU wide, wrapped in *depth* nested groups. Each
+        group halves the coordinate space, so the picture must come out at
+        100000 / 2**depth EMU regardless of how deep it sits."""
+        from aimformat.convert._docx_seam import _picture_width_px
+
+        a, pic_ns, wpg = _A, _PIC, _WPG
+        inner = (
+            f'<pic:pic xmlns:pic="{pic_ns}" xmlns:a="{a}"><pic:spPr><a:xfrm>'
+            '<a:ext cx="100000" cy="100000"/></a:xfrm></pic:spPr>'
+            '<pic:blipFill><a:blip r:embed="rId1" '
+            f'xmlns:r="{_R}"/></pic:blipFill></pic:pic>'
+        )
+        for level in range(depth):
+            # ext is HALF of chExt at every level: each wrapper halves again
+            child_space = 100000 * (2**level)
+            own_ext = child_space // 2
+            inner = (
+                f'<wpg:wgp xmlns:wpg="{wpg}" xmlns:a="{a}"><wpg:grpSpPr><a:xfrm>'
+                f'<a:ext cx="{own_ext}" cy="{own_ext}"/>'
+                f'<a:chExt cx="{child_space}" cy="{child_space}"/>'
+                f"</a:xfrm></wpg:grpSpPr>{inner}</wpg:wgp>"
+            )
+        root = etree.fromstring(f'<w:drawing xmlns:w="{_W}">{inner}</w:drawing>')
+        blip = root.find(f".//{{{a}}}blip")
+        return _picture_width_px(blip, is_vml=False)
+
+    def test_a_single_group_scales_into_its_coordinate_space(self):
+        # 100000 EMU authored, one group halving it → 50000 EMU ≈ 5px
+        assert self._drawingml(depth=1) == round(50000 / 9525)
+
+    def test_nested_groups_accumulate_every_ancestors_scale(self):
+        # two groups, each halving → 25000 EMU. Stopping at the FIRST group
+        # ancestor gives 50000 (5px) — twice the size Word draws.
+        assert self._drawingml(depth=2) == round(25000 / 9525)
+        assert self._drawingml(depth=3) == max(1, round(12500 / 9525))
+
+    @staticmethod
+    def _vml(child_style: str, group_style: str = "width:150pt", coordsize: str = "3000,3000"):
+        from aimformat.convert._docx_seam import _picture_width_px
+
+        root = etree.fromstring(
+            f'<w:pict xmlns:w="{_W}" xmlns:v="{_V}" xmlns:r="{_R}">'
+            f'<v:group style="{group_style}" coordsize="{coordsize}">'
+            f'<v:shape style="{child_style}"><v:imagedata r:id="rId1"/></v:shape>'
+            "</v:group></w:pict>"
+        )
+        return _picture_width_px(root.find(f".//{{{_V}}}imagedata"), is_vml=True)
+
+    def test_a_vml_group_child_scales_by_the_groups_coordsize(self):
+        # the child's "600" is in the group's 3000-unit space, and the group
+        # is 150pt (200px) wide → 200 * 600/3000 = 40px. Reading the bare
+        # number as a measurement, or falling through to the group's own
+        # width, both render this child at the whole group's size.
+        assert self._vml("position:absolute;width:600;height:600") == 40
+
+    def test_a_lone_vml_shape_uses_its_own_measurement(self):
+        from aimformat.convert._docx_seam import _picture_width_px
+
+        root = etree.fromstring(
+            f'<w:pict xmlns:w="{_W}" xmlns:v="{_V}" xmlns:r="{_R}">'
+            '<v:shape style="width:75pt;height:75pt"><v:imagedata r:id="rId1"/>'
+            "</v:shape></w:pict>"
+        )
+        assert _picture_width_px(root.find(f".//{{{_V}}}imagedata"), is_vml=True) == 100
 
 
 class TestImageParagraphs:

@@ -1123,62 +1123,113 @@ def _geometry_ext(root: Any) -> Any | None:
     return None
 
 
+def _own_xfrm(el: Any) -> tuple[int | None, int | None]:
+    """``(ext.cx, chExt.cx)`` from an element's OWN ``a:xfrm``, which sits
+    one level down (``wpg:grpSpPr/a:xfrm``, ``pic:spPr/a:xfrm``). Never a
+    descendant shape's — a subtree search would read a child picture's
+    extent as if it were the group's."""
+    for child in el:
+        xfrm = child.find(f"{{{_A_NS}}}xfrm")
+        if xfrm is None:
+            continue
+        ext = xfrm.find(f"{{{_A_NS}}}ext")
+        ch = xfrm.find(f"{{{_A_NS}}}chExt")
+        return (
+            _int_or_none(ext.get("cx")) if ext is not None else None,
+            _int_or_none(ch.get("cx")) if ch is not None else None,
+        )
+    return (None, None)
+
+
+_VML_WIDTH = re.compile(r"width:\s*([\d.]+)\s*(pt|px|in|mm|cm)?")
+
+
+def _vml_width(el: Any) -> tuple[float | None, str | None]:
+    """A VML element's declared width and its unit, if any. A shape inside a
+    ``v:group`` states its width in the GROUP's coordinate units, with no
+    unit suffix — which is what distinguishes it from a real measurement."""
+    match = _VML_WIDTH.search(el.get("style") or "")
+    if match is None:
+        return None, None
+    try:
+        return float(match.group(1)), match.group(2)
+    except ValueError:
+        return None, None
+
+
+_PT_PER_PX = 0.75
+_UNIT_PX = {"pt": 1 / _PT_PER_PX, "px": 1.0, "in": 96.0, "mm": 96 / 25.4, "cm": 96 / 2.54}
+
+
 def _picture_width_px(node: Any, is_vml: bool) -> int | None:
     """The width Word draws this picture at, in CSS px, or None.
 
-    A picture inside a group is authored in the GROUP's coordinate space, so
-    its real width is ``group_px * own_ext / group_child_ext``. Without that
-    scaling a 1.5-inch logo lands at its full pixel size and swamps the page.
+    A picture inside a group is authored in the GROUP's coordinate space, and
+    groups nest, so the conversion is a product of ``ext/chExt`` over every
+    group ancestor — only the outermost one states a real measurement.
+    Without it a 1.5-inch logo lands at its full pixel size and swamps the
+    page; with only one level of it, a picture inside a nested group is
+    scaled by the inner group's ratio alone and lands wrong by the outer
+    group's factor.
     """
     if is_vml:
-        cur = node  # v:shape / v:group carry CSS-ish geometry in @style
-        while cur is not None:
-            m = re.search(r"width:\s*([\d.]+)pt", cur.get("style") or "")
-            if m:
-                return max(1, round(float(m.group(1)) / 0.75))
-            cur = cur.getparent()
-        return None
+        return _vml_width_px(node)
 
     # this picture's own extent (pic → pic:spPr/a:xfrm/a:ext)
     pic = node
     while pic is not None and _local(pic) != "pic":
         pic = pic.getparent()
-    # NB: a:extLst holds unrelated <a:ext uri="…"> extension elements, so
-    # only an ext that actually carries geometry (@cx) counts
-    own_ext = _geometry_ext(pic) if pic is not None else None
+    own_cx = _own_xfrm(pic)[0] if pic is not None else None
 
-    # the drawing/group that gives the extent in real units, plus the child
-    # coordinate space the picture's own extent is expressed in
-    group_px: float | None = None
-    child_space: float | None = None
+    # every group ancestor contributes its own coordinate-space ratio
+    scale = 1.0
+    grouped = False
     cur = pic.getparent() if pic is not None else node
     while cur is not None and _local(cur) != "drawing":  # never leave this drawing
-        ch = cur.find(f".//{{{_A_NS}}}chExt")
-        ext = _geometry_ext(cur)
-        if ch is not None and ext is not None and ch.get("cx"):
-            try:
-                group_px, child_space = int(ext.get("cx")) / _EMU_PER_PX, float(ch.get("cx"))
-            except (TypeError, ValueError):
-                return None
-            break
+        ext_cx, ch_cx = _own_xfrm(cur)
+        if ext_cx and ch_cx:
+            scale *= ext_cx / ch_cx
+            grouped = True
         cur = cur.getparent()
-    if group_px is None:  # ungrouped: the drawing's own extent is the size
-        cur = node
-        while cur is not None and _local(cur) != "p":
-            ext = cur.find(f".//{{{_WP_NS}}}extent")
-            if ext is not None and ext.get("cx"):
-                try:
-                    return max(1, round(int(ext.get("cx")) / _EMU_PER_PX))
-                except (TypeError, ValueError):
-                    return None
-            cur = cur.getparent()
+
+    if grouped and own_cx:
+        return max(1, round(own_cx * scale / _EMU_PER_PX))
+    if grouped:  # a group whose child states no extent of its own
         return None
-    if own_ext is not None and child_space and own_ext.get("cx"):
-        try:
-            return max(1, round(group_px * int(own_ext.get("cx")) / child_space))
-        except (TypeError, ValueError, ZeroDivisionError):
-            return None
-    return max(1, round(group_px))
+    # ungrouped: the drawing's own extent is the size
+    cur = node
+    while cur is not None and _local(cur) != "p":
+        ext = cur.find(f".//{{{_WP_NS}}}extent")
+        if ext is not None and (cx := _int_or_none(ext.get("cx"))):
+            return max(1, round(cx / _EMU_PER_PX))
+        cur = cur.getparent()
+    return None
+
+
+def _vml_width_px(node: Any) -> int | None:
+    """VML geometry lives in a CSS-ish ``@style``. A shape inside a
+    ``v:group`` is sized in that group's ``coordsize`` units, so its bare
+    number has to be scaled by the group's real width — read literally, every
+    child of a group renders at the group's own size."""
+    own_w = own_unit = None
+    cur = node
+    while cur is not None:
+        width, unit = _vml_width(cur)
+        if width is not None and own_w is None:
+            own_w, own_unit = width, unit
+        if _local(cur) == "group":
+            group_w, group_unit = _vml_width(cur)
+            coords = (cur.get("coordsize") or "").split(",")
+            if own_unit is None and own_w is not None and group_w is not None and coords:
+                span = _int_or_none(coords[0])
+                factor = _UNIT_PX.get(group_unit or "pt")
+                if span and factor:
+                    return max(1, round(group_w * factor * own_w / span))
+        cur = cur.getparent()
+    if own_w is None:
+        return None
+    # a unitless width outside any group has no scale to resolve it against
+    return max(1, round(own_w * _UNIT_PX[own_unit])) if own_unit else None
 
 
 def picture_relationships(elem: Any) -> list[tuple[str, str, int | None]]:
