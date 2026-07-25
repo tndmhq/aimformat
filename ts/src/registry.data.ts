@@ -2,7 +2,7 @@
 // Source: src/aimformat/registry.json (+ the aim-note template in
 // src/aimformat/note.py). Regenerate: python3 scripts/gen_ts_registry.py
 
-export const SPEC_VERSION = "0.4";
+export const SPEC_VERSION = "0.5";
 
 export const VOID_ELEMENTS: ReadonlySet<string> = new Set(["meta", "img", "br", "hr", "link", "input"]);
 

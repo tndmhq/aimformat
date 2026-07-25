@@ -17,8 +17,18 @@ from .registry import REGISTRY
 
 def _base_layer() -> list[str]:
     slots = ";".join(f"{k}:{v['default']}" for k, v in REGISTRY.theme_slots.items())
+    levels = REGISTRY.num_levels
+    # The outline counters are instantiated ONCE, on the body, so every
+    # numbered block in the document shares one scope. Instantiating them per element is the
+    # counter-reset trap: a second instance does not reset the first.
+    counters = (
+        "body{counter-reset:" + " ".join(f"aim-c{i}" for i in range(1, levels + 1)) + "}"
+        if levels
+        else ""
+    )
     return [
         ":root{" + slots + "}",
+        *([counters] if counters else []),
         "html{-webkit-text-size-adjust:100%}",
         "body{margin:2rem auto;padding:0 1.5rem;max-width:52rem;"
         "font-family:var(--aim-font-body);font-size:1rem;line-height:1.6;"
@@ -105,6 +115,11 @@ def generate_aim_css() -> str:
     for name, decl in sorted(REGISTRY.class_declarations.items()):
         escaped = name.replace("/", "\\/")  # defensive; v0.1 names have no '/'
         lines.append("." + escaped + "{" + decl + "}")
+    # generated markers and compound selectors, in registry order: a compound
+    # rule has to follow the flat class it refines, so sorting them together
+    # with the table above would break the cascade
+    for selector, decl in REGISTRY.class_rules:
+        lines.append(selector + "{" + decl + "}")
     lines += _chrome_layer()
     return "\n".join(lines) + "\n"
 

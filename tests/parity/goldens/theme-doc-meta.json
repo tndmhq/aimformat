@@ -31,7 +31,7 @@
     }
   ],
   "containers": [],
-  "docHash": "sha256:8f62bb8270198d5b6111f6927879d879ae289b40b3c00034f5aa70a90af33971",
+  "docHash": "sha256:2fdcdf53ee9172edd1ef68dda5d66520ff8ffa297c6705f51401fb2e00e42ef0",
   "docSettings": {
     "page": {
       "margins": {
@@ -51,13 +51,13 @@
   "hasCanonicalNote": true,
   "history": {
     "lines": 4,
-    "sha256": "sha256:0c6fe4cc0327bea223f4e212bd2ddc71e7df21546f32a6f234ebcab7e2a51f87"
+    "sha256": "sha256:32c81a3a96ff0acbfc33392f4fb63eeedebad86f09a40c5ee1580d3874e9a564"
   },
   "lang": "en",
   "meta": {
     "summary": {
       "as_of_seq": 4,
-      "doc_hash": "sha256:8f62bb8270198d5b6111f6927879d879ae289b40b3c00034f5aa70a90af33971",
+      "doc_hash": "sha256:2fdcdf53ee9172edd1ef68dda5d66520ff8ffa297c6705f51401fb2e00e42ef0",
       "model": "model-x",
       "text": "A one-paragraph document about head state."
     },
@@ -98,7 +98,7 @@
       "text": "One paragraph to summarize and embed."
     }
   ],
-  "note": "\naim-note: This file is an AIM document (open format, v0.4) — valid HTML plus\nchunk identity, a pending-suggestions lane, and an edit history.\nAgent docs: https://aimformat.com/llms.txt\nThe reliable way to edit this file is the `aimformat` tooling, which manages\nids, suggestions, and history for you: `pip install aimformat` for the `aim`\nCLI (`aim --help`); `pip install 'aimformat[mcp]'` adds its MCP server\n(`aim mcp`). An Agent Skill exists: `npx skills add tndmhq/aimformat`.\nHand-editing as plain text is the fallback; if you do: keep every data-aim id\nstable (never renumber or reuse; give new content a fresh id), treat the\naim-proposals appendix and the history script as append-only tool lanes, and\nvalidate with `aim lint`. Humans review in AIM editors:\nhttps://aimformat.com/editors\n",
+  "note": "\naim-note: This file is an AIM document (open format, v0.5) — valid HTML plus\nchunk identity, a pending-suggestions lane, and an edit history.\nAgent docs: https://aimformat.com/llms.txt\nThe reliable way to edit this file is the `aimformat` tooling, which manages\nids, suggestions, and history for you: `pip install aimformat` for the `aim`\nCLI (`aim --help`); `pip install 'aimformat[mcp]'` adds its MCP server\n(`aim mcp`). An Agent Skill exists: `npx skills add tndmhq/aimformat`.\nHand-editing as plain text is the fallback; if you do: keep every data-aim id\nstable (never renumber or reuse; give new content a fresh id), treat the\naim-proposals appendix and the history script as append-only tool lanes, and\nvalidate with `aim lint`. Humans review in AIM editors:\nhttps://aimformat.com/editors\n",
   "pageSetup": {
     "contentHeightMm": 228.59999999999997,
     "contentWidthMm": 177.9,
@@ -114,10 +114,10 @@
     "size": "Letter"
   },
   "proposals": [],
-  "specVersion": "0.4",
+  "specVersion": "0.5",
   "stylesheet": {
-    "sha256": "sha256:fb75617803abea27d25fdd474a8aefe63be623764992fdd911d326f7dc603522",
-    "version": "0.4"
+    "sha256": "sha256:de54c7dd7c879ba0b6fbeb1115b2264bab9f4914bb2e413348fe3987e791ee10",
+    "version": "0.5"
   },
   "theme": {
     "--aim-brand-1": "#1a73e8",

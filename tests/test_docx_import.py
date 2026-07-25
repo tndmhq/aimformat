@@ -1,14 +1,18 @@
 """The native DOCX importer (extra ``docx``): styling fidelity, the
 rhythm-vs-local-intent doctrine, structure, pagination, theme derivation.
 
-Fixtures are built with python-docx (a dev/test dependency), same pattern
-as the pagination tests — no binary files in the repo.
+Fixtures here are built with python-docx (a dev/test dependency), same
+pattern as the pagination tests: one feature per document, so a failure
+names the feature. Whole real-world documents — the combinations no
+synthetic fixture produces — live as binaries in ``tests/fixtures/docxs/``
+and are asserted in ``test_docx_real_documents.py``.
 """
 
 from __future__ import annotations
 
 import io
 import re
+import zipfile
 
 import pytest
 
@@ -19,11 +23,13 @@ docx = pytest.importorskip("docx")
 
 from docx import Document  # noqa: E402
 from docx.enum.text import WD_ALIGN_PARAGRAPH, WD_BREAK, WD_COLOR_INDEX  # noqa: E402
-from docx.oxml import OxmlElement  # noqa: E402
+from docx.oxml import OxmlElement, parse_xml  # noqa: E402
 from docx.oxml.ns import qn  # noqa: E402
-from docx.shared import Emu, Pt, RGBColor  # noqa: E402
+from docx.shared import Emu, Inches, Pt, RGBColor  # noqa: E402
+from lxml import etree  # noqa: E402
 
 from aimformat.convert import from_docx  # noqa: E402
+from aimformat.registry import REGISTRY  # noqa: E402
 
 # a valid 1×1 red PNG
 _PNG = bytes.fromhex(
@@ -284,7 +290,6 @@ def test_a_list_starting_indented_keeps_its_outdented_items():
 # Card A: edge-case ports (strict-OOXML, textboxes, OMML, checkboxes, symbols)
 # --------------------------------------------------------------------------
 
-from docx.oxml import parse_xml  # noqa: E402
 
 from aimformat.convert._docx_in import convert_docx  # noqa: E402
 from aimformat.convert._docx_seam import (  # noqa: E402
@@ -297,6 +302,13 @@ from aimformat.convert._docx_seam import (  # noqa: E402
 _W = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
 _M = "http://schemas.openxmlformats.org/officeDocument/2006/math"
 _W14 = "http://schemas.microsoft.com/office/word/2010/wordml"
+_V = "urn:schemas-microsoft-com:vml"
+_R = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
+_MC = "http://schemas.openxmlformats.org/markup-compatibility/2006"
+_WPS = "http://schemas.microsoft.com/office/word/2010/wordprocessingShape"
+_A = "http://schemas.openxmlformats.org/drawingml/2006/main"
+_PIC = "http://schemas.openxmlformats.org/drawingml/2006/picture"
+_WPG = "http://schemas.microsoft.com/office/word/2010/wordprocessingGroup"
 
 
 def _one_para_html(builder) -> str:
@@ -427,6 +439,78 @@ class TestTextbox:
         imported = convert_docx(out)
         texts = [c.text for c in imported.chunks]
         assert texts == ["Anchor", "BoxLine"]
+
+    # An image inside a textbox has two failure modes that pull in OPPOSITE
+    # directions, so each flavour must be pinned or a fix for one silently
+    # breaks the other — which is exactly what happened twice here:
+    #
+    #   * dpc's typed model carries DrawingML pictures, so recovering blips
+    #     from inside a textbox emits them TWICE;
+    #   * dpc has no VML model at all, so NOT recovering there loses the
+    #     image outright.
+    #
+    # These two tests are a pair. Do not "simplify" either away.
+
+    @staticmethod
+    def _textbox_with_image(flavour: str) -> str:
+        doc = Document()
+        anchor = doc.add_paragraph("Anchor")
+        rid, _ = doc.part.get_or_add_image(io.BytesIO(_PNG))
+        if flavour == "vml":
+            inner = (
+                f'<w:pict xmlns:w="{_W}" xmlns:v="{_V}" xmlns:r="{_R}">'
+                '<v:shape style="width:60pt;height:60pt">'
+                f'<v:imagedata r:id="{rid}"/></v:shape></w:pict>'
+            )
+        else:
+            scratch = Document()
+            run = scratch.add_paragraph().add_run()
+            run.add_picture(io.BytesIO(_PNG), width=Inches(1))
+            drawing = etree.tostring(run._r.find(f"{{{_W}}}drawing")).decode()
+            inner = re.sub(r'r:embed="[^"]+"', f'r:embed="{rid}"', drawing)
+            if flavour == "drawingml-mce":
+                # how Word actually writes anything richer than a plain inline
+                # picture: grouped art, picture fills, SmartArt
+                inner = (
+                    f'<mc:AlternateContent xmlns:mc="{_MC}" xmlns:w="{_W}" '
+                    f'xmlns:wps="{_WPS}" xmlns:v="{_V}" xmlns:r="{_R}">'
+                    f'<mc:Choice Requires="wps">{inner}</mc:Choice>'
+                    f'<mc:Fallback><v:shape><v:imagedata r:id="{rid}"/>'
+                    "</v:shape></mc:Fallback></mc:AlternateContent>"
+                )
+        run = parse_xml(f'<w:r xmlns:w="{_W}"/>')
+        run.append(
+            parse_xml(
+                f'<w:pict xmlns:w="{_W}" xmlns:v="{_V}" xmlns:r="{_R}">'
+                "<v:shape><v:textbox><w:txbxContent><w:p>"
+                "<w:r><w:t>Caption</w:t></w:r>"
+                f"<w:r>{inner}</w:r>"
+                "</w:p></w:txbxContent></v:textbox></v:shape></w:pict>"
+            )
+        )
+        anchor._p.append(run)
+        out = io.BytesIO()
+        doc.save(out)
+        out.seek(0)
+        imported = convert_docx(out)
+        assert "Caption" in [c.text for c in imported.chunks]
+        return "\n".join(c.html for c in imported.chunks)
+
+    def test_vml_image_in_a_textbox_is_recovered_once(self):
+        # dpc cannot see VML; without the seam's recovery this image is LOST
+        assert self._textbox_with_image("vml").count("<img") == 1
+
+    def test_drawingml_image_in_a_textbox_is_not_doubled(self):
+        # dpc's own walk already emits this one, so the seam must not re-add it
+        assert self._textbox_with_image("drawingml").count("<img") == 1
+
+    def test_an_mce_wrapped_image_in_a_textbox_is_recovered(self):
+        # the third case, and the one that makes "skip blips inside textboxes"
+        # too blunt: dpc's run parser has no mc:AlternateContent branch, so it
+        # never sees this picture and the seam is the only thing that can
+        # recover it. Everything Word draws beyond a plain inline image —
+        # grouped artwork, shapes with a picture fill, SmartArt — lands here.
+        assert self._textbox_with_image("drawingml-mce").count("<img") == 1
 
 
 class TestArchiveGuards:
@@ -569,9 +653,345 @@ class TestTableStyling:
         assert _cell_width_px(None) is None
 
 
+class TestNumberingVocabularyIsValid:
+    """The importer's own output must lint. Twice now a v0.5 construct was
+    emitted before the registry admitted it — and since the editor rejects
+    non-conforming uploads, that turns a real contract into a 422 rather
+    than anything visible in a test of the markup alone."""
+
+    def test_a_numbering_prefix_lints_on_the_blocks_that_carry_it(self):
+        doc = aim.new_document(title="Prefix")
+        for tag in ("p", "h1", "h2", "h6"):
+            doc.add_chunk(
+                f'<{tag} class="num-1" data-aim-num-prefix="Article ">Scope</{tag}>',
+                author=aim.external("t"),
+            )
+        assert [f for f in aim.lint(doc) if f.level == "error"] == []
+
+    def test_a_list_start_lints(self):
+        doc = aim.new_document(title="Start")
+        doc.add_chunk(
+            '<ol class="list-multilevel" start="5"><li>five</li></ol>',
+            author=aim.external("t"),
+        )
+        assert [f for f in aim.lint(doc) if f.level == "error"] == []
+
+    def test_every_numbering_class_the_importer_emits_is_admitted(self):
+        # the whole vocabulary at once, so adding a class without registering
+        # its placement fails here rather than on a customer's upload
+        doc = aim.new_document(title="All")
+        for level in range(1, REGISTRY.num_levels + 1):
+            doc.add_chunk(f'<p class="num-{level}">x</p>', author=aim.external("t"))
+        doc.add_chunk('<p class="num-2 num-restart">x</p>', author=aim.external("t"))
+        assert [f for f in aim.lint(doc) if f.level == "error"] == []
+
+    @pytest.mark.parametrize("declared", ["0.4", "0.3", "0.1"])
+    def test_a_05_class_is_gated_against_an_older_declaration(self, declared):
+        # the gate named two eras explicitly, so every era added after them
+        # went unchecked: a num-3 in a 0.4 document linted clean
+        doc = aim.new_document(title="Gate")
+        doc.add_chunk('<p class="num-3">x</p>', author=aim.external("t"))
+        body = doc.dumps().replace('data-aim-version="0.5"', f'data-aim-version="{declared}"')
+        codes = {f.code for f in aim.lint(aim.loads(body)) if f.level == "error"}
+        assert "S034" in codes, f"a 0.5 class went unchecked under {declared}"
+
+    def test_the_v05_attributes_are_gated_against_an_older_declaration(self):
+        # The era gate reads classes and style props but never attributes, so
+        # a 0.4 document carrying v0.5 numbering ATTRIBUTES linted clean —
+        # and a writer recorded no floor for them either, so a document could
+        # be written claiming an era that cannot render it.
+        for markup in (
+            '<p data-aim-num-prefix="Article ">x</p>',
+            '<ol start="5"><li>five</li></ol>',
+        ):
+            doc = aim.new_document(title="Gate")
+            doc.add_chunk(markup, author=aim.external("t"))
+            body = doc.dumps().replace('data-aim-version="0.5"', 'data-aim-version="0.4"')
+            codes = {f.code for f in aim.lint(aim.loads(body)) if f.level == "error"}
+            assert "S034" in codes, f"{markup} went unchecked in a 0.4 document"
+
+
+class TestNumberedSchemesImportAsOneShape:
+    """A numbering scheme is one thing. Emitting part of it as a list and
+    part as blocks leaves the blocks counting against a level nothing
+    increments — they render 0.1, 0.2."""
+
+    @staticmethod
+    def _multilevel_docx(texts_and_levels) -> io.BytesIO:
+        def lvl(i: int, text: str) -> str:
+            return (
+                f'<w:lvl w:ilvl="{i}"><w:start w:val="1"/><w:numFmt w:val="decimal"/>'
+                f'<w:lvlText w:val="{text}"/></w:lvl>'
+            )
+
+        numbering = (
+            f'<w:numbering xmlns:w="{_W}"><w:abstractNum w:abstractNumId="30">'
+            + lvl(0, "%1.")
+            + lvl(1, "%1.%2.")
+            + lvl(2, "%1.%2.%3.")
+            + '</w:abstractNum><w:num w:numId="30">'
+            '<w:abstractNumId w:val="30"/></w:num></w:numbering>'
+        )
+        doc = Document()
+        for text, ilvl in texts_and_levels:
+            para = doc.add_paragraph(text)
+            para._p.get_or_add_pPr().append(
+                parse_xml(
+                    f'<w:numPr xmlns:w="{_W}"><w:ilvl w:val="{ilvl}"/>'
+                    '<w:numId w:val="30"/></w:numPr>'
+                )
+            )
+        buf = io.BytesIO()
+        doc.save(buf)
+        buf.seek(0)
+        source = zipfile.ZipFile(buf)
+        out = io.BytesIO()
+        with zipfile.ZipFile(out, "w") as z:
+            for name in source.namelist():
+                z.writestr(
+                    name,
+                    numbering.encode() if name == "word/numbering.xml" else source.read(name),
+                )
+        out.seek(0)
+        return out
+
+    def test_word_stock_multilevel_list_emits_one_shape(self):
+        imported = convert_docx(
+            self._multilevel_docx(
+                [("First", 0), ("Sub a", 1), ("Sub b", 1), ("Second", 0), ("Sub c", 1)]
+            )
+        )
+        content = "\n".join(c.html for c in imported.chunks)
+        assert "<ol" not in content, "the scheme was torn into list fragments"
+        levels = re.findall(r'class="num-(\d)"', content)
+        assert levels == ["1", "2", "2", "1", "2"], levels
+
+    def test_the_rendered_numbers_match_what_word_draws(self):
+        imported = convert_docx(
+            self._multilevel_docx(
+                [("First", 0), ("Sub a", 1), ("Sub b", 1), ("Second", 0), ("Sub c", 1)]
+            )
+        )
+        counters = [0] * 10
+        rendered = []
+        for chunk in imported.chunks:
+            match = re.search(r'class="num-(\d)"', chunk.html)
+            if not match:
+                continue
+            level = int(match.group(1))
+            counters[level] += 1
+            for deeper in range(level + 1, 10):
+                counters[deeper] = 0
+            rendered.append(".".join(str(counters[i]) for i in range(1, level + 1)))
+        assert rendered == ["1", "1.1", "1.2", "2", "2.1"], rendered
+
+    def test_a_flat_numbered_list_is_still_a_list(self):
+        imported = convert_docx(self._multilevel_docx([("One", 0), ("Two", 0), ("Three", 0)]))
+        body = imported.dumps()
+        assert "<ol" in body, "a plain numbered list lost its <ol>"
+        # search the CONTENT, not the document: the embedded stylesheet
+        # carries a .num-1 rule, so a whole-file search always matches
+        assert not any("num-" in c.html for c in imported.chunks)
+
+
+class TestTableStyleResolution:
+    """A table's whole appearance usually lives in its STYLE, in conditional
+    blocks (``w:tblStylePr``) that each apply to one band. Reading those
+    wrongly is not a cosmetic miss — it repaints the entire table."""
+
+    @staticmethod
+    def _styled(*style_xml: str, rows: int = 4) -> str:
+        """Import a table using custom styles injected into styles.xml. The
+        table uses the LAST one, so a basedOn parent can be passed first."""
+        doc = Document()
+        table = doc.add_table(rows=rows, cols=2)
+        for r in range(rows):
+            for c in range(2):
+                table.cell(r, c).text = f"r{r}c{c}"
+        table._tbl.tblPr.append(parse_xml(f'<w:tblStyle xmlns:w="{_W}" w:val="Probe"/>'))
+        # tblLook: firstRow + banded rows on, so the conditional blocks apply
+        table._tbl.tblPr.append(
+            parse_xml(
+                f'<w:tblLook xmlns:w="{_W}" w:val="04A0" w:firstRow="1" '
+                'w:lastRow="0" w:firstColumn="0" w:lastColumn="0" '
+                'w:noHBand="0" w:noVBand="1"/>'
+            )
+        )
+        for one in style_xml:
+            doc.styles.element.append(parse_xml(one))
+        out = io.BytesIO()
+        doc.save(out)
+        out.seek(0)
+        imported = convert_docx(out)
+        assert [f for f in aim.lint(imported) if f.level == "error"] == []
+        return "\n".join(c.html for c in imported.chunks if c.tag == "tr")
+
+    def test_a_first_row_band_does_not_paint_every_row(self):
+        # The wholeTable look is what the style declares DIRECTLY. Reading it
+        # with a `.//` subtree search hoists the firstRow band onto every row
+        # — a table of dark blue rows with white text on white paper.
+        html = self._styled(
+            f'<w:style xmlns:w="{_W}" w:type="table" w:styleId="Probe">'
+            '<w:name w:val="Probe"/><w:tblStylePr w:type="firstRow">'
+            '<w:tcPr><w:shd w:val="clear" w:fill="203864"/></w:tcPr>'
+            '<w:rPr><w:color w:val="FFFFFF"/></w:rPr>'
+            "</w:tblStylePr></w:style>"
+        )
+        rows = html.split("\n")
+        assert "#203864" in rows[0], "the header band itself was lost"
+        assert not any("#203864" in r for r in rows[1:]), (
+            "the firstRow band leaked onto the body rows"
+        )
+
+    def test_a_band_that_sets_only_text_colour_is_dropped(self):
+        # A conditional format with a colour and no fill is meaningless on
+        # its own: the fill it was designed against is not there, so the
+        # colour paints (often white) text onto white paper.
+        html = self._styled(
+            f'<w:style xmlns:w="{_W}" w:type="table" w:styleId="Probe">'
+            '<w:name w:val="Probe"/><w:tblStylePr w:type="firstRow">'
+            '<w:rPr><w:color w:val="FFFFFF"/></w:rPr>'
+            "</w:tblStylePr></w:style>"
+        )
+        assert "color:#ffffff" not in html
+
+    def test_an_inherited_fill_keeps_its_childs_text_colour(self):
+        # The colour-without-fill rule must run AFTER basedOn inheritance. A
+        # child style that only recolours the header text is completing its
+        # parent's dark fill; dropping the colour per-style leaves dark text
+        # on a dark band — the exact unreadable header the rule exists to
+        # prevent, caused by the rule itself.
+        html = self._styled(
+            f'<w:style xmlns:w="{_W}" w:type="table" w:styleId="Base">'
+            '<w:name w:val="Base"/><w:tblStylePr w:type="firstRow">'
+            '<w:tcPr><w:shd w:val="clear" w:fill="1f4e79"/></w:tcPr>'
+            "</w:tblStylePr></w:style>",
+            f'<w:style xmlns:w="{_W}" w:type="table" w:styleId="Probe">'
+            '<w:name w:val="Probe"/><w:basedOn w:val="Base"/>'
+            '<w:tblStylePr w:type="firstRow">'
+            '<w:rPr><w:color w:val="FFFFFF"/></w:rPr>'
+            "</w:tblStylePr></w:style>",
+        )
+        header = html.split("\n")[0]
+        assert "#1f4e79" in header, "the inherited fill was lost"
+        assert "color:#ffffff" in header, "the child's text colour was dropped"
+
+    def test_theme_named_fills_and_colours_resolve(self):
+        # Word's own table styles name colours through the theme far more
+        # often than they spell out hex. Literal-only reading left most real
+        # tables unstyled. accent2 is C0504D in the default theme.
+        html = self._styled(
+            f'<w:style xmlns:w="{_W}" w:type="table" w:styleId="Probe">'
+            '<w:name w:val="Probe"/><w:tblStylePr w:type="firstRow">'
+            '<w:tcPr><w:shd w:val="clear" w:themeFill="accent2"/></w:tcPr>'
+            '<w:rPr><w:color w:themeColor="background1"/></w:rPr>'
+            "</w:tblStylePr></w:style>"
+        )
+        header = html.split("\n")[0]
+        assert "#c0504d" in header, header
+        assert "#ffffff" in header, header
+
+
 # --------------------------------------------------------------------------
 # Card C: to_docx export symmetry (DOCX → aim → DOCX round-trip idempotency)
 # --------------------------------------------------------------------------
+
+
+class TestGroupedPictureSizing:
+    """A picture inside a group is authored in the GROUP's coordinate space.
+    Read literally it renders at its full authored size — a 1.5-inch logo
+    arriving 600px wide — so the scaling is what makes grouped artwork
+    usable at all. Groups nest, and VML expresses the same idea in a
+    completely different way; both are covered here because the real
+    fixture only exercises one flat DrawingML group."""
+
+    @staticmethod
+    def _drawingml(depth: int) -> int | None:
+        """A picture 100000 EMU wide, wrapped in *depth* nested groups. Each
+        group halves the coordinate space, so the picture must come out at
+        100000 / 2**depth EMU regardless of how deep it sits."""
+        from aimformat.convert._docx_seam import _picture_width_px
+
+        a, pic_ns, wpg = _A, _PIC, _WPG
+        inner = (
+            f'<pic:pic xmlns:pic="{pic_ns}" xmlns:a="{a}"><pic:spPr><a:xfrm>'
+            '<a:ext cx="100000" cy="100000"/></a:xfrm></pic:spPr>'
+            '<pic:blipFill><a:blip r:embed="rId1" '
+            f'xmlns:r="{_R}"/></pic:blipFill></pic:pic>'
+        )
+        for level in range(depth):
+            # ext is HALF of chExt at every level: each wrapper halves again
+            child_space = 100000 * (2**level)
+            own_ext = child_space // 2
+            inner = (
+                f'<wpg:wgp xmlns:wpg="{wpg}" xmlns:a="{a}"><wpg:grpSpPr><a:xfrm>'
+                f'<a:ext cx="{own_ext}" cy="{own_ext}"/>'
+                f'<a:chExt cx="{child_space}" cy="{child_space}"/>'
+                f"</a:xfrm></wpg:grpSpPr>{inner}</wpg:wgp>"
+            )
+        root = etree.fromstring(f'<w:drawing xmlns:w="{_W}">{inner}</w:drawing>')
+        blip = root.find(f".//{{{a}}}blip")
+        return _picture_width_px(blip, is_vml=False)
+
+    def test_a_single_group_scales_into_its_coordinate_space(self):
+        # 100000 EMU authored, one group halving it → 50000 EMU ≈ 5px
+        assert self._drawingml(depth=1) == round(50000 / 9525)
+
+    def test_nested_groups_accumulate_every_ancestors_scale(self):
+        # two groups, each halving → 25000 EMU. Stopping at the FIRST group
+        # ancestor gives 50000 (5px) — twice the size Word draws.
+        assert self._drawingml(depth=2) == round(25000 / 9525)
+        assert self._drawingml(depth=3) == max(1, round(12500 / 9525))
+
+    @staticmethod
+    def _vml(child_style: str, group_style: str = "width:150pt", coordsize: str = "3000,3000"):
+        from aimformat.convert._docx_seam import _picture_width_px
+
+        root = etree.fromstring(
+            f'<w:pict xmlns:w="{_W}" xmlns:v="{_V}" xmlns:r="{_R}">'
+            f'<v:group style="{group_style}" coordsize="{coordsize}">'
+            f'<v:shape style="{child_style}"><v:imagedata r:id="rId1"/></v:shape>'
+            "</v:group></w:pict>"
+        )
+        return _picture_width_px(root.find(f".//{{{_V}}}imagedata"), is_vml=True)
+
+    def test_a_vml_group_child_scales_by_the_groups_coordsize(self):
+        # the child's "600" is in the group's 3000-unit space, and the group
+        # is 150pt (200px) wide → 200 * 600/3000 = 40px. Reading the bare
+        # number as a measurement, or falling through to the group's own
+        # width, both render this child at the whole group's size.
+        assert self._vml("position:absolute;width:600;height:600") == 40
+
+    def test_nested_vml_groups_accumulate_every_coordinate_space(self):
+        # Groups nest, and an inner group states its own width in its
+        # PARENT's units — bare numbers either way. Reading an intermediate
+        # width as points multiplies the error by that group's whole
+        # coordinate space: this shape came out at 1000px instead of 50.
+        from aimformat.convert._docx_seam import _picture_width_px
+
+        root = etree.fromstring(
+            f'<w:pict xmlns:w="{_W}" xmlns:v="{_V}" xmlns:r="{_R}">'
+            '<v:group style="width:150pt;height:150pt" coordsize="3000,3000">'
+            '<v:group style="position:absolute;width:1500;height:1500" '
+            'coordsize="1500,1500">'
+            '<v:shape style="position:absolute;width:750;height:750">'
+            '<v:imagedata r:id="rId1"/></v:shape>'
+            "</v:group></v:group></w:pict>"
+        )
+        # 150pt = 200px; the inner group is 1500/3000 of it = 100px; the
+        # shape is 750/1500 of that = 50px
+        node = root.find(f".//{{{_V}}}imagedata")
+        assert _picture_width_px(node, is_vml=True) == 50
+
+    def test_a_lone_vml_shape_uses_its_own_measurement(self):
+        from aimformat.convert._docx_seam import _picture_width_px
+
+        root = etree.fromstring(
+            f'<w:pict xmlns:w="{_W}" xmlns:v="{_V}" xmlns:r="{_R}">'
+            '<v:shape style="width:75pt;height:75pt"><v:imagedata r:id="rId1"/>'
+            "</v:shape></w:pict>"
+        )
+        assert _picture_width_px(root.find(f".//{{{_V}}}imagedata"), is_vml=True) == 100
 
 
 class TestImageParagraphs:
@@ -757,3 +1177,1094 @@ class TestExportSymmetry:
             r.font.size.pt for p in d.paragraphs for r in p.runs if r.text == "X" and r.font.size
         ]
         assert sizes == [30.0]
+
+
+class TestNumberingStaysInSyncAcrossTheDocument:
+    """One numbering scheme is one continuous sequence, wherever its
+    paragraphs sit and whatever shape the vocabulary can draw.
+
+    Every failure these pin is silent: the document renders, nothing raises,
+    and the numbers are simply wrong from some point onward.
+    """
+
+    @staticmethod
+    def _with_numbering(doc, numbering: str) -> io.BytesIO:
+        buf = io.BytesIO()
+        doc.save(buf)
+        buf.seek(0)
+        source = zipfile.ZipFile(buf)
+        out = io.BytesIO()
+        with zipfile.ZipFile(out, "w") as z:
+            for name in source.namelist():
+                z.writestr(
+                    name,
+                    numbering.encode() if name == "word/numbering.xml" else source.read(name),
+                )
+        out.seek(0)
+        return out
+
+    @staticmethod
+    def _lvl(i: int, text: str, fmt: str = "decimal") -> str:
+        return (
+            f'<w:lvl w:ilvl="{i}"><w:start w:val="1"/><w:numFmt w:val="{fmt}"/>'
+            f'<w:lvlText w:val="{text}"/></w:lvl>'
+        )
+
+    @classmethod
+    def _chain(cls, num_ids=(30,), abstract: int = 30) -> str:
+        instances = "".join(
+            f'<w:num w:numId="{n}"><w:abstractNumId w:val="{abstract}"/></w:num>' for n in num_ids
+        )
+        return (
+            f'<w:numbering xmlns:w="{_W}"><w:abstractNum w:abstractNumId="{abstract}">'
+            + cls._lvl(0, "%1.")
+            + cls._lvl(1, "%1.%2")
+            + cls._lvl(2, "%1.%2.%3")
+            + f"</w:abstractNum>{instances}</w:numbering>"
+        )
+
+    @staticmethod
+    def _number(para, num_id: int, ilvl: int) -> None:
+        para._p.get_or_add_pPr().append(
+            parse_xml(
+                f'<w:numPr xmlns:w="{_W}"><w:ilvl w:val="{ilvl}"/>'
+                f'<w:numId w:val="{num_id}"/></w:numPr>'
+            )
+        )
+
+    def test_a_numbered_paragraph_in_a_table_cell_keeps_its_number(self):
+        # Word numbers paragraphs inside table cells like any other. Skipping
+        # them loses the number AND leaves the counter unadvanced, so every
+        # clause after the table is off by one — the damage outlives the table.
+        #
+        # The cell paragraph takes the SAME shape as its scheme's siblings:
+        # CSS counters advance on rendered blocks in DOM order, so num-N in a
+        # <td> keeps the chain in step. Asserting the baked substrings "1.2"
+        # and "1.3" instead let this test pass against a document where the
+        # cell was baked and every clause around it had been demoted with it.
+        doc = Document()
+        self._number(doc.add_paragraph("Top"), 30, 0)
+        self._number(doc.add_paragraph("First clause"), 30, 1)
+        table = doc.add_table(rows=1, cols=1)
+        cell_para = table.rows[0].cells[0].paragraphs[0]
+        cell_para.add_run("Clause in a cell")
+        self._number(cell_para, 30, 1)
+        self._number(doc.add_paragraph("Clause after the table"), 30, 1)
+
+        imported = aim.from_docx(self._with_numbering(doc, self._chain()))
+        html = "\n".join(c.html for c in imported.chunks)
+        assert re.findall(r'class="num-(\d)"', html) == ["1", "2", "2", "2"], html
+        assert '<td style="width:576px"><p class="num-2">' in html, (
+            f"the cell clause did not carry the dynamic shape: {html}"
+        )
+        assert "1.2" not in html, "the cell paragraph was baked, and its scheme with it"
+
+    def test_a_continuation_instance_does_not_tear_the_scheme(self):
+        # Word mints a fresh w:num for the same definition whenever a list is
+        # interrupted. Judged per instance the continuation uses only deep
+        # levels, fails the contiguity rule alone, and emits as <li> — one
+        # visible sequence rendered as blocks and then as a fresh list at 1.
+        doc = Document()
+        self._number(doc.add_paragraph("Top"), 30, 0)
+        self._number(doc.add_paragraph("One"), 30, 1)
+        self._number(doc.add_paragraph("Deep one"), 30, 2)
+        self._number(doc.add_paragraph("Deep two"), 2, 2)  # same abstract, new instance
+
+        imported = aim.from_docx(self._with_numbering(doc, self._chain(num_ids=(30, 2))))
+        html = "\n".join(c.html for c in imported.chunks)
+        assert "<ol" not in html, "the continuation instance tore the scheme into a list"
+        assert re.findall(r'class="num-(\d)"', html) == ["1", "2", "3", "3"]
+
+    def test_a_chained_scheme_the_vocabulary_cannot_draw_bakes_its_label(self):
+        # upperRoman over decimal children on PLAIN paragraphs: not a heading,
+        # not outline-drawable. Spec §3.8 says such a writer MUST write the
+        # computed number as text; dropping it loses the numbering outright.
+        numbering = (
+            f'<w:numbering xmlns:w="{_W}"><w:abstractNum w:abstractNumId="95">'
+            + self._lvl(0, "Article %1", fmt="upperRoman")
+            + self._lvl(1, "%1.%2")
+            + '</w:abstractNum><w:num w:numId="95">'
+            '<w:abstractNumId w:val="95"/></w:num></w:numbering>'
+        )
+        doc = Document()
+        self._number(doc.add_paragraph("Definitions"), 95, 0)
+        self._number(doc.add_paragraph("means x"), 95, 1)
+        self._number(doc.add_paragraph("means y"), 95, 1)
+
+        imported = aim.from_docx(self._with_numbering(doc, numbering))
+        html = "\n".join(c.html for c in imported.chunks)
+        assert "Article I" in html, "the top-level label vanished"
+        assert "I.1" in html and "I.2" in html, "the chained labels vanished"
+
+    def test_a_second_scheme_starts_at_one_rather_than_continuing_the_first(self):
+        # Two independent outline schemes share the same CSS counters, so the
+        # second must say "restart" or it carries on from the first: its
+        # opening clause renders 2. where the document says 1.
+        doc = Document()
+        for text, ilvl in (("A top", 0), ("A sub", 1)):
+            self._number(doc.add_paragraph(text), 30, ilvl)
+        doc.add_paragraph("Interlude")
+        for text, ilvl in (("B top", 0), ("B sub", 1)):
+            self._number(doc.add_paragraph(text), 31, ilvl)
+
+        numbering = (
+            f'<w:numbering xmlns:w="{_W}"><w:abstractNum w:abstractNumId="30">'
+            + self._lvl(0, "%1.")
+            + self._lvl(1, "%1.%2")
+            + '</w:abstractNum><w:abstractNum w:abstractNumId="31">'
+            + self._lvl(0, "%1.")
+            + self._lvl(1, "%1.%2")
+            + '</w:abstractNum><w:num w:numId="30"><w:abstractNumId w:val="30"/></w:num>'
+            '<w:num w:numId="31"><w:abstractNumId w:val="31"/></w:num></w:numbering>'
+        )
+        imported = aim.from_docx(self._with_numbering(doc, numbering))
+        html = "\n".join(c.html for c in imported.chunks)
+        blocks = re.findall(r'class="([^"]*num-1[^"]*)"[^>]*>([^<]*)', html)
+        second = [cls for cls, text in blocks if "B top" in text]
+        assert second and "num-restart" in second[0], (
+            f"the second scheme continues the first's counters: {blocks}"
+        )
+
+    def test_an_empty_numbered_paragraph_still_advances_the_counter(self):
+        # Word draws a number for an empty numbered paragraph and the next one
+        # carries on from it. Dropping the paragraph without advancing shifts
+        # every label after it down by one.
+        doc = Document()
+        self._number(doc.add_paragraph("Top"), 30, 0)
+        self._number(doc.add_paragraph("One"), 30, 1)
+        self._number(doc.add_paragraph(""), 30, 1)  # empty, but numbered
+        self._number(doc.add_paragraph("Three"), 30, 1)
+
+        imported = aim.from_docx(self._with_numbering(doc, self._chain()))
+        html = "\n".join(c.html for c in imported.chunks)
+        texts = re.findall(r">([^<]*Three[^<]*)<", html)
+        assert texts, "the trailing clause vanished"
+        # three sub-clauses were numbered, so the last one is 1.3 — whether it
+        # is drawn dynamically or baked, the counter must have moved three times
+        assert html.count('class="num-2"') == 3, (
+            "the empty numbered paragraph did not consume a number"
+        )
+
+    def test_a_list_reopened_after_prose_continues_its_numbering(self):
+        # Word keeps counting across the interruption — the fifth item is 5,
+        # not 1. A fresh <ol> with no start renders 1. again, so the document
+        # silently contains two item 1s and no item 3.
+        numbering = (
+            f'<w:numbering xmlns:w="{_W}"><w:abstractNum w:abstractNumId="40">'
+            + self._lvl(0, "%1.")
+            + '</w:abstractNum><w:num w:numId="40">'
+            '<w:abstractNumId w:val="40"/></w:num></w:numbering>'
+        )
+        doc = Document()
+        self._number(doc.add_paragraph("One"), 40, 0)
+        self._number(doc.add_paragraph("Two"), 40, 0)
+        doc.add_paragraph("An interrupting paragraph.")
+        self._number(doc.add_paragraph("Three"), 40, 0)
+        self._number(doc.add_paragraph("Four"), 40, 0)
+
+        imported = aim.from_docx(self._with_numbering(doc, numbering))
+        # the rendered document only — the history log repeats every markup
+        content = imported.dumps().split("<body", 1)[1].split("<script", 1)[0]
+        assert content.count("<ol") == 2, "the interruption should split the list"
+        assert 'start="3"' in content, f"the reopened list restarts at 1: {content}"
+
+
+class TestExportedNumberingIsOneSequence:
+    """What Word draws from the exported file must be what the .aim draws.
+
+    Both defects here were invisible to a test that reads the XML: the parts
+    are all present and well-formed, they just belong to different counter
+    streams or to no numbering at all.
+    """
+
+    @staticmethod
+    def _contract() -> aim.AimDocument:
+        doc = aim.new_document(title="Contract")
+        who = aim.external("t")
+        for markup in (
+            '<h1 class="num-1" data-aim-num-prefix="Article ">Scope</h1>',
+            '<p class="num-2">First sub-clause.</p>',
+            '<p class="num-2">Second sub-clause.</p>',
+            '<h1 class="num-1" data-aim-num-prefix="Article ">Term</h1>',
+            '<p class="num-2">Third sub-clause.</p>',
+        ):
+            doc.add_chunk(markup, author=who)
+        return doc
+
+    @staticmethod
+    def _numbering_of(path) -> tuple[dict[int, int], list[int]]:
+        """``{numId: abstractNumId}`` and the numIds document.xml actually uses."""
+        with zipfile.ZipFile(str(path)) as z:
+            numbering = etree.fromstring(z.read("word/numbering.xml"))
+            document = etree.fromstring(z.read("word/document.xml"))
+        w = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
+        mapping = {
+            int(n.get(f"{w}numId")): int(n.find(f"{w}abstractNumId").get(f"{w}val"))
+            for n in numbering.findall(f"{w}num")
+        }
+        used = [int(e.get(f"{w}val")) for e in document.iter(f"{w}numId") if e.get(f"{w}val")]
+        return mapping, used
+
+    def test_a_prefixed_scheme_stays_one_counter_stream(self, tmp_path):
+        # A literal lives in the level's lvlText, so a per-block prefix set
+        # minted an abstract per shape: the "Article" headings counted in one
+        # definition and their sub-clauses in another, whose level-0 counter
+        # nothing ever advanced. Word renders Article 2 / 1.3 where the
+        # document says Article 2 / 2.1 — and OOXML cannot share a counter
+        # across two definitions, so this has to be one.
+        out = aim.to_docx(self._contract(), tmp_path / "contract.docx")
+        mapping, used = self._numbering_of(out)
+        abstracts = {mapping[n] for n in used if n in mapping}
+        assert len(abstracts) == 1, f"the scheme was split across {abstracts}"
+
+    def test_the_exported_prefix_rides_the_level_it_belongs_to(self, tmp_path):
+        out = aim.to_docx(self._contract(), tmp_path / "contract.docx")
+        with zipfile.ZipFile(str(out)) as z:
+            numbering = z.read("word/numbering.xml").decode()
+        assert 'w:val="Article %1"' in numbering, numbering[:400]
+
+    def test_the_export_reimports_as_the_same_shape(self, tmp_path):
+        # the round trip is where a split shows up structurally: the
+        # sub-clauses come back as a plain <ol> because their scheme no
+        # longer uses level 0
+        out = aim.to_docx(self._contract(), tmp_path / "contract.docx")
+        back = aim.from_docx(str(out))
+        content = back.dumps().split("<body", 1)[1].split("<script", 1)[0]
+        assert content.count("<ol") == 0, "the sub-clauses degraded to a list"
+        assert re.findall(r'class="num-(\d)', content) == ["1", "2", "2", "1", "2"]
+
+    def test_a_pending_change_keeps_the_clause_numbered(self, tmp_path):
+        # tracked export is the DEFAULT, and it built its revision paragraphs
+        # without ever numbering them: every clause touched by a pending
+        # proposal lost its w:numPr, so the delivered file showed the rest of
+        # the contract shifted up by one.
+        doc = self._contract()
+        doc.propose_modify(
+            doc.chunks[1].id,
+            '<p class="num-2">First sub-clause, amended.</p>',
+            author=aim.external("bot"),
+            explanation="tighter",
+        )
+        out = aim.to_docx(doc, tmp_path / "tracked.docx", pending="tracked")
+        _, used = self._numbering_of(out)
+        # four untouched clauses, plus the struck original and its
+        # replacement — Word numbers a pending deletion until it is accepted
+        assert len(used) == 6, f"a tracked clause lost its numbering: {len(used)} numbered of 6"
+
+
+class TestThemeFontsComeFromTheStylesWordRenders:
+    """The document's face is what the STYLE resolves to, not what the theme
+    table declares — and a style may name its font through the theme, or
+    carry a localized styleId, or not exist at all under that name.
+
+    Every miss here is the same silent failure: the whole document renders in
+    the wrong family, and a test that only asks whether the slot is non-empty
+    never notices.
+    """
+
+    @staticmethod
+    def _docx(patch_styles=None, *, major="Georgia", minor="Verdana", heading_style=True):
+        doc = Document()
+        doc.add_paragraph("Body text")
+        if heading_style:
+            doc.add_paragraph("A heading").style = "Heading 1"
+        buf = io.BytesIO()
+        doc.save(buf)
+        buf.seek(0)
+        src = zipfile.ZipFile(buf)
+        out = io.BytesIO()
+        with zipfile.ZipFile(out, "w") as z:
+            for name in src.namelist():
+                data = src.read(name)
+                if name == "word/theme/theme1.xml":
+                    s = data.decode()
+                    s = re.sub(r'(<a:majorFont>\s*<a:latin typeface=")[^"]*', r"\g<1>" + major, s)
+                    s = re.sub(r'(<a:minorFont>\s*<a:latin typeface=")[^"]*', r"\g<1>" + minor, s)
+                    data = s.encode()
+                elif name == "word/styles.xml" and patch_styles is not None:
+                    data = patch_styles(data.decode()).encode()
+                z.writestr(name, data)
+        out.seek(0)
+        return out
+
+    @staticmethod
+    def _heading_slot(source) -> str | None:
+        from aimformat.convert._docx_in import _derived_theme_slots
+        from aimformat.convert._docx_seam import parse_docx
+
+        return _derived_theme_slots(parse_docx(source)).get("--aim-font-heading")
+
+    def test_a_style_naming_its_font_through_the_theme_is_resolved(self):
+        # Word's own default heading style carries asciiTheme="majorHAnsi"
+        # rather than a literal face. The parse layer drops rFonts entirely
+        # when it is a theme reference, so the resolved props came back empty
+        # and the slot silently fell back to the theme table. Pointed at the
+        # MINOR font, the two answers differ and the bug is visible.
+        def minor_ref(s):
+            return re.sub(
+                r'(<w:style [^>]*w:styleId="Heading1">)',
+                r'\1<w:rPr><w:rFonts w:asciiTheme="minorHAnsi" w:hAnsiTheme="minorHAnsi"/></w:rPr>',
+                s,
+            )
+
+        assert self._heading_slot(self._docx(minor_ref)) == "Verdana"
+
+    def test_a_localized_style_id_is_found_by_its_english_name(self):
+        # A German Word writes w:styleId="berschrift1" and keeps
+        # <w:name w:val="heading 1"/>. Keyed on the styleId alone, every
+        # non-English document loses its heading face.
+        def localized(s):
+            s = s.replace('w:styleId="Heading1"', 'w:styleId="berschrift1"')
+            return re.sub(
+                r'(<w:style [^>]*w:styleId="berschrift1">)',
+                r'\1<w:rPr><w:rFonts w:ascii="Palatino" w:hAnsi="Palatino"/></w:rPr>',
+                s,
+            )
+
+        assert self._heading_slot(self._docx(localized)) == "Palatino"
+
+    def test_a_document_without_heading_1_falls_through_to_the_next_level(self):
+        # Plenty of documents start at Heading 2. Looking only for Heading 1
+        # leaves the slot on the theme table's word.
+        def only_h2(s):
+            return re.sub(
+                r'(<w:style [^>]*w:styleId="Heading2">)',
+                r'\1<w:rPr><w:rFonts w:ascii="Baskerville" w:hAnsi="Baskerville"/></w:rPr>',
+                s,
+            )
+
+        doc = Document()
+        doc.add_paragraph("Body")
+        doc.add_paragraph("Sub heading").style = "Heading 2"
+        buf = io.BytesIO()
+        doc.save(buf)
+        buf.seek(0)
+        src = zipfile.ZipFile(buf)
+        out = io.BytesIO()
+        with zipfile.ZipFile(out, "w") as z:
+            for name in src.namelist():
+                data = src.read(name)
+                if name == "word/theme/theme1.xml":
+                    s = data.decode()
+                    s = re.sub(r'(<a:majorFont>\s*<a:latin typeface=")[^"]*', r"\g<1>Georgia", s)
+                    data = s.encode()
+                elif name == "word/styles.xml":
+                    data = only_h2(data.decode()).encode()
+                z.writestr(name, data)
+        out.seek(0)
+        assert self._heading_slot(out) == "Baskerville"
+
+
+class TestMalformedInputFailsTyped:
+    """An unreadable file is a user error, not a crash. Without a typed
+    error the CLI prints a traceback ending in someone else's exception
+    class, and every caller has to guess what to catch."""
+
+    @staticmethod
+    def _import(data: bytes):
+        return aim.from_docx(io.BytesIO(data))
+
+    def test_an_empty_zip_raises_a_typed_error(self):
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w"):
+            pass
+        with pytest.raises(aim.ParseError):
+            self._import(buf.getvalue())
+
+    def test_a_truncated_archive_raises_a_typed_error(self):
+        doc = Document()
+        doc.add_paragraph("ok")
+        buf = io.BytesIO()
+        doc.save(buf)
+        with pytest.raises(aim.ParseError):
+            self._import(buf.getvalue()[: len(buf.getvalue()) // 2])
+
+    def test_a_file_that_is_not_a_zip_raises_a_typed_error(self):
+        # a legacy .doc renamed .docx is the everyday version of this
+        with pytest.raises(aim.ParseError):
+            self._import(b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1 legacy OLE compound file")
+
+
+class TestListsStayAddressable:
+    """A list is a CONTAINER whose items carry their own ids — that is what
+    lets a proposal target one item. The rule that decides this matched the
+    literal string "<ol>", so the moment a list carried an attribute it
+    silently became one atomic chunk and every item lost its id."""
+
+    @staticmethod
+    def _containerize(markup: str) -> str:
+        from aimformat.ingest import _containerize
+
+        return _containerize(markup)
+
+    def test_a_list_with_an_attribute_is_still_a_container(self):
+        out = self._containerize('<ol start="6"><li>six</li><li>seven</li></ol>')
+        assert "data-aim-container" in out, out
+        assert out.count('<li data-aim=""') == 2, out
+
+    def test_the_plain_list_is_unchanged(self):
+        out = self._containerize("<ol><li>one</li></ol>")
+        assert "data-aim-container" in out
+        assert out.count('<li data-aim=""') == 1
+
+    def test_the_real_document_keeps_its_items_addressable(self):
+        # sample3's reopened list is the one that grew a start attribute
+        imported = aim.from_docx("tests/fixtures/docxs/sample3.docx")
+        content = imported.dumps().split("<body", 1)[1].split("<script", 1)[0]
+        for ol in re.findall(r"<ol[^>]*>.*?</ol>", content, re.S):
+            assert "data-aim-container" in ol, ol[:160]
+            assert "<li data-aim=" in ol, ol[:160]
+
+
+class TestTheNumberingPathwaysAreActuallyCovered:
+    """Four deliberate mutations survived a fully green suite: the importer
+    could stop emitting num-restart, advance the counters twice, drop
+    data-aim-num-prefix, or reuse one numbering instance across restarts, and
+    nothing went red. Each test here fails against one of those mutations.
+
+    They assert the LABEL — what a reader sees — rather than the markup, so
+    an implementation that produces the right shape with the wrong numbers
+    cannot pass.
+    """
+
+    _num = staticmethod(TestNumberingStaysInSyncAcrossTheDocument._number)
+    _with_numbering = staticmethod(TestNumberingStaysInSyncAcrossTheDocument._with_numbering)
+    _lvl = staticmethod(TestNumberingStaysInSyncAcrossTheDocument._lvl)
+
+    def test_a_restart_over_a_running_sequence_is_marked(self):
+        # kills "never emit num-restart": a second instance carrying
+        # startOverride over a sequence already running IS Word's "restart
+        # numbering", and without the class the counters climb straight past it
+        numbering = (
+            f'<w:numbering xmlns:w="{_W}"><w:abstractNum w:abstractNumId="50">'
+            + self._lvl(0, "%1.")
+            + self._lvl(1, "%1.%2")
+            + "</w:abstractNum>"
+            '<w:num w:numId="50"><w:abstractNumId w:val="50"/></w:num>'
+            '<w:num w:numId="51"><w:abstractNumId w:val="50"/>'
+            '<w:lvlOverride w:ilvl="1"><w:startOverride w:val="1"/></w:lvlOverride></w:num>'
+            "</w:numbering>"
+        )
+        doc = Document()
+        self._num(doc.add_paragraph("Top"), 50, 0)
+        self._num(doc.add_paragraph("One"), 50, 1)
+        self._num(doc.add_paragraph("Two"), 50, 1)
+        self._num(doc.add_paragraph("Restarted"), 51, 1)
+
+        imported = aim.from_docx(self._with_numbering(doc, numbering))
+        content = imported.dumps().split("<body", 1)[1].split("<script", 1)[0]
+        restarted = re.search(r'class="([^"]*)"[^>]*>Restarted', content)
+        assert restarted and "num-restart" in restarted.group(1), content
+
+    def test_the_baked_labels_are_exactly_what_word_draws(self):
+        # kills "advance twice" and "skip an advance": the baked path writes
+        # the number into the text, so a counter that moved the wrong number
+        # of times is visible character by character
+        numbering = (
+            f'<w:numbering xmlns:w="{_W}"><w:abstractNum w:abstractNumId="60">'
+            + self._lvl(0, "%1.", fmt="upperRoman")
+            + self._lvl(1, "%1-%2")  # mixed separator: not drawable, so baked
+            + '</w:abstractNum><w:num w:numId="60">'
+            '<w:abstractNumId w:val="60"/></w:num></w:numbering>'
+        )
+        doc = Document()
+        for text, ilvl in (
+            ("First part", 0),
+            ("sub one", 1),
+            ("sub two", 1),
+            ("Second part", 0),
+            ("sub three", 1),
+        ):
+            self._num(doc.add_paragraph(text), 60, ilvl)
+
+        imported = aim.from_docx(self._with_numbering(doc, numbering))
+        text = re.sub(r"<[^>]+>", " ", imported.dumps().split("<body", 1)[1].split("<script", 1)[0])
+        for want in ("I-1 sub one", "I-2 sub two", "II-1 sub three"):
+            assert want in re.sub(r"[\s\xa0]+", " ", text), f"missing {want!r} in {text[:400]}"
+
+    def test_a_literal_prefix_survives_import(self):
+        # kills "drop data-aim-num-prefix": without the attribute the block
+        # falls back to the plain rule and renders "1" where Word draws
+        # "Article 1" — the class alone cannot tell you which happened
+        numbering = (
+            f'<w:numbering xmlns:w="{_W}"><w:abstractNum w:abstractNumId="70">'
+            + self._lvl(0, "Article %1")
+            + self._lvl(1, "%1.%2")
+            + '</w:abstractNum><w:num w:numId="70">'
+            '<w:abstractNumId w:val="70"/></w:num></w:numbering>'
+        )
+        doc = Document()
+        self._num(doc.add_paragraph("Scope"), 70, 0)
+        self._num(doc.add_paragraph("A clause"), 70, 1)
+
+        imported = aim.from_docx(self._with_numbering(doc, numbering))
+        content = imported.dumps().split("<body", 1)[1].split("<script", 1)[0]
+        assert 'data-aim-num-prefix="Article "' in content, content
+
+    def test_a_restart_exports_as_its_own_instance_and_stays_in_effect(self, tmp_path):
+        # kills "reuse one instance for every restart": a startOverride applies
+        # on an instance's FIRST use only, so two restarts sharing an instance
+        # leave the second counting straight on. Asserts the numId sequence,
+        # not merely that some override exists.
+        doc = aim.new_document(title="Restarts")
+        who = aim.external("t")
+        for markup in (
+            '<p class="num-1">One</p>',
+            '<p class="num-1">Two</p>',
+            '<p class="num-1 num-restart">Fresh one</p>',
+            '<p class="num-1">Fresh two</p>',
+            '<p class="num-1 num-restart">Fresher one</p>',
+        ):
+            doc.add_chunk(markup, author=who)
+        out = aim.to_docx(doc, tmp_path / "restarts.docx")
+        with zipfile.ZipFile(str(out)) as z:
+            document = etree.fromstring(z.read("word/document.xml"))
+        w = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
+        used = [int(e.get(f"{w}val")) for e in document.iter(f"{w}numId") if e.get(f"{w}val")]
+        assert len(used) == 5, used
+        assert used[0] == used[1], "the opening run must share one instance"
+        assert used[2] == used[3], "a restart's instance stays in effect for what follows"
+        assert len({used[0], used[2], used[4]}) == 3, f"each restart needs its own instance: {used}"
+
+
+class TestOneSchemeDrawsOneShape:
+    """A numbering scheme is one thing, and the shape decision belongs to the
+    SCHEME.
+
+    Deciding it per paragraph — as the emission gate did between 51c4b23 and
+    2e15010 — tears Word's stock multilevel list into an ``<ol>``, a run of
+    baked ``<p>``, and a second ``<ol>``: three shapes for one list. The
+    corpus cannot catch it, because all five real fixtures use level 0 only
+    for their list schemes; the trigger is one Tab keypress in Word.
+    """
+
+    @staticmethod
+    def _docx(paragraphs, levels_by_abstract, instances=None) -> io.BytesIO:
+        """A document whose numbering.xml we write ourselves.
+
+        *paragraphs* is ``(text, num_id, ilvl)``, ``num_id`` None for prose;
+        *levels_by_abstract* is ``{abstract_id: [level_xml, …]}``;
+        *instances* is ``{num_id: abstract_id}``, defaulting to the identity.
+        """
+        parts = [
+            f'<w:abstractNum w:abstractNumId="{aid}">' + "".join(levels) + "</w:abstractNum>"
+            for aid, levels in levels_by_abstract.items()
+        ]
+        for nid, aid in (instances or {a: a for a in levels_by_abstract}).items():
+            parts.append(f'<w:num w:numId="{nid}"><w:abstractNumId w:val="{aid}"/></w:num>')
+        numbering = f'<w:numbering xmlns:w="{_W}">' + "".join(parts) + "</w:numbering>"
+
+        doc = Document()
+        for text, num_id, ilvl in paragraphs:
+            para = doc.add_paragraph(text)
+            if num_id is not None:
+                para._p.get_or_add_pPr().append(
+                    parse_xml(
+                        f'<w:numPr xmlns:w="{_W}"><w:ilvl w:val="{ilvl}"/>'
+                        f'<w:numId w:val="{num_id}"/></w:numPr>'
+                    )
+                )
+        buf = io.BytesIO()
+        doc.save(buf)
+        buf.seek(0)
+        source = zipfile.ZipFile(buf)
+        out = io.BytesIO()
+        with zipfile.ZipFile(out, "w") as z:
+            for name in source.namelist():
+                z.writestr(
+                    name,
+                    numbering.encode() if name == "word/numbering.xml" else source.read(name),
+                )
+        out.seek(0)
+        return out
+
+    @staticmethod
+    def _level(ilvl: int, text: str, fmt: str = "decimal", start: int = 1) -> str:
+        return (
+            f'<w:lvl w:ilvl="{ilvl}"><w:start w:val="{start}"/>'
+            f'<w:numFmt w:val="{fmt}"/><w:lvlText w:val="{text}"/></w:lvl>'
+        )
+
+    #: Word's stock multilevel numbered list — the toolbar button's own
+    #: abstract: decimal, then lowerLetter, then lowerRoman.
+    def _stock(self):
+        return {
+            30: [
+                self._level(0, "%1."),
+                self._level(1, "%2.", "lowerLetter"),
+                self._level(2, "%3.", "lowerRoman"),
+            ]
+        }
+
+    def _body(self, stream) -> str:
+        # the whole body, not the chunk htmls: a list's container element —
+        # which is where <ol>, its classes and its start attribute live — is
+        # not part of any item chunk
+        html = convert_docx(stream).dumps()
+        return html.split("<body", 1)[1].split(">", 1)[1].split("<script", 1)[0]
+
+    def test_words_stock_multilevel_list_stays_one_nested_list(self):
+        # LibreOffice draws: 1. First / a. Sub a / b. Sub b / 2. Second
+        content = self._body(
+            self._docx(
+                [("First", 30, 0), ("Sub a", 30, 1), ("Sub b", 30, 1), ("Second", 30, 0)],
+                self._stock(),
+            )
+        )
+        assert content.count("<ol") == 2, f"one list plus one nested list, got: {content}"
+        assert "<li" in content
+        assert "<p" not in content, f"the scheme was torn into baked paragraphs: {content}"
+        assert "a. Sub a" not in content, "the label was baked into a list item's text"
+        assert 'start="2"' not in content, "the second item opened a fresh list"
+
+    def test_the_nested_levels_carry_the_format_word_draws(self):
+        # the marker style is the whole point: without the class the browser
+        # draws "1." where Word draws "a."
+        content = self._body(
+            self._docx(
+                [("First", 30, 0), ("Sub a", 30, 1), ("Deep", 30, 2)],
+                self._stock(),
+            )
+        )
+        assert "list-lower-alpha" in content, content
+        assert "list-lower-roman" in content, content
+
+    def test_a_parenthesised_level_keeps_its_list_and_its_suffix(self):
+        content = self._body(
+            self._docx(
+                [("One", 31, 0), ("Two", 31, 0)],
+                {31: [self._level(0, "%1)", "lowerLetter")]},
+            )
+        )
+        assert "<ol" in content, f"a lettered list stopped being a list: {content}"
+        assert "list-lower-alpha" in content
+        assert "list-paren" in content
+        assert "a)" not in content, "the label was baked as well as drawn"
+
+    def test_a_clause_scheme_survives_a_bulleted_interruption(self):
+        # a <ul> advances no aim-cN counter, so it cannot collide with the
+        # clause scheme's — but the interleaving test counted it anyway, and
+        # one bulleted sub-list de-dynamised a whole contract
+        clause = [self._level(0, "%1."), self._level(1, "%1.%2.")]
+        bullet = ['<w:lvl w:ilvl="0"><w:numFmt w:val="bullet"/><w:lvlText w:val="•"/></w:lvl>']
+        content = self._body(
+            self._docx(
+                [
+                    ("Purpose", 40, 0),
+                    ("Scope", 40, 1),
+                    ("bullet one", 41, 0),
+                    ("bullet two", 41, 0),
+                    ("Term", 40, 0),
+                    ("Renewal", 40, 1),
+                ],
+                {40: clause, 41: bullet},
+            )
+        )
+        levels = re.findall(r'class="num-(\d)"', content)
+        assert levels == ["1", "2", "1", "2"], f"the clause scheme lost its counters: {content}"
+        assert "<ul" in content, "the bullets stopped being a list"
+        assert "1.1." not in content, "a clause label was baked"
+
+    def test_a_numbered_paragraph_in_a_cell_keeps_the_scheme_dynamic(self):
+        # CSS counters advance in DOM order, so a num-N block inside a <td>
+        # keeps the chain in sync — excluding the whole scheme because one
+        # clause sits in a layout table demotes the entire document
+        clause = {50: [self._level(0, "%1."), self._level(1, "%1.%2.")]}
+        doc = Document()
+        para = doc.add_paragraph("Top")
+        para._p.get_or_add_pPr().append(
+            parse_xml(f'<w:numPr xmlns:w="{_W}"><w:ilvl w:val="0"/><w:numId w:val="50"/></w:numPr>')
+        )
+        table = doc.add_table(rows=1, cols=1)
+        cell_para = table.cell(0, 0).paragraphs[0]
+        cell_para.text = "Clause in a cell"
+        cell_para._p.get_or_add_pPr().append(
+            parse_xml(f'<w:numPr xmlns:w="{_W}"><w:ilvl w:val="1"/><w:numId w:val="50"/></w:numPr>')
+        )
+        after = doc.add_paragraph("Clause after the table")
+        after._p.get_or_add_pPr().append(
+            parse_xml(f'<w:numPr xmlns:w="{_W}"><w:ilvl w:val="1"/><w:numId w:val="50"/></w:numPr>')
+        )
+        buf = io.BytesIO()
+        doc.save(buf)
+        buf.seek(0)
+        source = zipfile.ZipFile(buf)
+        parts = [
+            '<w:abstractNum w:abstractNumId="50">' + "".join(clause[50]) + "</w:abstractNum>",
+            '<w:num w:numId="50"><w:abstractNumId w:val="50"/></w:num>',
+        ]
+        numbering = f'<w:numbering xmlns:w="{_W}">' + "".join(parts) + "</w:numbering>"
+        out = io.BytesIO()
+        with zipfile.ZipFile(out, "w") as z:
+            for name in source.namelist():
+                z.writestr(
+                    name,
+                    numbering.encode() if name == "word/numbering.xml" else source.read(name),
+                )
+        out.seek(0)
+        content = self._body(out)
+        assert re.findall(r'class="num-(\d)"', content) == ["1", "2", "2"], content
+        assert "1.1" not in content, f"the scheme was demoted to baked labels: {content}"
+
+    def test_a_scheme_entered_below_its_top_level_counts_like_word(self):
+        # LibreOffice draws: 1.1 / 2. / 2.1 / 2.2 — Word shows an untouched
+        # ancestor at its start value, so entering at level 1 must not leave
+        # two different clauses both labelled 1.1
+        content = self._body(
+            self._docx(
+                [
+                    ("Interpretation", 60, 1),
+                    ("Definitions", 60, 0),
+                    ("Construction", 60, 1),
+                    ("Headings", 60, 1),
+                ],
+                {60: [self._level(0, "%1."), self._level(1, "%1.%2")]},
+            )
+        )
+        # whichever shape it takes, no two clauses may carry one label: a
+        # visible "0.1" is obviously broken, a duplicated "1.1" is not
+        assert content.count("1.1") <= 1, f"two clauses drew the same label: {content}"
+        # …and the wrapper <li> _nest synthesises to hang the deeper list from
+        # is an item like any other, so seeding start from the first REAL
+        # item's counter renders everything after it one too high
+        assert 'start="2"' not in content, f"the wrapper item consumed a number: {content}"
+
+
+class TestOneSchemesLiteralStaysInItsOwnScheme:
+    """The literal ("Article ") lives in a level's ``lvlText``, so it belongs
+    to the numbering DEFINITION. Collected document-wide it stops describing
+    a scheme and starts describing the file: every later scheme inherits it,
+    and a scheme that never carried a literal is exported with one.
+    """
+
+    @staticmethod
+    def _doc(markups) -> aim.AimDocument:
+        doc = aim.new_document(title="Contract")
+        who = aim.external("t")
+        for markup in markups:
+            doc.add_chunk(markup, author=who)
+        return doc
+
+    @staticmethod
+    def _levels(path) -> tuple[dict[int, dict[int, str]], list[tuple[int, int]]]:
+        """``{abstractId: {ilvl: lvlText}}`` and the (numId, ilvl) each
+        numbered paragraph uses, paired with its abstract by the caller."""
+        with zipfile.ZipFile(str(path)) as z:
+            numbering = etree.fromstring(z.read("word/numbering.xml"))
+            document = etree.fromstring(z.read("word/document.xml"))
+        w = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
+        abstracts = {
+            int(a.get(f"{w}abstractNumId")): {
+                int(lvl.get(f"{w}ilvl")): (
+                    lvl.find(f"{w}lvlText").get(f"{w}val")
+                    if lvl.find(f"{w}lvlText") is not None
+                    else ""
+                )
+                for lvl in a.findall(f"{w}lvl")
+            }
+            for a in numbering.findall(f"{w}abstractNum")
+        }
+        instance = {
+            int(n.get(f"{w}numId")): int(n.find(f"{w}abstractNumId").get(f"{w}val"))
+            for n in numbering.findall(f"{w}num")
+        }
+        used = []
+        for num_pr in document.iter(f"{w}numPr"):
+            num_id = num_pr.find(f"{w}numId")
+            ilvl = num_pr.find(f"{w}ilvl")
+            if num_id is None:
+                continue
+            used.append(
+                (
+                    instance.get(int(num_id.get(f"{w}val")), -1),
+                    int(ilvl.get(f"{w}val")) if ilvl is not None else 0,
+                )
+            )
+        return abstracts, used
+
+    def test_a_literal_is_not_fabricated_into_a_scheme_that_never_had_one(self, tmp_path):
+        # the commoner shape: a prefixed scheme, then Word's stock "1." list.
+        # The stock scheme's blocks carry no literal of their own, inherit
+        # "Article " from the document-wide map, and Word draws
+        # "Article 1 Payment" where the document says "1. Payment".
+        out = aim.to_docx(
+            self._doc(
+                [
+                    '<p class="num-1" data-aim-num-prefix="Article ">Scope</p>',
+                    '<p class="num-2">A sub-clause.</p>',
+                    '<p class="num-1 num-restart">Payment</p>',
+                    '<p class="num-2">Another sub-clause.</p>',
+                ]
+            ),
+            tmp_path / "two.docx",
+        )
+        abstracts, used = self._levels(out)
+        drawn = [abstracts.get(aid, {}).get(ilvl, "") for aid, ilvl in used]
+        assert drawn[0] == "Article %1", drawn
+        assert "Article" not in drawn[2], (
+            f"the second scheme was exported with a literal it never had: {drawn}"
+        )
+
+    def test_a_prefixed_scheme_still_keeps_one_definition(self, tmp_path):
+        # …and the fix must not undo what it replaced: within ONE scheme the
+        # prefixed level and its un-prefixed sub-levels share a definition,
+        # because OOXML cannot share a counter across two.
+        out = aim.to_docx(
+            self._doc(
+                [
+                    '<p class="num-1" data-aim-num-prefix="Article ">Scope</p>',
+                    '<p class="num-2">First.</p>',
+                    '<p class="num-2">Second.</p>',
+                ]
+            ),
+            tmp_path / "one.docx",
+        )
+        _abstracts, used = self._levels(out)
+        assert len({aid for aid, _ in used}) == 1, f"the scheme was split: {used}"
+
+
+class TestTrackedParagraphsSurviveAcceptInWord:
+    """A revision paragraph the exporter creates whole needs its PARAGRAPH
+    MARK marked too. Marking only the runs leaves the mark unrevised, so
+    accepting an insertion in Word keeps an empty numbered clause behind and
+    every following clause shifts by one — in the delivered file, on the
+    reviewer's screen, and tracked export is the default.
+    """
+
+    @staticmethod
+    def _marks(path) -> list[tuple[str, str]]:
+        """``(what the paragraph's mark is marked as, its text)``."""
+        with zipfile.ZipFile(str(path)) as z:
+            document = etree.fromstring(z.read("word/document.xml"))
+        w = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
+        out = []
+        for para in document.iter(f"{w}p"):
+            mark = ""
+            p_pr = para.find(f"{w}pPr")
+            if p_pr is not None:
+                r_pr = p_pr.find(f"{w}rPr")
+                if r_pr is not None:
+                    if r_pr.find(f"{w}ins") is not None:
+                        mark = "ins"
+                    elif r_pr.find(f"{w}del") is not None:
+                        mark = "del"
+            text = "".join(t.text or "" for t in para.iter(f"{w}t"))
+            text += "".join(t.text or "" for t in para.iter(f"{w}delText"))
+            out.append((mark, text))
+        return out
+
+    def test_an_inserted_paragraph_marks_its_paragraph_mark(self, tmp_path):
+        doc = aim.new_document(title="T")
+        who = aim.external("t")
+        doc.add_chunk('<p data-aim="p1">Anchor.</p>', author=who)
+        doc.propose_add("<p>Inserted clause.</p>", after="p1", author=who)
+        out = aim.to_docx(doc, tmp_path / "ins.docx")
+        marks = dict((text, mark) for mark, text in self._marks(out))
+        assert marks.get("Inserted clause.") == "ins", self._marks(out)
+
+    def test_a_deleted_paragraph_marks_its_paragraph_mark(self, tmp_path):
+        doc = aim.new_document(title="T")
+        who = aim.external("t")
+        doc.add_chunk('<p data-aim="p1">Doomed clause.</p>', author=who)
+        doc.propose_delete("p1", author=who)
+        out = aim.to_docx(doc, tmp_path / "del.docx")
+        marks = dict((text, mark) for mark, text in self._marks(out))
+        assert marks.get("Doomed clause.") == "del", self._marks(out)
+
+
+class TestAListSurvivesTheRoundTripWithItsMarkers:
+    """DOCX → .aim → DOCX must draw the same markers Word drew.
+
+    The exporter leaned on Word's "List Number" style, which carries the
+    template's own numbering: every ordered list in the document shared one
+    counter, every level drew decimal, and ``start`` had nowhere to go. So a
+    lettered sub-list came back as "1.", and two independent lists continued
+    each other.
+    """
+
+    @staticmethod
+    def _stock_docx() -> io.BytesIO:
+        def lvl(i: int, text: str, fmt: str = "decimal") -> str:
+            return (
+                f'<w:lvl w:ilvl="{i}"><w:start w:val="1"/><w:numFmt w:val="{fmt}"/>'
+                f'<w:lvlText w:val="{text}"/></w:lvl>'
+            )
+
+        numbering = (
+            f'<w:numbering xmlns:w="{_W}"><w:abstractNum w:abstractNumId="30">'
+            + lvl(0, "%1.")
+            + lvl(1, "%2.", "lowerLetter")
+            + lvl(2, "%3.", "lowerRoman")
+            + '</w:abstractNum><w:num w:numId="30">'
+            '<w:abstractNumId w:val="30"/></w:num></w:numbering>'
+        )
+        doc = Document()
+        for text, ilvl in [("First", 0), ("Sub a", 1), ("Sub b", 1), ("Deep", 2), ("Second", 0)]:
+            para = doc.add_paragraph(text)
+            para._p.get_or_add_pPr().append(
+                parse_xml(
+                    f'<w:numPr xmlns:w="{_W}"><w:ilvl w:val="{ilvl}"/>'
+                    '<w:numId w:val="30"/></w:numPr>'
+                )
+            )
+        buf = io.BytesIO()
+        doc.save(buf)
+        buf.seek(0)
+        source = zipfile.ZipFile(buf)
+        out = io.BytesIO()
+        with zipfile.ZipFile(out, "w") as z:
+            for name in source.namelist():
+                z.writestr(
+                    name,
+                    numbering.encode() if name == "word/numbering.xml" else source.read(name),
+                )
+        out.seek(0)
+        return out
+
+    @staticmethod
+    def _exported_levels(path) -> list[tuple[int, str, str]]:
+        """``(ilvl, numFmt, lvlText)`` for each numbered paragraph, resolved
+        through the instance to its definition — the shape Word draws from."""
+        with zipfile.ZipFile(str(path)) as z:
+            numbering = etree.fromstring(z.read("word/numbering.xml"))
+            document = etree.fromstring(z.read("word/document.xml"))
+        w = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
+        abstracts = {
+            int(a.get(f"{w}abstractNumId")): {
+                int(lv.get(f"{w}ilvl")): (
+                    lv.find(f"{w}numFmt").get(f"{w}val"),
+                    lv.find(f"{w}lvlText").get(f"{w}val"),
+                )
+                for lv in a.findall(f"{w}lvl")
+            }
+            for a in numbering.findall(f"{w}abstractNum")
+        }
+        instance = {
+            int(n.get(f"{w}numId")): int(n.find(f"{w}abstractNumId").get(f"{w}val"))
+            for n in numbering.findall(f"{w}num")
+        }
+        out = []
+        for num_pr in document.iter(f"{w}numPr"):
+            num_id, ilvl = num_pr.find(f"{w}numId"), num_pr.find(f"{w}ilvl")
+            if num_id is None:
+                continue
+            depth = int(ilvl.get(f"{w}val")) if ilvl is not None else 0
+            fmt, text = abstracts.get(instance.get(int(num_id.get(f"{w}val")), -1), {}).get(
+                depth, ("?", "?")
+            )
+            out.append((depth, fmt, text))
+        return out
+
+    def test_each_level_exports_the_format_word_drew(self, tmp_path):
+        imported = aim.from_docx(self._stock_docx())
+        out = aim.to_docx(imported, tmp_path / "roundtrip.docx")
+        levels = self._exported_levels(out)
+        assert [d for d, _, _ in levels] == [0, 1, 1, 2, 0], levels
+        assert [f for _, f, _ in levels] == [
+            "decimal",
+            "lowerLetter",
+            "lowerLetter",
+            "lowerRoman",
+            "decimal",
+        ], f"the markers were flattened to decimal: {levels}"
+
+    def test_two_independent_lists_do_not_continue_each_other(self, tmp_path):
+        doc = aim.new_document(title="T")
+        who = aim.external("t")
+        doc.add_chunk("<ol><li>One</li><li>Two</li></ol>", author=who)
+        doc.add_chunk("<p>Prose between them.</p>", author=who)
+        doc.add_chunk("<ol><li>Fresh one</li><li>Fresh two</li></ol>", author=who)
+        out = aim.to_docx(doc, tmp_path / "two-lists.docx")
+        with zipfile.ZipFile(str(out)) as z:
+            document = etree.fromstring(z.read("word/document.xml"))
+        w = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
+        used = [int(e.get(f"{w}val")) for e in document.iter(f"{w}numId") if e.get(f"{w}val")]
+        assert len(set(used)) == 2, f"both lists shared one counter: {used}"
+
+    def test_a_resumed_list_exports_its_start(self, tmp_path):
+        doc = aim.new_document(title="T")
+        doc.add_chunk('<ol start="6"><li>Sixth</li></ol>', author=aim.external("t"))
+        out = aim.to_docx(doc, tmp_path / "start.docx")
+        with zipfile.ZipFile(str(out)) as z:
+            numbering = z.read("word/numbering.xml").decode()
+        assert '<w:startOverride w:val="6"/>' in numbering, "start was dropped on export"
+
+
+class TestTheVerdictHoldsWhereTheWalkDoesNotReach:
+    """Three fixes with nothing pinning them, found by mutating a green
+    suite. Each is a place where the scheme verdict is decided somewhere the
+    obvious test does not look."""
+
+    @staticmethod
+    def _numbering(levels: str, num_id: int = 80, abstract: int = 80) -> str:
+        return (
+            f'<w:numbering xmlns:w="{_W}"><w:abstractNum w:abstractNumId="{abstract}">'
+            f'{levels}</w:abstractNum><w:num w:numId="{num_id}">'
+            f'<w:abstractNumId w:val="{abstract}"/></w:num></w:numbering>'
+        )
+
+    @staticmethod
+    def _level(ilvl: int, text: str, fmt: str = "decimal") -> str:
+        return (
+            f'<w:lvl w:ilvl="{ilvl}"><w:start w:val="1"/><w:numFmt w:val="{fmt}"/>'
+            f'<w:lvlText w:val="{text}"/></w:lvl>'
+        )
+
+    @staticmethod
+    def _rewrite(doc, numbering: str) -> io.BytesIO:
+        buf = io.BytesIO()
+        doc.save(buf)
+        buf.seek(0)
+        source = zipfile.ZipFile(buf)
+        out = io.BytesIO()
+        with zipfile.ZipFile(out, "w") as z:
+            for name in source.namelist():
+                z.writestr(
+                    name,
+                    numbering.encode() if name == "word/numbering.xml" else source.read(name),
+                )
+        out.seek(0)
+        return out
+
+    def test_a_numbered_heading_scheme_used_at_one_level_stays_dynamic(self):
+        # The depth guard keeps a flat ordered list out of the block path. A
+        # heading has no list path to be kept out of — <li> is not <h1> — so
+        # applying it there dropped the number entirely and leaked the label
+        # into the document title.
+        doc = Document()
+        for text in ("Definitions", "Payment", "Term"):
+            para = doc.add_paragraph(text, style="Heading 1")
+            para._p.get_or_add_pPr().append(
+                parse_xml(
+                    f'<w:numPr xmlns:w="{_W}"><w:ilvl w:val="0"/><w:numId w:val="80"/></w:numPr>'
+                )
+            )
+        imported = convert_docx(self._rewrite(doc, self._numbering(self._level(0, "%1."))))
+        html = "\n".join(c.html for c in imported.chunks)
+        assert re.findall(r'class="num-(\d)"', html) == ["1", "1", "1"], html
+        assert imported.title == "Definitions", (
+            f"the clause label leaked into the title: {imported.title!r}"
+        )
+
+    def test_a_numbered_paragraph_in_a_textbox_still_keeps_its_number(self):
+        # The classification pass does not walk textboxes; the emission walk
+        # does. So this paragraph reaches the gate with NO verdict — and the
+        # default has to be BAKED, or the number vanishes rather than
+        # degrading to text. (Walking textboxes in both passes is the better
+        # fix; this pins the floor until then.)
+        doc = Document()
+        anchor = doc.add_paragraph("Anchor.")
+        anchor._p.append(
+            parse_xml(
+                f'<w:r xmlns:w="{_W}" xmlns:v="urn:schemas-microsoft-com:vml">'
+                "<w:pict><v:shape><v:textbox><w:txbxContent>"
+                '<w:p><w:pPr><w:numPr><w:ilvl w:val="1"/><w:numId w:val="80"/></w:numPr>'
+                "</w:pPr><w:r><w:t>Boxed clause</w:t></w:r></w:p>"
+                "</w:txbxContent></v:textbox></v:shape></w:pict></w:r>"
+            )
+        )
+        levels = self._level(0, "%1.") + self._level(1, "%1.%2")
+        imported = convert_docx(self._rewrite(doc, self._numbering(levels)))
+        html = "\n".join(c.html for c in imported.chunks)
+        assert "Boxed clause" in html, html
+        assert "1.1" in html, f"the textbox clause lost its number outright: {html}"

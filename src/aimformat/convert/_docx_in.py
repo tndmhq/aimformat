@@ -30,10 +30,18 @@ Explicit pagination intent (sectPr page setup, ``w:br type="page"``,
 anchoring. Content dpc's model drops is recovered from the source ``w:p``
 element (the seam pairs each with its dpc item): body-level textbox
 paragraphs, content-control checkbox state, OMML equations as literal text,
-and symbol-font glyphs (a curated Wingdings map). Not yet carried
-(deliberately, tracked for the next pass): field codes, footnote refs,
-tab-stop geometry, textboxes/equations/checkboxes *inside table cells*, and
-everything Word means by floating objects. Table cell shading and widths
+and symbol-font glyphs (a curated Wingdings map).
+
+**Not carried, deliberately, and worth stating plainly because each is a
+whole part of the document that silently disappears:** footnotes and
+endnotes (``word/footnotes.xml`` / ``endnotes.xml`` — their reference marks
+survive in the body, their text does not), headers and footers
+(``header*.xml`` / ``footer*.xml``, including page-number fields, which have
+no meaning in a format with no page furniture), field codes, tab-stop
+geometry, textboxes/equations/checkboxes *inside table cells*, and
+everything Word means by floating objects. The footnote and header gaps are
+recorded as xfail tests over a real document in the editor repo, so they
+announce themselves the day support lands. Table cell shading and widths
 survive (§_table_markup); borders do not — the vocabulary has only border
 utilities and border-colour paint, not per-side border geometry.
 """
@@ -41,6 +49,7 @@ utilities and border-colour paint, not per-side border geometry.
 from __future__ import annotations
 
 import re
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any, BinaryIO
 
@@ -52,6 +61,7 @@ from ..pagesetup import _fmt_mm
 from ..registry import REGISTRY
 from ._docx_pages import _match_named_size
 from ._docx_seam import (
+    NumberDraw,
     ParsedDocx,
     data_uri,
     effective_run_props,
@@ -83,6 +93,13 @@ _ALIGN_CLASS = {
     "distribute": "text-justify",
 }
 _PAGE_BREAK = "<aim-page-break></aim-page-break>"
+
+#: The three shapes a numbering scheme can draw. The verdict is reached once
+#: per scheme in ``_classify_numbering`` and read nowhere else — asking per
+#: paragraph is what tore Word's stock multilevel list into three shapes.
+_OUTLINE, _LIST, _BAKED = "outline", "list", "baked"
+#: how a scheme is keyed: its abstract definition where it has one
+_Scheme = tuple[str, int]
 _IMG_TAG = re.compile(r"<img\b[^>]*>")
 _IMG_ONLY = re.compile(r"(?:<img\b[^>]*>)+")
 _NUM_LABEL = re.compile(r"^[0-9]+(?:\.[0-9]+)*\.?[\s\xa0]+")
@@ -129,11 +146,87 @@ def convert_docx(
     return doc
 
 
+def _derived_theme_slots(parsed: ParsedDocx) -> dict[str, str]:
+    """The document's typographic identity, as it actually renders.
+
+    ``theme1.xml`` names a major and a minor face, but a style may override
+    them outright — every python-docx document, and many Word templates, set
+    ``Normal`` to a literal face while the theme still says something else.
+    Word renders the style, so taking the theme table at its word puts the
+    whole document in the wrong family: these fixtures declare a Cambria
+    minor font and render in Calibri.
+
+    So the slots come from the RESOLVED styles where those exist, and fall
+    back to the theme table where they do not.
+    """
+    slots = dict(parsed.theme.slots())
+    body = font_of(parsed.baseline_run or {}, parsed.theme) or _resolved_style_font(
+        parsed, parsed.default_style_id or "", "Normal"
+    )
+    if body:
+        slots["--aim-font-body"] = body
+    heading = _heading_face(parsed)
+    if heading:
+        slots["--aim-font-heading"] = heading
+    return slots
+
+
+def _heading_face(parsed: ParsedDocx) -> str | None:
+    """The face the document's headings actually render in.
+
+    The styles a document DEFINES are not the ones it uses: Word's template
+    defines all nine heading styles whether or not the author touched them,
+    so a document written entirely in Heading 2 would otherwise report
+    Heading 1's face. Used styles first, shallowest first; only then the
+    defined ones.
+    """
+    used = {
+        str(model_dump(item.p_pr).get("p_style") or "").lower()
+        for item, _ in parsed.content
+        if type(item).__name__ == "Paragraph"
+    }
+    levels = [(f"heading{n}", f"heading {n}") for n in range(1, 7)]
+    for by_id, by_name in levels:
+        for style_id in used:
+            if style_id == by_id or parsed.style_names.get(style_id) == by_name:
+                face = parsed.style_fonts.get(style_id)
+                if face:
+                    return face
+    keys = [key for pair in levels for key in pair]
+    return _resolved_style_font(parsed, *keys)
+
+
+def _resolved_style_font(parsed: ParsedDocx, *style_ids: str) -> str | None:
+    """The latin face a named style resolves to, or None if it has no say.
+
+    ``style_fonts`` — read from styles.xml directly — answers for every
+    candidate before the typed resolver is asked for any: the typed model
+    drops a theme-referencing ``rFonts`` outright and then reports the
+    document default instead, which would win over a later candidate that
+    genuinely names a face.
+    """
+    for style_id in style_ids:
+        face = parsed.style_fonts.get(style_id.lower()) if style_id else None
+        if face:
+            return face
+    for style_id in style_ids:
+        if not style_id:
+            continue
+        try:
+            props = parsed.resolver.resolve_paragraph_properties(style_id)
+        except Exception:
+            continue
+        face = font_of(props.get("r_pr") or {}, parsed.theme)
+        if face:
+            return face
+    return None
+
+
 def _safe_theme_slots(parsed: ParsedDocx) -> dict[str, str]:
     """The derived theme, minus any value the slot grammar cannot hold
     (a non-latin face name must degrade the slot, not fail the ingest)."""
     out: dict[str, str] = {}
-    for slot, value in parsed.theme.slots().items():
+    for slot, value in _derived_theme_slots(parsed).items():
         kind = REGISTRY.theme_slots.get(slot, {}).get("type")
         pattern = REGISTRY.theme_patterns.get(kind or "")
         if pattern is not None and pattern.fullmatch(value):
@@ -148,15 +241,26 @@ class _Converter:
         self.p = parsed
         self.title_text: str | None = None
         self._blocks: list[str] = []
-        # consecutive list paragraphs buffer: (num_id, ilvl, markup, li attr)
-        self._items: list[tuple[int, int, str, str]] = []
+        # consecutive list paragraphs buffer:
+        # (num_id, ilvl, markup, li attr, the number Word draws for it)
+        self._items: list[tuple[int, int, str, str, int]] = []
         # relationship ids the run walk already emitted for the current
         # paragraph, so the picture recovery below stays additive
         self._emitted_images: set[str] = set()
+        # numIds whose whole scheme draws outline-numbered blocks
+        self._outline_schemes: set[int] = set()
+        # num_id -> the one shape its whole scheme draws (_OUTLINE/_LIST/_BAKED)
+        self._verdict_of: dict[int, str] = {}
+        # num_id -> the scheme (abstract definition) it belongs to, and the
+        # scheme the last outline block came from: two schemes share one set
+        # of CSS counters, so the second has to restart them
+        self._scheme_of: dict[int, tuple[str, int]] = {}
+        self._last_outline_scheme: tuple[str, int] | None = None
 
     # -- top level ---------------------------------------------------------
 
     def blocks(self) -> list[str]:
+        self._classify_numbering()
         for item, elem in self.p.content:
             kind = type(item).__name__
             if kind == "Paragraph":
@@ -199,6 +303,161 @@ class _Converter:
             },
         }
 
+    # -- numbering ---------------------------------------------------------
+
+    def _numbering_of(self, para: Any) -> dict:
+        """A paragraph's effective ``numPr`` — direct, else inherited from its
+        style, which is how templates carry outline numbering."""
+        direct = model_dump(para.p_pr)
+        style_id = direct.pop("p_style", None)
+        num_pr = self.p.resolver.resolve_with_direct(style_id, direct).get("num_pr") or {}
+        # w:numId="0" is OOXML for "numbering removed here"
+        return {} if str(num_pr.get("num_id")) == "0" else num_pr
+
+    def _iter_paragraphs(self, content: Any = None, in_cell: bool = False):
+        """Every paragraph in document order, table cells included.
+
+        Both numbering passes need this. A paragraph inside a cell is
+        numbered by Word like any other, so a walk that stops at the table
+        both loses that number and leaves the counter unadvanced — which
+        misnumbers everything after the table, not just the cell.
+        """
+        for item in content if content is not None else (i for i, _ in self.p.content):
+            kind = type(item).__name__
+            if kind == "Paragraph":
+                yield item, in_cell
+            elif kind == "Table":
+                for row in getattr(item, "tr", []) or []:
+                    for cell in getattr(row, "tc", []) or []:
+                        yield from self._iter_paragraphs(
+                            getattr(cell, "content", []) or [], in_cell=True
+                        )
+
+    def _classify_numbering(self) -> None:
+        """Decide, ONCE PER SCHEME, which of three shapes it draws — before
+        emitting anything.
+
+        ``OUTLINE`` — dynamic ``num-N`` blocks: the contract-clause idiom,
+        clauses interleaved with prose, tables and headings.
+        ``LIST`` — a nested ``<ol>``/``<ul>`` carrying the ``list-*`` format
+        and suffix classes: Word's list idiom.
+        ``BAKED`` — a flat ``<p>`` per paragraph with the computed label as
+        text, for a scheme neither vocabulary can draw.
+
+        **The verdict belongs to the scheme, and to nothing smaller.** A
+        converter that asked per paragraph tears one list into three shapes:
+        Word's stock multilevel list (decimal, then lowerLetter, then
+        lowerRoman) emits its top level as ``<li>``, its lettered levels as
+        baked paragraphs, and then reopens a second ``<ol>``. The structure,
+        the indentation and the item ids are all lost, and the ``<ol>`` the
+        format classes attach to is gone with them.
+
+        The grouping key is the **abstract definition**, not the instance:
+        Word mints a fresh ``w:num`` for the same definition every time a
+        list is interrupted, and the counters are shared per definition. Keyed
+        per instance, a continuation used only at deeper levels fails the
+        contiguity rule on its own, and one continuous visible sequence emits
+        as blocks and then as a list starting again at 1.
+        """
+        engine = self.p.numbering_engine
+        used: dict[_Scheme, set[int]] = {}
+        first: dict[_Scheme, int] = {}
+        instances: dict[_Scheme, set[int]] = {}
+        headed: set[_Scheme] = set()
+        order: list[_Scheme] = []
+        for para, _in_cell in self._iter_paragraphs():
+            num_pr, is_heading = self._scheme_facts(para)
+            try:
+                num_id = int(num_pr["num_id"])
+                ilvl = int(num_pr.get("ilvl") or 0)
+            except (KeyError, TypeError, ValueError):
+                continue
+            abstract = engine.abstract_of(num_id)
+            key = ("a", abstract) if abstract is not None else ("n", num_id)
+            used.setdefault(key, set()).add(ilvl)
+            first.setdefault(key, ilvl)
+            instances.setdefault(key, set()).add(num_id)
+            if is_heading:
+                headed.add(key)
+            if not order or order[-1] != key:
+                order.append(key)
+
+        verdict: dict[_Scheme, str] = {}
+        for key, levels in used.items():
+            ids = instances[key]
+            # A heading-styled scheme can never be a list — <li> is not <h2>,
+            # and a heading emitted as a list item loses its number outright.
+            # It is also allowed the flat shape, which the list path otherwise
+            # reserves: a single-level numbered heading is still a clause.
+            if all(
+                engine.scheme_is_outline(
+                    nid, levels, first_level=first[key], allow_flat=key in headed
+                )
+                for nid in ids
+            ):
+                verdict[key] = _OUTLINE
+            elif key not in headed and all(engine.scheme_is_list(nid, levels) for nid in ids):
+                verdict[key] = _LIST
+            else:
+                verdict[key] = _BAKED
+
+        # Only schemes that BOTH render dynamically contend for the shared
+        # aim-cN counters, so only those can interleave destructively. A <ul>
+        # touches none of them, and counting it demoted a whole contract for
+        # having one bulleted sub-list in it.
+        dynamic: list[_Scheme] = []
+        for key in order:
+            if verdict.get(key) != _OUTLINE:
+                continue
+            if not dynamic or dynamic[-1] != key:
+                dynamic.append(key)
+        for key in {k for k in dynamic if dynamic.count(k) > 1}:
+            verdict[key] = _BAKED
+
+        self._scheme_of = {nid: key for key, ids in instances.items() for nid in ids}
+        self._verdict_of = {nid: verdict[key] for key, ids in instances.items() for nid in ids}
+        self._outline_schemes = {n for n, v in self._verdict_of.items() if v == _OUTLINE}
+
+    def _clause_attrs(self, num_pr: dict, draw: NumberDraw) -> tuple[list[str], str]:
+        """The ``num-N`` classes and prefix attribute for one dynamic clause.
+
+        v0.5: the level is one CSS counters can draw, so the number is NOT
+        written into the text. It is computed at render time, which is what
+        makes it survive an edit — insert a clause and everything after it
+        renumbers.
+
+        Called in document order from every path that emits a clause, the
+        cell walk included: the fresh-scheme check below depends on it.
+        """
+        clause = [f"num-{draw.level}"]
+        prefix_attr = ""
+        scheme = self._scheme_of.get(int(num_pr.get("num_id", -1)))
+        # Two schemes share one set of CSS counters, so a document that
+        # finishes one numbering scheme and begins another must say so:
+        # without this the second scheme's opening clause carries on from the
+        # first and renders 2. where the document says 1. Word keeps a counter
+        # per definition and needs no such marker.
+        fresh_scheme = self._last_outline_scheme is not None and scheme != self._last_outline_scheme
+        if draw.restarted or fresh_scheme:
+            clause.append("num-restart")
+        self._last_outline_scheme = scheme
+        if draw.prefix:
+            prefix_attr = f' data-aim-num-prefix="{escape_attr(draw.prefix)}"'
+        return clause, prefix_attr
+
+    def _scheme_facts(self, para: Any) -> tuple[dict, bool]:
+        """A paragraph's effective ``numPr`` and whether it is heading-styled
+        — resolved together, because the classification pass needs both and
+        the style resolution is the expensive half."""
+        direct = model_dump(para.p_pr)
+        style_id = direct.pop("p_style", None)
+        effective = self.p.resolver.resolve_with_direct(style_id, direct)
+        num_pr = effective.get("num_pr") or {}
+        # w:numId="0" is OOXML for "numbering removed here"
+        if str(num_pr.get("num_id")) == "0":
+            num_pr = {}
+        return num_pr, self._heading_level(style_id, effective) is not None
+
     # -- paragraphs --------------------------------------------------------
 
     def _paragraph(self, para: Any, elem: Any = None) -> None:
@@ -221,16 +480,41 @@ class _Converter:
         if str(num_pr.get("num_id")) == "0":
             num_pr = {}
         heading = self._heading_level(style_id, effective)
+        # Counters advance exactly ONCE per numbered paragraph, here, in
+        # document order — before any decision about how to render it. Both
+        # the clause path and the list path below depend on that, and
+        # advancing twice (or skipping one) desyncs every label after it.
+        draw = self._draw(num_pr)
         # An outline style that also carries numbering is a numbered clause
         # ("1.", "1.1", "1.1.1" — the legal-document idiom). Word draws that
-        # label; nothing in the text holds it, so it has to be materialised
-        # here or the clause structure is simply lost. The label is claimed
-        # in document order, before the heading/paragraph decision, because
-        # the counters advance per numbered paragraph either way.
-        label = ""
-        if heading is not None and num_pr.get("num_id") is not None:
-            label = self._number_label(num_pr)
-            if label:
+        # label; nothing in the text holds it.
+        label: str = ""
+        clause: list[str] = []
+        prefix_attr = ""
+        # Outline-numbered or a list item? Ask the SCHEME, decided once in
+        # _classify_numbering — never this paragraph in isolation, or one
+        # scheme emits both shapes and the blocks count against a level
+        # nothing increments.
+        # BAKED is the default, not "no verdict": a scheme the classify pass
+        # never saw — one reachable only through a container that walk does
+        # not descend into — must still write its label as text. Losing the
+        # number outright is the one outcome spec §3.8 rules out.
+        verdict = self._verdict_of.get(int(num_pr.get("num_id", -1)), _BAKED)
+        outline = draw is not None and verdict == _OUTLINE
+        # A scheme neither vocabulary can draw is baked — ALWAYS, not only on
+        # heading-styled paragraphs. Spec §3.8: "a writer that cannot express
+        # a scheme in this vocabulary MUST write the computed number as text
+        # instead". Gating that on the heading style dropped the label
+        # outright for plain-styled contracts ("Article I", "I.1"), which is
+        # the one outcome the section rules out.
+        if draw is not None and (outline or verdict == _BAKED):
+            if outline and draw.level is not None:
+                clause, prefix_attr = self._clause_attrs(num_pr, draw)
+            elif draw.label:
+                # a level fixed CSS cannot express (mixed formats down one
+                # chain, parenthesised sub-items): bake what Word draws. The
+                # document reads correctly and simply does not renumber.
+                label = draw.label
                 # Word separates label from clause text with a tab, which
                 # the walk already emitted as a no-break space — only add
                 # a separator when the text brings none. No-break, never a
@@ -247,18 +531,25 @@ class _Converter:
         if inline:
             if heading is not None:
                 self._flush_items()
-                self._blocks.append(self._block(f"h{heading}", inline, effective))
-            elif label:
-                # numbered clause that is not a visual heading: an ordinary
-                # paragraph carrying its own label (an <ol> would renumber it
-                # 1,2,3 per level and lose the "1.1.1" the document states)
+                self._blocks.append(
+                    self._block(f"h{heading}", inline, effective, clause, prefix_attr)
+                )
+            elif label or clause:
+                # A numbered clause that is not a visual heading stays an
+                # ordinary paragraph carrying its number — as a class when
+                # CSS can draw it, baked otherwise. Never an <ol>: the
+                # clauses of a contract are interleaved with prose, and a
+                # list would either swallow that prose or fragment.
                 self._flush_items()
-                self._blocks.append(self._block("p", inline, effective))
+                self._blocks.append(self._block("p", inline, effective, clause, prefix_attr))
             elif num_pr.get("num_id") is not None:
-                # claim this item's number too: the counters are shared with
-                # any heading-styled clause on the same definition, and
-                # skipping list items desyncs every label after them
-                self._number_label(num_pr)
+                if draw is not None and draw.restarted and self._items:
+                    # Word's "restart numbering" mid-list: close the run so a
+                    # fresh <ol> begins at 1. Without this the items coalesce
+                    # into one list and the restart disappears — the numbers
+                    # simply keep climbing past where the document says begin
+                    # again.
+                    self._flush_items()
                 # list items carry their alignment class like any block —
                 # a centered bullet is visible structure too
                 self._items.append(
@@ -267,6 +558,7 @@ class _Converter:
                         int(num_pr.get("ilvl") or 0),
                         inline,
                         self._class_attr(effective),
+                        (draw.value if draw is not None and draw.value else 1),
                     )
                 )
             elif _IMG_ONLY.fullmatch(inline):
@@ -282,6 +574,15 @@ class _Converter:
             else:
                 self._flush_items()
                 self._blocks.append(self._block("p", inline, effective))
+        elif clause:
+            # An empty numbered paragraph still draws its number in Word, and
+            # the next clause carries on from it. The CSS counters advance on
+            # RENDERED blocks, not on the walk, so dropping this one shifts
+            # every label after it down by one — silently, since the document
+            # still reads as authoritative. (The baked path needs no such
+            # branch: its label is the text.)
+            self._flush_items()
+            self._blocks.append(self._block("p", "", effective, clause, prefix_attr))
         if trailing_break:
             self._flush_items()
             self._blocks.append(_PAGE_BREAK)
@@ -335,30 +636,28 @@ class _Converter:
             suffix = " " + escape_text(math)
         return (prefix + inline + suffix).strip()
 
+    def _draw(self, num_pr: dict) -> NumberDraw | None:
+        """Advance the numbering counters for this paragraph and describe how
+        to render it. Exactly once per numbered paragraph, in document order
+        — which is how the walk visits them."""
+        try:
+            num_id = int(num_pr["num_id"])
+            ilvl = int(num_pr.get("ilvl") or 0)
+        except (KeyError, TypeError, ValueError):
+            return None
+        return self.p.numbering_engine.draw(num_id, ilvl)
+
     def _number_label(self, num_pr: dict) -> str:
         """The label Word would draw for this numbered paragraph ("1.1.1"),
         or "" when the definition yields none. Counters advance per call, so
         this must be called exactly once per numbered paragraph, in document
         order — which is how the walk visits them."""
-        tracker = self.p.numbering_tracker
-        if tracker is None:
-            return ""
         try:
             num_id = int(num_pr["num_id"])
-            # count against the abstract definition, not the instance
-            num_id = self.p.num_alias.get(num_id, num_id)
             ilvl = int(num_pr.get("ilvl") or 0)
-            label = str(tracker.get_number(num_id, ilvl))
-            level = tracker.get_level(num_id, ilvl)
-            fmt = getattr(level, "num_fmt", None) if level is not None else None
-            if fmt in ("none", "bullet"):
-                # Word draws nothing for these levels (or a font-private
-                # bullet glyph); the counter still advanced above so the
-                # numbered siblings around them stay correct
-                return ""
-            return label
-        except Exception:
+        except (KeyError, TypeError, ValueError):
             return ""
+        return self.p.numbering_engine.label(num_id, ilvl)
 
     def _looks_like_a_heading(self, style_id: str | None, effective: dict) -> bool:
         """Whether a style actually reads as a heading to a human.
@@ -417,18 +716,22 @@ class _Converter:
                 return min(int(m.group(1)), 6)
         return None
 
-    def _block(self, tag: str, inline: str, effective: dict) -> str:
-        attr = self._class_attr(effective)
+    def _block(
+        self, tag: str, inline: str, effective: dict, extra: Sequence[str] = (), attrs: str = ""
+    ) -> str:
+        attr = self._class_attr(effective, extra)
         if tag == "h1" and self.title_text is None:
             # a clause label is not part of the title ("1. Definitions")
             self.title_text = _NUM_LABEL.sub("", _plain_text(inline)).strip() or None
-        return f"<{tag}{attr}>{inline}</{tag}>"
+        return f"<{tag}{attr}{attrs}>{inline}</{tag}>"
 
     @staticmethod
-    def _class_attr(effective: dict) -> str:
-        """The block's class attribute ('' when none): alignment classes."""
+    def _class_attr(effective: dict, extra: Sequence[str] = ()) -> str:
+        """The block's class attribute ('' when none): alignment, plus any
+        structural classes the caller adds (clause numbering)."""
         align = _ALIGN_CLASS.get(str(effective.get("jc") or ""))
-        return f' class="{align}"' if align else ""
+        names = [*extra] + ([align] if align else [])
+        return f' class="{" ".join(names)}"' if names else ""
 
     # -- inline content ----------------------------------------------------
 
@@ -590,26 +893,56 @@ class _Converter:
         for num_id, group in _group_runs(items):
             self._blocks.append(self._list_markup(num_id, group))
 
-    def _list_markup(self, num_id: int, items: list[tuple[int, int, str, str]]) -> str:
+    def _open_list(self, num_id: int, ilvl: int, value: int) -> tuple[str, str]:
+        """The opening tag and the closing tag for one list level.
+
+        Carries two things the level's own definition decides:
+
+        * the ``list-*`` classes that draw the marker Word draws — without
+          them a lettered sub-list renders "1." where Word renders "a.";
+        * ``start``, because Word counts across an interruption (a list
+          resumed after a paragraph carries on at 5) while a fresh ``<ol>``
+          renders 1. again. The marker is the built-in ``list-item`` counter,
+          which is exactly what ``start`` seeds — and the reason the format
+          classes ride the element rather than each item.
+        """
+        tag = "ol" if self._ordered(num_id, ilvl) else "ul"
+        names = self.p.numbering_engine.list_style(num_id, ilvl) or ()
+        cls = f' class="{" ".join(names)}"' if names else ""
+        start = f' start="{value}"' if tag == "ol" and value > 1 else ""
+        return f"<{tag}{cls}{start}>", f"</{tag}>"
+
+    def _list_markup(self, num_id: int, items: list[tuple[int, int, str, str, int]]) -> str:
         # nest from the group's MINIMUM level, not the first item's: a list
         # that starts indented and later outdents must keep the outdented
         # items (starting deeper would drop everything below the entry
         # level when the walk returns)
-        start = min(ilvl for _, ilvl, _, _ in items)
-        tag = "ol" if self._ordered(num_id, start) else "ul"
+        start = min(ilvl for _, ilvl, _, _, _ in items)
+        first = next(value for _, ilvl, _, _, value in items if ilvl == start)
+        if items[0][1] > start:
+            # the group opens BELOW its own top level, so _nest synthesises a
+            # wrapper <li> to hang the deeper list from. That wrapper is an
+            # item like any other and consumes a number — seed one lower, or
+            # the first real item and everything after it renders one too high
+            first -= 1
         body, _ = self._nest(items, 0, start)
-        return f"<{tag}>{body}</{tag}>"
+        open_tag, close_tag = self._open_list(num_id, start, first)
+        return f"{open_tag}{body}{close_tag}"
 
-    def _nest(self, items: list[tuple[int, int, str, str]], i: int, level: int) -> tuple[str, int]:
+    def _nest(
+        self, items: list[tuple[int, int, str, str, int]], i: int, level: int
+    ) -> tuple[str, int]:
         parts: list[str] = []
         while i < len(items):
-            _, ilvl, markup, attr = items[i]
+            _, ilvl, markup, attr, _value = items[i]
             if ilvl < level:
                 break
             if ilvl > level:
+                opening = items[i][4]
+                entered = items[i][0]
                 nested, i = self._nest(items, i, ilvl)
-                tag = "ol" if self._ordered(items[i - 1][0], ilvl) else "ul"
-                nested_markup = f"<{tag}>{nested}</{tag}>"
+                open_tag, close_tag = self._open_list(entered, ilvl, opening)
+                nested_markup = f"{open_tag}{nested}{close_tag}"
                 if parts:
                     parts[-1] = parts[-1][: -len("</li>")] + nested_markup + "</li>"
                 else:
@@ -620,21 +953,7 @@ class _Converter:
         return "".join(parts), i
 
     def _ordered(self, num_id: int, ilvl: int) -> bool:
-        numbering = self.p.numbering
-        if numbering is None:
-            return False
-        abstract_id = next(
-            (n.abstract_num_id for n in getattr(numbering, "num", []) if n.num_id == num_id),
-            None,
-        )
-        if abstract_id is None:
-            return False
-        for ab in getattr(numbering, "abstract_num", []):
-            if getattr(ab, "abstract_num_id", None) == abstract_id:
-                for lvl in getattr(ab, "lvl", []) or []:
-                    if getattr(lvl, "ilvl", None) == ilvl:
-                        return getattr(lvl, "num_fmt", None) not in (None, "bullet", "none")
-        return False
+        return self.p.numbering_engine.is_ordered(num_id, ilvl)
 
     # -- tables ------------------------------------------------------------
 
@@ -764,7 +1083,7 @@ class _Converter:
         return f' style="{escape_attr(decl)}"'
 
     def _cell_markup(self, cell: Any) -> str:
-        paras: list[str] = []
+        paras: list[tuple[str, str]] = []  # (markup, the <p> attributes it needs)
         nested: list[str] = []
         for item in getattr(cell, "content", []) or []:
             kind = type(item).__name__
@@ -772,18 +1091,40 @@ class _Converter:
                 direct = model_dump(item.p_pr)
                 style_id = direct.pop("p_style", None)
                 inline, _ = self._inline_markup(item, style_id)
+                # A numbered paragraph in a cell advances the same counters as
+                # one in the body — in document order, which is why this runs
+                # during the table walk rather than before or after it. It
+                # carries the SAME shape as its scheme's siblings outside the
+                # table: CSS counters advance on rendered blocks in DOM order,
+                # so a num-N block in a <td> keeps the chain in step. Excluding
+                # the whole scheme because one clause sits in a layout table
+                # demoted every other clause in the document.
+                num_pr = self._numbering_of(item)
+                draw = self._draw(num_pr)
+                attrs = ""
+                if draw is not None:
+                    if self._verdict_of.get(int(num_pr.get("num_id", -1))) == _OUTLINE and (
+                        draw.level is not None
+                    ):
+                        clause, prefix_attr = self._clause_attrs(num_pr, draw)
+                        attrs = f' class="{" ".join(clause)}"{prefix_attr}'
+                    elif draw.label:
+                        sep = "" if inline[:1] in (" ", "\xa0", "\t") else "\xa0"
+                        inline = f"{escape_text(draw.label)}{sep}{inline}"
                 if inline:
-                    paras.append(inline)
+                    paras.append((inline, attrs))
             elif kind == "Table":
                 markup = self._table_markup(item)
                 if markup:
                     nested.append(markup)
-        if len(paras) == 1 and not nested:
-            return paras[0]
-        return "".join(f"<p>{p}</p>" for p in paras) + "".join(nested)
+        if len(paras) == 1 and not nested and not paras[0][1]:
+            return paras[0][0]
+        # num-N is placement-checked onto <p>, never onto <td>: a cell that
+        # carries a clause needs the paragraph the class belongs on
+        return "".join(f"<p{attrs}>{p}</p>" for p, attrs in paras) + "".join(nested)
 
 
-def _group_runs(items: list[tuple[int, int, str, str]]):
+def _group_runs(items: list[tuple[int, int, str, str, int]]):
     """Consecutive items sharing a num_id form one list."""
     start = 0
     for i in range(1, len(items) + 1):

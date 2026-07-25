@@ -32,7 +32,7 @@ from .dom import Comment, Element, Text, parse_fragment
 from .errors import AimError, HistoryError, InvalidOperation, ParseError, TargetNotFound
 from .events import _ISO_RE
 from .pagesetup import page_setup_from_obj, parse_doc_settings
-from .registry import REGISTRY
+from .registry import REGISTRY, version_key
 
 __all__ = ["Finding", "lint", "lint_text", "lint_path"]
 
@@ -151,27 +151,26 @@ class _Linter:
                 f"document targets spec {version}, this tool implements "
                 f"{REGISTRY.spec_version} — rules it does not know are unchecked",
             )
-        if version is not None and not REGISTRY.version_includes(
-            version, REGISTRY.typography_since
-        ):
-            # only documents older than the newest gated era can violate a
-            # gate, so current-version files skip the retained-markup scan
+        if version is not None and not REGISTRY.version_includes(version, REGISTRY.spec_version):
+            # Only a document older than the CURRENT version can violate a
+            # gate. Comparing against the newest *named* era instead let every
+            # later era through: a 0.5 class in a 0.4 document skipped this
+            # scan entirely, and in a 0.3 document reached it but matched
+            # neither hardcoded check. Every floor that exists is tested, so
+            # adding a gated construct cannot forget to add its gate.
             floors = self._retained_feature_floors()
-            if REGISTRY.paint_since in floors and not REGISTRY.version_includes(
-                version, REGISTRY.paint_since
-            ):
+            named = {
+                REGISTRY.paint_since: ("S032", "literal paint"),
+                REGISTRY.typography_since: ("S033", "literal typography"),
+            }
+            for floor in sorted(floors, key=lambda f: version_key(f) or ()):
+                if REGISTRY.version_includes(version, floor):
+                    continue  # the document is new enough for this construct
+                code, what = named.get(floor, ("S034", f"spec {floor} markup"))
                 self.add(
-                    "S032",
+                    code,
                     ERROR,
-                    f"literal paint requires spec {REGISTRY.paint_since} or newer, "
-                    f"but the document declares {version}",
-                )
-            if REGISTRY.typography_since in floors:
-                self.add(
-                    "S033",
-                    ERROR,
-                    f"literal typography requires spec {REGISTRY.typography_since} "
-                    f"or newer, but the document declares {version}",
+                    f"{what} requires spec {floor} or newer, but the document declares {version}",
                 )
         head = self.state.head
         if not head.find(lambda e: e.tag == "meta" and e.get("charset") == "utf-8"):
@@ -567,6 +566,16 @@ class _Linter:
                         )
                     elif token not in REGISTRY.allowed_classes:
                         self.add("V005", ERROR, f"unknown class {token!r}", loc)
+                    else:
+                        where = REGISTRY.class_placement.get(token)
+                        if where is not None and tag not in where:
+                            self.add(
+                                "V013",
+                                ERROR,
+                                f"class {token!r} does not apply to <{tag}> "
+                                f"(only {', '.join(sorted(where))})",
+                                loc,
+                            )
             if name == "style" and value:
                 self.check_style(value, loc)
             if name == "href" or name == "src":

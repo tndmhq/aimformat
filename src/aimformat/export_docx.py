@@ -504,6 +504,29 @@ class _Revisions:
         el.set(qn("w:date"), date or "2026-01-01T00:00:00Z")
         self._next += 1
 
+    def mark_paragraph(self, paragraph, tag: str, author: str, date: str) -> None:
+        """Mark the paragraph MARK itself as inserted or deleted.
+
+        A paragraph the exporter creates whole as a revision needs this as
+        well as its runs. Word treats the mark as the thing that ENDS a
+        paragraph, so an unmarked mark survives accept/reject: accepting an
+        insertion keeps an empty paragraph behind, and because that paragraph
+        still carries its ``w:numPr``, it keeps a number too — every clause
+        after it shifts by one, in the delivered file.
+        """
+        from docx.oxml import OxmlElement
+        from docx.oxml.ns import qn
+
+        p_pr = paragraph._p.get_or_add_pPr()
+        r_pr = p_pr.find(qn("w:rPr"))
+        if r_pr is None:
+            r_pr = OxmlElement("w:rPr")
+            # w:rPr is the first child of w:pPr in the OOXML content model
+            p_pr.insert(0, r_pr)
+        revision = OxmlElement(tag)
+        self._attrs(revision, author, date)
+        r_pr.append(revision)
+
     def ins(self, paragraph, runs: list[dict], author: str, date: str) -> None:
         from docx.oxml import OxmlElement
 
@@ -715,6 +738,107 @@ def _style_px(el: Element, prop: str) -> float | None:
     return None
 
 
+def _has_class(el: Element, name: str) -> bool:
+    return name in (el.get("class") or "").split()
+
+
+_NUM_CLASS = re.compile(r"^num-([1-9])$")
+
+
+def _num_level(el: Element) -> int | None:
+    """The 1-based outline-numbering level a block declares, or None."""
+    for name in (el.get("class") or "").split():
+        match = _NUM_CLASS.match(name)
+        if match:
+            level = int(match.group(1))
+            if level <= REGISTRY.num_levels:
+                return level
+    return None
+
+
+#: One abstract definition covering every level: decimal, chained
+#: (%1.%2.%3…), each level restarting under its parent — the scheme the
+#: num-N classes describe. Word draws the labels from this, so an exported
+#: document renumbers on edit exactly as the .aim did.
+def _xml_attr(value: str) -> str:
+    """Escape a literal for an XML attribute value — a prefix is authored
+    text and may carry & or <."""
+    return (
+        value.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;")
+    )
+
+
+#: the ``list-*`` format class → the ``w:numFmt`` that draws it
+_LIST_CLASS_FMT = {
+    "list-lower-alpha": "lowerLetter",
+    "list-upper-alpha": "upperLetter",
+    "list-lower-roman": "lowerRoman",
+    "list-upper-roman": "upperRoman",
+}
+#: the suffix class → what follows the counter in ``w:lvlText``. No class is
+#: the browser's own default for ``<ol>``, a trailing dot.
+_LIST_CLASS_SUFFIX = {"list-paren": ")", "list-bare": ""}
+
+
+def _list_abstract_xml(abstract_id: int, specs: dict[int, tuple[str, str, bool]]) -> str:
+    """A numbering definition for ONE list tree, from its ``list-*`` classes.
+
+    Without this the exporter leaned on Word's "List Number" style, which
+    carries the template's own numbering: every ordered list in the document
+    shared one counter (so independent lists continued each other), every
+    level drew decimal (so a lettered sub-list came out "1."), and ``start``
+    had nowhere to go.
+    """
+    from docx.oxml.ns import nsmap
+
+    lvls = []
+    for i in range(REGISTRY.num_levels):
+        fmt, suffix, multilevel = specs.get(i, ("decimal", ".", False))
+        if fmt == "bullet":
+            text, num_fmt = "", "bullet"
+        elif multilevel:
+            # the chain the stylesheet draws with counters(list-item, "."):
+            # dot separators, decimal at every depth, by construction
+            text = ".".join(f"%{j + 1}" for j in range(i + 1)) + suffix
+            num_fmt = "decimal"
+        else:
+            text, num_fmt = f"%{i + 1}{suffix}", fmt
+        lvls.append(
+            f'<w:lvl w:ilvl="{i}"><w:start w:val="1"/><w:numFmt w:val="{num_fmt}"/>'
+            f'<w:lvlText w:val="{_xml_attr(text)}"/><w:lvlJc w:val="left"/>'
+            f'<w:pPr><w:ind w:left="{720 * (i + 1)}" w:hanging="720"/></w:pPr></w:lvl>'
+        )
+    return (
+        f'<w:abstractNum xmlns:w="{nsmap["w"]}" w:abstractNumId="{abstract_id}">'
+        f'<w:multiLevelType w:val="multilevel"/>{"".join(lvls)}</w:abstractNum>'
+    )
+
+
+def _num_abstract_xml(abstract_id: int, levels: int, prefixes: dict[int, str] | None = None) -> str:
+    from docx.oxml.ns import nsmap
+
+    w = nsmap["w"]
+    lvls = []
+    for i in range(levels):
+        literal = (prefixes or {}).get(i + 1)
+        if literal:
+            # a prefixed level shows its own counter alone ("Article 1"),
+            # never the chain — the same rule the stylesheet applies
+            text = f"{_xml_attr(literal)}%{i + 1}"
+        else:
+            chain = ".".join(f"%{j + 1}" for j in range(i + 1))
+            text = f"{chain}." if i == 0 else chain
+        lvls.append(
+            f'<w:lvl w:ilvl="{i}"><w:start w:val="1"/><w:numFmt w:val="decimal"/>'
+            f'<w:lvlText w:val="{text}"/><w:lvlJc w:val="left"/>'
+            f'<w:pPr><w:ind w:left="{720 * (i + 1)}" w:hanging="720"/></w:pPr></w:lvl>'
+        )
+    return (
+        f'<w:abstractNum xmlns:w="{w}" w:abstractNumId="{abstract_id}">'
+        f'<w:multiLevelType w:val="multilevel"/>{"".join(lvls)}</w:abstractNum>'
+    )
+
+
 # --------------------------------------------------------------------------
 class _Exporter:
     def __init__(self, doc: AimDocument, docx_mod):
@@ -735,6 +859,16 @@ class _Exporter:
             self.paint.resolve(construct)
         self.out = docx_mod.Document()
         self.rev = _Revisions()
+        # numbering definitions created on demand: per-level literal prefixes
+        # → abstractNumId, and the plain (non-restarting) instance for each
+        self._num_abstracts: dict[tuple[tuple[int, str], ...], int] = {}
+        self._num_instances: dict[int, int] = {}
+        self._num_serial = 0
+        # the literal each numbering level carries, for the scheme being
+        # emitted — cut at each scheme boundary, never document-wide
+        self._num_prefixes: dict[int, str] = {}
+        # (num id, depth) of the list whose item is being emitted, if any
+        self._list_item_num: tuple[int, int] | None = None
         # Set after a slide: True means accepted structure owns the next
         # break; a Proposal means the pending slide owns it.
         self._break_before_next: bool | Proposal = False
@@ -849,6 +983,8 @@ class _Exporter:
                 para = self.out.add_paragraph(
                     style=style or self._safe_style(_style_for(block.tag))
                 )
+                self._number_paragraph(para, block)
+                self.rev.mark_paragraph(para, "w:ins", _actor_label(prop.author), prop.at)
                 self.rev.ins(
                     para,
                     _tracked_block_runs(block, self.paint),
@@ -970,6 +1106,12 @@ class _Exporter:
         label, date = _actor_label(prop.author), prop.at
         for block in _block_children(el, self.paint):
             para = self.out.add_paragraph(style=style or self._safe_style(_style_for(block.tag)))
+            # A revision paragraph is still a numbered clause. Word numbers a
+            # pending deletion until it is accepted, so leaving these bare
+            # shifted every following clause up by one in the delivered file —
+            # and tracked is the DEFAULT export.
+            self._number_paragraph(para, block)
+            self.rev.mark_paragraph(para, "w:del", label, date)
             self.rev.dele(para, _tracked_block_runs(block, self.paint), label, date)
         if payload and prop.action == "modify":
             for new_el in self._payload_elements(prop):
@@ -977,6 +1119,8 @@ class _Exporter:
                     para = self.out.add_paragraph(
                         style=style or self._safe_style(_style_for(block.tag))
                     )
+                    self._number_paragraph(para, block)
+                    self.rev.mark_paragraph(para, "w:ins", label, date)
                     self.rev.ins(para, _tracked_block_runs(block, self.paint), label, date)
 
     def emit_tracked_list_container(self, el: Element, prop: Proposal) -> None:
@@ -1028,9 +1172,147 @@ class _Exporter:
         align = _alignment_of(el)
         if align is not None:
             para.alignment = align
+        self._number_paragraph(para, el)
         runs, box = _clean_runs_and_box(el, self.paint)
         _apply_runs(para, runs)
         _paint_paragraph(para, box)
+
+    def _num_prefix_key(self, level: int, prefix: str | None) -> tuple[tuple[int, str], ...]:
+        """The definition key for one block: the literals of the SCHEME it
+        belongs to.
+
+        A literal lives in its level's ``lvlText``, so it belongs to the
+        DEFINITION. Read per block it minted one definition for the prefixed
+        shape and another for the plain one — and OOXML counters belong to
+        the definition, so the sub-clauses counted against a level-0 counter
+        nothing ever advanced: Word drew ``Article 2 / 1.3`` where the
+        document says ``Article 2 / 2.1``.
+
+        Read per DOCUMENT it stopped describing a scheme at all. Every later
+        scheme inherited the first one's literals, so a plain "1." list that
+        followed an "Article" scheme was exported as "Article 1", "Article 2"
+        — a literal fabricated into a scheme that never carried one.
+
+        So the map is accumulated forward and cut at each scheme boundary,
+        which the importer already marks: ``num-restart`` on a top-level
+        block. Within a scheme the level-1 block carrying the literal
+        precedes its sub-clauses, so they key against it and share its
+        definition; a scheme with no literal keys the empty map and gets its
+        own. A mid-scheme restart re-derives the same literals from the block
+        that carries it, so its key — and its definition — are unchanged.
+        """
+        if prefix:
+            self._num_prefixes[level] = prefix
+        return tuple(sorted(self._num_prefixes.items()))
+
+    def _num_abstract_id(self, prefixes: tuple[tuple[int, str], ...]) -> int | None:
+        """The abstract definition for a set of per-level literal prefixes.
+
+        The plain chain is one definition shared by the whole document; a
+        block carrying ``data-aim-num-prefix`` needs its own, because the
+        literal lives in the level's ``lvlText`` — Word has nowhere else to
+        put it. Without this an "Article 1" heading exports as "1.", so a
+        DOCX → aim → DOCX trip destroys the prefix the importer preserved.
+        """
+        if prefixes in self._num_abstracts:
+            return self._num_abstracts[prefixes]
+        numbering = self._numbering_part()
+        if numbering is None:
+            return None
+        from docx.oxml import parse_xml
+
+        abstract_id = 9000 + len(self._num_abstracts)
+        numbering.insert(
+            0, parse_xml(_num_abstract_xml(abstract_id, REGISTRY.num_levels, dict(prefixes)))
+        )
+        self._num_abstracts[prefixes] = abstract_id
+        return abstract_id
+
+    def _numbering_part(self):
+        """The document's numbering part. Absent only for a template that
+        ships without one — which the exporter's own template does not, so a
+        None here means numbering is lost and the caller bakes instead."""
+        try:
+            return self.out.part.numbering_part.element
+        except (AttributeError, KeyError, ValueError):
+            return None
+
+    def _num_instance_id(
+        self, *, restart: bool, level: int, prefixes: tuple[tuple[int, str], ...]
+    ) -> int | None:
+        """A ``w:num`` id for outline numbering.
+
+        One shared instance carries the document's sequence. Each RESTART
+        gets an instance of its own — not one per level — because a
+        startOverride applies on an instance's first use only (§17.9.27), so
+        two restarts sharing an instance leave the second one counting
+        straight on: 1 2 1 2 3 4 where the document says 1 2 1 2 1 2.
+        """
+        abstract_id = self._num_abstract_id(prefixes)
+        if abstract_id is None:
+            return None
+        # A restart mints a new instance and that instance stays IN EFFECT:
+        # the blocks after it continue its sequence. Sending them back to the
+        # original instance would restart the numbering a second time, and on
+        # re-import fragment one list into three.
+        if not restart and abstract_id in self._num_instances:
+            return self._num_instances[abstract_id]
+        numbering = self._numbering_part()
+        if numbering is None:
+            return None
+        from docx.oxml import parse_xml
+        from docx.oxml.ns import nsmap
+
+        self._num_serial += 1
+        num_id = 9100 + self._num_serial
+        override = (
+            f'<w:lvlOverride w:ilvl="{level - 1}"><w:startOverride w:val="1"/></w:lvlOverride>'
+            if restart
+            else ""
+        )
+        numbering.append(
+            parse_xml(
+                f'<w:num xmlns:w="{nsmap["w"]}" w:numId="{num_id}">'
+                f'<w:abstractNumId w:val="{abstract_id}"/>{override}</w:num>'
+            )
+        )
+        self._num_instances[abstract_id] = num_id
+        return num_id
+
+    def _number_paragraph(self, para, el: Element) -> None:
+        """Give a ``num-N`` block real Word numbering.
+
+        Since v0.5 the number is not in the text, so without this the export
+        loses it altogether — worse than the baked label it replaced. Word
+        draws it from ``numbering.xml`` the same way the source document did,
+        which also means it renumbers in Word after an edit."""
+        level = _num_level(el)
+        if level is None:
+            if self._list_item_num is not None:
+                self._apply_num_pr(para, *self._list_item_num)
+            return
+        restart = _has_class(el, "num-restart")
+        if restart and level == 1:
+            # a fresh scheme: its literals are its own, and a scheme with none
+            # must not inherit the previous one's
+            self._num_prefixes.clear()
+        num_id = self._num_instance_id(
+            restart=restart,
+            level=level,
+            prefixes=self._num_prefix_key(level, el.get("data-aim-num-prefix")),
+        )
+        if num_id is None:
+            return
+        self._apply_num_pr(para, num_id, level - 1)
+
+    @staticmethod
+    def _apply_num_pr(para, num_id: int, ilvl: int) -> None:
+        from docx.oxml.ns import qn
+
+        props = para._p.get_or_add_pPr()
+        num_pr = _fresh_child(props, "w:numPr", ordered_in="pPr")
+        _fresh_child(num_pr, "w:ilvl").set(qn("w:val"), str(ilvl))
+        _fresh_child(num_pr, "w:numId").set(qn("w:val"), str(num_id))
 
     def emit_pre(self, el: Element) -> None:
         """A code block, one run per (paint, line) segment.
@@ -1179,11 +1461,66 @@ class _Exporter:
         return Inches(max(0.25, min(inches, avail)))
 
     # -- lists ---------------------------------------------------------------------
-    def emit_list(self, el: Element, level: int = 0) -> None:
+    def _list_specs(
+        self, el: Element, depth: int = 0, out: dict[int, tuple[str, str, bool]] | None = None
+    ) -> dict[int, tuple[str, str, bool]]:
+        """``{depth: (numFmt, lvlText suffix, is a chain)}`` for a list tree.
+
+        Collected over the whole tree because an OOXML definition declares
+        every level at once, while the classes sit on each ``<ol>``.
+        """
+        specs = {} if out is None else out
+        classes = set((el.get("class") or "").split())
+        fmt = "bullet" if el.tag == "ul" else "decimal"
+        if el.tag == "ol":
+            fmt = next((v for k, v in _LIST_CLASS_FMT.items() if k in classes), "decimal")
+        suffix = next((v for k, v in _LIST_CLASS_SUFFIX.items() if k in classes), ".")
+        specs.setdefault(depth, (fmt, suffix, "list-multilevel" in classes))
+        for item in el.elements():
+            for sub in item.elements():
+                if sub.tag in ("ul", "ol"):
+                    self._list_specs(sub, depth + 1, specs)
+        return specs
+
+    def _list_num_id(self, el: Element) -> int | None:
+        """A ``w:num`` of this list's own, so it draws its own markers and
+        starts where it says. One instance per top-level list: sharing the
+        template's numbering is what made two independent lists continue
+        each other."""
+        numbering = self._numbering_part()
+        if numbering is None:
+            return None
+        from docx.oxml import parse_xml
+        from docx.oxml.ns import nsmap
+
+        specs = self._list_specs(el)
+        key = tuple(sorted(specs.items()))
+        abstract_id = self._num_abstracts.get(key)
+        if abstract_id is None:
+            abstract_id = 9000 + len(self._num_abstracts)
+            numbering.insert(0, parse_xml(_list_abstract_xml(abstract_id, specs)))
+            self._num_abstracts[key] = abstract_id  # type: ignore[index]
+        raw = el.get("start") or "1"
+        start = int(raw) if raw.lstrip("+-").isdigit() and int(raw) > 0 else 1
+        self._num_serial += 1
+        num_id = 9100 + self._num_serial
+        numbering.append(
+            parse_xml(
+                f'<w:num xmlns:w="{nsmap["w"]}" w:numId="{num_id}">'
+                f'<w:abstractNumId w:val="{abstract_id}"/>'
+                f'<w:lvlOverride w:ilvl="0"><w:startOverride w:val="{start}"/></w:lvlOverride>'
+                "</w:num>"
+            )
+        )
+        return num_id
+
+    def emit_list(self, el: Element, level: int = 0, num_id: int | None = None) -> None:
         base = "List Bullet" if el.tag == "ul" else "List Number"
         style = base if level == 0 else f"{base} {min(level + 1, 3)}"
         if not self._has_style(style):
             style = base if self._has_style(base) else None
+        if level == 0:
+            num_id = self._list_num_id(el)
         container_id = el.container_id
         if container_id:
             self._emit_list_adds(container_id, None, style)
@@ -1212,12 +1549,19 @@ class _Exporter:
                     if value:
                         content.set(attr, value)
                 self.paint.adopt(content, li)
-                if prop is not None:
-                    self.emit_tracked_chunk(content, prop, style=style, payload=li is group[-1])
-                else:
-                    self.emit_block(content, cid, style=style)
+                # the item's own paragraph draws from the list's definition at
+                # this depth; set for the emit call and cleared straight after,
+                # so nothing else picks it up
+                self._list_item_num = (num_id, level) if num_id is not None else None
+                try:
+                    if prop is not None:
+                        self.emit_tracked_chunk(content, prop, style=style, payload=li is group[-1])
+                    else:
+                        self.emit_block(content, cid, style=style)
+                finally:
+                    self._list_item_num = None
                 for sub in nested:
-                    self.emit_list(sub, level + 1)
+                    self.emit_list(sub, level + 1, num_id)
             if container_id and cid:
                 self._emit_list_adds(container_id, cid, style)
 

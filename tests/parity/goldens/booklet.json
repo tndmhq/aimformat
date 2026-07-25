@@ -107,13 +107,13 @@
     "pg2",
     "prog"
   ],
-  "docHash": "sha256:740c299b422e6653b08c57f77849d8f111769eb0643940882dd84c87a866715c",
+  "docHash": "sha256:7f063de10089a69aa9c272b65827c71e798def34f9e6986ff976708930ead781",
   "docSettings": {},
   "embeddings": null,
   "hasCanonicalNote": true,
   "history": {
     "lines": 3,
-    "sha256": "sha256:4ff7e4370389135f76985d8fc8b5535f2dc04b1e8175f2d23cdc1e5d2d0212c1"
+    "sha256": "sha256:6c3c0dddb18890313a29a60a2c0d24a97029470282cd7b84ba117cd159f8a988"
   },
   "lang": "en",
   "meta": null,
@@ -252,7 +252,7 @@
       "tag": "aim-slide"
     }
   ],
-  "note": "\naim-note: This file is an AIM document (open format, v0.4) — valid HTML plus\nchunk identity, a pending-suggestions lane, and an edit history.\nAgent docs: https://aimformat.com/llms.txt\nThe reliable way to edit this file is the `aimformat` tooling, which manages\nids, suggestions, and history for you: `pip install aimformat` for the `aim`\nCLI (`aim --help`); `pip install 'aimformat[mcp]'` adds its MCP server\n(`aim mcp`). An Agent Skill exists: `npx skills add tndmhq/aimformat`.\nHand-editing as plain text is the fallback; if you do: keep every data-aim id\nstable (never renumber or reuse; give new content a fresh id), treat the\naim-proposals appendix and the history script as append-only tool lanes, and\nvalidate with `aim lint`. Humans review in AIM editors:\nhttps://aimformat.com/editors\n",
+  "note": "\naim-note: This file is an AIM document (open format, v0.5) — valid HTML plus\nchunk identity, a pending-suggestions lane, and an edit history.\nAgent docs: https://aimformat.com/llms.txt\nThe reliable way to edit this file is the `aimformat` tooling, which manages\nids, suggestions, and history for you: `pip install aimformat` for the `aim`\nCLI (`aim --help`); `pip install 'aimformat[mcp]'` adds its MCP server\n(`aim mcp`). An Agent Skill exists: `npx skills add tndmhq/aimformat`.\nHand-editing as plain text is the fallback; if you do: keep every data-aim id\nstable (never renumber or reuse; give new content a fresh id), treat the\naim-proposals appendix and the history script as append-only tool lanes, and\nvalidate with `aim lint`. Humans review in AIM editors:\nhttps://aimformat.com/editors\n",
   "pageSetup": {
     "contentHeightMm": 267.0,
     "contentWidthMm": 180.0,
@@ -268,10 +268,10 @@
     "size": "A4"
   },
   "proposals": [],
-  "specVersion": "0.4",
+  "specVersion": "0.5",
   "stylesheet": {
-    "sha256": "sha256:fb75617803abea27d25fdd474a8aefe63be623764992fdd911d326f7dc603522",
-    "version": "0.4"
+    "sha256": "sha256:de54c7dd7c879ba0b6fbeb1115b2264bab9f4914bb2e413348fe3987e791ee10",
+    "version": "0.5"
   },
   "theme": {
     "--aim-brand-1": "#7c3aed"

@@ -97,10 +97,12 @@ def _payload_floors(markup: str | None) -> set[str]:
     if not markup:
         return floors
     gated_classes = REGISTRY.class_floors
+    gated_attrs = REGISTRY.attr_floors
     if not (
         any(p in markup for p in REGISTRY.paint_props)
         or any(p in markup for p in REGISTRY.typography_props)
         or any(c in markup for c in gated_classes)
+        or any(a in markup for a in gated_attrs)
     ):
         return floors
     for node in parse_fragment(markup):
@@ -118,6 +120,10 @@ def _payload_floors(markup: str | None) -> set[str]:
                     floors.add(REGISTRY.typography_since)
             for token in (el.get("class") or "").split():
                 floor = gated_classes.get(token)
+                if floor is not None:
+                    floors.add(floor)
+            for name, _value in el.attrs:
+                floor = gated_attrs.get(name)
                 if floor is not None:
                     floors.add(floor)
     return floors

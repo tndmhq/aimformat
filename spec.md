@@ -1,9 +1,9 @@
-# The `.aim` document format — specification v0.4
+# The `.aim` document format — specification v0.5
 
-**Status: v0.4 (draft; v0.3 plus literal per-element typography — validated
-inline `font-size` and `font-family`, the `text-justify` alignment utility,
-and the `text-7xl`–`text-9xl` display sizes, §3.3; v0.3 added literal
-per-element paint).** This is the
+**Status: v0.5 (draft; v0.4 plus dynamic numbering — outline-numbered blocks
+and list formats whose numbers are computed at render time rather than
+written into the text, §3.8; v0.4 added literal per-element typography,
+v0.3 literal per-element paint).** This is the
 normative specification
 for `.aim`, an AI-native document format in which AI proposals and human
 accept/reject decisions are first-class file primitives. The reference
@@ -15,11 +15,11 @@ Maintained by the aimformat project. Licensed MIT, like everything in this
 repository. Contributions: see [`CONTRIBUTING.md`](CONTRIBUTING.md).
 
 **Versioning.** A document declares the spec version it targets in
-`<html data-aim-version="0.4">`. The spec follows SemVer with the 0.x
+`<html data-aim-version="0.5">`. The spec follows SemVer with the 0.x
 caveat: **every 0.x minor may break**; parsers MUST ignore unknown JSON
 fields (with `x_*` reserved for vendor extensions) and MUST treat unknown
 event kinds or elements as errors within the same minor version. The
-embedded stylesheet is versioned with the spec (`data-aim-css="0.4"`).
+embedded stylesheet is versioned with the spec (`data-aim-css="0.5"`).
 
 The key words MUST, MUST NOT, SHOULD, SHOULD NOT, and MAY are to be
 interpreted as described in RFC 2119. Sections marked *informative* define
@@ -103,7 +103,7 @@ see §4.4 for id rules):
 
 ```html
 <!doctype html>
-<html data-aim-version="0.4" lang="en">
+<html data-aim-version="0.5" lang="en">
 <head>
 <meta charset="utf-8">
 <title>Q3 Proposal — Acme GmbH</title>
@@ -113,7 +113,7 @@ see §4.4 for id rules):
 <script type="application/aim-doc+json">
 {"page":{"margins":{"bottom":"15mm","left":"15mm","right":"15mm","top":"15mm"},"orientation":"portrait","size":"A4"}}
 </script>
-<style data-aim-css="0.4">/* machine-managed stylesheet, §3.4 */</style>
+<style data-aim-css="0.5">/* machine-managed stylesheet, §3.4 */</style>
 <style data-aim-theme>:root{--aim-brand-1:#1a73e8}</style>
 </head>
 <body>
@@ -210,7 +210,7 @@ The canonical note for this spec version:
 
 ```html
 <!--
-aim-note: This file is an AIM document (open format, v0.4) — valid HTML plus
+aim-note: This file is an AIM document (open format, v0.5) — valid HTML plus
 chunk identity, a pending-suggestions lane, and an edit history.
 Agent docs: https://aimformat.com/llms.txt
 The reliable way to edit this file is the `aimformat` tooling, which manages
@@ -363,7 +363,7 @@ remains valid; renderers and exporters read each slide's own declared size.
 One static stylesheet per spec minor version — an element base layer,
 every registered utility, theme-slot defaults, and the `aim-*` chrome
 (slide canvas framing/scaling, proposal cards). It is embedded by default
-(`<style data-aim-css="0.4">`) so documents are self-contained, offline,
+(`<style data-aim-css="0.5">`) so documents are self-contained, offline,
 and archival; it is **machine-managed and derived**: tools regenerate it
 freely, and it is excluded from content hashing. Documents SHOULD embed it;
 a document without it still conforms but degrades at the raw tier.
@@ -476,6 +476,70 @@ itself remains unrecorded (§5.4).
 be modified but never deleted or moved. It is **not** a proposal target —
 the upgrade rides the edit that needs it, and a pending card aimed at it is
 invalid (P008).
+
+### 3.8 Numbering (since v0.5)
+
+**A number that is written into the text is wrong the moment the document
+is edited.** Insert a section into a numbered document and everything below
+it is misnumbered while still reading as authoritative — and any
+cross-reference to "1.1.7" now points somewhere else. So `.aim` does not
+store computed numbers: it states an element's *place* in a numbering
+scheme, and the stylesheet (§3.4) draws the number.
+
+Two shapes, because documents have two:
+
+**Outline numbering** — `num-1` … `num-9` on a block (`p`, `h1`–`h6`).
+The block advances its own level and zeroes every deeper one; the marker is
+generated content showing the chain of ancestor counters (`1.`, `1.1`,
+`1.1.1`). This is the numbered-section structure of standards, policies,
+technical manuals, statutes, academic papers and contracts alike — anywhere
+a document numbers its sections rather than listing items.
+
+Blocks stay flat siblings, so **body text between numbered blocks changes
+nothing** — which a list cannot express without either swallowing that text
+into an item or fragmenting into separate lists. Nine levels because that is
+the depth cap of the numbering models this maps from.
+
+- `num-restart` on the same block restarts that level (the "restart
+  numbering" a source document may declare).
+- `data-aim-num-prefix` supplies a literal before the counter
+  (`Article 1`, `Section 2`, `Requirement 3`). The attribute value is
+  **data** — the same kind of thing as `alt` on an image — and the rule
+  that renders it is fixed, so no per-document CSS is generated.
+
+**List numbering** — `<ol>`/`<ul>` as before, with the format of the marker
+named by a class (`list-lower-alpha`, `list-upper-alpha`,
+`list-lower-roman`, `list-upper-roman`), its suffix by `list-paren` (`1)`)
+or `list-bare` (`1`), and `list-multilevel` for a list whose items show the
+chain of their ancestors (`1`, `1.1`, `1.1.1`). `<ol start>` is honoured;
+these markers ride the built-in list-item counter, which is what makes that
+work.
+
+A writer that cannot express a scheme in this vocabulary — mixed formats
+down one chain (`I.A.1`), mixed separators (`1-2.3`) — MUST write the
+computed number as text instead. That document renders correctly and simply
+does not renumber when edited. It is the honest degradation: generated
+content cannot read an ancestor level's *format* from a fixed stylesheet,
+and a rule per (depth × format) pair is how a closed vocabulary turns into
+per-document CSS.
+
+**Renderer requirements.** The generated stylesheet uses `counter-set` (not
+`counter-reset`) for the deeper levels a numbered block zeroes, and `::before` (not
+`::marker`) for every generated marker. Both are load-bearing:
+`counter-reset` on flat siblings instantiates a *new* counter rather than
+resetting the one in scope, so deeper levels keep climbing from the second
+occurrence onward; `::marker` content has a narrower support floor, and its
+failure mode is a wrong number rather than an unstyled one. A conforming
+renderer needs `counter-set` and `counters()` in `::before`.
+
+A renderer that does not mount the document under `<body>` — an editor
+canvas, an embedded preview, anything re-scoping the stylesheet — MUST
+instantiate the numbering counters **once on its own root**, and once per
+document. A counter that is never instantiated is created implicitly by each
+element that increments it, so a document whose blocks sit in separate
+wrappers numbers each wrapper independently: `1.`, `0.1`, `0.0.1`. Two
+documents sharing one root leak counters into each other for the same
+reason.
 
 ---
 
@@ -928,7 +992,7 @@ embed the generated one):
 <head>
 <meta charset="utf-8">
 <title>Minimal</title>
-<style data-aim-css="0.4">
+<style data-aim-css="0.5">
 </style>
 </head>
 <body>
@@ -951,7 +1015,7 @@ resolution and a checkpoint in the log:
 <head>
 <meta charset="utf-8">
 <title>Pending lane</title>
-<style data-aim-css="0.4">
+<style data-aim-css="0.5">
 </style>
 </head>
 <body>
@@ -977,7 +1041,7 @@ chunks:
 <head>
 <meta charset="utf-8">
 <title>One slide</title>
-<style data-aim-css="0.4">
+<style data-aim-css="0.5">
 </style>
 </head>
 <body>
@@ -1043,7 +1107,7 @@ stylesheet. Do not edit it by hand.*
 - **Spacing** `m`, `mt`, `mb`, `ml`, `mr`, `mx`, `my`, `p`, `pt`, `pb`, `pl`, `pr`, `px`, `py` × scale `0` `1` `2` `3` `4` `6` `8` `10` `12` `16`
 - **Singles**: `bg-white` `border` `border-b` `border-t` `font-body` `font-heading` `font-mono` `italic` `line-through` `list-decimal` `list-disc` `list-none` `rounded` `rounded-full` `rounded-lg` `rounded-md` `shadow` `text-white` `tracking-tight` `tracking-wide` `underline` `uppercase`
 
-Total registered utilities: **247**.
+Total registered utilities: **264**.
 
 ### A.3 Inline style properties
 
@@ -1139,6 +1203,7 @@ Literal paint (`color` `background-color` `border-color`) is since spec 0.3 (S03
 | S031 | error | aim-slide marked as a chunk (slides are containers) |
 | S032 | error | literal paint requires a supporting spec version |
 | S033 | error | literal typography requires a supporting spec version |
+| S034 | error | markup from a spec era newer than the declared version |
 | V001 | error | element not allowed in the asset registry |
 | V002 | error | element outside the vocabulary |
 | V003 | error | attribute not allowed on this element |
@@ -1151,6 +1216,7 @@ Literal paint (`color` `background-color` `border-color`) is since spec 0.3 (S03
 | V010 | error | theme block is not a single :root rule |
 | V011 | error | unregistered theme slot |
 | V012 | error | theme slot value does not match its grammar |
+| V013 | error | class used on an element it does not apply to |
 | X001 | error | forbidden element |
 | X002 | error | event-handler attribute |
 | X003 | error | dangerous URL (javascript:/data:text) |

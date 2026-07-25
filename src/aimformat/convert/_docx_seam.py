@@ -20,6 +20,10 @@ Beside the re-exports, this module fills the gaps the dependency leaves:
 - **colour math** — OOXML ``themeTint``/``themeShade`` are hex fractions
   applied against white/black; Word's highlight enum is a fixed named
   palette.
+- **numbering** — :class:`NumberingEngine` parses ``numbering.xml`` and
+  counts the way Word counts: per shared *definition*, not per instance.
+  Upstream's tracker keys counters per instance and drops the ``w:lvl``
+  bodies inside a ``w:lvlOverride``, either of which misnumbers a contract.
 
 Style resolution note: the resolver merges docDefaults → basedOn chain →
 direct formatting with override semantics. True OOXML *toggle* semantics
@@ -51,9 +55,6 @@ from typing import Any, BinaryIO
 
 try:
     from docx_parser_converter import api as _api
-    from docx_parser_converter.converters.common.numbering_tracker import (
-        NumberingTracker,
-    )
     from docx_parser_converter.converters.common.style_resolver import StyleResolver
     from docx_parser_converter.parsers.document.paragraph_parser import parse_paragraph
     from docx_parser_converter.parsers.document.table_parser import parse_table
@@ -65,9 +66,12 @@ except ImportError as exc:  # pragma: no cover - exercised without the extra
 
 from lxml import etree
 
+from ..errors import AimError, ParseError
+
 __all__ = [
     "DocxTheme",
-    "NumberingTracker",
+    "NumberingEngine",
+    "NumberLevel",
     "ParsedDocx",
     "data_uri",
     "effective_run_props",
@@ -82,6 +86,7 @@ __all__ = [
     "resolve_color",
     "shading_hex",
     "symbol_char",
+    "format_number",
     "table_look_val",
     "table_style_looks",
     "textbox_paragraphs",
@@ -232,29 +237,41 @@ class ParsedDocx:
     #: styleId → conditional look (shaded header row, banded rows). Most
     #: Word tables carry their whole appearance here, not on the cells.
     table_looks: dict[str, dict[str, dict[str, str]]]
-    #: numId → the instance whose counters it must share. Word clones a
-    #: numbering instance whenever a list is interrupted, so one visible
-    #: list can span several numIds that all point at the same abstract
-    #: definition; counting per numId restarts it mid-document.
-    num_alias: dict[int, int]
     #: Stateful label generator for numbered paragraphs ("1.1.1"): its
     #: counters advance per call, so it is shared for one walk in document
     #: order and never reused across documents.
-    numbering_tracker: Any | None
+    numbering_engine: NumberingEngine
     hyperlinks: dict[str, str]  # rId → external URL
     images: dict[str, tuple[bytes, str]]  # rId → (bytes, mime)
     theme: DocxTheme
     default_style_id: str | None  # the default paragraph style ("Normal")
     baseline_run: dict[str, Any]  # document-default effective run props
+    #: style name AND id (lowercased) → the latin face it resolves to, read
+    #: from styles.xml so theme-referencing and localized styles still answer
+    style_fonts: dict[str, str]
+    #: styleId → w:name, lowercased: which heading level a localized style is
+    style_names: dict[str, str]
 
 
 def parse_docx(source: str | bytes | BinaryIO) -> ParsedDocx:
     """Open and parse *source* through the pinned parse layer + gap-fillers."""
-    zf = _api.open_docx(source)
-    _guard_archive(zf)  # every input, not only the Strict-OOXML branch
-    if _is_strict_ooxml(zf):
-        zf = _api.open_docx(_normalize_strict_ooxml(zf))
-    doc_elem = _api.extract_document_xml(zf)
+    try:
+        zf = _api.open_docx(source)
+        _guard_archive(zf)  # every input, not only the Strict-OOXML branch
+        if _is_strict_ooxml(zf):
+            zf = _api.open_docx(_normalize_strict_ooxml(zf))
+        doc_elem = _api.extract_document_xml(zf)
+    except (AimError, ValueError):
+        # our own guards (zip-slip, oversized member) already say what is
+        # wrong in our own vocabulary
+        raise
+    except Exception as exc:
+        # Anything the archive layer raises — a truncated file, a legacy .doc
+        # renamed .docx, a zip with no word/document.xml — is a bad INPUT, not
+        # a bug. Unwrapped, callers got a KeyError or the dependency's own
+        # DocxReadError: the CLI printed a traceback, and every caller had to
+        # guess which third-party class to catch.
+        raise ParseError(f"not a readable .docx file: {exc}") from exc
     document = _api.parse_document(doc_elem)
     if document is None:
         raise ValueError("not a WordprocessingML document (no document body)")
@@ -266,6 +283,7 @@ def parse_docx(source: str | bytes | BinaryIO) -> ParsedDocx:
     hyperlinks, image_targets = _relationships(zf)
     images = _load_images(zf, image_targets)
     theme = _parse_theme(zf)
+    _style_index = style_fonts(zf, theme)
     default = resolver.get_default_paragraph_style()
     default_id = getattr(default, "style_id", None) if default is not None else None
     baseline = resolver.resolve_paragraph_properties(default_id).get("r_pr", {}) or {}
@@ -274,42 +292,577 @@ def parse_docx(source: str | bytes | BinaryIO) -> ParsedDocx:
         content=content,
         resolver=resolver,
         numbering=numbering,
-        table_looks=table_style_looks(zf),
-        num_alias=_num_aliases(numbering),
-        numbering_tracker=NumberingTracker(numbering) if numbering is not None else None,
+        table_looks=table_style_looks(zf, theme),
+        numbering_engine=NumberingEngine(_part_bytes(zf, "word/numbering.xml")),
         hyperlinks=hyperlinks,
         images=images,
         theme=theme,
         default_style_id=default_id,
         baseline_run=baseline,
+        style_fonts=_style_index[0],
+        style_names=_style_index[1],
     )
 
 
-def _num_aliases(numbering: Any) -> dict[int, int]:
-    """numId → the lowest numId sharing its abstract definition.
+#: ``%1.%2.%3`` — the decimal chain that legal clause numbering is built from.
+_CHAIN = re.compile(r"^%1(?:\.%(\d))*\.?$")
 
-    Word emits a fresh ``w:num`` whenever a numbered list is interrupted, so
-    a single visible sequence ("1.1.1 … 1.1.14") routinely arrives as two or
-    three numIds over one ``abstractNumId``. Counters therefore belong to the
-    abstract definition, not the instance — keying them per numId restarts
-    the numbering mid-list. Instances carrying their own level overrides
-    (``w:lvlOverride``, i.e. a deliberate restart) are left alone.
+#: ``w:numFmt`` → the ``list-*`` class that draws it. Empty string means the
+#: browser's own default for ``<ol>`` already draws it. A format absent here
+#: (decimalZero, ordinal, cardinalText, every non-Latin numbering) is one the
+#: vocabulary cannot express — and one ``format_number`` cannot compute
+#: either, so it must not be baked as a fabricated label.
+_LIST_FORMATS = {
+    "decimal": "",
+    "lowerLetter": "list-lower-alpha",
+    "upperLetter": "list-upper-alpha",
+    "lowerRoman": "list-lower-roman",
+    "upperRoman": "list-upper-roman",
+}
+
+#: What follows the counter in ``w:lvlText`` → the suffix class. A trailing
+#: "." is the browser's own default and needs no class.
+_LIST_SUFFIXES: dict[str, tuple[str, ...]] = {
+    ".": (),
+    ")": ("list-paren",),
+    "": ("list-bare",),
+}
+
+
+@dataclass
+class NumberDraw:
+    """Everything needed to render one numbered paragraph, from one advance
+    of the counters — so a caller cannot accidentally count twice."""
+
+    label: str
+    """What Word draws ("1.1.11"), always computed: it is the baked fallback
+    and the oracle the dynamic rendering is checked against."""
+
+    restarted: bool
+    """This paragraph reset its level's counter (Word's "Restart at 1")."""
+
+    level: int | None = None
+    """1-based outline level when this paragraph can be numbered dynamically,
+    None when it must carry a baked label."""
+
+    prefix: str = ""
+    """The literal before the counter ("Article "), when the level draws one."""
+
+    chained: bool = False
+    """This level shows its ancestors' counters too ("1.1.1"). Such a
+    paragraph is a numbered SECTION, not a list item, whatever style it
+    carries: an
+    ``<ol>`` renders 1, 2, 3 at every depth and cannot express the chain at
+    all — which is the defect that started this."""
+
+    value: int | None = None
+    """This level's counter after the advance — the number Word draws for
+    this paragraph at its own level. A list reopened after an interruption
+    needs it: the markup must say ``<ol start>`` or the fresh list renders
+    1. again where the document counts on."""
+
+
+@dataclass
+class NumberLevel:
+    """One level of a numbering definition, as Word declares it."""
+
+    ilvl: int
+    num_fmt: str  # decimal, lowerLetter, upperRoman, bullet, none, …
+    lvl_text: str  # the template: "%1.%2.%3", "Article %1", "(%3)"
+    start: int
+    lvl_restart: int | None  # 0 = never restart; None = default (any shallower)
+
+    @property
+    def is_ordered(self) -> bool:
+        return self.num_fmt not in ("bullet", "none")
+
+
+class NumberingEngine:
+    """Word's numbering counters, keyed the way Word keys them.
+
+    ``numbering.xml`` is parsed here rather than through the dependency's
+    tracker for two reasons: that tracker keys counters by numbering
+    *instance* (``w:num``) where Word keys them by the shared *definition*
+    (``w:abstractNum``), and it discards the ``w:lvl`` bodies inside a
+    ``w:lvlOverride``, which redefine a level's format for one instance.
+
+    The rule, which took three wrong heuristics and two documents to pin
+    down — see ``tests/test_docx_numbering.py`` for the evidence:
+
+        Counters are shared per ``(abstract definition, level)``. A
+        ``startOverride`` resets that shared counter to the given value when
+        its instance is FIRST ENCOUNTERED in the document — it does not open
+        a separate sequence.
+
+    So a single visible run of clauses ("1.1.1 … 1.1.14") stays unbroken
+    across the fresh ``w:num`` Word emits every time a list is interrupted,
+    while a deliberate "Restart at 1" still restarts.
+
+    Counters advance on every :meth:`label` call, so an engine belongs to one
+    walk in document order and is never reused across documents.
+
+    Known gaps, each verified rather than assumed:
+
+    - ``w:numStyleLink`` chains are not followed. An abstract definition that
+      delegates to a numbering *style* (Word's built-in "List Paragraph"
+      family) carries no ``w:lvl`` of its own, so its lists degrade to
+      bullets. Same behaviour as the dependency's tracker; no document in the
+      corpus uses it.
+    - A level that exists ONLY as an instance ``lvlOverride`` body is not
+      reset by a parent advancing, and its ``lvlRestart`` is read from the
+      abstract rather than the override — ``_reset_deeper`` walks the
+      abstract's levels.
+
+    Deliberately unsettled: whether a ``startOverride`` applies on the
+    instance's first use at ANY level or per level on first use at THAT
+    level. This implements per level; both readings explain every fixture we
+    have. A Word-authored document that separates them would decide it.
+
+    Also unsettled, and left alone on purpose: when a deeper level is drawn
+    before the shallower one it references, this renders the shallower
+    level's start value. Word may instead phantom-instantiate that level, so
+    the next item at it would be 2 rather than 1. Needs a Word-authored probe
+    document, not a guess.
     """
-    canonical: dict[int, int] = {}
-    for inst in getattr(numbering, "num", None) or []:
-        num_id = getattr(inst, "num_id", None)
-        abstract = getattr(inst, "abstract_num_id", None)
-        if num_id is None or abstract is None or getattr(inst, "lvl_override", None):
-            continue
-        first = canonical.setdefault(abstract, num_id)
-        canonical[abstract] = min(first, num_id)
-    out: dict[int, int] = {}
-    for inst in getattr(numbering, "num", None) or []:
-        num_id = getattr(inst, "num_id", None)
-        abstract = getattr(inst, "abstract_num_id", None)
-        if num_id is not None and abstract in canonical:
-            out[num_id] = canonical[abstract]
-    return out
+
+    def __init__(self, numbering_xml: bytes | None) -> None:
+        self._levels: dict[int, dict[int, NumberLevel]] = {}  # abstract → ilvl → level
+        self._abstract: dict[int, int] = {}  # num_id → abstract id
+        self._overrides: dict[tuple[int, int], NumberLevel] = {}  # (num, ilvl) → level
+        self._start_overrides: dict[tuple[int, int], int] = {}
+        self._pending: set[tuple[int, int]] = set()  # start overrides not yet applied
+        self._counters: dict[tuple[int, int], int] = {}  # (abstract, ilvl) → value
+        if numbering_xml:
+            self._parse(numbering_xml)
+
+    # -- definitions -------------------------------------------------------
+
+    def _parse(self, xml: bytes) -> None:
+        try:
+            root = etree.fromstring(xml)
+        except etree.XMLSyntaxError:
+            # A corrupt part must degrade, never abort the import: the parse
+            # layer tolerates this one and so did we before this engine, and
+            # from_docx ingests arbitrary uploads. Numbering is lost; the
+            # document still arrives.
+            return
+        w = f"{{{_W_NS}}}"
+        for ab in root.iter(f"{w}abstractNum"):
+            aid = _int_or_none(ab.get(f"{w}abstractNumId"))
+            if aid is None:
+                continue
+            self._levels[aid] = {
+                lvl.ilvl: lvl
+                for lvl in (_parse_level(el, w) for el in ab.findall(f"{w}lvl"))
+                if lvl
+            }
+        for num in root.iter(f"{w}num"):
+            nid = _int_or_none(num.get(f"{w}numId"))
+            ref = num.find(f"{w}abstractNumId")
+            aid = _int_or_none(ref.get(f"{w}val")) if ref is not None else None
+            if nid is None or aid is None:
+                continue
+            self._abstract[nid] = aid
+            for ov in num.findall(f"{w}lvlOverride"):
+                ilvl = _int_or_none(ov.get(f"{w}ilvl"))
+                if ilvl is None:
+                    continue
+                start = ov.find(f"{w}startOverride")
+                if start is not None:
+                    value = _int_or_none(start.get(f"{w}val"))
+                    if value is not None:
+                        self._start_overrides[(nid, ilvl)] = value
+                        self._pending.add((nid, ilvl))
+                # a lvlOverride may also REDEFINE the level (format, template)
+                # for this instance alone, which is not a restart at all
+                body = ov.find(f"{w}lvl")
+                if body is not None:
+                    redefined = _parse_level(body, w)
+                    if redefined is not None:
+                        self._overrides[(nid, ilvl)] = redefined
+
+    def level(self, num_id: int, ilvl: int) -> NumberLevel | None:
+        """The level definition in force for this instance, override first."""
+        own = self._overrides.get((num_id, ilvl))
+        if own is not None:
+            return own
+        abstract = self._abstract.get(num_id)
+        if abstract is None:
+            return None
+        return self._levels.get(abstract, {}).get(ilvl)
+
+    def is_ordered(self, num_id: int, ilvl: int) -> bool:
+        """Whether this level draws numbers (``<ol>``) or bullets (``<ul>``)."""
+        level = self.level(num_id, ilvl)
+        return level is not None and level.is_ordered
+
+    def abstract_of(self, num_id: int) -> int | None:
+        """The definition this instance draws from, or ``None`` if unknown.
+
+        Callers that decide anything per *scheme* must group by this rather
+        than by ``num_id``: Word mints a fresh instance every time a list is
+        interrupted, and the counters are shared per definition.
+        """
+        return self._abstract.get(num_id)
+
+    def list_style(self, num_id: int, ilvl: int) -> tuple[str, ...] | None:
+        """The ``list-*`` classes that draw this level the way Word draws it,
+        or ``None`` when the list vocabulary cannot express it.
+
+        An empty tuple is a real answer, not a refusal: a bullet level needs
+        no class (``<ul>`` draws it) and so does a plain decimal level with a
+        trailing dot (``<ol>`` draws it).
+
+        The marker is drawn by the built-in ``list-item`` counter, which is
+        what makes ``<ol start>`` work — so the vocabulary can express a
+        level's FORMAT and its SUFFIX, but never a literal prefix
+        ("Article %1") and never a mixed-format chain. Those belong to
+        ``num-N`` or to a baked label.
+        """
+        level = self.level(num_id, ilvl)
+        if level is None:
+            return None
+        if not level.is_ordered:
+            return ()  # a bullet or a "none" level: <ul> already draws it
+        text = level.lvl_text
+        if text.count("%") > 1:
+            # ``counters(list-item, ".")`` draws the whole chain with dot
+            # separators and decimal at every depth — the only chain the
+            # stylesheet spells out, since a per-(depth × format) rule matrix
+            # is how a closed vocabulary turns into per-document CSS
+            chain = ".".join(f"%{i + 1}" for i in range(ilvl + 1))
+            if not text.startswith(chain):
+                return None
+            for ref in range(ilvl + 1):
+                ancestor = self.level(num_id, ref)
+                if ancestor is None or ancestor.num_fmt != "decimal":
+                    return None
+            suffix = _LIST_SUFFIXES.get(text[len(chain) :])
+            return None if suffix is None else ("list-multilevel", *suffix)
+        own = f"%{ilvl + 1}"
+        if text.count("%") != 1 or not text.startswith(own):
+            return None
+        fmt = _LIST_FORMATS.get(level.num_fmt)
+        suffix = _LIST_SUFFIXES.get(text[len(own) :])
+        if fmt is None or suffix is None:
+            return None
+        return tuple(name for name in (fmt, *suffix) if name)
+
+    def scheme_is_list(self, num_id: int, used_levels: set[int]) -> bool:
+        """Whether every level this scheme USES is one the list vocabulary
+        draws. Judged over the whole scheme for the same reason as
+        ``scheme_is_outline``: a per-level answer tears one list into
+        fragments."""
+        return bool(used_levels) and all(
+            self.list_style(num_id, ilvl) is not None for ilvl in used_levels
+        )
+
+    # -- counting ----------------------------------------------------------
+
+    def label(self, num_id: int, ilvl: int) -> str:
+        """Advance the counters for one numbered paragraph and return the
+        label Word would draw ("1.1.1", "(a)", "Article 3"), or "" when the
+        level draws none. Call exactly once per numbered paragraph, in
+        document order."""
+        return self.draw(num_id, ilvl).label
+
+    def draw(self, num_id: int, ilvl: int) -> NumberDraw:
+        """Advance the counters once and describe how to render this
+        paragraph — the label Word draws, whether it restarts, and whether
+        the level can be expressed dynamically instead of baked."""
+        level = self.level(num_id, ilvl)
+        abstract = self._abstract.get(num_id)
+        if level is None or abstract is None:
+            return NumberDraw(label="", restarted=False)
+        # A startOverride RESTARTS only if the sequence was already running.
+        # Word writes one on fresh instances as a matter of course, so
+        # treating every pending override as a restart marks the first block
+        # of a level `num-restart` — harmless until someone inserts a block
+        # before it, at which point the document shows two clauses numbered
+        # 1.1.1. Seeding a counter that does not exist yet is not a restart.
+        restarted = (num_id, ilvl) in self._pending and (
+            self._abstract.get(num_id),
+            ilvl,
+        ) in self._counters
+        self._advance(abstract, num_id, ilvl, level)
+        if not level.is_ordered:
+            # a bullet level draws a glyph we do not carry, a "none" level
+            # draws nothing — but the counter above still moved, so the
+            # numbered siblings around it stay correct
+            return NumberDraw(label="", restarted=restarted)
+        num_level, prefix = self._dynamic_style(num_id, ilvl, level)
+        return NumberDraw(
+            label=self._render(abstract, num_id, level),
+            restarted=restarted,
+            level=num_level,
+            prefix=prefix,
+            value=self._counters.get((abstract, ilvl)),
+            chained=(level.lvl_text or "").count("%") > 1,
+        )
+
+    def scheme_is_outline(
+        self,
+        num_id: int,
+        used_levels: set[int],
+        first_level: int | None = None,
+        allow_flat: bool = False,
+    ) -> bool:
+        """Whether a whole numbering scheme should be drawn as outline-numbered
+        BLOCKS rather than a list.
+
+        The decision belongs to the scheme, not the paragraph. Word's stock
+        multilevel list defines ``%1.`` at its top level and ``%1.%2.`` below
+        — judged per paragraph the first looks like a list item and the second
+        like an outline block, so one list is torn into ``<li>`` fragments
+        interleaved with blocks whose ancestor counter nothing ever
+        increments. They render ``0.1, 0.2, 0.3``.
+
+        So: every level the document actually USES must be drawable, and its
+        ancestors with it — then the whole scheme is outline. Judging by the
+        levels merely *defined* fails the opposite way, since real templates
+        define exotic deep levels they never use (the legal fixture defines a
+        parenthesised level 5 and never reaches it).
+        """
+        if not used_levels:
+            return False
+        # Outline numbering means DEPTH. A scheme used at one level, drawing
+        # only its own counter, is a plain ordered list however drawable it
+        # is — "1. 2. 3." is a list, and turning it into numbered blocks
+        # would strip real <ol> structure from every document that has one.
+        deepest = self.level(num_id, max(used_levels))
+        if (
+            not allow_flat
+            and len(used_levels) < 2
+            and not (deepest and (deepest.lvl_text or "").count("%") > 1)
+        ):
+            # …unless the caller says the scheme cannot be a list at all.
+            # A heading is not an <li>, so a single-level numbered HEADING
+            # scheme has only this path and a baked label to choose between,
+            # and the depth rule — written to protect real <ol> structure —
+            # would silently drop the number and leak the label into the title.
+            return False
+        # Every level the chain RENDERS must also be one the document uses.
+        # A marker shows its ancestors' counters, and a counter no block
+        # increments reads 0 — so a scheme whose level-1 headings are
+        # unnumbered, or one that skips a level, would draw "0.1" and
+        # "1.0.1". Word draws the missing level's start value instead, so
+        # the two would disagree; baking is the honest degradation.
+        if set(range(max(used_levels) + 1)) - used_levels:
+            return False
+        # …and it must ENTER the scheme at the top. The used-levels set cannot
+        # see this: a document may use level 0 only after its first level-1
+        # block, and until something increments it that ancestor counter reads
+        # 0, so the first marker draws "0.1" where Word draws "1.1" (Word
+        # shows an untouched level at its start value). Seeding an ancestor
+        # from markup is not something the vocabulary can express, so this
+        # bakes rather than renders a zero.
+        if first_level is not None and first_level != min(used_levels):
+            return False
+        for ilvl in used_levels:
+            for depth in range(ilvl + 1):  # the level and every ancestor it draws
+                level = self.level(num_id, depth)
+                if level is None or not level.is_ordered:
+                    return False
+                if self._dynamic_style(num_id, depth, level) == (None, ""):
+                    return False
+                # a counter that only knows how to start at 1 cannot draw a
+                # level that starts anywhere else
+                if self._start_value(num_id, depth, level) != 1:
+                    return False
+                # The generated CSS zeroes every deeper counter whenever a
+                # level advances. A level declaring anything else — "never
+                # restart" (0), or restart on a level further up — would be
+                # reset anyway, and the two disagree from the second block on.
+                # `lvlRestart == depth` names the level immediately above,
+                # which is what the default already does.
+                if depth and level.lvl_restart is not None and level.lvl_restart != depth:
+                    return False
+        return True
+
+    def _dynamic_style(self, num_id: int, ilvl: int, level: NumberLevel) -> tuple[int | None, str]:
+        """Whether this level is one CSS counters can draw, and its literal
+        prefix if so.
+
+        Two shapes qualify, and only these two:
+
+        * the decimal chain ``%1.%2.%3`` — this level plus every ancestor,
+          uniform ``.`` separators, every referenced level decimal;
+        * ``Article %1`` — a literal followed by this level's own counter,
+          decimal, at the top level.
+
+        Everything else (mixed formats down one chain, mixed separators,
+        parenthesised sub-items) keeps a baked label. ``content:`` cannot
+        read an ancestor level's *format* from a fixed stylesheet, and a
+        per-(depth × format) rule matrix is how a closed vocabulary turns
+        into per-document CSS.
+        """
+        text = level.lvl_text
+        if not text or level.num_fmt != "decimal":
+            return None, ""
+        chain = _CHAIN.match(text)
+        if chain and text.count("%") == ilvl + 1:
+            # every referenced ancestor must be decimal too, or the chain
+            # renders one style where the source draws another
+            for ref in range(ilvl + 1):
+                ancestor = self.level(num_id, ref)
+                if ancestor is None or ancestor.num_fmt != "decimal":
+                    return None, ""
+            return ilvl + 1, ""
+        own = f"%{ilvl + 1}"
+        if text.count("%") == 1 and text.endswith(own):
+            prefix = text[: -len(own)]
+            # A literal is what makes this shape drawable: the prefixed rule
+            # renders `attr(data-aim-num-prefix) counter(aim-cN)` — that level's
+            # counter ALONE. Without a literal there is no attribute, the plain
+            # rule takes over, and it draws the whole ancestor chain: "1.2"
+            # where Word draws "2". Only the top level survives that, where the
+            # chain is one counter long anyway.
+            if "%" not in prefix and (prefix or ilvl == 0):
+                return ilvl + 1, prefix
+        return None, ""
+
+    def _advance(self, abstract: int, num_id: int, ilvl: int, level: NumberLevel) -> None:
+        key = (abstract, ilvl)
+        pending = (num_id, ilvl) in self._pending
+        if pending:
+            # Word's "Restart at 1": it resets the SHARED counter the first
+            # time this instance is seen, rather than opening a sequence of
+            # its own — which is why a later instance on the same definition
+            # carries on from here instead of starting over.
+            self._pending.discard((num_id, ilvl))
+            self._counters[key] = self._start_overrides[(num_id, ilvl)]
+        elif key in self._counters:
+            self._counters[key] += 1
+        else:
+            # Seeding, either the first time or after a restart popped the
+            # counter. A startOverride applies "when this level initially
+            # starts in a given document, as well as whenever it is
+            # restarted" (§17.9.27) — so it is the start value here too, not
+            # only on first encounter. Invisible while override == start (the
+            # common Restart-at-1), wrong whenever they differ.
+            self._counters[key] = self._start_value(num_id, ilvl, level)
+        self._reset_deeper(abstract, ilvl)
+
+    def _start_value(self, num_id: int, ilvl: int, level: NumberLevel) -> int:
+        return self._start_overrides.get((num_id, ilvl), level.start)
+
+    def _reset_deeper(self, abstract: int, ilvl: int) -> None:
+        """A level moving on restarts the levels below it — 1.2.1 follows
+        1.1.9 — unless a level declares otherwise (``w:lvlRestart``)."""
+        for deeper, level in self._levels.get(abstract, {}).items():
+            if deeper <= ilvl:
+                continue
+            restart = level.lvl_restart
+            if restart == 0:  # explicitly never
+                continue
+            if restart is not None and ilvl > restart - 1:
+                # lvlRestart names a level (1-based); this level restarts when
+                # THAT level "or any lower level" is used (§17.9.10) — so a
+                # SHALLOWER level advancing resets it too. Reading it as "only
+                # that exact level" leaves a stale deep counter whenever a
+                # document skips a level, which is the ordinary
+                # heading-then-clause shape.
+                continue
+            self._counters.pop((abstract, deeper), None)
+
+    def _render(self, abstract: int, num_id: int, level: NumberLevel) -> str:
+        """Fill a level's ``lvlText`` template ("%1.%2.%3") with the current
+        counter of each referenced level, in that level's own format."""
+        out = level.lvl_text or f"%{level.ilvl + 1}"
+        for ref in range(9):
+            token = f"%{ref + 1}"
+            if token not in out:
+                continue
+            ref_level = self.level(num_id, ref)
+            value = self._counters.get((abstract, ref))
+            if value is None:
+                # Referenced before that level has been used: show what it
+                # WOULD start at, override included — otherwise the same
+                # level reads 1 here and 5 the moment it is first used.
+                value = self._start_value(num_id, ref, ref_level) if ref_level else 1
+                if ref < level.ilvl:
+                    # …and INSTANTIATE it, which is what Word does: drawing an
+                    # ancestor phantom-starts it, so the next block at that
+                    # level is 2, not 1. Without this a document that enters a
+                    # scheme at level 1 draws 1.1 for its first clause and 1.1
+                    # again after the level-0 block that follows — two clauses
+                    # carrying one number, which reads as authoritative and is
+                    # not.
+                    self._counters[(abstract, ref)] = value
+            fmt = ref_level.num_fmt if ref_level is not None else "decimal"
+            out = out.replace(token, format_number(value, fmt))
+        return out.strip()
+
+
+def _parse_level(el: Any, w: str) -> NumberLevel | None:
+    ilvl = _int_or_none(el.get(f"{w}ilvl"))
+    if ilvl is None:
+        return None
+
+    def val(tag: str) -> str | None:
+        node = el.find(f"{w}{tag}")
+        return node.get(f"{w}val") if node is not None else None
+
+    return NumberLevel(
+        ilvl=ilvl,
+        num_fmt=val("numFmt") or "decimal",
+        lvl_text=val("lvlText") or "",
+        start=_int_or_none(val("start")) or 1,
+        lvl_restart=_int_or_none(val("lvlRestart")),
+    )
+
+
+def _part_bytes(zf: zipfile.ZipFile, name: str) -> bytes | None:
+    """A package part's bytes, or None when the document has no such part
+    (a document with no lists carries no ``numbering.xml`` at all)."""
+    try:
+        return zf.read(name)
+    except KeyError:
+        return None
+
+
+def _int_or_none(value: Any) -> int | None:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def format_number(value: int, num_fmt: str) -> str:
+    """One counter value in an OOXML ``numFmt``. Formats beyond these degrade
+    to decimal rather than vanish — a wrong glyph is recoverable, a missing
+    clause number is not."""
+    if num_fmt in ("bullet", "none"):
+        return ""
+    if num_fmt in ("lowerLetter", "upperLetter"):
+        out = ""
+        n = value
+        while n > 0:
+            n, rem = divmod(n - 1, 26)
+            out = chr(ord("a") + rem) + out
+        return out if num_fmt == "lowerLetter" else out.upper()
+    if num_fmt in ("lowerRoman", "upperRoman"):
+        numerals = (
+            (1000, "m"),
+            (900, "cm"),
+            (500, "d"),
+            (400, "cd"),
+            (100, "c"),
+            (90, "xc"),
+            (50, "l"),
+            (40, "xl"),
+            (10, "x"),
+            (9, "ix"),
+            (5, "v"),
+            (4, "iv"),
+            (1, "i"),
+        )
+        out, n = "", value
+        for size, glyph in numerals:
+            count, n = divmod(n, size)
+            out += glyph * count
+        return out if num_fmt == "lowerRoman" else out.upper()
+    return str(value)
 
 
 def _body_content_pairs(body_elem: Any) -> list[tuple[Any, Any]]:
@@ -459,7 +1012,9 @@ def table_look_val(elem: Any) -> str | None:
     return look.get(f"{{{_W_NS}}}val") if look is not None else None
 
 
-def table_style_looks(zf: zipfile.ZipFile) -> dict[str, dict[str, dict[str, str]]]:
+def table_style_looks(
+    zf: zipfile.ZipFile, theme: DocxTheme | None = None
+) -> dict[str, dict[str, dict[str, str]]]:
     """``{styleId: {condition: {"fill": "#rrggbb", "color": "#rrggbb"}}}``.
 
     Word's built-in table styles ("Medium Shading 1 Accent 1" and friends)
@@ -478,18 +1033,73 @@ def table_style_looks(zf: zipfile.ZipFile) -> dict[str, dict[str, dict[str, str]
     raw: dict[str, dict[str, dict[str, str]]] = {}
     based: dict[str, str] = {}
 
+    palette = theme or DocxTheme()
+
+    def _fill_of(shd: Any) -> str | None:
+        """A w:shd fill as hex — literal, or resolved through the theme.
+        Built-in Word table styles name fills indirectly far more often than
+        they spell out hex, so literal-only reading leaves most real tables
+        unstyled."""
+        if shd is None:
+            return None
+        literal = (shd.get(f"{w}fill") or "").strip()
+        if re.fullmatch(r"[0-9A-Fa-f]{6}", literal):
+            return f"#{literal.lower()}"
+        name = shd.get(f"{w}themeFill")
+        if not name:
+            return None
+        return resolve_color(
+            {
+                "theme_color": name,
+                "theme_tint": shd.get(f"{w}themeFillTint"),
+                "theme_shade": shd.get(f"{w}themeFillShade"),
+            },
+            palette,
+        )
+
+    def _color_of(color: Any) -> str | None:
+        if color is None:
+            return None
+        literal = (color.get(f"{w}val") or "").strip()
+        if re.fullmatch(r"[0-9A-Fa-f]{6}", literal):
+            return f"#{literal.lower()}"
+        name = color.get(f"{w}themeColor")
+        if not name:
+            return None
+        return resolve_color(
+            {
+                "theme_color": name,
+                "theme_tint": color.get(f"{w}themeTint"),
+                "theme_shade": color.get(f"{w}themeShade"),
+            },
+            palette,
+        )
+
+    def _look_direct(scope: Any) -> dict[str, str]:
+        """What a scope declares directly — never inherited from a nested
+        conditional block."""
+        out: dict[str, str] = {}
+        shd = scope.find(f"{w}shd")
+        if shd is None:
+            tc = scope.find(f"{w}tcPr")
+            shd = tc.find(f"{w}shd") if tc is not None else None
+        fill = _fill_of(shd)
+        if fill:
+            out["fill"] = fill
+        rpr = scope.find(f"{w}rPr")
+        color = _color_of(rpr.find(f"{w}color") if rpr is not None else None)
+        if color:
+            out["color"] = color
+        return out
+
     def _look(scope: Any) -> dict[str, str]:
         out: dict[str, str] = {}
-        shd = scope.find(f".//{w}shd")
-        if shd is not None:
-            fill = (shd.get(f"{w}fill") or "").strip()
-            if re.fullmatch(r"[0-9A-Fa-f]{6}", fill):
-                out["fill"] = f"#{fill.lower()}"
-        color = scope.find(f".//{w}rPr/{w}color")
-        if color is not None:
-            val = (color.get(f"{w}val") or "").strip()
-            if re.fullmatch(r"[0-9A-Fa-f]{6}", val):
-                out["color"] = f"#{val.lower()}"
+        fill = _fill_of(scope.find(f".//{w}shd"))
+        if fill:
+            out["fill"] = fill
+        color = _color_of(scope.find(f".//{w}rPr/{w}color"))
+        if color:
+            out["color"] = color
         return out
 
     for style in root.iter(f"{w}style"):
@@ -502,18 +1112,22 @@ def table_style_looks(zf: zipfile.ZipFile) -> dict[str, dict[str, dict[str, str]
         if parent is not None and parent.get(f"{w}val"):
             based[style_id] = parent.get(f"{w}val")
         conds: dict[str, dict[str, str]] = {}
-        # the style's own tblPr/rPr is the wholeTable default
-        whole = {k: v for k, v in _look(style).items()}
         for spr in style.findall(f"{w}tblStylePr"):
             kind = spr.get(f"{w}type")
             if kind in _TABLE_CONDITIONS:
                 look = _look(spr)
                 if look:
-                    conds[kind] = look
-        # _look(style) searched the whole subtree, so strip what belongs to a
-        # condition rather than to the table as a whole
-        own = style.find(f"{w}tblPr")
-        conds["wholeTable"] = _look(own) if own is not None else whole
+                    conds.setdefault(kind, {}).update(look)
+        # The table-wide look is ONLY what the style declares directly. A
+        # subtree search here hoists a conditional block's formatting — a
+        # dark firstRow band — onto every row of every table using the style.
+        whole: dict[str, str] = {}
+        for scope in (style.find(f"{w}tblPr"), style.find(f"{w}tcPr"), style):
+            if scope is not None:
+                whole.update(_look_direct(scope))
+        if whole:
+            # an explicit tblStylePr type="wholeTable" refines these
+            conds["wholeTable"] = {**whole, **conds.get("wholeTable", {})}
         raw[style_id] = {k: v for k, v in conds.items() if v}
 
     resolved: dict[str, dict[str, dict[str, str]]] = {}
@@ -528,8 +1142,87 @@ def table_style_looks(zf: zipfile.ZipFile) -> dict[str, dict[str, dict[str, str]
         for ancestor in reversed(chain):  # parent first, child overrides
             for cond, look in raw[ancestor].items():
                 merged.setdefault(cond, {}).update(look)
-        resolved[style_id] = merged
+        # A band recolours its text BECAUSE it shades its background, so a
+        # colour with no fill would paint (usually white) text onto white
+        # paper. Applied once HERE, after inheritance: a child style that
+        # supplies only the text colour is completing its parent's fill, and
+        # dropping it per-style would break exactly the case the rule exists
+        # to protect.
+        for look in merged.values():
+            if "color" in look and "fill" not in look:
+                look.pop("color")
+        resolved[style_id] = {k: v for k, v in merged.items() if v}
     return resolved
+
+
+def style_fonts(zf: zipfile.ZipFile, theme: DocxTheme) -> tuple[dict[str, str], dict[str, str]]:
+    """``{style name and id (lowercased): the latin face it resolves to}``.
+
+    Read from ``styles.xml`` directly, for two reasons the typed model cannot
+    cover:
+
+    * a style usually names its font *through the theme*
+      (``w:asciiTheme="majorHAnsi"``), which the parse layer drops outright —
+      the resolved run props come back empty and the caller silently falls
+      back to the theme table;
+    * the styleId is localized (a German Word writes ``berschrift1``), while
+      ``w:name`` keeps the English "heading 1". Keyed on the id alone, every
+      non-English document loses its heading face.
+
+    ``basedOn`` is followed so a style that inherits its face still answers.
+    Returns the face index and the ``{styleId: w:name}`` map beside it, both
+    lowercased — the caller needs the names to tell which localized style is
+    which heading level.
+    """
+    try:
+        root = etree.fromstring(zf.read("word/styles.xml"))
+    except (KeyError, etree.XMLSyntaxError):
+        return {}, {}
+    w = f"{{{_W_NS}}}"
+    own: dict[str, str] = {}  # styleId -> face declared on the style itself
+    based: dict[str, str] = {}  # styleId -> the style it inherits from
+    names: dict[str, str] = {}  # styleId -> w:name
+    for style in root.findall(f"{w}style"):
+        style_id = style.get(f"{w}styleId")
+        if not style_id:
+            continue
+        name = style.find(f"{w}name")
+        if name is not None and name.get(f"{w}val"):
+            names[style_id] = str(name.get(f"{w}val"))
+        parent = style.find(f"{w}basedOn")
+        if parent is not None and parent.get(f"{w}val"):
+            based[style_id] = str(parent.get(f"{w}val"))
+        fonts = style.find(f"{w}rPr/{w}rFonts")
+        if fonts is None:
+            continue
+        face = fonts.get(f"{w}ascii") or fonts.get(f"{w}hAnsi")
+        if not face:
+            ref = str(fonts.get(f"{w}asciiTheme") or fonts.get(f"{w}hAnsiTheme") or "")
+            if ref.startswith("major"):
+                face = theme.major_font
+            elif ref.startswith("minor"):
+                face = theme.minor_font
+        if face:
+            own[style_id] = str(face)
+
+    def resolve(style_id: str, depth: int = 0) -> str | None:
+        # depth-capped: a corrupt file can make basedOn a cycle
+        if depth > 8:
+            return None
+        if style_id in own:
+            return own[style_id]
+        parent = based.get(style_id)
+        return resolve(parent, depth + 1) if parent else None
+
+    out: dict[str, str] = {}
+    for style_id in set(names) | set(own) | set(based):
+        face = resolve(style_id)
+        if not face:
+            continue
+        out.setdefault(style_id.lower(), face)
+        if style_id in names:
+            out.setdefault(names[style_id].lower(), face)
+    return out, {k.lower(): v.lower() for k, v in names.items()}
 
 
 def _parse_theme(zf: zipfile.ZipFile) -> DocxTheme:
@@ -725,16 +1418,47 @@ def _effective_descendants(elem: Any) -> Any:
     Word emits every inserted shape as AlternateContent carrying the *same*
     ``w:txbxContent`` in both a DrawingML Choice and a VML Fallback, so a
     naive ``.//`` search sees all duplicated content twice."""
+    for child, _, _ in _effective_descendants_scoped(elem):
+        yield child
+
+
+def _effective_descendants_scoped(
+    elem: Any, in_textbox: bool = False, boxed_mce: bool = False
+) -> Any:
+    """``_effective_descendants``, each node paired with whether dpc's typed
+    model will already have carried it.
+
+    Textbox content is walked a second time by ``textbox_paragraphs`` through
+    dpc, so a caller that recovers content itself needs to know what dpc
+    covers there — and dpc's run parser handles a bare ``w:drawing`` but has
+    no branch for ``mc:AlternateContent``. Two flags, because both matter:
+
+    ``in_textbox``
+        inside a ``w:txbxContent``.
+    ``boxed_mce``
+        inside an ``mc:AlternateContent`` that is itself inside that textbox
+        — content dpc cannot reach. Entering a textbox clears it, because
+        Word wraps the *whole shape* in AlternateContent (so the textbox is
+        usually inside one already, and that outer wrapper says nothing
+        about what dpc sees within).
+    """
+    txbx = f"{{{_W_NS}}}txbxContent"
     for child in elem:
         if child.tag == f"{{{_MC_NS}}}AlternateContent":
             branch = child.find(f"{{{_MC_NS}}}Choice")
             if branch is None:
                 branch = child.find(f"{{{_MC_NS}}}Fallback")
             if branch is not None:
-                yield from _effective_descendants(branch)
+                yield from _effective_descendants_scoped(
+                    branch, in_textbox, boxed_mce or in_textbox
+                )
             continue
-        yield child
-        yield from _effective_descendants(child)
+        if child.tag == txbx:
+            nested, mce = True, False
+        else:
+            nested, mce = in_textbox, boxed_mce
+        yield child, nested, mce
+        yield from _effective_descendants_scoped(child, nested, mce)
 
 
 def paragraph_math_text(elem: Any) -> str:
@@ -764,62 +1488,141 @@ def _geometry_ext(root: Any) -> Any | None:
     return None
 
 
+def _own_xfrm(el: Any) -> tuple[int | None, int | None]:
+    """``(ext.cx, chExt.cx)`` from an element's OWN ``a:xfrm``, which sits
+    one level down (``wpg:grpSpPr/a:xfrm``, ``pic:spPr/a:xfrm``). Never a
+    descendant shape's — a subtree search would read a child picture's
+    extent as if it were the group's."""
+    for child in el:
+        xfrm = child.find(f"{{{_A_NS}}}xfrm")
+        if xfrm is None:
+            continue
+        ext = xfrm.find(f"{{{_A_NS}}}ext")
+        ch = xfrm.find(f"{{{_A_NS}}}chExt")
+        return (
+            _int_or_none(ext.get("cx")) if ext is not None else None,
+            _int_or_none(ch.get("cx")) if ch is not None else None,
+        )
+    return (None, None)
+
+
+_VML_WIDTH = re.compile(r"width:\s*([\d.]+)\s*(pt|px|in|mm|cm)?")
+
+
+def _vml_width(el: Any) -> tuple[float | None, str | None]:
+    """A VML element's declared width and its unit, if any. A shape inside a
+    ``v:group`` states its width in the GROUP's coordinate units, with no
+    unit suffix — which is what distinguishes it from a real measurement."""
+    match = _VML_WIDTH.search(el.get("style") or "")
+    if match is None:
+        return None, None
+    try:
+        return float(match.group(1)), match.group(2)
+    except ValueError:
+        return None, None
+
+
+_PT_PER_PX = 0.75
+_UNIT_PX = {"pt": 1 / _PT_PER_PX, "px": 1.0, "in": 96.0, "mm": 96 / 25.4, "cm": 96 / 2.54}
+
+
 def _picture_width_px(node: Any, is_vml: bool) -> int | None:
     """The width Word draws this picture at, in CSS px, or None.
 
-    A picture inside a group is authored in the GROUP's coordinate space, so
-    its real width is ``group_px * own_ext / group_child_ext``. Without that
-    scaling a 1.5-inch logo lands at its full pixel size and swamps the page.
+    A picture inside a group is authored in the GROUP's coordinate space, and
+    groups nest, so the conversion is a product of ``ext/chExt`` over every
+    group ancestor — only the outermost one states a real measurement.
+    Without it a 1.5-inch logo lands at its full pixel size and swamps the
+    page; with only one level of it, a picture inside a nested group is
+    scaled by the inner group's ratio alone and lands wrong by the outer
+    group's factor.
     """
     if is_vml:
-        cur = node  # v:shape / v:group carry CSS-ish geometry in @style
-        while cur is not None:
-            m = re.search(r"width:\s*([\d.]+)pt", cur.get("style") or "")
-            if m:
-                return max(1, round(float(m.group(1)) / 0.75))
-            cur = cur.getparent()
-        return None
+        return _vml_width_px(node)
 
     # this picture's own extent (pic → pic:spPr/a:xfrm/a:ext)
     pic = node
     while pic is not None and _local(pic) != "pic":
         pic = pic.getparent()
-    # NB: a:extLst holds unrelated <a:ext uri="…"> extension elements, so
-    # only an ext that actually carries geometry (@cx) counts
-    own_ext = _geometry_ext(pic) if pic is not None else None
+    own_cx = _own_xfrm(pic)[0] if pic is not None else None
 
-    # the drawing/group that gives the extent in real units, plus the child
-    # coordinate space the picture's own extent is expressed in
-    group_px: float | None = None
-    child_space: float | None = None
+    # every group ancestor contributes its own coordinate-space ratio
+    scale = 1.0
+    grouped = False
     cur = pic.getparent() if pic is not None else node
     while cur is not None and _local(cur) != "drawing":  # never leave this drawing
-        ch = cur.find(f".//{{{_A_NS}}}chExt")
-        ext = _geometry_ext(cur)
-        if ch is not None and ext is not None and ch.get("cx"):
-            try:
-                group_px, child_space = int(ext.get("cx")) / _EMU_PER_PX, float(ch.get("cx"))
-            except (TypeError, ValueError):
-                return None
-            break
+        ext_cx, ch_cx = _own_xfrm(cur)
+        if ext_cx and ch_cx:
+            scale *= ext_cx / ch_cx
+            grouped = True
         cur = cur.getparent()
-    if group_px is None:  # ungrouped: the drawing's own extent is the size
-        cur = node
-        while cur is not None and _local(cur) != "p":
-            ext = cur.find(f".//{{{_WP_NS}}}extent")
-            if ext is not None and ext.get("cx"):
-                try:
-                    return max(1, round(int(ext.get("cx")) / _EMU_PER_PX))
-                except (TypeError, ValueError):
-                    return None
-            cur = cur.getparent()
+
+    if grouped and own_cx:
+        return max(1, round(own_cx * scale / _EMU_PER_PX))
+    if grouped:  # a group whose child states no extent of its own
         return None
-    if own_ext is not None and child_space and own_ext.get("cx"):
-        try:
-            return max(1, round(group_px * int(own_ext.get("cx")) / child_space))
-        except (TypeError, ValueError, ZeroDivisionError):
+    # ungrouped: the drawing's own extent is the size
+    cur = node
+    while cur is not None and _local(cur) != "p":
+        ext = cur.find(f".//{{{_WP_NS}}}extent")
+        if ext is not None and (cx := _int_or_none(ext.get("cx"))):
+            return max(1, round(cx / _EMU_PER_PX))
+        cur = cur.getparent()
+    return None
+
+
+def _vml_width_px(node: Any) -> int | None:
+    """VML geometry lives in a CSS-ish ``@style``.
+
+    A shape inside a ``v:group`` is sized in that group's ``coordsize``
+    units, and groups NEST — an inner group states its own width in its
+    parent's units too, so only the outermost one carries a real
+    measurement. Reading any intermediate width as points (they look like
+    bare numbers either way) multiplies the error by that group's whole
+    coordinate space: a 50px logo two groups deep came out at 1000px.
+    """
+    sized = _nearest_vml_width(node)
+    if sized is None:
+        return None
+    element, width, unit = sized
+    if unit:  # a real measurement, no group scaling to resolve
+        return max(1, round(width * _UNIT_PX[unit]))
+    # unitless: convert through each enclosing group's coordinate space until
+    # one of them states an actual unit
+    cur = element
+    while cur is not None:
+        group = _enclosing_vml_group(cur)
+        if group is None:
+            return None  # unitless with nothing to scale against
+        span = _int_or_none((group.get("coordsize") or "").split(",")[0])
+        group_w, group_unit = _vml_width(group)
+        if not span or group_w is None:
             return None
-    return max(1, round(group_px))
+        width = width * group_w / span
+        if group_unit:
+            return max(1, round(width * _UNIT_PX[group_unit]))
+        cur = group  # the group's own width was unitless too: keep climbing
+    return None  # ran out of ancestors with nothing stating a real unit
+
+
+def _nearest_vml_width(node: Any) -> tuple[Any, float, str | None] | None:
+    """The closest ancestor (or self) declaring a width, with that width."""
+    cur = node
+    while cur is not None:
+        width, unit = _vml_width(cur)
+        if width is not None:
+            return cur, width, unit
+        cur = cur.getparent()
+    return None
+
+
+def _enclosing_vml_group(el: Any) -> Any | None:
+    cur = el.getparent()
+    while cur is not None:
+        if _local(cur) == "group":
+            return cur
+        cur = cur.getparent()
+    return None
 
 
 def picture_relationships(elem: Any) -> list[tuple[str, str, int | None]]:
@@ -839,8 +1642,16 @@ def picture_relationships(elem: Any) -> list[tuple[str, str, int | None]]:
     embed, rel_id = f"{{{_R_NS}}}embed", f"{{{_R_NS}}}id"
     out: list[tuple[str, str, int | None]] = []
     seen: set[str] = set()
-    for node in _effective_descendants(elem):
+    # Inside a textbox, recover exactly what dpc cannot reach. Its run parser
+    # carries a bare w:drawing but has no VML model and no mc:AlternateContent
+    # branch, so the rule has to be that precise: recovering everything there
+    # doubles plain pictures, skipping everything loses VML and every shape
+    # Word wraps in AlternateContent (grouped art, picture fills, SmartArt).
+    # All three variants shipped in turn before tests pinned them together.
+    for node, in_textbox, boxed_mce in _effective_descendants_scoped(elem):
         if node.tag == blip:
+            if in_textbox and not boxed_mce:
+                continue  # a plain textbox drawing: dpc emits this one
             rid, alt = node.get(embed), "image"
         elif node.tag == imagedata:
             rid = node.get(rel_id)

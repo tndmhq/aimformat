@@ -1,5 +1,5 @@
 {
-  "spec_version": "0.4",
+  "spec_version": "0.5",
   "ids": {
     "chunk_pattern": "^[a-z0-9][a-z0-9_-]{0,63}$",
     "proposal_pattern": "^p-[a-z0-9][a-z0-9_-]{0,63}$",
@@ -148,6 +148,10 @@
     ]
   },
   "attributes": {
+    "since": {
+      "data-aim-num-prefix": "0.5",
+      "start": "0.5"
+    },
     "global": [
       "class",
       "style",
@@ -160,6 +164,30 @@
     "per_element": {
       "a": [
         "href"
+      ],
+      "p": [
+        "data-aim-num-prefix"
+      ],
+      "h1": [
+        "data-aim-num-prefix"
+      ],
+      "h2": [
+        "data-aim-num-prefix"
+      ],
+      "h3": [
+        "data-aim-num-prefix"
+      ],
+      "h4": [
+        "data-aim-num-prefix"
+      ],
+      "h5": [
+        "data-aim-num-prefix"
+      ],
+      "h6": [
+        "data-aim-num-prefix"
+      ],
+      "ol": [
+        "start"
       ],
       "img": [
         "src",
@@ -610,6 +638,36 @@
       "list-none": "list-style:none;padding-left:0",
       "list-disc": "list-style:disc",
       "list-decimal": "list-style:decimal"
+    },
+    "list_formats": {
+      "list-lower-alpha": "lower-alpha",
+      "list-upper-alpha": "upper-alpha",
+      "list-lower-roman": "lower-roman",
+      "list-upper-roman": "upper-roman"
+    },
+    "list_suffixes": {
+      "list-paren": ")\\a0",
+      "list-bare": "\\a0"
+    },
+    "markers": [
+      "num-restart",
+      "list-multilevel"
+    ],
+    "num_levels": 9,
+    "placement": {
+      "num": [
+        "p",
+        "h1",
+        "h2",
+        "h3",
+        "h4",
+        "h5",
+        "h6"
+      ],
+      "list": [
+        "ol",
+        "ul"
+      ]
     }
   },
   "events": {
@@ -877,6 +935,10 @@
       "error",
       "literal typography requires a supporting spec version"
     ],
+    "S034": [
+      "error",
+      "markup from a spec era newer than the declared version"
+    ],
     "V001": [
       "error",
       "element not allowed in the asset registry"
@@ -924,6 +986,10 @@
     "V012": [
       "error",
       "theme slot value does not match its grammar"
+    ],
+    "V013": [
+      "error",
+      "class used on an element it does not apply to"
     ],
     "X001": [
       "error",
