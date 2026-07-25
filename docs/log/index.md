@@ -9,6 +9,7 @@ required to add entries.)
 
 | Date | Type | Entry | Status | What |
 |---|---|---|---|---|
+| 2026-07-25 19:53 | report | [os-filetype-registration](2026-07-25_1953_report_os-filetype-registration.md) | active | Verified on macOS: registering a UTI that maps .aim to text/html makes Chrome render bare .aim files as HTML; unregistered extensions fall back to plain text. Default-app association is a separate mechanism. |
 | 2026-07-24 14:09 | plan | [docx-importer-and-v04-typography](2026-07-24_1409_plan_docx-importer-and-v04-typography.md) | active | Replace docling on the DOCX path with a docx-parser-converter-based importer emitting the new v0.4 typography vocabulary |
 | 2026-07-22 18:16 | review | [literal-paint-review-round-three](2026-07-22_1816_review_literal-paint-review-round-three.md) | done | Fix three final review findings in reconcile, retained-markup linting, and DOCX external-link suffix paint. |
 | 2026-07-22 17:37 | review | [literal-paint-review-round-two](2026-07-22_1737_review_literal-paint-review-round-two.md) | done | Fix five second-round review findings and verify browser, DOCX, PDF, history, and cascade behavior. |
