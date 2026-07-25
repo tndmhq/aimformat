@@ -145,6 +145,23 @@ class TestStartOverrideResetsOnFirstEncounter:
         [engine.label(19, 2) for _ in range(2)]
         assert engine.label(2, 2) == "1.1.3"
 
+    def test_returning_to_the_instance_does_not_reset_again(self):
+        # THE test for "first encountered". Every other test here uses each
+        # override instance in one contiguous run, so a materially wrong
+        # rule — "reset on every transition INTO the instance" — passes them
+        # all (a reviewer demonstrated exactly that). Interleaving is what
+        # separates the two readings.
+        engine = NumberingEngine(_CLAUSES)
+        engine.label(2, 0)
+        engine.label(2, 1)
+        seen = [
+            engine.label(19, 2),
+            engine.label(19, 2),
+            engine.label(2, 2),
+            engine.label(19, 2),  # back to 19: must NOT re-apply its override
+        ]
+        assert seen == ["1.1.1", "1.1.2", "1.1.3", "1.1.4"], seen
+
     def test_start_override_can_be_a_value_other_than_one(self):
         numbering = _numbering(
             abstracts='<w:abstractNum w:abstractNumId="1">'
@@ -208,6 +225,51 @@ class TestLevelRestarts:
         engine.label(1, 1)
         assert engine.label(1, 2) == "2.1.1"
 
+    def test_a_shallower_level_than_the_named_one_also_restarts_it(self):
+        # §17.9.10: the level restarts when the named level "or any lower
+        # level" is used. Reading it as "only that exact level" leaves a
+        # stale deep counter whenever a document skips a level — which is
+        # the ordinary heading-then-clause shape, so it shows up fast.
+        numbering = _numbering(
+            abstracts='<w:abstractNum w:abstractNumId="1">'
+            + _level(0, text="%1.")
+            + _level(1, text="%1.%2")
+            + _level(2, text="%1.%2.%3", restart=2)
+            + "</w:abstractNum>",
+            instances='<w:num w:numId="1"><w:abstractNumId w:val="1"/></w:num>',
+        )
+        engine = NumberingEngine(numbering)
+        engine.label(1, 0)
+        engine.label(1, 1)
+        engine.label(1, 2)
+        engine.label(1, 2)
+        engine.label(1, 0)  # level 0 is SHALLOWER than the named level 2
+        # NOTE: no level-1 call here. Level 1 advancing resets level 2 under
+        # BOTH readings of lvlRestart, so an intermediate one hides the bug —
+        # this test passed against the wrong implementation until that call
+        # was removed. The skipped level is the whole point.
+        assert engine.label(1, 2) == "2.1.1", "a shallower level did not restart it"
+
+    def test_a_start_override_reapplies_when_the_level_restarts(self):
+        # §17.9.27: a startOverride applies when the level "initially starts
+        # in a given document, as well as whenever it is restarted".
+        # Invisible while override == start (the common Restart-at-1), wrong
+        # whenever they differ — so it needs a value that is not 1.
+        numbering = _numbering(
+            abstracts='<w:abstractNum w:abstractNumId="1">'
+            + _level(0, text="%1.")
+            + _level(1, text="%1.%2")
+            + "</w:abstractNum>",
+            instances='<w:num w:numId="1"><w:abstractNumId w:val="1"/>'
+            '<w:lvlOverride w:ilvl="1"><w:startOverride w:val="5"/>'
+            "</w:lvlOverride></w:num>",
+        )
+        engine = NumberingEngine(numbering)
+        engine.label(1, 0)
+        assert [engine.label(1, 1) for _ in range(2)] == ["1.5", "1.6"]
+        engine.label(1, 0)  # the parent advances, restarting level 1
+        assert engine.label(1, 1) == "2.5", "the restart fell back to the abstract start"
+
 
 class TestLevelOverridesRedefineFormat:
     def test_an_instance_can_replace_a_level_definition(self):
@@ -267,6 +329,34 @@ class TestUnknownDefinitions:
         assert engine.label(1, 0) == ""
         assert engine.level(1, 0) is None
         assert not engine.is_ordered(1, 0)
+
+    def test_a_corrupt_numbering_part_degrades_instead_of_raising(self):
+        # from_docx ingests arbitrary uploads, and the parse layer tolerates
+        # a broken part by design. Losing the numbering is a degraded import;
+        # raising out of the importer is a failed one.
+        engine = NumberingEngine(b"<w:numbering unclosed")
+        assert engine.label(1, 0) == ""
+
+    def test_a_corrupt_numbering_part_still_imports_the_document(self):
+        import io
+        import zipfile
+
+        import aimformat as aim
+
+        docx = pytest.importorskip("docx")
+        buf = io.BytesIO()
+        doc = docx.Document()
+        doc.add_paragraph("the body survives")
+        doc.save(buf)
+        buf.seek(0)
+        source = zipfile.ZipFile(buf)
+        broken = io.BytesIO()
+        with zipfile.ZipFile(broken, "w") as out:
+            for name in source.namelist():
+                payload = source.read(name)
+                out.writestr(name, b"<w:numbering unclosed" if "numbering" in name else payload)
+        broken.seek(0)
+        assert "the body survives" in aim.from_docx(broken).dumps()
 
 
 class TestNumberFormats:

@@ -303,6 +303,8 @@ _M = "http://schemas.openxmlformats.org/officeDocument/2006/math"
 _W14 = "http://schemas.microsoft.com/office/word/2010/wordml"
 _V = "urn:schemas-microsoft-com:vml"
 _R = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
+_MC = "http://schemas.openxmlformats.org/markup-compatibility/2006"
+_WPS = "http://schemas.microsoft.com/office/word/2010/wordprocessingShape"
 
 
 def _one_para_html(builder) -> str:
@@ -462,6 +464,16 @@ class TestTextbox:
             run.add_picture(io.BytesIO(_PNG), width=Inches(1))
             drawing = etree.tostring(run._r.find(f"{{{_W}}}drawing")).decode()
             inner = re.sub(r'r:embed="[^"]+"', f'r:embed="{rid}"', drawing)
+            if flavour == "drawingml-mce":
+                # how Word actually writes anything richer than a plain inline
+                # picture: grouped art, picture fills, SmartArt
+                inner = (
+                    f'<mc:AlternateContent xmlns:mc="{_MC}" xmlns:w="{_W}" '
+                    f'xmlns:wps="{_WPS}" xmlns:v="{_V}" xmlns:r="{_R}">'
+                    f'<mc:Choice Requires="wps">{inner}</mc:Choice>'
+                    f'<mc:Fallback><v:shape><v:imagedata r:id="{rid}"/>'
+                    "</v:shape></mc:Fallback></mc:AlternateContent>"
+                )
         run = parse_xml(f'<w:r xmlns:w="{_W}"/>')
         run.append(
             parse_xml(
@@ -487,6 +499,14 @@ class TestTextbox:
     def test_drawingml_image_in_a_textbox_is_not_doubled(self):
         # dpc's own walk already emits this one, so the seam must not re-add it
         assert self._textbox_with_image("drawingml").count("<img") == 1
+
+    def test_an_mce_wrapped_image_in_a_textbox_is_recovered(self):
+        # the third case, and the one that makes "skip blips inside textboxes"
+        # too blunt: dpc's run parser has no mc:AlternateContent branch, so it
+        # never sees this picture and the seam is the only thing that can
+        # recover it. Everything Word draws beyond a plain inline image —
+        # grouped artwork, shapes with a picture fill, SmartArt — lands here.
+        assert self._textbox_with_image("drawingml-mce").count("<img") == 1
 
 
 class TestArchiveGuards:
@@ -635,8 +655,9 @@ class TestTableStyleResolution:
     wrongly is not a cosmetic miss — it repaints the entire table."""
 
     @staticmethod
-    def _styled(style_xml: str, rows: int = 4) -> str:
-        """Import a table using a custom style injected into styles.xml."""
+    def _styled(*style_xml: str, rows: int = 4) -> str:
+        """Import a table using custom styles injected into styles.xml. The
+        table uses the LAST one, so a basedOn parent can be passed first."""
         doc = Document()
         table = doc.add_table(rows=rows, cols=2)
         for r in range(rows):
@@ -651,7 +672,8 @@ class TestTableStyleResolution:
                 'w:noHBand="0" w:noVBand="1"/>'
             )
         )
-        doc.styles.element.append(parse_xml(style_xml))
+        for one in style_xml:
+            doc.styles.element.append(parse_xml(one))
         out = io.BytesIO()
         doc.save(out)
         out.seek(0)
@@ -687,6 +709,27 @@ class TestTableStyleResolution:
             "</w:tblStylePr></w:style>"
         )
         assert "color:#ffffff" not in html
+
+    def test_an_inherited_fill_keeps_its_childs_text_colour(self):
+        # The colour-without-fill rule must run AFTER basedOn inheritance. A
+        # child style that only recolours the header text is completing its
+        # parent's dark fill; dropping the colour per-style leaves dark text
+        # on a dark band — the exact unreadable header the rule exists to
+        # prevent, caused by the rule itself.
+        html = self._styled(
+            f'<w:style xmlns:w="{_W}" w:type="table" w:styleId="Base">'
+            '<w:name w:val="Base"/><w:tblStylePr w:type="firstRow">'
+            '<w:tcPr><w:shd w:val="clear" w:fill="1f4e79"/></w:tcPr>'
+            "</w:tblStylePr></w:style>",
+            f'<w:style xmlns:w="{_W}" w:type="table" w:styleId="Probe">'
+            '<w:name w:val="Probe"/><w:basedOn w:val="Base"/>'
+            '<w:tblStylePr w:type="firstRow">'
+            '<w:rPr><w:color w:val="FFFFFF"/></w:rPr>'
+            "</w:tblStylePr></w:style>",
+        )
+        header = html.split("\n")[0]
+        assert "#1f4e79" in header, "the inherited fill was lost"
+        assert "color:#ffffff" in header, "the child's text colour was dropped"
 
     def test_theme_named_fills_and_colours_resolve(self):
         # Word's own table styles name colours through the theme far more

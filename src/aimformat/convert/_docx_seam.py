@@ -321,10 +321,28 @@ class NumberingEngine:
     Counters advance on every :meth:`label` call, so an engine belongs to one
     walk in document order and is never reused across documents.
 
+    Known gaps, each verified rather than assumed:
+
+    - ``w:numStyleLink`` chains are not followed. An abstract definition that
+      delegates to a numbering *style* (Word's built-in "List Paragraph"
+      family) carries no ``w:lvl`` of its own, so its lists degrade to
+      bullets. Same behaviour as the dependency's tracker; no document in the
+      corpus uses it.
+    - A level that exists ONLY as an instance ``lvlOverride`` body is not
+      reset by a parent advancing, and its ``lvlRestart`` is read from the
+      abstract rather than the override — ``_reset_deeper`` walks the
+      abstract's levels.
+
     Deliberately unsettled: whether a ``startOverride`` applies on the
     instance's first use at ANY level or per level on first use at THAT
     level. This implements per level; both readings explain every fixture we
     have. A Word-authored document that separates them would decide it.
+
+    Also unsettled, and left alone on purpose: when a deeper level is drawn
+    before the shallower one it references, this renders the shallower
+    level's start value. Word may instead phantom-instantiate that level, so
+    the next item at it would be 2 rather than 1. Needs a Word-authored probe
+    document, not a guess.
     """
 
     def __init__(self, numbering_xml: bytes | None) -> None:
@@ -340,7 +358,14 @@ class NumberingEngine:
     # -- definitions -------------------------------------------------------
 
     def _parse(self, xml: bytes) -> None:
-        root = etree.fromstring(xml)
+        try:
+            root = etree.fromstring(xml)
+        except etree.XMLSyntaxError:
+            # A corrupt part must degrade, never abort the import: the parse
+            # layer tolerates this one and so did we before this engine, and
+            # from_docx ingests arbitrary uploads. Numbering is lost; the
+            # document still arrives.
+            return
         w = f"{{{_W_NS}}}"
         for ab in root.iter(f"{w}abstractNum"):
             aid = _int_or_none(ab.get(f"{w}abstractNumId"))
@@ -423,8 +448,17 @@ class NumberingEngine:
         elif key in self._counters:
             self._counters[key] += 1
         else:
-            self._counters[key] = level.start
+            # Seeding, either the first time or after a restart popped the
+            # counter. A startOverride applies "when this level initially
+            # starts in a given document, as well as whenever it is
+            # restarted" (§17.9.27) — so it is the start value here too, not
+            # only on first encounter. Invisible while override == start (the
+            # common Restart-at-1), wrong whenever they differ.
+            self._counters[key] = self._start_value(num_id, ilvl, level)
         self._reset_deeper(abstract, ilvl)
+
+    def _start_value(self, num_id: int, ilvl: int, level: NumberLevel) -> int:
+        return self._start_overrides.get((num_id, ilvl), level.start)
 
     def _reset_deeper(self, abstract: int, ilvl: int) -> None:
         """A level moving on restarts the levels below it — 1.2.1 follows
@@ -435,8 +469,13 @@ class NumberingEngine:
             restart = level.lvl_restart
             if restart == 0:  # explicitly never
                 continue
-            if restart is not None and ilvl != restart - 1:
-                # restarts only when THAT level (1-based) advances
+            if restart is not None and ilvl > restart - 1:
+                # lvlRestart names a level (1-based); this level restarts when
+                # THAT level "or any lower level" is used (§17.9.10) — so a
+                # SHALLOWER level advancing resets it too. Reading it as "only
+                # that exact level" leaves a stale deep counter whenever a
+                # document skips a level, which is the ordinary
+                # heading-then-clause shape.
                 continue
             self._counters.pop((abstract, deeper), None)
 
@@ -451,7 +490,10 @@ class NumberingEngine:
             ref_level = self.level(num_id, ref)
             value = self._counters.get((abstract, ref))
             if value is None:
-                value = ref_level.start if ref_level is not None else 1
+                # referenced before that level has been used: show what it
+                # WOULD start at, override included — otherwise the same
+                # level reads 1 here and 5 the moment it is first used
+                value = self._start_value(num_id, ref, ref_level) if ref_level else 1
             fmt = ref_level.num_fmt if ref_level is not None else "decimal"
             out = out.replace(token, format_number(value, fmt))
         return out.strip()
@@ -738,13 +780,6 @@ def table_style_looks(
             palette,
         )
 
-    def _finish(out: dict[str, str]) -> dict[str, str]:
-        if "color" in out and "fill" not in out:
-            # a band recolours its text BECAUSE it shades its background;
-            # colour alone paints white text on white paper
-            out.pop("color")
-        return out
-
     def _look_direct(scope: Any) -> dict[str, str]:
         """What a scope declares directly — never inherited from a nested
         conditional block."""
@@ -760,7 +795,7 @@ def table_style_looks(
         color = _color_of(rpr.find(f"{w}color") if rpr is not None else None)
         if color:
             out["color"] = color
-        return _finish(out)
+        return out
 
     def _look(scope: Any) -> dict[str, str]:
         out: dict[str, str] = {}
@@ -770,7 +805,7 @@ def table_style_looks(
         color = _color_of(scope.find(f".//{w}rPr/{w}color"))
         if color:
             out["color"] = color
-        return _finish(out)
+        return out
 
     for style in root.iter(f"{w}style"):
         if style.get(f"{w}type") != "table":
@@ -812,7 +847,16 @@ def table_style_looks(
         for ancestor in reversed(chain):  # parent first, child overrides
             for cond, look in raw[ancestor].items():
                 merged.setdefault(cond, {}).update(look)
-        resolved[style_id] = merged
+        # A band recolours its text BECAUSE it shades its background, so a
+        # colour with no fill would paint (usually white) text onto white
+        # paper. Applied once HERE, after inheritance: a child style that
+        # supplies only the text colour is completing its parent's fill, and
+        # dropping it per-style would break exactly the case the rule exists
+        # to protect.
+        for look in merged.values():
+            if "color" in look and "fill" not in look:
+                look.pop("color")
+        resolved[style_id] = {k: v for k, v in merged.items() if v}
     return resolved
 
 
@@ -1009,15 +1053,30 @@ def _effective_descendants(elem: Any) -> Any:
     Word emits every inserted shape as AlternateContent carrying the *same*
     ``w:txbxContent`` in both a DrawingML Choice and a VML Fallback, so a
     naive ``.//`` search sees all duplicated content twice."""
-    for child, _ in _effective_descendants_scoped(elem):
+    for child, _, _ in _effective_descendants_scoped(elem):
         yield child
 
 
-def _effective_descendants_scoped(elem: Any, in_textbox: bool = False) -> Any:
-    """``_effective_descendants``, each node paired with whether it sits
-    inside a ``w:txbxContent``. Textbox content is walked a second time by
-    ``textbox_paragraphs`` through dpc's typed model, so a caller that would
-    otherwise double what dpc already carries needs to know where it is."""
+def _effective_descendants_scoped(
+    elem: Any, in_textbox: bool = False, boxed_mce: bool = False
+) -> Any:
+    """``_effective_descendants``, each node paired with whether dpc's typed
+    model will already have carried it.
+
+    Textbox content is walked a second time by ``textbox_paragraphs`` through
+    dpc, so a caller that recovers content itself needs to know what dpc
+    covers there — and dpc's run parser handles a bare ``w:drawing`` but has
+    no branch for ``mc:AlternateContent``. Two flags, because both matter:
+
+    ``in_textbox``
+        inside a ``w:txbxContent``.
+    ``boxed_mce``
+        inside an ``mc:AlternateContent`` that is itself inside that textbox
+        — content dpc cannot reach. Entering a textbox clears it, because
+        Word wraps the *whole shape* in AlternateContent (so the textbox is
+        usually inside one already, and that outer wrapper says nothing
+        about what dpc sees within).
+    """
     txbx = f"{{{_W_NS}}}txbxContent"
     for child in elem:
         if child.tag == f"{{{_MC_NS}}}AlternateContent":
@@ -1025,11 +1084,16 @@ def _effective_descendants_scoped(elem: Any, in_textbox: bool = False) -> Any:
             if branch is None:
                 branch = child.find(f"{{{_MC_NS}}}Fallback")
             if branch is not None:
-                yield from _effective_descendants_scoped(branch, in_textbox)
+                yield from _effective_descendants_scoped(
+                    branch, in_textbox, boxed_mce or in_textbox
+                )
             continue
-        nested = in_textbox or child.tag == txbx
-        yield child, nested
-        yield from _effective_descendants_scoped(child, nested)
+        if child.tag == txbx:
+            nested, mce = True, False
+        else:
+            nested, mce = in_textbox, boxed_mce
+        yield child, nested, mce
+        yield from _effective_descendants_scoped(child, nested, mce)
 
 
 def paragraph_math_text(elem: Any) -> str:
@@ -1134,15 +1198,16 @@ def picture_relationships(elem: Any) -> list[tuple[str, str, int | None]]:
     embed, rel_id = f"{{{_R_NS}}}embed", f"{{{_R_NS}}}id"
     out: list[tuple[str, str, int | None]] = []
     seen: set[str] = set()
-    # Inside a textbox, recover only what dpc cannot model. textbox_paragraphs
-    # re-parses those w:p through dpc, which carries their DrawingML pictures
-    # but has no VML model at all — so descending for blips there doubles the
-    # image, and skipping VML there loses it outright. (Both were shipped, in
-    # turn, before a test pinned the two flavours against each other.)
-    for node, in_textbox in _effective_descendants_scoped(elem):
+    # Inside a textbox, recover exactly what dpc cannot reach. Its run parser
+    # carries a bare w:drawing but has no VML model and no mc:AlternateContent
+    # branch, so the rule has to be that precise: recovering everything there
+    # doubles plain pictures, skipping everything loses VML and every shape
+    # Word wraps in AlternateContent (grouped art, picture fills, SmartArt).
+    # All three variants shipped in turn before tests pinned them together.
+    for node, in_textbox, boxed_mce in _effective_descendants_scoped(elem):
         if node.tag == blip:
-            if in_textbox:
-                continue
+            if in_textbox and not boxed_mce:
+                continue  # a plain textbox drawing: dpc emits this one
             rid, alt = node.get(embed), "image"
         elif node.tag == imagedata:
             rid = node.get(rel_id)
