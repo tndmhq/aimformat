@@ -229,6 +229,13 @@ def main() -> None:
         "nok_V011_unknown_theme_slot.aim": flat.replace(
             "--aim-brand-1:#1a73e8", "--aim-accent:#1a73e8"
         ),
+        # A list-marker class on a paragraph matches no generated rule, so it
+        # draws nothing — silently. The counterpart (a num-N on a list) is
+        # the same mistake in the other direction; one fixture per rule, and
+        # this one is the direction a hand-editing author is likelier to hit.
+        "nok_V013_class_on_wrong_element.aim": flat.replace(
+            'class="font-bold text-3xl"', 'class="list-paren"'
+        ),
         "nok_X002_event_handler.aim": flat.replace(
             '<p data-aim="p1">', '<p data-aim="p1" onmouseover="x()">'
         ),

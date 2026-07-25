@@ -567,6 +567,16 @@ class _Linter:
                         )
                     elif token not in REGISTRY.allowed_classes:
                         self.add("V005", ERROR, f"unknown class {token!r}", loc)
+                    else:
+                        where = REGISTRY.class_placement.get(token)
+                        if where is not None and tag not in where:
+                            self.add(
+                                "V013",
+                                ERROR,
+                                f"class {token!r} does not apply to <{tag}> "
+                                f"(only {', '.join(sorted(where))})",
+                                loc,
+                            )
             if name == "style" and value:
                 self.check_style(value, loc)
             if name == "href" or name == "src":

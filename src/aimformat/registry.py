@@ -196,6 +196,24 @@ class Registry:
         return int(self.raw["classes"].get("num_levels", 0))
 
     @cached_property
+    def class_placement(self) -> dict[str, frozenset[str]]:
+        """``{class: the tags it may appear on}`` for classes that are only
+        meaningful somewhere specific.
+
+        Most utilities (``text-center``, ``bg-brand-1``) mean the same thing
+        wherever they land and are absent here. The numbering vocabulary does
+        not: ``num-2`` on a ``<td>``, or ``list-paren`` on a ``<p>``, matches
+        no generated rule and so draws nothing at all — a silent no-op rather
+        than a visible mistake, which is precisely what a linter is for."""
+        table = self.raw["classes"].get("placement", {})
+        out: dict[str, frozenset[str]] = {}
+        for name in self.allowed_classes:
+            family = name.split("-", 1)[0]
+            if family in table:
+                out[name] = frozenset(table[family])
+        return out
+
+    @cached_property
     def class_rules(self) -> list[tuple[str, str]]:
         """Rules that are not one class → one declaration: generated markers
         (``::before``) and compound selectors. Kept apart from

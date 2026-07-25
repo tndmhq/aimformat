@@ -1206,6 +1206,7 @@ Literal paint (`color` `background-color` `border-color`) is since spec 0.3 (S03
 | V010 | error | theme block is not a single :root rule |
 | V011 | error | unregistered theme slot |
 | V012 | error | theme slot value does not match its grammar |
+| V013 | error | class used on an element it does not apply to |
 | X001 | error | forbidden element |
 | X002 | error | event-handler attribute |
 | X003 | error | dangerous URL (javascript:/data:text) |

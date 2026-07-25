@@ -625,7 +625,22 @@
       "num-restart",
       "list-multilevel"
     ],
-    "num_levels": 9
+    "num_levels": 9,
+    "placement": {
+      "num": [
+        "p",
+        "h1",
+        "h2",
+        "h3",
+        "h4",
+        "h5",
+        "h6"
+      ],
+      "list": [
+        "ol",
+        "ul"
+      ]
+    }
   },
   "events": {
     "kinds": [
@@ -939,6 +954,10 @@
     "V012": [
       "error",
       "theme slot value does not match its grammar"
+    ],
+    "V013": [
+      "error",
+      "class used on an element it does not apply to"
     ],
     "X001": [
       "error",
