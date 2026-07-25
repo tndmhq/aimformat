@@ -9,6 +9,7 @@ required to add entries.)
 
 | Date | Type | Entry | Status | What |
 |---|---|---|---|---|
+| 2026-07-25 21:21 | plan | [agent-interface-gaps](2026-07-25_2121_plan_agent-interface-gaps.md) | active | Four deferred fixes from a live session: no recipe for showing a document to a human, the HTML export default hides pending changes, amend_proposal reaches no agent surface, and no install guidance for PEP 668 sandboxes. |
 | 2026-07-25 21:07 | plan | [html-tracked-export-and-view](2026-07-25_2107_plan_html-tracked-export-and-view.md) | active | Add the missing pending='tracked' fate to the HTML exporter (del/ins, mirroring the DOCX one) plus a thin 'aim view' wrapper; a static artifact rather than a local server, and a cheaper answer than rendering payloads inside the .aim itself. |
 | 2026-07-25 20:56 | plan | [browser-view-and-css-versioning](2026-07-25_2056_plan_browser-view-and-css-versioning.md) | active | Version the embedded stylesheet so a CSS change stops invalidating every existing file, then improve what a browser-only reader sees in the pending lane (editor pointer, model name, readable hierarchy, collapsible cards). |
 | 2026-07-25 19:53 | report | [os-filetype-registration](2026-07-25_1953_report_os-filetype-registration.md) | active | Verified on macOS: registering a UTI that maps .aim to text/html makes Chrome render bare .aim files as HTML; unregistered extensions fall back to plain text. Default-app association is a separate mechanism. |
