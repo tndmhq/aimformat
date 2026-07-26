@@ -31,15 +31,22 @@ def test_changelog_top_matches_package_version():
     step 0.5.0 skipped.
     """
     text = (ROOT / "CHANGELOG.md").read_text("utf-8")
-    # The version must be the WHOLE token, delimited by the heading's " — date"
-    # or end of line — otherwise a suffixed heading (`## 0.6.0-rc.1`, or the
-    # typo `## 0.6.0.1`) would prefix-match `0.6.0` and pass against a `0.6.0`
-    # package while the changelog names a different release.
-    m = re.search(r"^## (\d+\.\d+\.\d+)(?= —|$)", text, re.M)
-    assert m, "CHANGELOG.md has no versioned heading of the form '## X.Y.Z — …'"
-    assert m.group(1) == aim.__version__, (
-        f"CHANGELOG.md top release is {m.group(1)}, package is {aim.__version__} — "
-        "when you bump __version__, add or rename its CHANGELOG section to match"
+    # Validate the ACTUAL first numbered heading — do not skip a malformed one.
+    # A `## Unreleased` heading (starts with a letter) is skipped; the first
+    # heading whose token starts with a digit IS the release these notes
+    # describe, and it must be a clean X.Y.Z equal to __version__. Skipping a
+    # suffixed heading (`## 0.6.0-rc.1`) to match a later `## 0.5.0` would let
+    # the changelog's real top section disagree with the package while the
+    # publish gate stays green.
+    first = None
+    for token in re.findall(r"^## (\S+)", text, re.M):
+        if token[0].isdigit():
+            first = token
+            break
+    assert first is not None, "CHANGELOG.md has no numbered release heading"
+    assert re.fullmatch(r"\d+\.\d+\.\d+", first) and first == aim.__version__, (
+        f"CHANGELOG.md's first numbered heading is {first!r}, package is "
+        f"{aim.__version__} — they must be the same complete version"
     )
 
 
@@ -61,9 +68,15 @@ def test_shipped_docs_declare_the_spec_version():
         ("CONTRIBUTING.md", r"carries the v(\d+\.\d+) draft"),
     ):
         text = (ROOT / name).read_text("utf-8")
-        m = re.search(pattern, text)
-        assert m, f"{name} lost its version-claim phrase (pattern {pattern!r})"
-        assert m.group(1) == aim.SPEC_VERSION, (
-            f"{name} claims spec v{m.group(1)} (via {pattern!r}), "
-            f"SPEC_VERSION is {aim.SPEC_VERSION}"
+        # Exactly one match, not the first of several: prepending a new
+        # `**v0.6** (the current draft)` while leaving the old one is the
+        # natural way this drifts, and re.search would silently accept the
+        # newer of two contradictory claims.
+        found = re.findall(pattern, text)
+        assert len(found) == 1, (
+            f"{name} has {len(found)} version-claim phrases matching {pattern!r} "
+            f"({found}); expected exactly one"
+        )
+        assert found[0] == aim.SPEC_VERSION, (
+            f"{name} claims spec v{found[0]} (via {pattern!r}), SPEC_VERSION is {aim.SPEC_VERSION}"
         )

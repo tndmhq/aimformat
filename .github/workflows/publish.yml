@@ -33,7 +33,13 @@ jobs:
         # consistency test ci runs, at the actual publish moment, before upload.
         run: |
           pip install -e . pytest==9.1.1
-          python -m pytest tests/test_release_consistency.py -q
+          # test_release_consistency ties the changelog to __version__ and the
+          # doc prose to SPEC_VERSION independently; the assertion LINKING
+          # __version__ to SPEC_VERSION lives in test_spec — run it too, or a
+          # 0.6.0 package/changelog with a 0.5 registry+docs would pass this
+          # gate and ship a package implementing a different spec version.
+          python -m pytest tests/test_release_consistency.py \
+            tests/test_spec.py::test_spec_declares_current_version -q
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: dist
