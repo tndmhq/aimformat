@@ -196,6 +196,16 @@ def test_export_markdown(tmp_path):
     assert "Original text." in out_md.read_text()
 
 
+def test_export_aim_html_is_the_file_itself(tmp_path):
+    """The alias shares `.html` with the flattening export — writing a
+    flattened copy under it would silently drop the history."""
+    path = _make_doc(tmp_path)
+    alias = tmp_path / "doc.aim.html"
+    out = _payload(_call("aim_export", {"path": str(path), "out_path": str(alias)}))
+    assert out["ok"]
+    assert alias.read_bytes() == path.read_bytes()
+
+
 def test_root_gate_allows_inside_root(tmp_path, monkeypatch):
     monkeypatch.setenv("AIMFORMAT_MCP_ROOT", str(tmp_path))
     path = _make_doc(tmp_path)

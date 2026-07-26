@@ -350,15 +350,25 @@ def create_server() -> FastMCP:
         """Convert an .aim document to another format, chosen by out_path
         extension: .docx (pending: tracked | accept-all | reject-all),
         .md (drop | criticmarkup), .html (keep | accept-all | reject-all),
-        .pdf (keep | accept-all | reject-all). Heavier formats need extras:
-        pip install 'aimformat[docx]' (or [convert], [pdf]). Reads from and
-        writes to any absolute path on the host; intended for local,
-        trusted stdio use only."""
-        from .cli import _EXPORT_PENDING
+        .pdf (keep | accept-all | reject-all). A .aim.html target is not a
+        conversion — it writes the document itself under the compatibility
+        alias, so it opens in a browser with history and pending lane
+        intact. Heavier formats need extras: pip install 'aimformat[docx]'
+        (or [convert], [pdf]). Reads from and writes to any absolute path
+        on the host; intended for local, trusted stdio use only."""
+        from .cli import _EXPORT_PENDING, _is_alias
 
         doc = _load(path)
         _guard(out_path)
         out = Path(out_path)
+        if _is_alias(out):
+            if pending not in (None, "keep"):
+                raise ValueError(
+                    f"aim: pending={pending!r} not valid for .aim.html "
+                    "(the alias carries the file as-is)"
+                )
+            doc.save(out)
+            return {"ok": True, "wrote": str(out), "pending": "keep"}
         suffix = out.suffix.lower()
         if suffix not in _EXPORT_PENDING:
             raise ValueError(

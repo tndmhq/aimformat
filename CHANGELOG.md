@@ -50,6 +50,15 @@ version tracks the spec version it implements (0.x minors may break).
   (→ `background-color`) and fixed width (→ `width:NNpx`); borders are
   deliberately not carried (the vocabulary has no per-side border
   geometry).
+- **`.aim.html` targets stop being flattened** — `aim export F.aim -o
+  F.aim.html` (and the `aim_export` MCP tool) wrote a *converted* copy,
+  because the compatibility alias (§10) shares its suffix with the `.html`
+  export: history dropped, silently, under a name that promises the whole
+  file. The alias is now matched ahead of the suffix table and writes the
+  document itself; `--pending` other than `keep` is refused there, since
+  the alias carries the lane as-is. The Agent Skill also matches
+  `**/*.aim.html`, so it triggers on an alias file the way it does on a
+  bare `.aim`.
 - **`to_docx` export symmetry** — the round trip is now idempotent on
   styling: inline `font-size`/`font-family` → run properties, type-scale
   classes → points via the normative table, alignment classes (incl.

@@ -467,11 +467,36 @@ _EXPORT_PENDING = {
 }
 
 
+def _is_alias(out: Path) -> bool:
+    """True for a ``*.aim.html`` target — the compatibility alias (spec §10).
+
+    Matched ahead of the suffix table, which sees only ``.html`` and would
+    otherwise hand back a *flattened* copy under a name that promises the
+    whole file: history dropped, silently, in a document whose whole point
+    is that the history travels with it.
+    """
+    return out.name.lower().endswith(".aim.html")
+
+
 def _cmd_export(args: argparse.Namespace) -> int:
     out = Path(args.output)
     if out.exists() and not args.force:
         print(f"aim: {out} exists (use --force to overwrite)", file=sys.stderr)
         return 2
+    if _is_alias(out):
+        # not a conversion: the same bytes `aim` would write, named so
+        # browsers and mail clients open the document instead of its source
+        if args.pending not in (None, "keep"):
+            print(
+                f"aim: --pending {args.pending!r} not valid for .aim.html "
+                "(the alias carries the file as-is; resolve the lane with "
+                "`aim accept`/`aim reject` first)",
+                file=sys.stderr,
+            )
+            return 2
+        AimDocument.load(args.input).save(out)
+        print(f"wrote {out}")
+        return 0
     suffix = out.suffix.lower()
     if suffix not in _EXPORT_PENDING:
         print(
@@ -725,12 +750,15 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--force", action="store_true", help="overwrite an existing file")
     p.set_defaults(func=_cmd_import)
 
-    p = sub.add_parser("export", help="convert .aim to docx/md/html/pdf (by extension)")
+    p = sub.add_parser(
+        "export", help="convert .aim to docx/md/html/pdf, or copy to .aim.html (by extension)"
+    )
     p.add_argument("input")
     p.add_argument("-o", "--output", required=True)
     p.add_argument(
         "--pending",
-        help="pending-lane fate; per-format default: docx=tracked, md=drop, html/pdf=keep",
+        help="pending-lane fate; per-format default: docx=tracked, md=drop, html/pdf=keep "
+        "(.aim.html carries the lane as-is)",
     )
     p.add_argument("--force", action="store_true", help="overwrite an existing file")
     p.set_defaults(func=_cmd_export)

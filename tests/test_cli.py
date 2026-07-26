@@ -81,6 +81,39 @@ class TestOtherCommands:
         text = rejected.read_text()
         assert "Kept." in text and "Fresh." not in text
 
+    def test_aim_html_target_writes_the_file_not_a_flattened_copy(self, tmp_path):
+        """`.aim.html` is the alias (spec §10), not an HTML conversion.
+
+        It shares its suffix with the flattening `.html` export, so the
+        regression this guards is silent: a lossy copy under a name that
+        promises the whole file.
+        """
+        doc = aim.new_document(title="Alias")
+        doc.add_chunk('<p data-aim="p1">Kept.</p>', author=BOT, at=ts(0))
+        doc.propose_add("<p>Fresh.</p>", after="p1", author=BOT, at=ts(1))
+        src = tmp_path / "a.aim"
+        doc.save(src)
+
+        alias = tmp_path / "a.aim.html"
+        assert main(["export", str(src), "-o", str(alias)]) == 0
+        assert alias.read_bytes() == src.read_bytes()
+
+        flat = tmp_path / "a.html"
+        assert main(["export", str(src), "-o", str(flat)]) == 0
+        assert flat.read_bytes() != src.read_bytes()  # the conversion still converts
+
+        loaded = aim.load(alias)
+        assert loaded.history and len(loaded.proposals) == 1
+
+    def test_aim_html_target_rejects_a_lane_fate(self, tmp_path, capsys):
+        doc = aim.new_document(title="Alias")
+        src = tmp_path / "a.aim"
+        doc.save(src)
+        out = tmp_path / "a.aim.html"
+        assert main(["export", str(src), "-o", str(out), "--pending", "accept-all"]) == 2
+        assert "not valid for .aim.html" in capsys.readouterr().err
+        assert not out.exists()
+
     def test_flatten_removes_history(self, saved, tmp_path, capsys):
         out = tmp_path / "flat.aim"
         assert main(["flatten", str(saved), "-o", str(out)]) == 0
