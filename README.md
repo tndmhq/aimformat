@@ -231,7 +231,9 @@ Design pillars (details and rationale in the spec):
 - **Docs and slides in one format.** Slides are fixed-canvas containers of
   positioned chunks, with the same proposals and the same history.
 - **Security as conformance.** No script, no event handlers, no dangerous URL
-  schemes, all enforced by the linter (`aim lint` is the gate).
+  schemes, all enforced by the linter (`aim lint` is the gate). Executable
+  content was never part of the vocabulary, so a conforming file has nothing
+  to run; lint anything you did not write before you render it.
 
 ## Status and roadmap
 
