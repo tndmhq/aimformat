@@ -25,6 +25,15 @@ jobs:
         run: |
           ls -l dist/
           test -f "dist/aimformat-${GITHUB_REF_NAME#v}.tar.gz"
+      - name: Version claims are consistent
+        # publish.yml fires on the release event, independent of ci — nothing
+        # here depends on a green ci run for the tag, so a release cut from a
+        # tag whose ci is pending, failed, or never ran would otherwise upload
+        # stale version claims (README IS the PyPI project page). Run the same
+        # consistency test ci runs, at the actual publish moment, before upload.
+        run: |
+          pip install -e . pytest==9.1.1
+          python -m pytest tests/test_release_consistency.py -q
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: dist
