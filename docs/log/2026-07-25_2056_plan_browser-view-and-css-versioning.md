@@ -1,7 +1,7 @@
 ---
 date: 2026-07-25 20:56
 type: plan
-status: active
+status: todo
 related:
   - 2026-07-25_1953_report_os-filetype-registration.md
 ---

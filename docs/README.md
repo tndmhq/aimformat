@@ -47,10 +47,16 @@ python3 scripts/new_log_entry.py <type> <slug> --what "one-line index summary"
 ---
 date: 2026-07-06 18:30
 type: plan
-status: active        # active | done | superseded
+status: active        # todo | active | done | superseded
 related: []
 ---
 ```
+
+`status` is the entry's own lifecycle: `todo` (written, work not started),
+`active` (underway), `done` (complete), `superseded` (replaced by another
+entry). The scaffolder writes `active`; set `todo` by hand when the entry is
+queued rather than started, so the index distinguishes a backlog from work in
+flight.
 
 **Rules:**
 

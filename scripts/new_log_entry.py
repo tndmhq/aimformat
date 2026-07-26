@@ -42,10 +42,12 @@ related: []
 
 # {title}
 
-<!-- Write the entry here. Keep repo-relative links. When the work completes:
-     flip `status:` above to done (or superseded), update this entry's row in
-     index.md, and promote durable lessons into docs/knowledge/
-     (see docs/README.md, rule 4). -->
+<!-- Write the entry here. Keep repo-relative links.
+     Status: todo (written, not started) | active (underway) | done |
+     superseded. This scaffolds as active; set todo if the work is only
+     queued. When the work completes: flip `status:` above, update this
+     entry's row in index.md, and promote durable lessons into
+     docs/knowledge/ (see docs/README.md, rule 4). -->
 """
 
 

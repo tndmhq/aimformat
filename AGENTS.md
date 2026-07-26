@@ -86,7 +86,7 @@ technical content only (see Governance below).
    are timestamped, append-only files in `docs/log/`
    (`YYYY-MM-DD_HHMM_<type>_<slug>.md`, time of day in **UTC**,
    type ∈ plan|review|report|status|decision|event), each with
-   YAML frontmatter (`status: active|done|superseded`) and a one-line row in
+   YAML frontmatter (`status: todo|active|done|superseded`) and a one-line row in
    `docs/log/index.md`. Never rewrite a log entry — supersede it and flip the
    old entry's `status`. Full rules → [`docs/README.md`](docs/README.md).
 

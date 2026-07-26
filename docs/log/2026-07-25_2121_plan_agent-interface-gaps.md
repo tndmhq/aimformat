@@ -1,7 +1,7 @@
 ---
 date: 2026-07-25 21:21
 type: plan
-status: active
+status: todo
 related:
   - 2026-07-10_0414_decision_agent-native-surfaces.md
   - 2026-07-10_1646_decision_amend-proposal.md
