@@ -31,8 +31,12 @@ def test_changelog_top_matches_package_version():
     step 0.5.0 skipped.
     """
     text = (ROOT / "CHANGELOG.md").read_text("utf-8")
-    m = re.search(r"^## (\d+\.\d+\.\d+)\b", text, re.M)
-    assert m, "CHANGELOG.md has no versioned heading"
+    # The version must be the WHOLE token, delimited by the heading's " — date"
+    # or end of line — otherwise a suffixed heading (`## 0.6.0-rc.1`, or the
+    # typo `## 0.6.0.1`) would prefix-match `0.6.0` and pass against a `0.6.0`
+    # package while the changelog names a different release.
+    m = re.search(r"^## (\d+\.\d+\.\d+)(?= —|$)", text, re.M)
+    assert m, "CHANGELOG.md has no versioned heading of the form '## X.Y.Z — …'"
     assert m.group(1) == aim.__version__, (
         f"CHANGELOG.md top release is {m.group(1)}, package is {aim.__version__} — "
         "when you bump __version__, add or rename its CHANGELOG section to match"
@@ -41,16 +45,25 @@ def test_changelog_top_matches_package_version():
 
 def test_shipped_docs_declare_the_spec_version():
     """README is the PyPI project page (`pyproject: readme = "README.md"`), so
-    its draft line is public the moment a release lands; CONTRIBUTING makes the
-    same claim to contributors. Both must name the current spec minor.
+    its version claims are public the moment a release lands; CONTRIBUTING makes
+    the same claim to contributors. Three claims, all of which have drifted in
+    practice: README's intro line, README's Status-and-roadmap "current draft"
+    entry (which stopped at v0.3 while the code was v0.5), and CONTRIBUTING's.
+
+    Each is located by a short *stable phrase* around the version number, and
+    only the number is asserted. Rewording elsewhere is free; rewording one of
+    these three anchor phrases means updating its pattern here — a deliberate
+    trade of a little brittleness for catching the exact drift a release ships.
     """
     for name, pattern in (
         ("README.md", r"The spec is a v(\d+\.\d+) draft"),
+        ("README.md", r"\*\*v(\d+\.\d+)\*\* \(the current draft\)"),
         ("CONTRIBUTING.md", r"carries the v(\d+\.\d+) draft"),
     ):
         text = (ROOT / name).read_text("utf-8")
         m = re.search(pattern, text)
-        assert m, f"{name} lost its 'v<minor> draft' line (pattern {pattern!r})"
+        assert m, f"{name} lost its version-claim phrase (pattern {pattern!r})"
         assert m.group(1) == aim.SPEC_VERSION, (
-            f"{name} says spec v{m.group(1)}, SPEC_VERSION is {aim.SPEC_VERSION}"
+            f"{name} claims spec v{m.group(1)} (via {pattern!r}), "
+            f"SPEC_VERSION is {aim.SPEC_VERSION}"
         )
