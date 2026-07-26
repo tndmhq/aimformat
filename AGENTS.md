@@ -15,7 +15,7 @@ the pointer in `CLAUDE.md`.)
 
 `aimformat` — the open `.aim` document format: an AI-native format where AI
 proposals and human accept/reject are first-class file primitives. This repo
-holds the **spec (v0.2 draft, [`spec.md`](spec.md))**, the Python SDK +
+holds the **spec (v0.5 draft, [`spec.md`](spec.md))**, the Python SDK +
 verifier + CLI (`src/aimformat/`), the MCP server (`aim mcp`, extra
 `[mcp]`), the Agent Skill (`skills/aimformat/`), the conformance suite, and
 the developer docs; the reference viewer is planned. Open design questions

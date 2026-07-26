@@ -48,7 +48,7 @@ bare document.
 └────────────────────────────────────────────────────────────────────────┘
 ```
 
-The spec is a v0.3 draft; breaking changes are possible until 1.0. What
+The spec is a v0.5 draft; breaking changes are possible until 1.0. What
 each revision added: [status and roadmap](#status-and-roadmap).
 
 ## Install
@@ -240,10 +240,15 @@ Design pillars (details and rationale in the spec):
 The spec and the reference tooling are published; breaking changes stay
 possible until 1.0.
 
-- **v0.3** (the current draft) added literal per-element paint: validated
-  inline `color`, `background-color` and `border-color`, so one element
-  can be given one exact colour without touching a document-wide theme
-  slot.
+- **v0.5** (the current draft) added numbering that survives an edit: a
+  block states its level (`num-1` … `num-9`) and the stylesheet draws the
+  number, so inserting a clause renumbers everything below it instead of
+  leaving stale text that still reads as authoritative.
+- **v0.4** added literal per-element typography: inline `font-size` and
+  `font-family`, a display type scale, and justified alignment.
+- **v0.3** added literal per-element paint: validated inline `color`,
+  `background-color` and `border-color`, so one element can be given one
+  exact colour without touching a document-wide theme slot.
 - **v0.2** added pagination: page setup (`aim:doc`) and hard page breaks.
 
 Planned next, tracked in the spec's Future Extensions: reference viewer

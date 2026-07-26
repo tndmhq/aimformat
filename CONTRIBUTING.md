@@ -1,6 +1,6 @@
 # Contributing
 
-Thanks for your interest in `.aim`. The repo carries the v0.2 draft of the
+Thanks for your interest in `.aim`. The repo carries the v0.5 draft of the
 spec and the reference toolkit; breaking changes are possible until 1.0,
 and design discussion via issues is as welcome as PRs.
 
@@ -75,8 +75,13 @@ the PyPI project trusts owner `tndmhq`, repository `aimformat`, workflow
 Settings → Publishing if it's ever lost). Per release:
 
 1. Bump `__version__` in `src/aimformat/__init__.py` (the single source;
-   pyproject reads it) and move the `## Unreleased` block in
-   `CHANGELOG.md` under the new version heading.
+   pyproject reads it) and give the unreleased block in `CHANGELOG.md` its
+   version heading and date. A version that never shipped keeps its own
+   heading, retitled `## X.Y.Z — unreleased (folded into <released>)`, so
+   the file still records which construct arrived in which spec minor.
+   Check the version claims that ship *with* the release while you are
+   here: `README.md` is the PyPI project page, and its "the spec is a vN
+   draft" line and Status-and-roadmap list are the two that go stale.
 2. `python3 -m pytest` green; `git tag v<version> && git push --tags`.
 3. Create a GitHub release for the tag; publishing it triggers
    [`publish.yml`](.github/workflows/publish.yml), which builds sdist +
