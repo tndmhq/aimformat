@@ -3191,68 +3191,53 @@ class AimDocument:
                     f"({earlier.id!r}) proposed before it — the anchor's position "
                     "is undecided; resolve that move first"
                 )
-        # a zone split (a move of the anchor block proposed between two
-        # cards) orders the later generation CLOSER to the block; a
-        # later-generation card must therefore not land while an
-        # earlier-generation zone-mate is still pending — its plain insert
-        # afterwards would end up on the wrong side
-        if after is not None:
-            sec0 = self._state.section("aim-proposals")
-            if sec0 is not None:
-                cards0 = list(sec0.elements())
-                by_id0 = {c.get("id"): c for c in cards0}
-                try:
-                    ordered0 = [p.id for p in resolution_order(self.proposals)]
-                except _ChainedAddCycle:
-                    ordered0 = [p.id for p in self.proposals]
-                pos0 = {pid: i for i, pid in enumerate(ordered0)}
-                big0 = len(pos0) + 1
-                own_pos = pos0.get(prop.id, big0)
-                move_pos = [
-                    pos0.get(c.get("id") or "", big0)
-                    for c in cards0
-                    if c.get("data-action") == "move" and c.get("data-for") == after
-                ]
-                for c in cards0:
-                    if c.get("id") == prop.id or c.get("data-action") not in ("add", "move"):
-                        continue
-                    if self._card_zone(c, by_id0) != (container, after, shell):
-                        continue
-                    holder = self._zone_holder(c, by_id0)
-                    other_el = holder if holder is not None else c
-                    other_pos = pos0.get(other_el.get("id") or "", big0)
-                    split = other_pos < own_pos and any(other_pos < mp < own_pos for mp in move_pos)
-                    if split:
-                        raise InvalidOperation(
-                            f"proposal {prop.id!r} sits on the later side of a zone "
-                            f"split of {after!r}, while {c.get('id')!r} from the "
-                            "earlier side is still pending — resolve that card first"
-                        )
-        # the same undecidability from the other side: an EARLIER-proposed
-        # pending move landing in this zone means whether its block becomes
-        # this card's neighbor is unknown until that move resolves
-        sec = self._state.section("aim-proposals")
-        if sec is not None:
-            cards = list(sec.elements())
-            by_id = {c.get("id"): c for c in cards}
+        # one lane scan powers both remaining guards: (a) a zone split (a
+        # PENDING move of the anchor block between two cards) orders the
+        # later generation closer to the block, so a later-generation card
+        # must not land while an earlier-generation zone-mate is pending;
+        # (b) an EARLIER-proposed pending move landing in this zone means
+        # whether its block becomes this card's neighbor is unknown until
+        # that move resolves
+        sec0 = self._state.section("aim-proposals")
+        if sec0 is not None:
+            cards0 = list(sec0.elements())
+            by_id0 = {c.get("id"): c for c in cards0}
+            holder0, zone0 = self._zone_maps(cards0, by_id0)
             try:
-                ordered = [p.id for p in resolution_order(self.proposals)]
+                ordered0 = [p.id for p in resolution_order(self.proposals)]
             except _ChainedAddCycle:
-                ordered = [p.id for p in self.proposals]
-            if prop.id in ordered:
-                earlier_ids = set(ordered[: ordered.index(prop.id)])
-                key = (container, after, shell)
-                for c in cards:
-                    if (
-                        c.get("data-action") == "move"
-                        and c.get("id") in earlier_ids
-                        and self._card_zone(c, by_id) == key
-                    ):
+                ordered0 = [p.id for p in self.proposals]
+            pos0 = {pid: i for i, pid in enumerate(ordered0)}
+            big0 = len(pos0) + 1
+            own_pos = pos0.get(prop.id, big0)
+            key = (container, after, shell)
+            move_pos = [
+                pos0.get(c.get("id") or "", big0)
+                for c in cards0
+                if c.get("data-action") == "move" and c.get("data-for") == after
+            ]
+            for c in cards0:
+                cid0 = c.get("id") or ""
+                if cid0 == prop.id or c.get("data-action") not in ("add", "move"):
+                    continue
+                if c.get("data-action") == "move" and pos0.get(cid0, big0) < own_pos:
+                    if zone0.get(cid0) == key:
                         raise InvalidOperation(
                             f"anchor zone of proposal {prop.id!r} is the destination "
-                            f"of pending move {c.get('id')!r} proposed earlier — the "
+                            f"of pending move {cid0!r} proposed earlier — the "
                             "zone's content is undecided; resolve that move first"
                         )
+                if after is None or zone0.get(cid0) != key:
+                    continue
+                holder = holder0.get(cid0)
+                other_el = holder if holder is not None else c
+                other_pos = pos0.get(other_el.get("id") or "", big0)
+                if other_pos < own_pos and any(other_pos < mp < own_pos for mp in move_pos):
+                    raise InvalidOperation(
+                        f"proposal {prop.id!r} sits on the later side of a zone "
+                        f"split of {after!r}, while {cid0!r} from the "
+                        "earlier side is still pending — resolve that card first"
+                    )
         return Anchor(container, after, shell=shell)
 
     def _earlier_pending_move_of(
@@ -3382,6 +3367,56 @@ class AimDocument:
     def _payload_root_id(self, payload: str) -> str:
         nodes = [n for n in parse_fragment(payload) if isinstance(n, Element)]
         return (nodes[0].chunk_id or nodes[0].container_id or "") if nodes else ""
+
+    @staticmethod
+    def _zone_maps(
+        cards: list[Element], by_id: dict[str | None, Element]
+    ) -> tuple[
+        dict[str, Element | None],
+        dict[str, tuple[str, str | None, str | None] | None],
+    ]:
+        """Holder and zone for every card, path-compressed: each walked
+        chain memoizes its result onto every member, so a long chain costs
+        one traversal instead of one per member (a per-card chase made
+        accept_all cubic — review finding)."""
+        holder_of: dict[str, Element | None] = {}
+        zone_of: dict[str, tuple[str, str | None, str | None] | None] = {}
+        for c in cards:
+            if (c.get("id") or "") in holder_of:
+                continue
+            path: list[str] = []
+            walk_seen: set[str] = set()
+            cur = c
+            holder: Element | None = None
+            zone: tuple[str, str | None, str | None] | None = None
+            while True:
+                ccid = cur.get("id") or ""
+                if ccid in holder_of:  # memoized suffix from an earlier walk
+                    holder = holder_of[ccid]
+                    zone = zone_of[ccid]
+                    break
+                after = cur.get("data-anchor-after")
+                if after is None or not ids.is_valid_proposal_id(after):
+                    path.append(ccid)
+                    holder = cur
+                    zone = (
+                        cur.get("data-anchor-container") or "body",
+                        after,
+                        cur.get("data-anchor-shell"),
+                    )
+                    break
+                if ccid in walk_seen:  # foreign cycle: the whole path is dead
+                    break
+                walk_seen.add(ccid)
+                path.append(ccid)
+                parent = by_id.get(after)
+                if parent is None or parent.get("data-action") not in ("add", "move"):
+                    break  # dangling or non-position parent: path is dead
+                cur = parent
+            for walked in path:
+                holder_of[walked] = holder
+                zone_of[walked] = zone
+        return holder_of, zone_of
 
     @staticmethod
     def _zone_holder(card: Element, by_id: dict[str | None, Element]) -> Element | None:
@@ -3598,14 +3633,11 @@ class AimDocument:
 
         # one pass over the lane: holders, zones, and pending-move positions
         # by target — same_zone_side and the rebind scan below stay O(lane)
-        # per acceptance instead of rescanning per candidate
-        holder_of: dict[str, Element | None] = {}
-        zone_of: dict[str, tuple[str, str | None, str | None] | None] = {}
+        # per acceptance, with chain walks path-compressed in _zone_maps
+        holder_of, zone_of = self._zone_maps(cards, by_id)
         pending_move_pos: dict[str, list[int]] = {}
         for c in cards:
             cid = c.get("id") or ""
-            holder_of[cid] = self._zone_holder(c, by_id)
-            zone_of[cid] = self._card_zone(c, by_id)
             if c.get("data-action") == "move" and c.get("data-for"):
                 pending_move_pos.setdefault(c.get("data-for") or "", []).append(pos_of(cid))
 
