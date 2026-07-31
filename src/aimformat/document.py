@@ -1787,6 +1787,9 @@ class AimDocument:
         if before is None:
             raise TargetNotFound(f"no chunk {cid!r}")
         anchor = self._anchor_of(cid)
+        self._guard_geometry_dependents(None, vacated_block=cid, incoming_dst=None)
+        if self._cards_anchored_on(cid):
+            self._guard_dissolve_target(cid, anchor, None)
         self._state.remove(cid)
         self._rebind_removed_anchor(cid, anchor)
         data = {
@@ -2314,9 +2317,15 @@ class AimDocument:
         return proposal
 
     def _supersede_if_pending(
-        self, target: str, new_pid: str, author: Actor, at: str | None
+        self,
+        target: str,
+        new_pid: str,
+        author: Actor,
+        at: str | None,
+        *,
+        actions: tuple[str, ...] = ("modify", "delete"),
     ) -> None:
-        for p in self._superseded_by_new(target):
+        for p in self._superseded_by_new(target, actions=actions):
             self._resolve_retaining_paint(
                 p,
                 decision="superseded",
@@ -2325,11 +2334,12 @@ class AimDocument:
                 at=at,
             )
 
-    def _superseded_by_new(self, target: str) -> list[Proposal]:
-        """The pending cards a new modify/delete proposal on *target* replaces."""
-        return [
-            p for p in self.proposals if p.target == target and p.action in ("modify", "delete")
-        ]
+    def _superseded_by_new(
+        self, target: str, *, actions: tuple[str, ...] = ("modify", "delete")
+    ) -> list[Proposal]:
+        """The pending cards a new proposal on *target* replaces (§5.4):
+        modify/delete replace each other; a move replaces a pending move."""
+        return [p for p in self.proposals if p.target == target and p.action in actions]
 
     def _require_current_target(self, target: str) -> None:
         """Proposal targets must exist in the CURRENT document (lint P008).
@@ -2572,18 +2582,26 @@ class AimDocument:
                 target, author=author, container=container, after=after, shell=shell, at=at
             )
         )
-        projected_anchor = self._projected_operation(f"new move of {target!r}", validate)
-        anchor = self._card_position_anchor("move", projected_anchor)
-        return self._new_card(
-            action="move",
-            author=author,
-            target=target,
-            payload=None,
-            anchor=anchor,
-            explanation=explanation,
-            depends_on=None,
-            at=at,
+        projected_anchor = self._projected_operation(
+            f"new move of {target!r}",
+            validate,
+            exclude=[p.id for p in self._superseded_by_new(target, actions=("move",))],
         )
+        anchor = self._card_position_anchor("move", projected_anchor)
+        pid = self._new_proposal_id()
+        with self.batch():  # the supersede + the new card are one intention
+            self._supersede_if_pending(target, pid, author, at, actions=("move",))
+            return self._new_card(
+                action="move",
+                author=author,
+                target=target,
+                payload=None,
+                anchor=anchor,
+                explanation=explanation,
+                depends_on=None,
+                at=at,
+                pid=pid,
+            )
 
     def amend_proposal(
         self,
@@ -2920,18 +2938,24 @@ class AimDocument:
         elif prop.explanation:
             data["explanation"] = prop.explanation
 
+        effective_anchor: Anchor | None = None
+        move_source: Anchor | None = None
+        noop_move = False
+        later_ids = self._later_card_ids(prop)
         if prop.action == "add":
             anchor = Anchor(
                 prop.anchor_container or "body", prop.anchor_after, shell=prop.anchor_shell
             )
             data["target"] = self._payload_root_id(prop.payload_html or "")
             data["proposed"] = prop.payload_html
+            if decision == "accepted":
+                # a card anchored on a still-pending card may be accepted
+                # first: it lands at the chain's zone, and the parent —
+                # inserting directly after the same zone anchor — lands in
+                # front of it later. Record the anchor actually used.
+                anchor = effective_anchor = self._effective_anchor(prop)
             data["anchor"] = anchor.to_obj()
             if decision == "accepted":
-                if anchor.after and ids.is_valid_proposal_id(anchor.after):
-                    raise InvalidOperation(
-                        f"anchor proposal {anchor.after!r} is still pending — resolve it first"
-                    )
                 payload = applied if applied is not None else prop.payload_html
                 # externally-authored cards bypass creation-time
                 # normalization: re-validate the FULL payload (root marker
@@ -2989,6 +3013,11 @@ class AimDocument:
                 # fail with intent (reject/supersede stay available)
                 _no_delete_move(prop.target or "", "delete proposal")
                 removed_anchor = self._anchor_of(prop.target or "")
+                self._guard_geometry_dependents(
+                    prop, vacated_block=prop.target or "", incoming_dst=None
+                )
+                if self._cards_anchored_on(prop.target or ""):
+                    self._guard_dissolve_target(prop.target or "", removed_anchor, prop)
                 data["anchor"] = removed_anchor.to_obj()
                 self._state.remove(prop.target or "")
                 self._rebind_removed_anchor(prop.target or "", removed_anchor)
@@ -2996,6 +3025,8 @@ class AimDocument:
                 dst = Anchor(
                     prop.anchor_container or "body", prop.anchor_after, shell=prop.anchor_shell
                 )
+                if decision == "accepted":
+                    dst = effective_anchor = self._effective_anchor(prop)
                 data["to"] = dst.to_obj()
                 if decision == "accepted":
                     _no_delete_move(prop.target or "", "move proposal")
@@ -3007,6 +3038,66 @@ class AimDocument:
                             "enclosing target instead"
                         )
                     src = self._anchor_of(prop.target or "")
+                    if src.after is not None:
+                        hazard = self._earlier_pending_move_of(
+                            src.after, prop, actions=("move", "delete")
+                        )
+                        if hazard is not None:
+                            # whether this move is a real relocation or a
+                            # positional no-op depends on the fate of its
+                            # source predecessor — undecided until that
+                            # earlier card resolves
+                            raise InvalidOperation(
+                                f"move {prop.id!r} cannot resolve while pending "
+                                f"{hazard.action} {hazard.id!r} of its source "
+                                f"predecessor {src.after!r} is undecided — "
+                                "resolve that card first"
+                            )
+                    if dst.after == prop.target:
+                        if prop.anchor_after is not None and ids.is_valid_proposal_id(
+                            prop.anchor_after
+                        ):
+                            # the self-anchor came from CHASING a pending
+                            # chain whose zone is this move's own target:
+                            # whether the block ends up before or after the
+                            # chain's payloads depends on those cards —
+                            # undecided until they resolve
+                            raise InvalidOperation(
+                                f"move {prop.id!r} chains onto pending "
+                                f"{prop.anchor_after!r} in the zone of its own "
+                                f"target {prop.target!r} — resolve that card first"
+                            )
+                        # a REJECT fallback can point a move at its own target
+                        # ("after where the rejected parent would have been"):
+                        # the block is already there — a harmless no-op, not
+                        # an error. Nothing lands and nothing vacates, so no
+                        # rebinds fire either.
+                        dst = src
+                        data["to"] = dst.to_obj()
+                        effective_anchor = None
+                        noop_move = True
+                    elif (src.container, src.after, src.shell) == (
+                        dst.container,
+                        dst.after,
+                        dst.shell,
+                    ):
+                        # destination == current position: the block never
+                        # leaves, so nothing vacates and nothing lands anew
+                        effective_anchor = None
+                        noop_move = True
+                    else:
+                        self._guard_geometry_dependents(
+                            prop, vacated_block=prop.target or "", incoming_dst=dst
+                        )
+                        vacated = [
+                            c
+                            for c in self._cards_anchored_on(prop.target or "")
+                            if (c.get("id") or "") not in later_ids and c.get("id") != prop.id
+                        ]
+                        if vacated:
+                            self._guard_dissolve_target(prop.target or "", src, prop)
+                            self._guard_vacated_descendants(vacated, later_ids, prop)
+                        move_source = src
                     data["anchor"] = dst.to_obj()
                     data["from"] = src.to_obj()
                     self._state.move(prop.target or "", dst)
@@ -3014,30 +3105,355 @@ class AimDocument:
         # drop the card; rebind dependent position cards anchored on this proposal
         sec = self._state.section("aim-proposals")
         assert sec is not None
-        cards = sec.elements()
-        later_ids = frozenset(c.get("id") or "" for c in cards[cards.index(card) + 1 :])
         sec.children.remove(card)
         if not sec.elements():
             self._state.body.children.remove(sec)
         self._get_history_index().remove_proposal(prop)
-        self._rebind_chained(prop, decision, later_ids=later_ids)
+        self._rebind_chained(
+            prop,
+            decision,
+            later_ids=later_ids,
+            effective=effective_anchor,
+            move_source=move_source,
+            noop_move=noop_move,
+        )
         return self._append_event(data)
+
+    def _later_card_ids(self, prop: Proposal) -> frozenset[str]:
+        """Cards created after *prop*, in dependency-adjusted order.
+
+        ``resolution_order`` is the creation order a foreign file's lane
+        actually resolves in (a chained card physically placed before its
+        parent moves behind it); deriving "later" from the raw DOM slice
+        would make accepted state and the tracked views disagree on such
+        files. A cyclic foreign chain falls back to the physical order —
+        the cycle members themselves are unresolvable either way."""
+        try:
+            ordered = [p.id for p in resolution_order(self.proposals)]
+        except _ChainedAddCycle:
+            ordered = [p.id for p in self.proposals]
+        if prop.id not in ordered:
+            return frozenset()
+        return frozenset(ordered[ordered.index(prop.id) + 1 :])
+
+    def _effective_anchor(self, prop: Proposal) -> Anchor:
+        """The concrete anchor *prop* resolves to, chasing any pending-card
+        chain (§5.4). Position cards accept in any order: a card anchored on
+        a still-pending card lands at the chain's zone, and the parent —
+        inserting directly after the same zone anchor — lands in front of it
+        when it arrives. Two positions genuinely do not resolve and refuse:
+        a dangling/cyclic foreign chain, and an anchor block whose position
+        is itself undecided — an EARLIER-proposed pending move of that block
+        means this card was validated against the block at the move's
+        destination, and accept cannot know whether the move will be
+        accepted (land there) or rejected (stay). Resolve the move first."""
+        container = prop.anchor_container or "body"
+        after = prop.anchor_after
+        shell = prop.anchor_shell
+        seen: set[str] = set()
+        while after is not None and ids.is_valid_proposal_id(after):
+            if after in seen:
+                raise InvalidOperation(
+                    f"anchor chain of proposal {prop.id!r} is cyclic at {after!r}"
+                )
+            seen.add(after)
+            try:
+                parent = self.proposal(after)
+            except AimError as exc:
+                raise InvalidOperation(
+                    f"anchor proposal {after!r} of {prop.id!r} is not pending"
+                ) from exc
+            container = parent.anchor_container or "body"
+            after = parent.anchor_after
+            shell = parent.anchor_shell
+        if after is not None:
+            earlier = self._earlier_pending_move_of(after, prop)
+            if earlier is not None:
+                raise InvalidOperation(
+                    f"anchor {after!r} of proposal {prop.id!r} has a pending move "
+                    f"({earlier.id!r}) proposed before it — the anchor's position "
+                    "is undecided; resolve that move first"
+                )
+        # a zone split (a move of the anchor block proposed between two
+        # cards) orders the later generation CLOSER to the block; a
+        # later-generation card must therefore not land while an
+        # earlier-generation zone-mate is still pending — its plain insert
+        # afterwards would end up on the wrong side
+        if after is not None:
+            sec0 = self._state.section("aim-proposals")
+            if sec0 is not None:
+                cards0 = list(sec0.elements())
+                by_id0 = {c.get("id"): c for c in cards0}
+                own_stamp = prop.at or ""
+                stamps = [
+                    c.get("data-at") or ""
+                    for c in cards0
+                    if c.get("data-action") == "move" and c.get("data-for") == after
+                ]
+                stamps += [
+                    ev.get("proposed_at") or ""
+                    for ev in self._history_events()
+                    if ev.kind == "resolution" and ev.action == "move" and ev.target == after
+                ]
+                for c in cards0:
+                    if c.get("id") == prop.id or c.get("data-action") not in ("add", "move"):
+                        continue
+                    if self._card_zone(c, by_id0) != (container, after, shell):
+                        continue
+                    holder = self._zone_holder(c, by_id0)
+                    other = ((holder.get("data-at") or "") if holder is not None else "") or (
+                        c.get("data-at") or ""
+                    )
+                    if other < own_stamp and any(other < s < own_stamp for s in stamps):
+                        raise InvalidOperation(
+                            f"proposal {prop.id!r} sits on the later side of a zone "
+                            f"split of {after!r}, while {c.get('id')!r} from the "
+                            "earlier side is still pending — resolve that card first"
+                        )
+        # the same undecidability from the other side: an EARLIER-proposed
+        # pending move landing in this zone means whether its block becomes
+        # this card's neighbor is unknown until that move resolves
+        sec = self._state.section("aim-proposals")
+        if sec is not None:
+            cards = list(sec.elements())
+            by_id = {c.get("id"): c for c in cards}
+            try:
+                ordered = [p.id for p in resolution_order(self.proposals)]
+            except _ChainedAddCycle:
+                ordered = [p.id for p in self.proposals]
+            if prop.id in ordered:
+                earlier_ids = set(ordered[: ordered.index(prop.id)])
+                key = (container, after, shell)
+                for c in cards:
+                    if (
+                        c.get("data-action") == "move"
+                        and c.get("id") in earlier_ids
+                        and self._card_zone(c, by_id) == key
+                    ):
+                        raise InvalidOperation(
+                            f"anchor zone of proposal {prop.id!r} is the destination "
+                            f"of pending move {c.get('id')!r} proposed earlier — the "
+                            "zone's content is undecided; resolve that move first"
+                        )
+        return Anchor(container, after, shell=shell)
+
+    def _earlier_pending_move_of(
+        self,
+        target: str,
+        prop: Proposal | None,
+        *,
+        actions: tuple[str, ...] = ("move",),
+    ) -> Proposal | None:
+        """The pending *actions* card on *target* proposed before *prop*
+        (``None`` = "now", i.e. any pending one counts)."""
+        move = next(
+            (p for p in self.proposals if p.action in actions and p.target == target),
+            None,
+        )
+        if move is None or prop is None:
+            return move
+        if move.id == prop.id:
+            return None
+        try:
+            ordered = [p.id for p in resolution_order(self.proposals)]
+        except _ChainedAddCycle:
+            ordered = [p.id for p in self.proposals]
+        if prop.id not in ordered or move.id not in ordered:
+            return None
+        return move if ordered.index(move.id) < ordered.index(prop.id) else None
+
+    def _guard_vacated_descendants(
+        self, vacated: list[Element], later_ids: frozenset[str], prop: Proposal
+    ) -> None:
+        """Refuse a vacation whose dissolved cards still carry chain
+        descendants created AFTER the move: the descendants track the
+        block's destination while the dissolve tracks its source, so a
+        later reject of the dissolved card would hand them the wrong side.
+        Creation order resolves the dissolved card before the move, so an
+        in-order resolution never hits this."""
+        sec = self._state.section("aim-proposals")
+        assert sec is not None
+        children: dict[str, list[Element]] = {}
+        for c in sec.elements():
+            after = c.get("data-anchor-after")
+            if after is not None and ids.is_valid_proposal_id(after):
+                children.setdefault(after, []).append(c)
+        queue = [c.get("id") or "" for c in vacated]
+        seen: set[str] = set()
+        while queue:
+            pid = queue.pop()
+            if pid in seen:
+                continue
+            seen.add(pid)
+            for child in children.get(pid, ()):
+                cid = child.get("id") or ""
+                if cid in later_ids:
+                    raise InvalidOperation(
+                        f"accepting {prop.id!r} vacates the anchor of {pid!r}, "
+                        f"which still has a dependent card ({cid!r}) proposed "
+                        "after this move — resolve the anchored cards first"
+                    )
+                queue.append(cid)
+
+    def _guard_geometry_dependents(
+        self, prop: Proposal | None, *, vacated_block: str, incoming_dst: Anchor | None
+    ) -> None:
+        """Refuse resolving a move/delete while an EARLIER-proposed pending
+        move's source geometry hangs on it: a move whose target currently
+        sits directly after the vacated block (its source predecessor is
+        about to vanish), or directly after the incoming destination (its
+        source predecessor is about to become the moved block). Creation
+        order resolves the earlier move first, so an in-order resolution
+        never hits this; out of order, the geometry the earlier move was
+        proposed against would be silently destroyed."""
+        for p in self.proposals:
+            if p.action != "move" or not p.target:
+                continue
+            if prop is not None and p.id == prop.id:
+                continue
+            if (
+                self._earlier_pending_move_of(p.target, prop, actions=("move",)) is None
+                and prop is not None
+            ):
+                continue
+            if not self._state.exists(p.target):
+                continue
+            pred = self._anchor_of(p.target).after
+            hit = pred == vacated_block or (
+                incoming_dst is not None
+                and pred == incoming_dst.after
+                and p.target != vacated_block
+            )
+            if hit:
+                who = f"accepting {prop.id!r}" if prop is not None else "this edit"
+                raise InvalidOperation(
+                    f"{who} would change the source geometry of pending move "
+                    f"{p.id!r} (its target {p.target!r} sits directly after the "
+                    "affected position) — resolve that move first"
+                )
+
+    def _cards_anchored_on(self, block: str) -> list[Element]:
+        """Pending position cards whose recorded anchor is *block*."""
+        sec = self._state.section("aim-proposals")
+        if sec is None:
+            return []
+        return [
+            c
+            for c in sec.elements()
+            if c.get("data-anchor-after") == block and c.get("data-action") in ("add", "move")
+        ]
+
+    def _guard_dissolve_target(self, block: str, anchor: Anchor, prop: Proposal | None) -> None:
+        """Refuse a removal/vacation whose dissolve would merge cards onto a
+        block whose own position is undecided — an earlier pending move of
+        the merge target means the merged cards' landing depends on that
+        move's outcome. Creation order resolves the move first, so an
+        accept only trips this out of order; a direct edit trips it while
+        any such move is pending."""
+        if anchor.after is None:
+            return
+        mv = self._earlier_pending_move_of(anchor.after, prop)
+        if mv is not None:
+            who = f"accepting {prop.id!r}" if prop is not None else f"removing {block!r}"
+            raise InvalidOperation(
+                f"{who} would rebind cards anchored on {block!r} onto "
+                f"{anchor.after!r}, whose position is undecided (pending move "
+                f"{mv.id!r}) — resolve that move first"
+            )
 
     def _payload_root_id(self, payload: str) -> str:
         nodes = [n for n in parse_fragment(payload) if isinstance(n, Element)]
         return (nodes[0].chunk_id or nodes[0].container_id or "") if nodes else ""
 
-    def _rebind_removed_anchor(self, removed: str, anchor: Anchor) -> None:
-        """A removed block takes its position with it: pending position cards
-        anchored on it rebind to the removed block's own anchor — the exact
-        counterpart of chained-add rebinding on a rejected parent. Without
-        this, one delete of an anchor block leaves the whole pending lane
-        unprojectable (every subsequent propose fails)."""
+    @staticmethod
+    def _zone_holder(card: Element, by_id: dict[str | None, Element]) -> Element | None:
+        """The card in the chain that carries the concrete zone anchor (the
+        card itself when directly anchored); None on a dangling or cyclic
+        foreign chain."""
+        seen: set[str] = set()
+        while True:
+            after = card.get("data-anchor-after")
+            if after is None or not ids.is_valid_proposal_id(after):
+                return card
+            cid = card.get("id") or ""
+            parent = by_id.get(after)
+            if parent is None or cid in seen:
+                return None
+            seen.add(cid)
+            card = parent
+
+    @staticmethod
+    def _card_zone(
+        card: Element, by_id: dict[str | None, Element]
+    ) -> tuple[str, str | None, str | None] | None:
+        """Concrete anchor tuple this card's position chain bottoms out at;
+        None for a dangling or cyclic foreign chain (reconcile's territory,
+        never rebound here)."""
+        seen: set[str] = set()
+        while True:
+            after = card.get("data-anchor-after")
+            if after is None or not ids.is_valid_proposal_id(after):
+                return (
+                    card.get("data-anchor-container") or "body",
+                    after,
+                    card.get("data-anchor-shell"),
+                )
+            cid = card.get("id") or ""
+            parent = by_id.get(after)
+            if parent is None or cid in seen:
+                return None
+            seen.add(cid)
+            card = parent
+
+    def _rebind_removed_anchor(
+        self, removed: str, anchor: Anchor, *, only: set[str | None] | None = None
+    ) -> None:
+        """A block leaving its position takes the zone behind it along.
+
+        Pending position cards anchored on it rebind onto the LAST pending
+        position card of the zone they merge into — a proposal-id chain, so
+        their blocks keep landing after that whole zone, preserving the
+        geometric order the removal dissolved — or directly onto the block's
+        own anchor when the zone has no pending cards. Runs for deletes
+        (every anchored card; without a rebind one delete leaves the whole
+        lane unprojectable) and for accepted moves (*only* the cards created
+        before the move: they meant "after the block where it was"; cards
+        created after it were proposed against the moved projection and
+        follow the block)."""
         sec = self._state.section("aim-proposals")
         if sec is None:
             return
-        for card in sec.elements():
-            if card.get("data-anchor-after") != removed:
+        cards = list(sec.elements())
+        dissolved_ids = {
+            c.get("id")
+            for c in cards
+            if c.get("data-anchor-after") == removed and (only is None or c.get("id") in only)
+        }
+        if not dissolved_ids:
+            return
+        by_id = {c.get("id"): c for c in cards}
+        key = (anchor.container, anchor.after, anchor.shell)
+        tail: str | None = None
+        for c in cards:
+            if (
+                c.get("id") not in dissolved_ids
+                and c.get("data-action") in ("add", "move")
+                and self._card_zone(c, by_id) == key
+            ):
+                tail = c.get("id")
+        for card in cards:
+            if card.get("id") not in dissolved_ids:
+                continue
+            # a dissolved MOVE whose own target IS the merge-zone block must
+            # not chain into that zone (its chase would bottom at its own
+            # target — an undecidable state creation order could then hit):
+            # bind it concretely instead, where it accepts as a harmless
+            # no-op ("after where the removed block was" = stay put)
+            if tail is not None and not (
+                card.get("data-action") == "move" and card.get("data-for") == anchor.after
+            ):
+                card.set("data-anchor-after", tail)
+                card.remove_attr("data-anchor-shell")  # the chain's zone supplies it
                 continue
             if anchor.after is None:
                 card.remove_attr("data-anchor-after")
@@ -3049,7 +3465,14 @@ class AimDocument:
                 card.set("data-anchor-shell", anchor.shell)
 
     def _rebind_chained(
-        self, resolved: Proposal, decision: str, *, later_ids: frozenset[str] = frozenset()
+        self,
+        resolved: Proposal,
+        decision: str,
+        *,
+        later_ids: frozenset[str] = frozenset(),
+        effective: Anchor | None = None,
+        move_source: Anchor | None = None,
+        noop_move: bool = False,
     ) -> None:
         """Materialize or bypass a pending-add position dependency.
 
@@ -3070,57 +3493,154 @@ class AimDocument:
         if sec is None:
             return
         landed: str | None = None
-        if decision == "accepted":
+        if decision == "accepted" and not noop_move:
             if resolved.action == "add":
                 landed = self._payload_root_id(resolved.payload_html or "") or None
             elif resolved.action == "move":
                 landed = resolved.target
+        # the key is where the block actually landed: for a card accepted
+        # ahead of its chain parent that is the chain's zone, not the raw
+        # proposal-id anchor still on the card
         anchor_key = (
-            resolved.anchor_container or "body",
-            resolved.anchor_after,
-            resolved.anchor_shell,
+            (effective.container, effective.after, effective.shell)
+            if effective is not None
+            else (
+                resolved.anchor_container or "body",
+                resolved.anchor_after,
+                resolved.anchor_shell,
+            )
         )
         cards = list(sec.elements())
         by_id = {c.get("id"): c for c in cards}
 
-        def zone(card: Element, seen: set[str]) -> tuple[str, str | None, str | None] | None:
-            """Concrete anchor tuple this card's position chain bottoms out
-            at; None for a dangling or cyclic foreign chain (reconcile's
-            territory, never rebound here)."""
-            after = card.get("data-anchor-after")
-            if after is not None and ids.is_valid_proposal_id(after):
-                cid = card.get("id") or ""
-                parent = by_id.get(after)
-                if parent is None or cid in seen:
-                    return None
-                seen.add(cid)
-                return zone(parent, seen)
-            return (
-                card.get("data-anchor-container") or "body",
-                after,
-                card.get("data-anchor-shell"),
-            )
+        # a chained card inherits its chain HOLDER's view of the zone block
+        # (the pending card that carries the concrete anchor): its zone rank
+        # is (holder stamp, own stamp) — holder first, so a card chained onto
+        # a late tail ranks behind the tail's zone even if itself early, and
+        # siblings under one parent still order by their own stamps
+        resolved_stamp = resolved.at or ""
+        if resolved.anchor_after is not None and ids.is_valid_proposal_id(resolved.anchor_after):
+            parent = by_id.get(resolved.anchor_after)
+            rh = self._zone_holder(parent, by_id) if parent is not None else None
+            if rh is not None:
+                resolved_stamp = rh.get("data-at") or resolved_stamp
+        # rank primary = max(holder, own): a normal forward chain (parent
+        # proposed first) ranks by the card's own stamp, while a
+        # dissolve-created BACKWARD chain (parent proposed later) ranks by
+        # the holder it now lands behind; leaf stamp breaks ties among
+        # siblings under one parent
+        resolved_rank = (
+            max(resolved_stamp, resolved.at or ""),
+            resolved.at or "",
+        )
 
-        # zones are computed against the lane as it stands when *resolved*
-        # drops out, before this round's rebinds mutate any anchors
-        rebound = [
+        def zone_rank(card: Element) -> tuple[str, str]:
+            holder = self._zone_holder(card, by_id)
+            own = card.get("data-at") or ""
+            if holder is None:
+                return (own, own)
+            return (max(holder.get("data-at") or own, own), own)
+
+        def move_stamps_of(block: str) -> list[str]:
+            """Proposal times of every move of *block* — pending cards AND
+            resolved ones from history. Using the permanent record makes the
+            split a pure function of the lane, independent of when between
+            the two accepts the move happened to resolve."""
+            out = [
+                c.get("data-at") or ""
+                for c in cards
+                if c.get("data-action") == "move" and c.get("data-for") == block
+            ]
+            out += [
+                ev.get("proposed_at") or ""
+                for ev in self._history_events()
+                if ev.kind == "resolution" and ev.action == "move" and ev.target == block
+            ]
+            return out
+
+        def same_zone_side(card: Element) -> bool:
+            """A move of the zone's anchor block PROPOSED between the two
+            cards' chain holders splits the zone — whatever that move's
+            outcome: the holders made their claims against potentially
+            different geometries and must not group as siblings."""
+            block = anchor_key[1]
+            if block is None:
+                return True
+            holder = self._zone_holder(card, by_id)
+            if holder is None:
+                return True
+            holder_stamp = holder.get("data-at") or ""
+            return not any(resolved_stamp < s < holder_stamp for s in move_stamps_of(block))
+
+        # the resolved card's own chain ancestors must never be captured by
+        # the same-zone rebind: a child accepted first lands at the zone
+        # precisely so its parents can land IN FRONT of it later — and a
+        # dissolve-chain can make an ancestor LATER-created, so later_ids
+        # alone does not exclude it
+        ancestors: set[str] = set()
+        walk = resolved.anchor_after
+        while walk is not None and ids.is_valid_proposal_id(walk) and walk not in ancestors:
+            ancestors.add(walk)
+            parent_el = by_id.get(walk)
+            if parent_el is None:
+                break
+            walk = parent_el.get("data-anchor-after")
+
+        prelim = [
             card
             for card in cards
             if card.get("data-anchor-after") != resolved.id
             and landed is not None
-            and (card.get("id") or "") in later_ids
+            and zone_rank(card) > resolved_rank
+            and (card.get("id") or "") not in ancestors
             and card.get("data-action") in ("add", "move")
             # a move whose own target just landed must keep its anchor:
             # rebinding it onto `landed` would read "move X after X",
-            # turning a validated no-op repeat into an unresolvable card
+            # turning it into an unresolvable card
             and card.get("data-for") != landed
-            and zone(card, set()) == anchor_key
+            and self._card_zone(card, by_id) == anchor_key
+            and same_zone_side(card)
         ]
+        # a chained candidate whose HOLDER is also being rebound must not be
+        # rewritten too: it follows its holder (rebinding both would flatten
+        # the chain and reverse their order); it detaches only when its
+        # holder stays put
+        prelim_ids = {c.get("id") for c in prelim}
+        rebound = []
+        for card in prelim:
+            holder = self._zone_holder(card, by_id)
+            if (
+                holder is not None
+                and holder.get("id") != card.get("id")
+                and holder.get("id") in prelim_ids
+            ):
+                continue
+            rebound.append(card)
+        # an accepted move vacates a position: a card created BEFORE the move
+        # and anchored on its target meant "after the block where it was" —
+        # in creation order it lands before the move applies — so its zone
+        # dissolves into the source zone, exactly like a deleted anchor.
+        # Later-created cards keep the anchor: they were proposed against
+        # the projection with the block already at its destination, and
+        # follow it there.
+        vacated_ids: set[str | None] = set()
+        if move_source is not None and resolved.target:
+            vacated_ids = {
+                card.get("id")
+                for card in cards
+                if card.get("data-anchor-after") == resolved.target
+                and (card.get("id") or "") not in later_ids
+                and card.get("data-action") in ("add", "move")
+            }
         for card in cards:
             if card.get("data-anchor-after") == resolved.id:
                 if decision == "accepted":
-                    new_after = self._payload_root_id(resolved.payload_html or "")
-                    card.set("data-anchor-after", new_after)
+                    new_after = (
+                        resolved.target
+                        if resolved.action == "move"
+                        else self._payload_root_id(resolved.payload_html or "")
+                    )
+                    card.set("data-anchor-after", new_after or "")
                 else:  # rejected/superseded: rebind to the resolved card's anchor
                     if resolved.anchor_after is None:
                         card.remove_attr("data-anchor-after")
@@ -3128,6 +3648,9 @@ class AimDocument:
                         card.set("data-anchor-after", resolved.anchor_after)
         for card in rebound:
             card.set("data-anchor-after", landed)
+        if vacated_ids:
+            assert move_source is not None and resolved.target
+            self._rebind_removed_anchor(resolved.target, move_source, only=vacated_ids)
 
     # -- verification & time travel ----------------------------------------------------------------
     def verify(self) -> list[str]:

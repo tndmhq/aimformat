@@ -257,6 +257,79 @@ class TestResolve:
         assert doc.body_ids == ["intro", "a", "b", "c"]
         assert doc.verify() == []
 
+    def test_chained_move_on_rejected_parent_accepts_as_noop(self):
+        # rejecting the parent rebinds the chained move onto the parent's
+        # anchor — which can be the move's own target ("after where the
+        # parent would have been"). The block is already there: accepting is
+        # a harmless no-op, never an "after itself" error
+        import aimformat as aim
+
+        doc = aim.new_document(title="T")
+        for i, cid in enumerate(("x", "y", "z")):
+            doc.add_chunk(f'<p data-aim="{cid}">{cid}</p>', author=BOT, at=ts(i))
+        d = doc.propose_delete("z", author=BOT, at=ts(3))
+        n = doc.propose_add('<p data-aim="n">N.</p>', author=BOT, at=ts(4))
+        assert n.anchor_after == "y"  # LAST projected without the deleted z
+        m = doc.propose_move("y", author=BOT, container="body", at=ts(5))
+        assert m.anchor_after == n.id  # LAST projected onto the pending tail
+        doc.reject(n.id, decided_by=ME, at=ts(6))
+        assert doc.proposal(m.id).anchor_after == "y"
+        doc.reject(d.id, decided_by=ME, at=ts(7))
+        doc.accept(m.id, decided_by=ME, at=ts(8))
+        assert doc.body_ids == ["x", "y", "z"]
+        assert doc.verify() == []
+
+    def test_move_vacation_dissolves_earlier_anchored_cards(self):
+        # an accepted move vacates its source: a card created BEFORE the
+        # move and anchored on its target chains onto the merge zone's
+        # pending tail, exactly like a deleted anchor — creation order
+        # survives accepting the move first
+        import aimformat as aim
+
+        def lane():
+            doc = aim.new_document(title="T")
+            for i, cid in enumerate(("x", "y", "z")):
+                doc.add_chunk(f'<p data-aim="{cid}">{cid}</p>', author=BOT, at=ts(i))
+            n3 = doc.propose_add('<p data-aim="n3">3.</p>', author=BOT, after="x", at=ts(3))
+            n4 = doc.propose_add('<p data-aim="n4">4.</p>', author=BOT, after=None, at=ts(4))
+            m = doc.propose_move("x", author=BOT, container="body", after="z", at=ts(5))
+            return doc, n3, n4, m
+
+        doc, n3, n4, m = lane()
+        for p in (n3, n4, m):
+            doc.accept(p.id, decided_by=ME, at=ts(6))
+        truth = doc.body_ids
+
+        doc, n3, n4, m = lane()
+        doc.accept(m.id, decided_by=ME, at=ts(6))
+        assert doc.proposal(n3.id).anchor_after == n4.id
+        doc.accept(n3.id, decided_by=ME, at=ts(7))
+        doc.accept(n4.id, decided_by=ME, at=ts(8))
+        assert doc.body_ids == truth == ["n4", "n3", "y", "z", "x"]
+        assert doc.verify() == []
+
+    def test_dissolve_onto_move_pending_block_refuses(self):
+        # deleting y would merge A onto x, whose own position is undecided
+        # (earlier pending move): the delete's accept refuses out of order,
+        # and the completed order converges with creation order
+        import aimformat as aim
+
+        doc = aim.new_document(title="T")
+        for i, cid in enumerate(("x", "y", "z")):
+            doc.add_chunk(f'<p data-aim="{cid}">{cid}</p>', author=BOT, at=ts(i))
+        m = doc.propose_move("x", author=BOT, container="body", after="z", at=ts(3))
+        a = doc.propose_add('<p data-aim="a">A.</p>', author=BOT, after="y", at=ts(4))
+        d = doc.propose_delete("y", author=BOT, at=ts(5))
+        before = doc.dumps()
+        with pytest.raises(InvalidOperation, match="resolve that move first"):
+            doc.accept(d.id, decided_by=ME, at=ts(6))
+        assert doc.dumps() == before
+        doc.accept(m.id, decided_by=ME, at=ts(6))
+        doc.accept(d.id, decided_by=ME, at=ts(7))
+        doc.accept(a.id, decided_by=ME, at=ts(8))
+        assert doc.body_ids == ["a", "z", "x"]
+        assert doc.verify() == []
+
     def test_direct_delete_rebinds_pending_cards_to_predecessor(self, basic_doc):
         # deleting the block a card is anchored on must not dangle the card
         # (one dangler makes the whole lane unprojectable): it rebinds to the
@@ -277,24 +350,80 @@ class TestResolve:
         assert basic_doc.body_ids == ["n1", "intro"]
         assert basic_doc.verify() == []
 
-    def test_repeated_identical_moves_stay_resolvable(self, basic_doc):
-        # two identical moves (second validates as a projected no-op): the
-        # same-anchor rebind must not point the later card at its own target,
-        # which would make an SDK-validated lane unresolvable (P1 review
-        # finding on this fix)
+    def test_new_move_supersedes_pending_move_of_same_target(self, basic_doc):
+        # §5.4: a move replaces a pending move of the same target, exactly as
+        # modify/delete replace each other — the latest instruction counts.
+        # (Twin moves used to coexist and made the lane's outcome depend on
+        # the acceptance sequence — P2 review finding on this fix.)
         m1 = basic_doc.propose_move("h1", author=BOT, container="body", after="intro", at=ts(7))
         m2 = basic_doc.propose_move("h1", author=BOT, container="body", after="intro", at=ts(8))
-        basic_doc.accept(m1.id, decided_by=ME, at=ts(9))
-        assert basic_doc.proposal(m2.id).anchor_after == "intro"
-        basic_doc.accept(m2.id, decided_by=ME, at=ts(10))
+        assert [p.id for p in basic_doc.proposals] == [m2.id]
+        ev = next(e for e in basic_doc.history if e.get("proposal") == m1.id)
+        assert ev.get("decision") == "superseded" and ev.get("superseded_by") == m2.id
+        basic_doc.accept(m2.id, decided_by=ME, at=ts(9))
         assert basic_doc.body_ids == ["intro", "h1"]
         assert basic_doc.verify() == []
 
-    def test_accept_child_before_parent_raises(self, basic_doc):
-        p1 = basic_doc.propose_add("<p>One.</p>", author=ME, at=ts(7))
-        p2 = basic_doc.propose_add("<p>Two.</p>", author=ME, after=p1.id, at=ts(8))
-        with pytest.raises(InvalidOperation):
-            basic_doc.accept(p2.id, decided_by=ME, at=ts(9))
+    def test_superseded_move_lane_converges_for_any_accept_order(self):
+        import aimformat as aim
+
+        def lane():
+            doc = aim.new_document(title="T")
+            doc.add_chunk('<p data-aim="x">X.</p>', author=BOT, at=ts(0))
+            doc.add_chunk('<p data-aim="z">Z.</p>', author=BOT, at=ts(1))
+            doc.propose_move("x", author=BOT, container="body", after="z", at=ts(2))
+            a = doc.propose_add('<p data-aim="a">A.</p>', author=BOT, after="z", at=ts(3))
+            m2 = doc.propose_move("x", author=BOT, container="body", after="z", at=ts(4))
+            return doc, a, m2
+
+        doc, a, m2 = lane()
+        doc.accept(a.id, decided_by=ME, at=ts(5))
+        doc.accept(m2.id, decided_by=ME, at=ts(6))
+        first = doc.body_ids
+
+        doc, a, m2 = lane()
+        doc.accept(m2.id, decided_by=ME, at=ts(5))
+        doc.accept(a.id, decided_by=ME, at=ts(6))
+        assert doc.body_ids == first == ["z", "a", "x"]
+        assert doc.verify() == []
+
+    def test_accept_child_before_parent_lands_at_the_chain_zone(self, basic_doc):
+        # a chained card may be accepted first (§5.4): it lands at the
+        # chain's zone, and the parent — inserting directly after the same
+        # anchor — lands in front of it when it arrives
+        p1 = basic_doc.propose_add('<p data-aim="n1">One.</p>', author=ME, at=ts(7))
+        p2 = basic_doc.propose_add('<p data-aim="n2">Two.</p>', author=ME, after=p1.id, at=ts(8))
+        basic_doc.accept(p2.id, decided_by=ME, at=ts(9))
+        assert basic_doc.body_ids == ["h1", "intro", "n2"]
+        ev = basic_doc.history[-1]
+        assert ev.get("anchor") == {"after": "intro", "container": "body"}
+        basic_doc.accept(p1.id, decided_by=ME, at=ts(10))
+        assert basic_doc.body_ids == ["h1", "intro", "n1", "n2"]
+        assert basic_doc.verify() == []
+
+    def test_dissolved_zone_chains_onto_merged_zone_tail(self):
+        # review round-3 example: A after y, B after x, then delete y. The
+        # dissolved card chains onto the merged zone's tail card, so its
+        # block keeps landing after that whole zone — under EVERY sequence
+        import itertools
+
+        import aimformat as aim
+
+        def lane():
+            doc = aim.new_document(title="T")
+            for i, cid in enumerate(("x", "y", "z")):
+                doc.add_chunk(f'<p data-aim="{cid}">{cid}</p>', author=BOT, at=ts(i))
+            a = doc.propose_add('<p data-aim="a">A.</p>', author=BOT, after="y", at=ts(3))
+            b = doc.propose_add('<p data-aim="b">B.</p>', author=BOT, after="x", at=ts(4))
+            d = doc.propose_delete("y", author=BOT, at=ts(5))
+            return doc, [a, b, d]
+
+        for order in itertools.permutations(range(3)):
+            doc, cards = lane()
+            for step, i in enumerate(order):
+                doc.accept(cards[i].id, decided_by=ME, at=ts(6 + step))
+            assert doc.body_ids == ["x", "b", "a", "z"], f"order {order}"
+            assert doc.verify() == []
 
     def test_resolution_carries_proposal_metadata(self, basic_doc):
         p = basic_doc.propose_modify(

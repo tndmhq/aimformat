@@ -39,7 +39,7 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from .document import AimDocument, Proposal
+from .document import AimDocument, Proposal, _ChainedAddCycle, resolution_order
 from .dom import Element, Text, parse_fragment
 from .errors import InvalidOperation
 from .events import external
@@ -876,8 +876,14 @@ class _Exporter:
         self.pending_del: dict[str, Proposal] = {}
         # adds keyed by (container, after) — every container, not just body
         self.adds_by_anchor: dict[tuple[str, str | None], list[Proposal]] = {}
-        # card creation order, the order the accepted lane lands in
-        self._card_order: dict[str, int] = {}
+        # dependency-adjusted creation order — the order the accepted lane
+        # lands in, even for a foreign file whose chained card physically
+        # precedes its parent (a cyclic lane falls back to physical order)
+        try:
+            ordered = resolution_order(doc.proposals)
+        except _ChainedAddCycle:
+            ordered = list(doc.proposals)
+        self._card_order: dict[str, int] = {p.id: i for i, p in enumerate(ordered)}
         for p in doc.proposals:
             if p.action == "modify" and p.target and p.target not in ("aim:theme", "aim:doc"):
                 self.pending_mod[p.target] = p
@@ -886,7 +892,6 @@ class _Exporter:
             elif p.action == "add":
                 key = (p.anchor_container or "body", p.anchor_after)
                 self.adds_by_anchor.setdefault(key, []).append(p)
-                self._card_order[p.id] = len(self._card_order)
 
     # -- top level -----------------------------------------------------------
     def run(self) -> None:

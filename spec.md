@@ -652,11 +652,16 @@ one-line "why".
 ### 5.4 Invariants
 
 - At most one pending `modify`-or-`delete` proposal per target: a new one
-  resolves the old as `superseded` (§6.2).
-- `add` chains: if the anchor proposal is **accepted**, dependent adds
-  rebind to the accepted chunk's id; if it is **rejected**, they rebind to
-  the rejected proposal's own anchor. Chains therefore always resolve
-  deterministically.
+  resolves the old as `superseded` (§6.2). Likewise at most one pending
+  `move` per target: a new move supersedes the pending move — the latest
+  position instruction is the one that counts.
+- `add` chains: if the anchor proposal is **accepted**, dependent cards
+  rebind to the landed block (the accepted chunk's id; a move parent's
+  target); if it is **rejected**, they rebind to the rejected proposal's
+  own anchor. A chained card may itself resolve **first**: it lands at the
+  chain's zone — the concrete anchor the chain bottoms out at — and the
+  parent, inserting directly after that same anchor, lands in front of it
+  when it arrives. Chains therefore resolve deterministically in any order.
 - Same-anchor position cards land in creation order: accepting an `add` or
   `move` also rebinds every **later-created** pending `add`/`move` whose
   anchor — followed through any pending-add chain — bottoms out at the same
@@ -666,6 +671,42 @@ one-line "why".
   order. The resolved order of a lane is therefore independent of the
   acceptance sequence: it is card creation order, with a chain guaranteeing
   only "after the parent", not adjacency.
+- A block leaving its position takes the zone behind it along. Removing an
+  anchor block (a delete, direct or accepted) rebinds the cards anchored on
+  it onto the **last pending position card** of the zone it merges into (a
+  proposal-id chain — their blocks keep landing after that whole zone), or
+  onto the removed block's own anchor when that zone has no pending cards.
+  An accepted move does the same for the cards **created before** the move
+  — they meant "after the block where it was"; cards created after it were
+  proposed against the projection with the block at its destination, and
+  follow it there.
+- Sibling grouping never spans an intervening move PROPOSAL of the anchor
+  block — whatever that move's eventual outcome: cards (their chain
+  holders, for chained cards) proposed before and after it made their
+  claims against potentially different geometries and belong to different
+  zones. The split reads proposal times from the permanent record (cards
+  and resolution events alike), so it is itself independent of when the
+  move resolves.
+- A resolution **refuses rather than guesses** whenever its landing or its
+  rebinds depend on another card that is still undecided: accepting a card
+  whose anchor block has an earlier-proposed pending move, or whose anchor
+  zone is such a move's destination, or that sits on the later side of a
+  zone split while an earlier-side zone-mate is pending; accepting a
+  delete/move whose dissolve would merge cards onto such a block, whose
+  vacated cards still carry chain descendants proposed after it, or whose
+  application would silently change an earlier-proposed pending move's
+  source geometry. Creation order resolves the earlier card first, so an
+  in-order resolution never hits any of these refusals.
+- Scope of the guarantee: for lanes of **adds, chains, and deletes** —
+  everything agent-emitted lanes contain — every completed resolution
+  order converges to the creation-order result (property-tested).
+  Lanes that interleave **move proposals** into a zone are guaranteed
+  under creation-order resolution (`accept_all`) and protected by the
+  refusals above; a residual family of out-of-order reject/accept
+  interleavings around such moves may still diverge, because zone
+  membership under reject fallbacks cannot be tracked without per-block
+  provenance, which the format deliberately does not carry. This is a
+  known, documented limitation.
 - `data-depends-on` is advisory metadata for coupled proposals (e.g. a
   chunk edit plus a theme recolor): editors group and warn; the format does
   not police partial acceptance.

@@ -30,7 +30,7 @@ from __future__ import annotations
 
 import re
 
-from ..document import AimDocument, Proposal
+from ..document import AimDocument, Proposal, _ChainedAddCycle, resolution_order
 from ..dom import Element, Text, parse_html
 from ..errors import InvalidOperation
 
@@ -489,11 +489,17 @@ def to_markdown(doc: AimDocument, *, pending: str = "drop") -> str:
     mods: dict[str, Proposal] = {}
     notes: list[str] = []
     if critic:
+        # dependency-adjusted creation order, matching what accepting yields
+        # (a cyclic foreign lane falls back to physical order)
+        try:
+            ordered = resolution_order(doc.proposals)
+        except _ChainedAddCycle:
+            ordered = list(doc.proposals)
+        card_order = {p.id: i for i, p in enumerate(ordered)}
         for p in doc.proposals:
             if p.action == "add":
                 key = (p.anchor_container, p.anchor_after)
                 adds_by_anchor.setdefault(key, []).append(p)
-                card_order[p.id] = len(card_order)
             elif (
                 p.action in ("modify", "delete")
                 and p.target
