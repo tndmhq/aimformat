@@ -151,6 +151,68 @@ class TestResolve:
         basic_doc.accept(p2.id, decided_by=ME, at=ts(10))
         assert basic_doc.body_ids[:3] == ["h1", "n2", "intro"]
 
+    def test_same_anchor_adds_accept_in_creation_order(self, basic_doc):
+        # two adds anchored on the SAME concrete block (a heading then its
+        # paragraph, e.g. "add a translation of the abstract"): each accept
+        # inserts directly after the anchor, so without the same-anchor
+        # rebind the later block landed FIRST and the pair came out reversed
+        t = basic_doc.propose_add(
+            '<h2 data-aim="t">Sommario</h2>', author=BOT, after="intro", at=ts(7)
+        )
+        p = basic_doc.propose_add('<p data-aim="p">Testo.</p>', author=BOT, after="intro", at=ts(8))
+        basic_doc.accept(t.id, decided_by=ME, at=ts(9))
+        assert basic_doc.proposal(p.id).anchor_after == "t"
+        basic_doc.accept(p.id, decided_by=ME, at=ts(10))
+        assert basic_doc.body_ids == ["h1", "intro", "t", "p"]
+        assert basic_doc.verify() == []
+
+    def test_same_anchor_adds_accept_all_in_creation_order(self, basic_doc):
+        basic_doc.propose_add('<h2 data-aim="t">Sommario</h2>', author=BOT, after="intro", at=ts(7))
+        basic_doc.propose_add('<p data-aim="p">Testo.</p>', author=BOT, after="intro", at=ts(8))
+        basic_doc.propose_add('<p data-aim="q">Coda.</p>', author=BOT, after="intro", at=ts(9))
+        basic_doc.accept_all(decided_by=ME, at=ts(10))
+        assert basic_doc.body_ids == ["h1", "intro", "t", "p", "q"]
+        assert basic_doc.verify() == []
+
+    def test_same_anchor_adds_out_of_order_accept_keeps_creation_order(self, basic_doc):
+        t = basic_doc.propose_add(
+            '<h2 data-aim="t">Sommario</h2>', author=BOT, after="intro", at=ts(7)
+        )
+        p = basic_doc.propose_add('<p data-aim="p">Testo.</p>', author=BOT, after="intro", at=ts(8))
+        basic_doc.accept(p.id, decided_by=ME, at=ts(9))
+        # the earlier-created card keeps its anchor: inserting there already
+        # places it before the later card's block
+        assert basic_doc.proposal(t.id).anchor_after == "intro"
+        basic_doc.accept(t.id, decided_by=ME, at=ts(10))
+        assert basic_doc.body_ids == ["h1", "intro", "t", "p"]
+
+    def test_same_anchor_reject_earlier_leaves_later_at_anchor(self, basic_doc):
+        t = basic_doc.propose_add(
+            '<h2 data-aim="t">Sommario</h2>', author=BOT, after="intro", at=ts(7)
+        )
+        p = basic_doc.propose_add('<p data-aim="p">Testo.</p>', author=BOT, after="intro", at=ts(8))
+        basic_doc.reject(t.id, decided_by=ME, at=ts(9))
+        assert basic_doc.proposal(p.id).anchor_after == "intro"
+        basic_doc.accept(p.id, decided_by=ME, at=ts(10))
+        assert basic_doc.body_ids == ["h1", "intro", "p"]
+
+    def test_same_anchor_head_inserts_land_in_creation_order(self, basic_doc):
+        t = basic_doc.propose_add('<h2 data-aim="t">Titolo</h2>', author=BOT, after=None, at=ts(7))
+        p = basic_doc.propose_add('<p data-aim="p">Testo.</p>', author=BOT, after=None, at=ts(8))
+        basic_doc.accept(t.id, decided_by=ME, at=ts(9))
+        assert basic_doc.proposal(p.id).anchor_after == "t"
+        basic_doc.accept(p.id, decided_by=ME, at=ts(10))
+        assert basic_doc.body_ids == ["t", "p", "h1", "intro"]
+
+    def test_same_anchor_move_after_add_lands_in_creation_order(self, basic_doc):
+        a = basic_doc.propose_add('<p data-aim="n1">One.</p>', author=BOT, after="intro", at=ts(7))
+        m = basic_doc.propose_move("h1", author=BOT, container="body", after="intro", at=ts(8))
+        basic_doc.accept(a.id, decided_by=ME, at=ts(9))
+        assert basic_doc.proposal(m.id).anchor_after == "n1"
+        basic_doc.accept(m.id, decided_by=ME, at=ts(10))
+        assert basic_doc.body_ids == ["intro", "n1", "h1"]
+        assert basic_doc.verify() == []
+
     def test_accept_child_before_parent_raises(self, basic_doc):
         p1 = basic_doc.propose_add("<p>One.</p>", author=ME, at=ts(7))
         p2 = basic_doc.propose_add("<p>Two.</p>", author=ME, after=p1.id, at=ts(8))

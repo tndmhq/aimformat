@@ -3011,22 +3011,46 @@ class AimDocument:
         # drop the card; rebind dependent position cards anchored on this proposal
         sec = self._state.section("aim-proposals")
         assert sec is not None
+        cards = sec.elements()
+        later_ids = frozenset(c.get("id") or "" for c in cards[cards.index(card) + 1 :])
         sec.children.remove(card)
         if not sec.elements():
             self._state.body.children.remove(sec)
         self._get_history_index().remove_proposal(prop)
-        self._rebind_chained(prop, decision)
+        self._rebind_chained(prop, decision, later_ids=later_ids)
         return self._append_event(data)
 
     def _payload_root_id(self, payload: str) -> str:
         nodes = [n for n in parse_fragment(payload) if isinstance(n, Element)]
         return (nodes[0].chunk_id or nodes[0].container_id or "") if nodes else ""
 
-    def _rebind_chained(self, resolved: Proposal, decision: str) -> None:
-        """Materialize or bypass a pending-add position dependency."""
+    def _rebind_chained(
+        self, resolved: Proposal, decision: str, *, later_ids: frozenset[str] = frozenset()
+    ) -> None:
+        """Materialize or bypass a pending-add position dependency.
+
+        Acceptance also rebinds every LATER-created pending position card that
+        shares *resolved*'s exact anchor onto the block that just landed:
+        each accept inserts directly after its anchor, so without the rebind
+        the later card's block would land BEFORE the earlier card's, reversing
+        creation order. Earlier-created cards keep their anchor — they land
+        before the resolved card's block under any acceptance order, which
+        already is creation order.
+        """
         sec = self._state.section("aim-proposals")
         if sec is None:
             return
+        landed: str | None = None
+        if decision == "accepted":
+            if resolved.action == "add":
+                landed = self._payload_root_id(resolved.payload_html or "") or None
+            elif resolved.action == "move":
+                landed = resolved.target
+        anchor_key = (
+            resolved.anchor_container or "body",
+            resolved.anchor_after,
+            resolved.anchor_shell,
+        )
         for card in sec.elements():
             if card.get("data-anchor-after") == resolved.id:
                 if decision == "accepted":
@@ -3037,6 +3061,18 @@ class AimDocument:
                         card.remove_attr("data-anchor-after")
                     else:
                         card.set("data-anchor-after", resolved.anchor_after)
+            elif (
+                landed is not None
+                and (card.get("id") or "") in later_ids
+                and card.get("data-action") in ("add", "move")
+                and (
+                    card.get("data-anchor-container") or "body",
+                    card.get("data-anchor-after"),
+                    card.get("data-anchor-shell"),
+                )
+                == anchor_key
+            ):
+                card.set("data-anchor-after", landed)
 
     # -- verification & time travel ----------------------------------------------------------------
     def verify(self) -> list[str]:

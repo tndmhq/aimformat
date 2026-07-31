@@ -876,6 +876,8 @@ class _Exporter:
         self.pending_del: dict[str, Proposal] = {}
         # adds keyed by (container, after) — every container, not just body
         self.adds_by_anchor: dict[tuple[str, str | None], list[Proposal]] = {}
+        # card creation order, the order the accepted lane lands in
+        self._card_order: dict[str, int] = {}
         for p in doc.proposals:
             if p.action == "modify" and p.target and p.target not in ("aim:theme", "aim:doc"):
                 self.pending_mod[p.target] = p
@@ -884,6 +886,7 @@ class _Exporter:
             elif p.action == "add":
                 key = (p.anchor_container or "body", p.anchor_after)
                 self.adds_by_anchor.setdefault(key, []).append(p)
+                self._card_order[p.id] = len(self._card_order)
 
     # -- top level -----------------------------------------------------------
     def run(self) -> None:
@@ -949,11 +952,15 @@ class _Exporter:
         return self.adds_by_anchor.pop((container, after), [])
 
     def _emit_anchored_adds(self, container: str, anchor: str | None) -> None:
-        # reversed: resolution inserts every same-anchor add at index(anchor)+1,
-        # so accept-all leaves the LAST-proposed sibling closest to the anchor
-        for prop in reversed(self._pop_adds(container, anchor)):
+        # creation order: acceptance rebinds every later same-anchor sibling
+        # onto the block that just landed, so the lane lands in card order; a
+        # chained add joins the pool once the add it anchors on is emitted
+        pool = self._pop_adds(container, anchor)
+        while pool:
+            pool.sort(key=lambda p: self._card_order.get(p.id, 0))
+            prop = pool.pop(0)
             self._emit_add_paragraphs(prop)
-            self._emit_anchored_adds(container, prop.id)  # chained adds anchor on this one
+            pool += self._pop_adds(container, prop.id)
 
     def _emit_add_paragraphs(self, prop: Proposal, style: str | None = None) -> None:
         els = self._payload_elements(prop)
@@ -1566,10 +1573,13 @@ class _Exporter:
                 self._emit_list_adds(container_id, cid, style)
 
     def _emit_list_adds(self, container: str, after: str | None, style: str | None) -> None:
-        # reversed for the same reason as _emit_anchored_adds
-        for prop in reversed(self._pop_adds(container, after)):
+        # creation-order pool, for the same reason as _emit_anchored_adds
+        pool = self._pop_adds(container, after)
+        while pool:
+            pool.sort(key=lambda p: self._card_order.get(p.id, 0))
+            prop = pool.pop(0)
             self._emit_add_paragraphs(prop, style=style)
-            self._emit_list_adds(container, prop.id, style)
+            pool += self._pop_adds(container, prop.id)
 
     # -- tables ----------------------------------------------------------------------
     def emit_table(
@@ -1792,8 +1802,10 @@ class _Exporter:
         """Insert pending row-adds as fully-inserted (w:ins) table rows,
         each positioned right after its anchor ``w:tr`` (the container start
         when ``first``)."""
-        props = self._pop_adds(container, after)
-        for prop in props:
+        pool = self._pop_adds(container, after)
+        while pool:
+            pool.sort(key=lambda p: self._card_order.get(p.id, 0))
+            prop = pool.pop(0)
             new_row = table.add_row()  # appended; repositioned below
             payload_cells = [
                 c
@@ -1811,10 +1823,12 @@ class _Exporter:
                 )
             if first:
                 table.rows[0]._tr.addprevious(new_row._tr)
+                first = False  # later siblings chain after this row
             else:
                 anchor_tr.addnext(new_row._tr)
-            # chained adds anchor on the row just inserted
-            self._emit_row_adds(table, new_row._tr, container, prop.id, ncols)
+            anchor_tr = new_row._tr
+            # chained adds anchor on the row just inserted; they join the pool
+            pool += self._pop_adds(container, prop.id)
 
 
 # --------------------------------------------------------------------------

@@ -180,10 +180,13 @@ class _Renderer:
         adds_by_anchor: dict[tuple[str | None, str | None], list[Proposal]],
         mods: dict[str, Proposal],
         critic: bool,
+        card_order: dict[str, int] | None = None,
     ):
         self.adds = adds_by_anchor
         self.mods = mods
         self.critic = critic
+        # card creation order, the order the accepted lane lands in
+        self.card_order = card_order or {}
 
     # ------------------------------------------------------------------
     def block(self, el: Element) -> list[str]:
@@ -440,12 +443,16 @@ class _Renderer:
         self, key: tuple[str | None, str | None], list_number: list[int] | None = None
     ) -> list[str]:
         out: list[str] = []
-        # reversed: resolution inserts every same-anchor add at
-        # index(anchor)+1, so accept-all leaves the LAST-proposed sibling
-        # closest to the anchor — render what accepting produces
-        for prop in reversed(self.adds.get(key, [])):
+        # creation order: acceptance rebinds every later same-anchor sibling
+        # onto the block that just landed, so the lane lands in card order; a
+        # chained add joins the pool once the add it anchors on is rendered —
+        # render what accepting produces
+        pool = list(self.adds.get(key, []))
+        while pool:
+            pool.sort(key=lambda p: self.card_order.get(p.id, 0))
+            prop = pool.pop(0)
             out.append(f"{{++{self._payload_md(prop, list_number)}++}}{self._note(prop)}")
-            out.extend(self._critic_adds((prop.anchor_container, prop.id), list_number))
+            pool += self.adds.get((prop.anchor_container, prop.id), [])
         return out
 
     def chunk_blocks(self, el: Element, cid: str | None) -> list[str]:
@@ -478,6 +485,7 @@ def to_markdown(doc: AimDocument, *, pending: str = "drop") -> str:
     critic = pending == "criticmarkup"
 
     adds_by_anchor: dict[tuple[str | None, str | None], list[Proposal]] = {}
+    card_order: dict[str, int] = {}
     mods: dict[str, Proposal] = {}
     notes: list[str] = []
     if critic:
@@ -485,6 +493,7 @@ def to_markdown(doc: AimDocument, *, pending: str = "drop") -> str:
             if p.action == "add":
                 key = (p.anchor_container, p.anchor_after)
                 adds_by_anchor.setdefault(key, []).append(p)
+                card_order[p.id] = len(card_order)
             elif (
                 p.action in ("modify", "delete")
                 and p.target
@@ -501,7 +510,7 @@ def to_markdown(doc: AimDocument, *, pending: str = "drop") -> str:
     html = next(e for e in frag.elements() if e.tag == "html")
     body = next(e for e in html.elements() if e.tag == "body")
 
-    renderer = _Renderer(adds_by_anchor, mods, critic)
+    renderer = _Renderer(adds_by_anchor, mods, critic, card_order)
     blocks: list[str] = []
     if critic:  # adds anchored at the very top of the body
         blocks.extend(renderer._critic_adds(("body", None)))
