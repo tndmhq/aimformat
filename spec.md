@@ -658,11 +658,14 @@ one-line "why".
   the rejected proposal's own anchor. Chains therefore always resolve
   deterministically.
 - Same-anchor position cards land in creation order: accepting an `add` or
-  `move` also rebinds every **later-created** pending `add`/`move` that
-  shares its exact anchor (container, after, shell) onto the block that just
-  landed. Each acceptance inserts directly after its anchor, so without the
-  rebind a later sibling would land *before* an earlier one, reversing the
-  proposed order under any acceptance sequence.
+  `move` also rebinds every **later-created** pending `add`/`move` whose
+  anchor — followed through any pending-add chain — bottoms out at the same
+  exact anchor (container, after, shell) onto the block that just landed.
+  Each acceptance inserts directly after its anchor, so without the rebind a
+  later sibling would land *before* an earlier one, reversing the proposed
+  order. The resolved order of a lane is therefore independent of the
+  acceptance sequence: it is card creation order, with a chain guaranteeing
+  only "after the parent", not adjacency.
 - `data-depends-on` is advisory metadata for coupled proposals (e.g. a
   chunk edit plus a theme recolor): editors group and warn; the format does
   not police partial acceptance.

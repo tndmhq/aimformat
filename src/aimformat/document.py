@@ -3053,13 +3053,18 @@ class AimDocument:
     ) -> None:
         """Materialize or bypass a pending-add position dependency.
 
-        Acceptance also rebinds every LATER-created pending position card that
-        shares *resolved*'s exact anchor onto the block that just landed:
-        each accept inserts directly after its anchor, so without the rebind
-        the later card's block would land BEFORE the earlier card's, reversing
+        Acceptance also rebinds every LATER-created pending position card
+        whose anchor — followed through any pending-add chain — bottoms out
+        at *resolved*'s exact anchor onto the block that just landed: each
+        accept inserts directly after its anchor, so without the rebind the
+        later card's block would land BEFORE the earlier card's, reversing
         creation order. Earlier-created cards keep their anchor — they land
         before the resolved card's block under any acceptance order, which
-        already is creation order.
+        already is creation order. Following chains keeps that true when a
+        later sibling is accepted while an earlier one (with chained
+        children proposed after the sibling) is still pending: the children
+        detach onto the landed block, which their creation order demands
+        they follow anyway, whatever becomes of their parent.
         """
         sec = self._state.section("aim-proposals")
         if sec is None:
@@ -3075,7 +3080,43 @@ class AimDocument:
             resolved.anchor_after,
             resolved.anchor_shell,
         )
-        for card in sec.elements():
+        cards = list(sec.elements())
+        by_id = {c.get("id"): c for c in cards}
+
+        def zone(card: Element, seen: set[str]) -> tuple[str, str | None, str | None] | None:
+            """Concrete anchor tuple this card's position chain bottoms out
+            at; None for a dangling or cyclic foreign chain (reconcile's
+            territory, never rebound here)."""
+            after = card.get("data-anchor-after")
+            if after is not None and ids.is_valid_proposal_id(after):
+                cid = card.get("id") or ""
+                parent = by_id.get(after)
+                if parent is None or cid in seen:
+                    return None
+                seen.add(cid)
+                return zone(parent, seen)
+            return (
+                card.get("data-anchor-container") or "body",
+                after,
+                card.get("data-anchor-shell"),
+            )
+
+        # zones are computed against the lane as it stands when *resolved*
+        # drops out, before this round's rebinds mutate any anchors
+        rebound = [
+            card
+            for card in cards
+            if card.get("data-anchor-after") != resolved.id
+            and landed is not None
+            and (card.get("id") or "") in later_ids
+            and card.get("data-action") in ("add", "move")
+            # a move whose own target just landed must keep its anchor:
+            # rebinding it onto `landed` would read "move X after X",
+            # turning a validated no-op repeat into an unresolvable card
+            and card.get("data-for") != landed
+            and zone(card, set()) == anchor_key
+        ]
+        for card in cards:
             if card.get("data-anchor-after") == resolved.id:
                 if decision == "accepted":
                     new_after = self._payload_root_id(resolved.payload_html or "")
@@ -3085,22 +3126,8 @@ class AimDocument:
                         card.remove_attr("data-anchor-after")
                     else:
                         card.set("data-anchor-after", resolved.anchor_after)
-            elif (
-                landed is not None
-                and (card.get("id") or "") in later_ids
-                and card.get("data-action") in ("add", "move")
-                # a move whose own target just landed must keep its anchor:
-                # rebinding it onto `landed` would read "move X after X",
-                # turning a validated no-op repeat into an unresolvable card
-                and card.get("data-for") != landed
-                and (
-                    card.get("data-anchor-container") or "body",
-                    card.get("data-anchor-after"),
-                    card.get("data-anchor-shell"),
-                )
-                == anchor_key
-            ):
-                card.set("data-anchor-after", landed)
+        for card in rebound:
+            card.set("data-anchor-after", landed)
 
     # -- verification & time travel ----------------------------------------------------------------
     def verify(self) -> list[str]:

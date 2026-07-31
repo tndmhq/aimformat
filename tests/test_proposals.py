@@ -213,6 +213,50 @@ class TestResolve:
         assert basic_doc.body_ids == ["intro", "n1", "h1"]
         assert basic_doc.verify() == []
 
+    def test_chain_on_out_of_order_accepted_sibling_keeps_creation_order(self, basic_doc):
+        # P2 review finding: A and B share an anchor; C chains on A but was
+        # proposed after B. accept(B), accept(A), accept(C) must converge to
+        # the accept_all order A, B, C — a chain guarantees "after the
+        # parent", and creation order places C after the already-landed B
+        a = basic_doc.propose_add('<p data-aim="a">A.</p>', author=BOT, after="intro", at=ts(7))
+        b = basic_doc.propose_add('<p data-aim="b">B.</p>', author=BOT, after="intro", at=ts(8))
+        c = basic_doc.propose_add('<p data-aim="c">C.</p>', author=BOT, after=a.id, at=ts(9))
+        basic_doc.accept(b.id, decided_by=ME, at=ts(10))
+        assert basic_doc.proposal(c.id).anchor_after == "b"
+        basic_doc.accept(a.id, decided_by=ME, at=ts(11))
+        basic_doc.accept(c.id, decided_by=ME, at=ts(12))
+        assert basic_doc.body_ids == ["h1", "intro", "a", "b", "c"]
+        assert basic_doc.verify() == []
+
+    def test_chain_zone_transitive_keeps_creation_order(self, basic_doc):
+        # the same, one chain level deeper: C's zone is reached through TWO
+        # pending parents (c → a2 → a1 → intro)
+        a1 = basic_doc.propose_add('<p data-aim="a1">A1.</p>', author=BOT, after="intro", at=ts(7))
+        a2 = basic_doc.propose_add('<p data-aim="a2">A2.</p>', author=BOT, after=a1.id, at=ts(8))
+        b = basic_doc.propose_add('<p data-aim="b">B.</p>', author=BOT, after="intro", at=ts(9))
+        c = basic_doc.propose_add('<p data-aim="c">C.</p>', author=BOT, after=a2.id, at=ts(10))
+        basic_doc.accept(b.id, decided_by=ME, at=ts(11))
+        assert basic_doc.proposal(c.id).anchor_after == "b"
+        # a2 was proposed BEFORE b: it stays chained and lands before b
+        assert basic_doc.proposal(a2.id).anchor_after == a1.id
+        basic_doc.accept(a1.id, decided_by=ME, at=ts(12))
+        basic_doc.accept(a2.id, decided_by=ME, at=ts(13))
+        basic_doc.accept(c.id, decided_by=ME, at=ts(14))
+        assert basic_doc.body_ids == ["h1", "intro", "a1", "a2", "b", "c"]
+        assert basic_doc.verify() == []
+
+    def test_chain_zone_accept_all_matches_manual_order(self):
+        import aimformat as aim
+
+        doc = aim.new_document(title="T")
+        doc.add_chunk('<p data-aim="intro">I.</p>', author=BOT, at=ts(0))
+        a = doc.propose_add('<p data-aim="a">A.</p>', author=BOT, after="intro", at=ts(1))
+        doc.propose_add('<p data-aim="b">B.</p>', author=BOT, after="intro", at=ts(2))
+        doc.propose_add('<p data-aim="c">C.</p>', author=BOT, after=a.id, at=ts(3))
+        doc.accept_all(decided_by=ME, at=ts(4))
+        assert doc.body_ids == ["intro", "a", "b", "c"]
+        assert doc.verify() == []
+
     def test_direct_delete_rebinds_pending_cards_to_predecessor(self, basic_doc):
         # deleting the block a card is anchored on must not dangle the card
         # (one dangler makes the whole lane unprojectable): it rebinds to the
