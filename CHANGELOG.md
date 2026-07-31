@@ -3,6 +3,39 @@
 All notable changes to the spec and the reference toolkit. The package
 version tracks the spec version it implements (0.x minors may break).
 
+## 0.5.1 — 2026-07-31
+
+Pending-lane resolution became order-independent where it can be, and
+honest where it cannot (spec §5.2, §5.4; found fixing a demo bug where two
+proposals anchored on one block applied in reverse order).
+
+- **Same-anchor position cards land in creation order.** Accepting an
+  `add`/`move` rebinds every later pending position card whose anchor —
+  followed through any pending chain — bottoms out at the same spot onto
+  the block that just landed. For move-free lanes (adds, chains, deletes)
+  every completed acceptance order now converges to the creation-order
+  result, enforced by a hypothesis property in CI.
+- **A move supersedes the pending move of its target**, exactly as
+  modify/delete already replaced each other; the verifier enforces it
+  (new rule P018, with a conformance-kit fixture).
+- **A removed block takes its zone along**: cards anchored on a deleted
+  block chain onto the merged zone's last pending card; an accepted move
+  does the same for cards proposed before it. Chains may target pending
+  moves (§5.2 grammar extended; P011/P015/P016 cover position cards
+  symmetrically, including table shells and first-position anchors).
+- **Chained cards accept in any order** — a child accepted first lands at
+  its chain's zone and the parent lands in front on arrival. Where an
+  outcome genuinely depends on an undecided earlier card, accept refuses
+  with "resolve that card first" instead of guessing; creation order
+  never refuses. Direct deletes refuse while pending cards anchor on the
+  target, keeping undo invertible.
+- Lanes interleaving move proposals into a zone remain creation-order
+  guaranteed via `accept_all`, with a documented residual for out-of-order
+  interleavings (§5.4). CriticMarkup/DOCX exports mirror the resolution
+  order, including previously-dropped move-chained adds.
+- Resolution guards are path-compressed: a 200-card chain accepts in the
+  same time band as 0.5.0.
+
 ## 0.5.0 — 2026-07-26
 
 Everything below ships as 0.5.0: the numbering work that moves the spec to
