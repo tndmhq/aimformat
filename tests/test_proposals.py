@@ -213,6 +213,39 @@ class TestResolve:
         assert basic_doc.body_ids == ["intro", "n1", "h1"]
         assert basic_doc.verify() == []
 
+    def test_direct_delete_rebinds_pending_cards_to_predecessor(self, basic_doc):
+        # deleting the block a card is anchored on must not dangle the card
+        # (one dangler makes the whole lane unprojectable): it rebinds to the
+        # removed block's own anchor, like a chained add on a rejected parent
+        p = basic_doc.propose_add('<p data-aim="n1">One.</p>', author=BOT, after="intro", at=ts(7))
+        basic_doc.delete_chunk("intro", author=ME, at=ts(8))
+        assert basic_doc.proposal(p.id).anchor_after == "h1"
+        basic_doc.accept(p.id, decided_by=ME, at=ts(9))
+        assert basic_doc.body_ids == ["h1", "n1"]
+        assert basic_doc.verify() == []
+
+    def test_accepted_delete_rebinds_pending_cards_to_predecessor(self, basic_doc):
+        p = basic_doc.propose_add('<p data-aim="n1">One.</p>', author=BOT, after="h1", at=ts(7))
+        d = basic_doc.propose_delete("h1", author=BOT, at=ts(8))
+        basic_doc.accept(d.id, decided_by=ME, at=ts(9))
+        assert basic_doc.proposal(p.id).anchor_after is None  # h1 was first
+        basic_doc.accept(p.id, decided_by=ME, at=ts(10))
+        assert basic_doc.body_ids == ["n1", "intro"]
+        assert basic_doc.verify() == []
+
+    def test_repeated_identical_moves_stay_resolvable(self, basic_doc):
+        # two identical moves (second validates as a projected no-op): the
+        # same-anchor rebind must not point the later card at its own target,
+        # which would make an SDK-validated lane unresolvable (P1 review
+        # finding on this fix)
+        m1 = basic_doc.propose_move("h1", author=BOT, container="body", after="intro", at=ts(7))
+        m2 = basic_doc.propose_move("h1", author=BOT, container="body", after="intro", at=ts(8))
+        basic_doc.accept(m1.id, decided_by=ME, at=ts(9))
+        assert basic_doc.proposal(m2.id).anchor_after == "intro"
+        basic_doc.accept(m2.id, decided_by=ME, at=ts(10))
+        assert basic_doc.body_ids == ["intro", "h1"]
+        assert basic_doc.verify() == []
+
     def test_accept_child_before_parent_raises(self, basic_doc):
         p1 = basic_doc.propose_add("<p>One.</p>", author=ME, at=ts(7))
         p2 = basic_doc.propose_add("<p>Two.</p>", author=ME, after=p1.id, at=ts(8))

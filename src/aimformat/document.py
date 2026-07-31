@@ -1788,6 +1788,7 @@ class AimDocument:
             raise TargetNotFound(f"no chunk {cid!r}")
         anchor = self._anchor_of(cid)
         self._state.remove(cid)
+        self._rebind_removed_anchor(cid, anchor)
         data = {
             "seq": self.seq + 1,
             "kind": "direct_edit",
@@ -2987,8 +2988,10 @@ class AimDocument:
                 # a hand-authored card can still carry a reserved target;
                 # fail with intent (reject/supersede stay available)
                 _no_delete_move(prop.target or "", "delete proposal")
-                data["anchor"] = self._anchor_of(prop.target or "").to_obj()
+                removed_anchor = self._anchor_of(prop.target or "")
+                data["anchor"] = removed_anchor.to_obj()
                 self._state.remove(prop.target or "")
+                self._rebind_removed_anchor(prop.target or "", removed_anchor)
             elif prop.action == "move":
                 dst = Anchor(
                     prop.anchor_container or "body", prop.anchor_after, shell=prop.anchor_shell
@@ -3023,6 +3026,27 @@ class AimDocument:
     def _payload_root_id(self, payload: str) -> str:
         nodes = [n for n in parse_fragment(payload) if isinstance(n, Element)]
         return (nodes[0].chunk_id or nodes[0].container_id or "") if nodes else ""
+
+    def _rebind_removed_anchor(self, removed: str, anchor: Anchor) -> None:
+        """A removed block takes its position with it: pending position cards
+        anchored on it rebind to the removed block's own anchor — the exact
+        counterpart of chained-add rebinding on a rejected parent. Without
+        this, one delete of an anchor block leaves the whole pending lane
+        unprojectable (every subsequent propose fails)."""
+        sec = self._state.section("aim-proposals")
+        if sec is None:
+            return
+        for card in sec.elements():
+            if card.get("data-anchor-after") != removed:
+                continue
+            if anchor.after is None:
+                card.remove_attr("data-anchor-after")
+            else:
+                card.set("data-anchor-after", anchor.after)
+            if anchor.shell is None:
+                card.remove_attr("data-anchor-shell")
+            else:
+                card.set("data-anchor-shell", anchor.shell)
 
     def _rebind_chained(
         self, resolved: Proposal, decision: str, *, later_ids: frozenset[str] = frozenset()
@@ -3065,6 +3089,10 @@ class AimDocument:
                 landed is not None
                 and (card.get("id") or "") in later_ids
                 and card.get("data-action") in ("add", "move")
+                # a move whose own target just landed must keep its anchor:
+                # rebinding it onto `landed` would read "move X after X",
+                # turning a validated no-op repeat into an unresolvable card
+                and card.get("data-for") != landed
                 and (
                     card.get("data-anchor-container") or "body",
                     card.get("data-anchor-after"),

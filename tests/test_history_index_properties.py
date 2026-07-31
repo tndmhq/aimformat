@@ -178,6 +178,20 @@ def _apply_operation(doc: aim.AimDocument, operation: str, choice: int, step: in
         ("add", 1),
     ]
 )
+@example(
+    # the same-anchor rebind points a pending card at the block an accepted
+    # sibling landed; deleting that block then dangled the card and every
+    # later propose failed projection, until removal rebinding
+    operations=[
+        ("propose", 0),
+        ("propose", 0),
+        ("accept", 0),
+        ("add", 0),
+        ("add", 0),
+        ("delete", 2),
+        ("propose", 0),
+    ]
+)
 @settings(
     max_examples=60,
     deadline=None,
