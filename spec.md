@@ -636,10 +636,12 @@ state, including its `data-aim`.
 `data-action` is one of `add`, `modify`, `delete`, `move`. `modify` and
 `add` carry payloads; `delete` and `move` are payloadless cards. `add` and
 `move` carry an anchor: `data-anchor-container` (a container id or `body`)
-plus `data-anchor-after` — a chunk id, the id of another *pending add*
-(chains), or **omitted, meaning first position** (the attribute spelling of
-JSON `after: null`) — plus, for rows in table containers,
-`data-anchor-shell` mirroring the event anchor's `shell` (§6.4).
+plus `data-anchor-after` — a chunk id, the id of another *pending position
+card* (an `add` or `move` — chains; SDK proposing chains onto adds, while
+dissolve rebinding (§5.4) may also chain onto a pending move), or
+**omitted, meaning first position** (the attribute spelling of JSON
+`after: null`) — plus, for rows in table containers, `data-anchor-shell`
+mirroring the event anchor's `shell` (§6.4).
 
 ### 5.3 Attribution
 
@@ -1287,9 +1289,10 @@ Literal paint (`color` `background-color` `border-color`) is since spec 0.3 (S03
 | P012 | warning | data-depends-on does not reference a pending proposal |
 | P013 | error | data-at is not ISO-8601 |
 | P014 | error | empty aim-proposals section |
-| P015 | error | pending adds anchor on each other in a cycle |
-| P016 | error | add proposal anchor is not valid in its container |
+| P015 | error | pending position cards anchor on each other in a cycle |
+| P016 | error | position proposal anchor is not valid in its container |
 | P017 | error | duplicate pending proposal id |
+| P018 | error | second pending move on one target (§5.4 supersede invariant) |
 | H001 | warning | no history block (flattened document) |
 | H002 | error | unparseable history line |
 | H003 | error | event violates its field schema |

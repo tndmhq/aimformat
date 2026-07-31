@@ -1073,15 +1073,19 @@
     ],
     "P015": [
       "error",
-      "pending adds anchor on each other in a cycle"
+      "pending position cards anchor on each other in a cycle"
     ],
     "P016": [
       "error",
-      "add proposal anchor is not valid in its container"
+      "position proposal anchor is not valid in its container"
     ],
     "P017": [
       "error",
       "duplicate pending proposal id"
+    ],
+    "P018": [
+      "error",
+      "second pending move on one target (\u00a75.4 supersede invariant)"
     ],
     "H001": [
       "warning",

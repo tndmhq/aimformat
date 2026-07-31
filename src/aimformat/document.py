@@ -1015,6 +1015,11 @@ class AimDocument:
             assert sec is not None
             sec.children.remove(card)
             index.remove_proposal(proposal)
+            # excluding IS superseding: dependents (e.g. a card a dissolve
+            # chained onto this move) must rebind exactly as the live
+            # supersession will, or the projection dangles and every
+            # replacement proposal is refused
+            projection._rebind_chained(proposal, "superseded")
         order = _creation_order(projection.proposals)
         decider = Actor("external", id="pending-projection")
 
@@ -3591,7 +3596,13 @@ class AimDocument:
             for card in cards
             if card.get("data-anchor-after") != resolved.id
             and landed is not None
-            and zone_rank(card) > resolved_rank
+            # dependency-adjusted position breaks stamp ties: _now_iso() has
+            # one-second precision, so same-second same-anchor cards are a
+            # normal SDK lane, and the tracked views order them by position
+            and (
+                zone_rank(card) > resolved_rank
+                or (zone_rank(card) == resolved_rank and (card.get("id") or "") in later_ids)
+            )
             and (card.get("id") or "") not in ancestors
             and card.get("data-action") in ("add", "move")
             # a move whose own target just landed must keep its anchor:

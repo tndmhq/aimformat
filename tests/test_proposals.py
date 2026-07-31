@@ -330,6 +330,72 @@ class TestResolve:
         assert doc.body_ids == ["a", "z", "x"]
         assert doc.verify() == []
 
+    def test_same_second_stamps_still_land_in_creation_order(self, basic_doc):
+        # _now_iso() has one-second precision: two same-anchor cards with
+        # IDENTICAL data-at are a normal SDK lane. Position (dependency-
+        # adjusted order) breaks the tie — round-4 review finding
+        t = basic_doc.propose_add('<h2 data-aim="t">T.</h2>', author=BOT, after="intro", at=ts(7))
+        p = basic_doc.propose_add('<p data-aim="p">P.</p>', author=BOT, after="intro", at=ts(7))
+        basic_doc.accept(t.id, decided_by=ME, at=ts(8))
+        assert basic_doc.proposal(p.id).anchor_after == "t"
+        basic_doc.accept(p.id, decided_by=ME, at=ts(9))
+        assert basic_doc.body_ids == ["h1", "intro", "t", "p"]
+        assert basic_doc.verify() == []
+
+    def test_superseding_a_move_rebinds_its_dissolve_dependents(self):
+        # a delete can dissolve an add onto a pending MOVE (the zone tail);
+        # superseding that move must rebind the dependent in the validation
+        # projection exactly like the live path — round-4 review finding
+        import aimformat as aim
+
+        doc = aim.new_document(title="T")
+        for i, cid in enumerate(("w", "x", "y", "z")):
+            doc.add_chunk(f'<p data-aim="{cid}">{cid}</p>', author=BOT, at=ts(i))
+        m = doc.propose_move("w", author=BOT, container="body", after="x", at=ts(4))
+        a = doc.propose_add('<p data-aim="a">A.</p>', author=BOT, after="y", at=ts(5))
+        d = doc.propose_delete("y", author=BOT, at=ts(6))
+        doc.accept(d.id, decided_by=ME, at=ts(7))
+        assert doc.proposal(a.id).anchor_after == m.id  # dissolved onto the move tail
+        m2 = doc.propose_move("w", author=BOT, container="body", after="z", at=ts(8))
+        assert [p.id for p in doc.proposals if p.action == "move"] == [m2.id]
+        # the dependent rebound onto the superseded move's own anchor
+        assert doc.proposal(a.id).anchor_after == "x"
+        doc.accept(m2.id, decided_by=ME, at=ts(9))
+        doc.accept(a.id, decided_by=ME, at=ts(10))
+        assert doc.body_ids == ["x", "a", "z", "w"]
+        assert doc.verify() == []
+
+    def test_lint_flags_duplicate_pending_moves(self):
+        # §5.4's one-move-per-target is a lint invariant too (P018): a
+        # foreign lane with two pending moves of one target must not be
+        # lint-clean — round-4 review finding
+        import aimformat as aim
+
+        doc = aim.new_document(title="T")
+        doc.add_chunk('<p data-aim="x">X.</p>', author=BOT, at=ts(0))
+        doc.add_chunk('<p data-aim="y">Y.</p>', author=BOT, at=ts(1))
+        doc.add_chunk('<p data-aim="z">Z.</p>', author=BOT, at=ts(2))
+        doc.propose_move("x", author=BOT, container="body", after="z", at=ts(3))
+        m2 = doc.propose_move("y", author=BOT, container="body", after="z", at=ts(4))
+        doc._card_el(m2.id).set("data-for", "x")  # foreign-authored duplicate
+        assert any(f.code == "P018" for f in lint(doc))
+
+    def test_lint_accepts_dissolve_chain_onto_move_tail(self):
+        # §5.2 permits chains onto pending position cards: the dissolve-
+        # created anchor onto a MOVE card must stay lint-clean
+        import aimformat as aim
+
+        doc = aim.new_document(title="T")
+        for i, cid in enumerate(("w", "x", "y", "z")):
+            doc.add_chunk(f'<p data-aim="{cid}">{cid}</p>', author=BOT, at=ts(i))
+        m = doc.propose_move("w", author=BOT, container="body", after="x", at=ts(4))
+        a = doc.propose_add('<p data-aim="a">A.</p>', author=BOT, after="y", at=ts(5))
+        d = doc.propose_delete("y", author=BOT, at=ts(6))
+        doc.accept(d.id, decided_by=ME, at=ts(7))
+        assert doc.proposal(a.id).anchor_after == m.id
+        assert lint(doc) == []
+        assert doc.verify() == []
+
     def test_direct_delete_rebinds_pending_cards_to_predecessor(self, basic_doc):
         # deleting the block a card is anchored on must not dangle the card
         # (one dangler makes the whole lane unprojectable): it rebinds to the
