@@ -2946,7 +2946,16 @@ class AimDocument:
         effective_anchor: Anchor | None = None
         move_source: Anchor | None = None
         noop_move = False
-        later_ids = self._later_card_ids(prop)
+        try:
+            ordered_ids = [p.id for p in resolution_order(self.proposals)]
+        except _ChainedAddCycle:
+            ordered_ids = [p.id for p in self.proposals]
+        card_pos = {pid: i for i, pid in enumerate(ordered_ids)}
+        later_ids = (
+            frozenset(ordered_ids[ordered_ids.index(prop.id) + 1 :])
+            if prop.id in ordered_ids
+            else frozenset()
+        )
         if prop.action == "add":
             anchor = Anchor(
                 prop.anchor_container or "body", prop.anchor_after, shell=prop.anchor_shell
@@ -3118,28 +3127,12 @@ class AimDocument:
             prop,
             decision,
             later_ids=later_ids,
+            pos=card_pos,
             effective=effective_anchor,
             move_source=move_source,
             noop_move=noop_move,
         )
         return self._append_event(data)
-
-    def _later_card_ids(self, prop: Proposal) -> frozenset[str]:
-        """Cards created after *prop*, in dependency-adjusted order.
-
-        ``resolution_order`` is the creation order a foreign file's lane
-        actually resolves in (a chained card physically placed before its
-        parent moves behind it); deriving "later" from the raw DOM slice
-        would make accepted state and the tracked views disagree on such
-        files. A cyclic foreign chain falls back to the physical order —
-        the cycle members themselves are unresolvable either way."""
-        try:
-            ordered = [p.id for p in resolution_order(self.proposals)]
-        except _ChainedAddCycle:
-            ordered = [p.id for p in self.proposals]
-        if prop.id not in ordered:
-            return frozenset()
-        return frozenset(ordered[ordered.index(prop.id) + 1 :])
 
     def _effective_anchor(self, prop: Proposal) -> Anchor:
         """The concrete anchor *prop* resolves to, chasing any pending-card
@@ -3168,6 +3161,13 @@ class AimDocument:
                 raise InvalidOperation(
                     f"anchor proposal {after!r} of {prop.id!r} is not pending"
                 ) from exc
+            if parent.action not in ("add", "move"):
+                # §5.2: only position cards may be chain anchors — a modify/
+                # delete card carries no position to chain through
+                raise InvalidOperation(
+                    f"anchor proposal {after!r} of {prop.id!r} is a "
+                    f"{parent.action} card, not a position card"
+                )
             container = parent.anchor_container or "body"
             after = parent.anchor_after
             shell = parent.anchor_shell
@@ -3189,13 +3189,20 @@ class AimDocument:
             if sec0 is not None:
                 cards0 = list(sec0.elements())
                 by_id0 = {c.get("id"): c for c in cards0}
+                try:
+                    ordered0 = [p.id for p in resolution_order(self.proposals)]
+                except _ChainedAddCycle:
+                    ordered0 = [p.id for p in self.proposals]
+                pos0 = {pid: i for i, pid in enumerate(ordered0)}
+                big0 = len(pos0) + 1
+                own_pos = pos0.get(prop.id, big0)
                 own_stamp = prop.at or ""
-                stamps = [
-                    c.get("data-at") or ""
+                move_pos = [
+                    pos0.get(c.get("id") or "", big0)
                     for c in cards0
                     if c.get("data-action") == "move" and c.get("data-for") == after
                 ]
-                stamps += [
+                move_stamps = [
                     ev.get("proposed_at") or ""
                     for ev in self._history_events()
                     if ev.kind == "resolution" and ev.action == "move" and ev.target == after
@@ -3206,10 +3213,16 @@ class AimDocument:
                     if self._card_zone(c, by_id0) != (container, after, shell):
                         continue
                     holder = self._zone_holder(c, by_id0)
-                    other = ((holder.get("data-at") or "") if holder is not None else "") or (
-                        c.get("data-at") or ""
+                    other_el = holder if holder is not None else c
+                    other_pos = pos0.get(other_el.get("id") or "", big0)
+                    other_stamp = other_el.get("data-at") or ""
+                    split = (
+                        other_pos < own_pos and any(other_pos < mp < own_pos for mp in move_pos)
+                    ) or (
+                        other_stamp < own_stamp
+                        and any(other_stamp < ms < own_stamp for ms in move_stamps)
                     )
-                    if other < own_stamp and any(other < s < own_stamp for s in stamps):
+                    if split:
                         raise InvalidOperation(
                             f"proposal {prop.id!r} sits on the later side of a zone "
                             f"split of {after!r}, while {c.get('id')!r} from the "
@@ -3382,7 +3395,7 @@ class AimDocument:
                 return card
             cid = card.get("id") or ""
             parent = by_id.get(after)
-            if parent is None or cid in seen:
+            if parent is None or cid in seen or parent.get("data-action") not in ("add", "move"):
                 return None
             seen.add(cid)
             card = parent
@@ -3405,7 +3418,7 @@ class AimDocument:
                 )
             cid = card.get("id") or ""
             parent = by_id.get(after)
-            if parent is None or cid in seen:
+            if parent is None or cid in seen or parent.get("data-action") not in ("add", "move"):
                 return None
             seen.add(cid)
             card = parent
@@ -3475,6 +3488,7 @@ class AimDocument:
         decision: str,
         *,
         later_ids: frozenset[str] = frozenset(),
+        pos: dict[str, int] | None = None,
         effective: Anchor | None = None,
         move_source: Anchor | None = None,
         noop_move: bool = False,
@@ -3520,62 +3534,68 @@ class AimDocument:
 
         # a chained card inherits its chain HOLDER's view of the zone block
         # (the pending card that carries the concrete anchor): its zone rank
-        # is (holder stamp, own stamp) — holder first, so a card chained onto
-        # a late tail ranks behind the tail's zone even if itself early, and
-        # siblings under one parent still order by their own stamps
+        # is (holder position, own position) in the dependency-adjusted lane
+        # order — the canonical creation order; data-at is advisory and may
+        # tie (one-second precision) or run backwards in a foreign lane.
+        # Rank primary = max(holder, own): a normal forward chain (parent
+        # proposed first) ranks by the card itself, while a dissolve-created
+        # BACKWARD chain (parent proposed later) ranks by the holder it now
+        # lands behind; own position breaks ties among siblings under one
+        # parent.
+        pos = pos or {}
+        big = len(pos) + 1
+
+        def pos_of(pid: str | None) -> int:
+            return pos.get(pid or "", big)
+
+        resolved_pos = pos_of(resolved.id)
+        resolved_holder_pos = resolved_pos
         resolved_stamp = resolved.at or ""
         if resolved.anchor_after is not None and ids.is_valid_proposal_id(resolved.anchor_after):
             parent = by_id.get(resolved.anchor_after)
             rh = self._zone_holder(parent, by_id) if parent is not None else None
             if rh is not None:
+                resolved_holder_pos = pos_of(rh.get("id"))
                 resolved_stamp = rh.get("data-at") or resolved_stamp
-        # rank primary = max(holder, own): a normal forward chain (parent
-        # proposed first) ranks by the card's own stamp, while a
-        # dissolve-created BACKWARD chain (parent proposed later) ranks by
-        # the holder it now lands behind; leaf stamp breaks ties among
-        # siblings under one parent
-        resolved_rank = (
-            max(resolved_stamp, resolved.at or ""),
-            resolved.at or "",
-        )
+        resolved_rank = (max(resolved_holder_pos, resolved_pos), resolved_pos)
 
-        def zone_rank(card: Element) -> tuple[str, str]:
+        def zone_rank(card: Element) -> tuple[int, int]:
+            own = pos_of(card.get("id"))
             holder = self._zone_holder(card, by_id)
-            own = card.get("data-at") or ""
             if holder is None:
                 return (own, own)
-            return (max(holder.get("data-at") or own, own), own)
-
-        def move_stamps_of(block: str) -> list[str]:
-            """Proposal times of every move of *block* — pending cards AND
-            resolved ones from history. Using the permanent record makes the
-            split a pure function of the lane, independent of when between
-            the two accepts the move happened to resolve."""
-            out = [
-                c.get("data-at") or ""
-                for c in cards
-                if c.get("data-action") == "move" and c.get("data-for") == block
-            ]
-            out += [
-                ev.get("proposed_at") or ""
-                for ev in self._history_events()
-                if ev.kind == "resolution" and ev.action == "move" and ev.target == block
-            ]
-            return out
+            return (max(pos_of(holder.get("id")), own), own)
 
         def same_zone_side(card: Element) -> bool:
             """A move of the zone's anchor block PROPOSED between the two
             cards' chain holders splits the zone — whatever that move's
             outcome: the holders made their claims against potentially
-            different geometries and must not group as siblings."""
+            different geometries and must not group as siblings. Pending
+            moves compare by lane position (canonical); moves that already
+            resolved exist only in history, so their recorded proposal time
+            is compared against the holders' stamps — exact for SDK lanes,
+            best-effort for a foreign lane whose stamps disagree with its
+            card order."""
             block = anchor_key[1]
             if block is None:
                 return True
             holder = self._zone_holder(card, by_id)
             if holder is None:
                 return True
+            hpos = pos_of(holder.get("id"))
+            lo, hi = min(resolved_holder_pos, hpos), max(resolved_holder_pos, hpos)
+            for c in cards:
+                if c.get("data-action") != "move" or c.get("data-for") != block:
+                    continue
+                if lo < pos_of(c.get("id")) < hi:
+                    return False
             holder_stamp = holder.get("data-at") or ""
-            return not any(resolved_stamp < s < holder_stamp for s in move_stamps_of(block))
+            s_lo, s_hi = min(resolved_stamp, holder_stamp), max(resolved_stamp, holder_stamp)
+            for ev in self._history_events():
+                if ev.kind == "resolution" and ev.action == "move" and ev.target == block:
+                    if s_lo < (ev.get("proposed_at") or "") < s_hi:
+                        return False
+            return True
 
         # the resolved card's own chain ancestors must never be captured by
         # the same-zone rebind: a child accepted first lands at the zone
@@ -3596,13 +3616,7 @@ class AimDocument:
             for card in cards
             if card.get("data-anchor-after") != resolved.id
             and landed is not None
-            # dependency-adjusted position breaks stamp ties: _now_iso() has
-            # one-second precision, so same-second same-anchor cards are a
-            # normal SDK lane, and the tracked views order them by position
-            and (
-                zone_rank(card) > resolved_rank
-                or (zone_rank(card) == resolved_rank and (card.get("id") or "") in later_ids)
-            )
+            and zone_rank(card) > resolved_rank
             and (card.get("id") or "") not in ancestors
             and card.get("data-action") in ("add", "move")
             # a move whose own target just landed must keep its anchor:

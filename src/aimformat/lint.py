@@ -767,6 +767,7 @@ class _Linter:
         pending_md: dict[str, str] = {}
         pending_mv: dict[str, str] = {}
         pending_ids: set[str] = set()
+        pending_position_ids: set[str] = set()
         for node in sec.children:
             if isinstance(node, Element) and node.tag != "aim-proposal":
                 self.add("P001", ERROR, f"unexpected <{node.tag}> inside <aim-proposals>")
@@ -785,6 +786,8 @@ class _Linter:
             if p.id in pending_ids:
                 self.add("P017", ERROR, f"duplicate pending proposal id {p.id!r}", p.id)
             pending_ids.add(p.id)
+            if p.action in ("add", "move"):
+                pending_position_ids.add(p.id)
         for p in self.doc.proposals:
             where = p.id
             if not ids.is_valid_proposal_id(p.id):
@@ -890,16 +893,19 @@ class _Linter:
                                 where,
                             )
             if p.action in ("add", "move") and p.anchor_after:
-                ok = self.state.exists(p.anchor_after) or p.anchor_after in pending_ids
+                # §5.2: a proposal-id anchor must name a pending POSITION
+                # card — a modify/delete card carries no position to chain
+                # through
+                ok = self.state.exists(p.anchor_after) or p.anchor_after in pending_position_ids
                 if not ok:
                     self.add(
                         "P011",
                         ERROR,
                         f"{p.action} anchor {p.anchor_after!r} is neither a chunk "
-                        "nor a pending proposal",
+                        "nor a pending position card",
                         where,
                     )
-                elif p.anchor_after in pending_ids:
+                elif p.anchor_after in pending_position_ids:
                     # chained position card (§5.2): the position card it
                     # anchors on must target the same container, or the
                     # resolved anchor lands elsewhere and the proposal

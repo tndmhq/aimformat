@@ -447,12 +447,12 @@ class _Renderer:
         # onto the block that just landed, so the lane lands in card order; a
         # chained add joins the pool once the add it anchors on is rendered —
         # render what accepting produces
-        pool = list(self.adds.get(key, []))
+        pool = list(self.adds.pop(key, []))
         while pool:
             pool.sort(key=lambda p: self.card_order.get(p.id, 0))
             prop = pool.pop(0)
             out.append(f"{{++{self._payload_md(prop, list_number)}++}}{self._note(prop)}")
-            pool += self.adds.get((prop.anchor_container, prop.id), [])
+            pool += self.adds.pop((prop.anchor_container, prop.id), [])
         return out
 
     def chunk_blocks(self, el: Element, cid: str | None) -> list[str]:
@@ -541,5 +541,11 @@ def to_markdown(doc: AimDocument, *, pending: str = "drop") -> str:
             blks.extend(renderer._critic_adds((None, ref_id)))
             blks.extend(renderer._critic_adds(("body", ref_id)))
         blocks.extend(blks)
+    if critic:
+        # adds whose anchor chain runs through a card no walk reaches — e.g.
+        # a dissolve chained them onto a pending MOVE, which renders only as
+        # a note — surface at the end rather than being silently dropped
+        for key in list(renderer.adds):
+            blocks.extend(renderer._critic_adds(key))
     blocks.extend(notes)
     return "\n\n".join(b for b in blocks if b) + "\n"

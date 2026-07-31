@@ -396,6 +396,47 @@ class TestResolve:
         assert lint(doc) == []
         assert doc.verify() == []
 
+    def test_chain_through_non_position_card_is_rejected(self, basic_doc):
+        # §5.2: only position cards may be chain anchors. A foreign add
+        # anchored on a pending MODIFY id must lint dirty (P011) and refuse
+        # to accept, never silently land at the container head
+        mod = basic_doc.propose_modify(
+            "intro", '<p data-aim="intro">New.</p>', author=BOT, at=ts(7)
+        )
+        a = basic_doc.propose_add('<p data-aim="a">A.</p>', author=BOT, after="h1", at=ts(8))
+        basic_doc._card_el(a.id).set("data-anchor-after", mod.id)  # foreign-authored
+        assert any(f.code == "P011" for f in lint(basic_doc))
+        with pytest.raises(InvalidOperation, match="not a position card"):
+            basic_doc.accept(a.id, decided_by=ME, at=ts(9))
+
+    def test_reversed_stamps_still_land_in_lane_order(self, basic_doc):
+        # data-at is advisory: a foreign lane may carry stamps that run
+        # backwards. Lane position is the canonical creation order — the
+        # same basis _creation_order() and the tracked views use
+        a = basic_doc.propose_add('<p data-aim="a">A.</p>', author=BOT, after="intro", at=ts(9))
+        b = basic_doc.propose_add('<p data-aim="b">B.</p>', author=BOT, after="intro", at=ts(8))
+        basic_doc.accept(a.id, decided_by=ME, at=ts(10))
+        assert basic_doc.proposal(b.id).anchor_after == "a"
+        basic_doc.accept(b.id, decided_by=ME, at=ts(11))
+        assert basic_doc.body_ids == ["h1", "intro", "a", "b"]
+        assert basic_doc.verify() == []
+
+    def test_criticmarkup_renders_move_chained_adds(self):
+        # an add dissolved onto a pending MOVE tail must not vanish from the
+        # criticmarkup view — leftovers surface at the end
+        import aimformat as aim
+
+        doc = aim.new_document(title="T")
+        for i, cid in enumerate(("w", "x", "y", "z")):
+            doc.add_chunk(f'<p data-aim="{cid}">{cid}</p>', author=BOT, at=ts(i))
+        m = doc.propose_move("w", author=BOT, container="body", after="x", at=ts(4))
+        a = doc.propose_add('<p data-aim="a">PAYLOAD-A</p>', author=BOT, after="y", at=ts(5))
+        d = doc.propose_delete("y", author=BOT, at=ts(6))
+        doc.accept(d.id, decided_by=ME, at=ts(7))
+        assert doc.proposal(a.id).anchor_after == m.id
+        md = aim.to_markdown(doc, pending="criticmarkup")
+        assert "PAYLOAD-A" in md
+
     def test_direct_delete_rebinds_pending_cards_to_predecessor(self, basic_doc):
         # deleting the block a card is anchored on must not dangle the card
         # (one dangler makes the whole lane unprojectable): it rebinds to the
