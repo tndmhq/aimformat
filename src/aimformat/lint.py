@@ -970,6 +970,23 @@ class _Linter:
                             f"{p.anchor_container or 'body'!r}",
                             where,
                         )
+            if p.action in ("add", "move") and not p.anchor_after:
+                # first-position card: the container (and optional table
+                # shell) must still resolve — a ghost container or wrong
+                # shell can never accept
+                try:
+                    self.state.resolve_insert_point(
+                        Anchor(p.anchor_container or "body", None, shell=p.anchor_shell)
+                    )
+                except (TargetNotFound, InvalidOperation):
+                    self.add(
+                        "P016",
+                        ERROR,
+                        f"{p.action} anchors at first position of "
+                        f"{p.anchor_container or 'body'!r} (shell "
+                        f"{p.anchor_shell!r}), which is not a valid position",
+                        where,
+                    )
             if p.depends_on and p.depends_on not in pending_ids:
                 self.add("P012", WARNING, f"data-depends-on {p.depends_on!r} is not pending", where)
             if p.at and not _ISO_RE.match(p.at):
