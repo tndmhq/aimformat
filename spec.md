@@ -700,9 +700,11 @@ one-line "why".
   application would silently change an earlier-proposed pending move's
   source geometry. Creation order resolves the earlier card first, so an
   in-order resolution never hits any of these refusals.
-- Scope of the guarantee: for lanes of **adds, chains, and deletes** —
-  everything agent-emitted lanes contain — every completed resolution
-  order converges to the creation-order result (property-tested).
+- Scope of the guarantee: for **move-free lanes** (adds, chains, and
+  deletes) every completed resolution order converges to the
+  creation-order result (property-tested). Agents CAN emit moves — the
+  CLI and MCP tools expose them — so this class is a property of the
+  lane's content, not of who authored it.
   Lanes that interleave **move proposals** into a zone are guaranteed
   under creation-order resolution (`accept_all`) and protected by the
   refusals above; a residual family of out-of-order reject/accept

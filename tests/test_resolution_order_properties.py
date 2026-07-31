@@ -243,8 +243,8 @@ def test_accept_all_matches_creation_order_or_rejects_atomically(spec: LaneSpec)
 # An order may fail fast (spec §5.4's refusals), but a completed order must
 # always converge to the creation-order result.
 #
-# The GUARANTEED class — lanes of adds, chains, and deletes, i.e. everything
-# agent-emitted lanes contain — is enforced here in CI. Lanes that also
+# The GUARANTEED class — move-free lanes (adds, chains, and deletes; a
+# property of the lane's content, not its author) — is enforced here in CI. Lanes that also
 # interleave MOVE proposals into a zone are creation-order-guaranteed
 # (accept_all) and guard-protected, but a residual family of out-of-order
 # reject/accept interleavings is a documented open limitation (§5.4): zone

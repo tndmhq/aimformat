@@ -3613,21 +3613,33 @@ class AimDocument:
             and zone_of.get(card.get("id") or "") == anchor_key
             and same_zone_side(card)
         ]
-        # a chained candidate whose HOLDER is also being rebound must not be
-        # rewritten too: it follows its holder (rebinding both would flatten
-        # the chain and reverse their order); it detaches only when its
-        # holder stays put
+        # a chained candidate with ANY chain ancestor also being rebound
+        # must not be rewritten too: it follows that ancestor (rebinding
+        # both would flatten the chain and reverse their order); it
+        # detaches only when its whole chain stays put. The ultimate
+        # holder alone is not enough: in a foreign-reordered chain the
+        # direct parent can be a candidate while the holder is not
+        # (round-8 review finding)
         prelim_ids = {c.get("id") for c in prelim}
         rebound = []
         for card in prelim:
-            holder = holder_of.get(card.get("id") or "")
-            if (
-                holder is not None
-                and holder.get("id") != card.get("id")
-                and holder.get("id") in prelim_ids
-            ):
-                continue
-            rebound.append(card)
+            follows = False
+            seen_walk: set[str] = set()
+            walk_el = card
+            while True:
+                nxt = walk_el.get("data-anchor-after")
+                if nxt is None or not ids.is_valid_proposal_id(nxt) or nxt in seen_walk:
+                    break
+                if nxt in prelim_ids:
+                    follows = True
+                    break
+                seen_walk.add(nxt)
+                parent_el = by_id.get(nxt)
+                if parent_el is None:
+                    break
+                walk_el = parent_el
+            if not follows:
+                rebound.append(card)
         # an accepted move vacates a position: a card created BEFORE the move
         # and anchored on its target meant "after the block where it was" —
         # in creation order it lands before the move applies — so its zone

@@ -495,6 +495,40 @@ class TestResolve:
         assert doc.body_ids == truth == ["x", "y", "c", "a", "b", "e"]
         assert doc.verify() == []
 
+    def test_foreign_reordered_chain_keeps_descendants_attached(self):
+        # round-8 finding: with a lint-clean foreign card order, a rebind
+        # candidate's DIRECT parent can be a candidate while its ultimate
+        # holder is not — the exclusion must walk every chain ancestor, or
+        # the sibling rebind flattens the chain
+        import aimformat as aim
+
+        def lane():
+            doc = aim.new_document(title="T")
+            doc.add_chunk('<p data-aim="x">X.</p>', author=BOT, at=ts(0))
+            n1 = doc.propose_add('<p data-aim="n1">1.</p>', author=BOT, after="x", at=ts(1))
+            n2 = doc.propose_add('<p data-aim="n2">2.</p>', author=BOT, after=n1.id, at=ts(2))
+            n5 = doc.propose_add('<p data-aim="n5">5.</p>', author=BOT, after=n2.id, at=ts(3))
+            n0 = doc.propose_add('<p data-aim="n0">0.</p>', author=BOT, after="x", at=ts(4))
+            sec = doc._state.section("aim-proposals")
+            assert sec is not None
+            order = {n5.id: 0, n1.id: 1, n0.id: 2, n2.id: 3}
+            sec.children.sort(key=lambda c: order[c.get("id")])
+            return aim.loads(doc.dumps()), (n0.id, n1.id, n2.id, n5.id)
+
+        doc, (n0, n1, n2, n5) = lane()
+        for pid in (n1, n2, n5, n0):  # dependency-adjusted creation order
+            doc.accept(pid, decided_by=ME, at=ts(9))
+        truth = doc.body_ids
+
+        doc, (n0, n1, n2, n5) = lane()
+        doc.accept(n0, decided_by=ME, at=ts(9))
+        assert doc.proposal(n5).anchor_after == n2  # still chained, not flattened
+        doc.accept(n2, decided_by=ME, at=ts(10))
+        doc.accept(n1, decided_by=ME, at=ts(11))
+        doc.accept(n5, decided_by=ME, at=ts(12))
+        assert doc.body_ids == truth
+        assert doc.verify() == []
+
     def test_direct_delete_rebinds_pending_cards_to_predecessor(self, basic_doc):
         # deleting the block a card is anchored on must not dangle the card
         # (one dangler makes the whole lane unprojectable): it rebinds to the
