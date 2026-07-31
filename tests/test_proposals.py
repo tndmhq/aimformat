@@ -542,6 +542,50 @@ class TestResolve:
         assert basic_doc.body_ids == ["h1", "n1"]
         assert basic_doc.verify() == []
 
+    def test_unreachable_chain_leftovers_render_in_resolution_order(self):
+        # round-10 finding: a foreign-reordered chain hanging off a pending
+        # MOVE reaches no concrete anchor, so it renders via the leftover
+        # drain — which must follow resolution order, not dict order
+        import aimformat as aim
+
+        doc = aim.new_document(title="T")
+        doc.add_chunk('<p data-aim="x">x</p>', author=BOT, at=ts(0))
+        doc.add_chunk('<p data-aim="y">y</p>', author=BOT, at=ts(1))
+        m = doc.propose_move("x", author=BOT, container="body", after="y", at=ts(2))
+        a = doc.propose_add('<p data-aim="a">PAYLOAD-A</p>', author=BOT, after="y", at=ts(3))
+        b = doc.propose_add('<p data-aim="b">PAYLOAD-B</p>', author=BOT, after=a.id, at=ts(4))
+        doc._card_el(a.id).set("data-anchor-after", m.id)  # foreign: chained on the move
+        sec = doc._state.section("aim-proposals")
+        assert sec is not None
+        order = {b.id: 0, a.id: 1, m.id: 2}
+        sec.children.sort(key=lambda c: order[c.get("id")])
+        doc = aim.loads(doc.dumps())
+        md = aim.to_markdown(doc, pending="criticmarkup")
+        assert md.index("PAYLOAD-A") < md.index("PAYLOAD-B")
+
+    def test_lint_flags_conflicting_shell_on_chained_anchor(self):
+        # round-10 finding: a chained position card declaring a different
+        # table shell than its chain's zone can never resolve — the
+        # verifier must not approve it (P016)
+        import aimformat as aim
+
+        doc = aim.new_document(title="T")
+        doc.add_chunk(
+            '<table data-aim-container="tbl"><thead>'
+            '<tr data-aim="hh"><th>h</th></tr></thead><tbody>'
+            '<tr data-aim="r1"><td>1</td></tr>'
+            '<tr data-aim="r2"><td>2</td></tr></tbody></table>',
+            author=BOT,
+            at=ts(0),
+        )
+        m1 = doc.propose_move("r1", author=BOT, container="tbl", after="hh", at=ts(1))
+        m2 = doc.propose_move("r2", author=BOT, container="tbl", after="hh", at=ts(2))
+        card = doc._card_el(m2.id)  # foreign: chain onto m1, declare tbody
+        card.set("data-anchor-after", m1.id)
+        card.set("data-anchor-shell", "tbody")
+        findings = lint(doc)
+        assert any(f.code == "P016" and "shell" in f.message for f in findings)
+
     def test_stacked_dissolves_refuse_rather_than_merge_zones(self):
         # round-9 finding: two dissolves collapsing DIFFERENT zones onto one
         # pending tail lose which zone each card came from; the second

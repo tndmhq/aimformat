@@ -544,8 +544,14 @@ def to_markdown(doc: AimDocument, *, pending: str = "drop") -> str:
     if critic:
         # adds whose anchor chain runs through a card no walk reaches — e.g.
         # a dissolve chained them onto a pending MOVE, which renders only as
-        # a note — surface at the end rather than being silently dropped
-        for key in list(renderer.adds):
+        # a note — surface at the end rather than being silently dropped,
+        # draining the group holding the earliest remaining card first so a
+        # foreign-reordered chain still renders in resolution order
+        while renderer.adds:
+            key = min(
+                renderer.adds,
+                key=lambda k: min(renderer.card_order.get(q.id, 0) for q in renderer.adds[k]),
+            )
             blocks.extend(renderer._critic_adds(key))
     blocks.extend(notes)
     return "\n\n".join(b for b in blocks if b) + "\n"

@@ -923,6 +923,34 @@ class _Linter:
                             "in a different container",
                             where,
                         )
+                    elif anchor_prop is not None and p.anchor_shell is not None:
+                        # a declared shell must match the chain's zone shell,
+                        # or the resolved anchor lands in a row section the
+                        # landed block is not in and the lane cannot resolve
+                        walk = anchor_prop
+                        chain_seen = {p.id}
+                        zone_shell: str | None = None
+                        while walk is not None:
+                            if walk.anchor_after is None or not ids.is_valid_proposal_id(
+                                walk.anchor_after
+                            ):
+                                zone_shell = walk.anchor_shell
+                                break
+                            if walk.id in chain_seen:
+                                walk = None
+                                break
+                            chain_seen.add(walk.id)
+                            nxt = walk.anchor_after
+                            walk = next((q for q in self.doc.proposals if q.id == nxt), None)
+                        if walk is not None and zone_shell != p.anchor_shell:
+                            self.add(
+                                "P016",
+                                ERROR,
+                                f"{p.action} anchors on pending {p.anchor_after!r} "
+                                f"with a conflicting table shell "
+                                f"({p.anchor_shell!r} vs {zone_shell!r})",
+                                where,
+                            )
                 else:
                     # existing anchor: must be a legal insertion point in this
                     # proposal's own container, not merely exist somewhere in

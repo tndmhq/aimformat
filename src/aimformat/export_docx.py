@@ -906,12 +906,16 @@ class _Exporter:
             cid = construct.chunk_id or construct.container_id
             self._emit_anchored_adds("body", cid)
         # anything still unemitted (adds into containers that are themselves
-        # pending-deleted) surfaces at the end rather than being silently
-        # dropped
-        for props in list(self.adds_by_anchor.values()):
-            for prop in props:
-                self._emit_add_paragraphs(prop)
-        self.adds_by_anchor.clear()
+        # pending-deleted, or chains through a pending move) surfaces at the
+        # end rather than being silently dropped — draining the group with
+        # the earliest remaining card first so a foreign-reordered chain
+        # still emits in resolution order
+        while self.adds_by_anchor:
+            key = min(
+                self.adds_by_anchor,
+                key=lambda k: min(self._card_order.get(q.id, 0) for q in self.adds_by_anchor[k]),
+            )
+            self._emit_anchored_adds(*key)
 
     def _apply_theme_fonts(self) -> None:
         """The document's theme font-stack slots → the exported document's
