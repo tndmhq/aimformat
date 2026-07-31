@@ -2791,10 +2791,11 @@ class TestConsecutiveDocxBreaksAllSurvive:
 
 
 class TestSiblingAddOrderMatchesAcceptAll:
-    """AF-47: resolution inserts every same-anchor add at index(anchor)+1,
-    so accept-all leaves the LAST-proposed sibling closest to the anchor —
-    but the tracked-DOCX paragraph lane and criticmarkup rendered proposal
-    order. The two views of the same pending lane disagreed."""
+    """AF-47: the tracked-DOCX paragraph lane, criticmarkup, and accept-all
+    must render the SAME pending-lane order. Since the same-anchor rebind in
+    ``_rebind_chained``, that shared order is card creation order: acceptance
+    rebinds every later same-anchor sibling onto the block that just landed,
+    so the FIRST-proposed sibling stays closest to the anchor."""
 
     @pytest.fixture
     def two_adds(self):
@@ -2806,11 +2807,11 @@ class TestSiblingAddOrderMatchesAcceptAll:
 
     def test_accept_all_ground_truth(self, two_adds):
         md = aim.to_markdown(two_adds, pending="accept-all")
-        assert md.index("Second card") < md.index("First card")
+        assert md.index("First card") < md.index("Second card")
 
     def test_criticmarkup_matches_accept_all(self, two_adds):
         md = aim.to_markdown(two_adds, pending="criticmarkup")
-        assert md.index("Second card") < md.index("First card")
+        assert md.index("First card") < md.index("Second card")
 
     def test_tracked_docx_matches_accept_all(self, two_adds, tmp_path):
         docx = pytest.importorskip("docx")
@@ -2821,7 +2822,7 @@ class TestSiblingAddOrderMatchesAcceptAll:
             "".join(t.text or "" for t in p._p.iter(qn("w:t")))
             for p in docx.Document(str(out)).paragraphs
         ]
-        assert texts.index("Second card") < texts.index("First card")
+        assert texts.index("First card") < texts.index("Second card")
 
     def test_chained_add_still_follows_its_parent(self, two_adds):
         first = next(p for p in two_adds.proposals if "First card" in (p.payload_html or ""))
@@ -2831,8 +2832,11 @@ class TestSiblingAddOrderMatchesAcceptAll:
         accept = aim.to_markdown(two_adds, pending="accept-all")
         critic = aim.to_markdown(two_adds, pending="criticmarkup")
         for md in (accept, critic):
-            assert md.index("First card") < md.index("Chained on first")
-            assert md.index("Second card") < md.index("First card")
+            # creation order: First, then the older same-anchor sibling,
+            # then the chained card (proposed last) — chains guarantee
+            # "after the parent", not adjacency
+            assert md.index("First card") < md.index("Second card")
+            assert md.index("Second card") < md.index("Chained on first")
 
 
 class TestRowAddsAnchorAfterTheWholeRunChunk:

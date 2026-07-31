@@ -765,7 +765,9 @@ class _Linter:
                 "empty <aim-proposals> section (remove it when the pending lane is empty)",
             )
         pending_md: dict[str, str] = {}
+        pending_mv: dict[str, str] = {}
         pending_ids: set[str] = set()
+        pending_position_ids: set[str] = set()
         for node in sec.children:
             if isinstance(node, Element) and node.tag != "aim-proposal":
                 self.add("P001", ERROR, f"unexpected <{node.tag}> inside <aim-proposals>")
@@ -784,6 +786,8 @@ class _Linter:
             if p.id in pending_ids:
                 self.add("P017", ERROR, f"duplicate pending proposal id {p.id!r}", p.id)
             pending_ids.add(p.id)
+            if p.action in ("add", "move"):
+                pending_position_ids.add(p.id)
         for p in self.doc.proposals:
             where = p.id
             if not ids.is_valid_proposal_id(p.id):
@@ -818,6 +822,19 @@ class _Linter:
                         where,
                     )
                 pending_md[p.target] = p.id
+            if p.action == "move" and p.target:
+                # §5.4: at most one pending move per target — a new move
+                # supersedes the old, so two coexisting is a foreign lane
+                # the SDK's latest-move guarantee cannot hold for
+                if p.target in pending_mv:
+                    self.add(
+                        "P018",
+                        ERROR,
+                        f"second pending move on {p.target!r} "
+                        f"(already pending: {pending_mv[p.target]})",
+                        where,
+                    )
+                pending_mv[p.target] = p.id
             if p.action == "modify" and p.payload_html:
                 if p.target == "aim:theme":
                     inner = re.sub(r"^<style[^>]*>|</style>$", "", p.payload_html.strip())
@@ -875,19 +892,24 @@ class _Linter:
                                 f"but target {p.target!r} is a {live}",
                                 where,
                             )
-            if p.action == "add" and p.anchor_after:
-                ok = self.state.exists(p.anchor_after) or p.anchor_after in pending_ids
+            if p.action in ("add", "move") and p.anchor_after:
+                # §5.2: a proposal-id anchor must name a pending POSITION
+                # card — a modify/delete card carries no position to chain
+                # through
+                ok = self.state.exists(p.anchor_after) or p.anchor_after in pending_position_ids
                 if not ok:
                     self.add(
                         "P011",
                         ERROR,
-                        f"add anchor {p.anchor_after!r} is neither a chunk nor a pending proposal",
+                        f"{p.action} anchor {p.anchor_after!r} is neither a chunk "
+                        "nor a pending position card",
                         where,
                     )
-                elif p.anchor_after in pending_ids:
-                    # chained add: the add it anchors on must target the same
-                    # container, or the resolved anchor lands elsewhere and the
-                    # proposal cannot be accepted (AIM-03)
+                elif p.anchor_after in pending_position_ids:
+                    # chained position card (§5.2): the position card it
+                    # anchors on must target the same container, or the
+                    # resolved anchor lands elsewhere and the proposal
+                    # cannot be accepted (AIM-03)
                     anchor_prop = next(
                         (q for q in self.doc.proposals if q.id == p.anchor_after), None
                     )
@@ -897,9 +919,38 @@ class _Linter:
                         self.add(
                             "P016",
                             ERROR,
-                            f"add anchors on pending {p.anchor_after!r} in a different container",
+                            f"{p.action} anchors on pending {p.anchor_after!r} "
+                            "in a different container",
                             where,
                         )
+                    elif anchor_prop is not None and p.anchor_shell is not None:
+                        # a declared shell must match the chain's zone shell,
+                        # or the resolved anchor lands in a row section the
+                        # landed block is not in and the lane cannot resolve
+                        walk = anchor_prop
+                        chain_seen = {p.id}
+                        zone_shell: str | None = None
+                        while walk is not None:
+                            if walk.anchor_after is None or not ids.is_valid_proposal_id(
+                                walk.anchor_after
+                            ):
+                                zone_shell = walk.anchor_shell
+                                break
+                            if walk.id in chain_seen:
+                                walk = None
+                                break
+                            chain_seen.add(walk.id)
+                            nxt = walk.anchor_after
+                            walk = next((q for q in self.doc.proposals if q.id == nxt), None)
+                        if walk is not None and zone_shell != p.anchor_shell:
+                            self.add(
+                                "P016",
+                                ERROR,
+                                f"{p.action} anchors on pending {p.anchor_after!r} "
+                                f"with a conflicting table shell "
+                                f"({p.anchor_shell!r} vs {zone_shell!r})",
+                                where,
+                            )
                 else:
                     # existing anchor: must be a legal insertion point in this
                     # proposal's own container, not merely exist somewhere in
@@ -914,24 +965,48 @@ class _Linter:
                         self.add(
                             "P016",
                             ERROR,
-                            f"add anchor {p.anchor_after!r} is not a valid "
+                            f"{p.action} anchor {p.anchor_after!r} is not a valid "
                             f"position in "
                             f"{p.anchor_container or 'body'!r}",
                             where,
                         )
+            if p.action in ("add", "move") and not p.anchor_after:
+                # first-position card: the container (and optional table
+                # shell) must still resolve — a ghost container or wrong
+                # shell can never accept
+                try:
+                    self.state.resolve_insert_point(
+                        Anchor(p.anchor_container or "body", None, shell=p.anchor_shell)
+                    )
+                except (TargetNotFound, InvalidOperation):
+                    self.add(
+                        "P016",
+                        ERROR,
+                        f"{p.action} anchors at first position of "
+                        f"{p.anchor_container or 'body'!r} (shell "
+                        f"{p.anchor_shell!r}), which is not a valid position",
+                        where,
+                    )
             if p.depends_on and p.depends_on not in pending_ids:
                 self.add("P012", WARNING, f"data-depends-on {p.depends_on!r} is not pending", where)
             if p.at and not _ISO_RE.match(p.at):
                 self.add("P013", ERROR, f"data-at is not ISO-8601 UTC: {p.at!r}", where)
-        # chained adds must form chains, not cycles — a cycle can never
-        # resolve (accept order does not exist)
-        add_anchor = {p.id: p.anchor_after for p in self.doc.proposals if p.action == "add"}
+        # chained position cards must form chains, not cycles — a cycle
+        # can never resolve (accept order does not exist)
+        add_anchor = {
+            p.id: p.anchor_after for p in self.doc.proposals if p.action in ("add", "move")
+        }
         for start in add_anchor:
             seen = {start}
             nxt = add_anchor[start]
             while nxt in add_anchor:
                 if nxt in seen:
-                    self.add("P015", ERROR, "pending adds anchor on each other in a cycle", start)
+                    self.add(
+                        "P015",
+                        ERROR,
+                        "pending position cards anchor on each other in a cycle",
+                        start,
+                    )
                     break
                 seen.add(nxt)
                 nxt = add_anchor[nxt]

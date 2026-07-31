@@ -47,6 +47,16 @@ def _pending_delete_doc() -> str:
     return doc.dumps()
 
 
+def _duplicate_move_doc() -> str:
+    # two pending moves of one target can only be foreign-authored (§5.4:
+    # a new move supersedes the pending one), so retarget the second card
+    doc = base_doc()
+    doc.propose_move("p1", author=BOT, container="body", after="l1", at=t(3))
+    m2 = doc.propose_move("h1", author=BOT, container="body", after="p1", at=t(4))
+    doc._card_el(m2.id).set("data-for", "p1")
+    return doc.dumps()
+
+
 def main() -> None:
     OUT.mkdir(parents=True, exist_ok=True)
     for old in OUT.glob("*.aim"):
@@ -248,6 +258,7 @@ def main() -> None:
         "nok_P014_empty_proposals_section.aim": flat.replace(
             "</body>", "<aim-proposals>\n</aim-proposals>\n</body>"
         ),
+        "nok_P018_duplicate_pending_move.aim": _duplicate_move_doc(),
         "nok_M003_malformed_meta_cache.aim": flat.replace(
             "<title>Conformance fixture</title>\n",
             "<title>Conformance fixture</title>\n"

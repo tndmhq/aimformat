@@ -39,7 +39,7 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from .document import AimDocument, Proposal
+from .document import AimDocument, Proposal, _ChainedAddCycle, resolution_order
 from .dom import Element, Text, parse_fragment
 from .errors import InvalidOperation
 from .events import external
@@ -876,6 +876,14 @@ class _Exporter:
         self.pending_del: dict[str, Proposal] = {}
         # adds keyed by (container, after) — every container, not just body
         self.adds_by_anchor: dict[tuple[str, str | None], list[Proposal]] = {}
+        # dependency-adjusted creation order — the order the accepted lane
+        # lands in, even for a foreign file whose chained card physically
+        # precedes its parent (a cyclic lane falls back to physical order)
+        try:
+            ordered = resolution_order(doc.proposals)
+        except _ChainedAddCycle:
+            ordered = list(doc.proposals)
+        self._card_order: dict[str, int] = {p.id: i for i, p in enumerate(ordered)}
         for p in doc.proposals:
             if p.action == "modify" and p.target and p.target not in ("aim:theme", "aim:doc"):
                 self.pending_mod[p.target] = p
@@ -898,12 +906,16 @@ class _Exporter:
             cid = construct.chunk_id or construct.container_id
             self._emit_anchored_adds("body", cid)
         # anything still unemitted (adds into containers that are themselves
-        # pending-deleted) surfaces at the end rather than being silently
-        # dropped
-        for props in list(self.adds_by_anchor.values()):
-            for prop in props:
-                self._emit_add_paragraphs(prop)
-        self.adds_by_anchor.clear()
+        # pending-deleted, or chains through a pending move) surfaces at the
+        # end rather than being silently dropped — draining the group with
+        # the earliest remaining card first so a foreign-reordered chain
+        # still emits in resolution order
+        while self.adds_by_anchor:
+            key = min(
+                self.adds_by_anchor,
+                key=lambda k: min(self._card_order.get(q.id, 0) for q in self.adds_by_anchor[k]),
+            )
+            self._emit_anchored_adds(*key)
 
     def _apply_theme_fonts(self) -> None:
         """The document's theme font-stack slots → the exported document's
@@ -949,11 +961,15 @@ class _Exporter:
         return self.adds_by_anchor.pop((container, after), [])
 
     def _emit_anchored_adds(self, container: str, anchor: str | None) -> None:
-        # reversed: resolution inserts every same-anchor add at index(anchor)+1,
-        # so accept-all leaves the LAST-proposed sibling closest to the anchor
-        for prop in reversed(self._pop_adds(container, anchor)):
+        # creation order: acceptance rebinds every later same-anchor sibling
+        # onto the block that just landed, so the lane lands in card order; a
+        # chained add joins the pool once the add it anchors on is emitted
+        pool = self._pop_adds(container, anchor)
+        while pool:
+            pool.sort(key=lambda p: self._card_order.get(p.id, 0))
+            prop = pool.pop(0)
             self._emit_add_paragraphs(prop)
-            self._emit_anchored_adds(container, prop.id)  # chained adds anchor on this one
+            pool += self._pop_adds(container, prop.id)
 
     def _emit_add_paragraphs(self, prop: Proposal, style: str | None = None) -> None:
         els = self._payload_elements(prop)
@@ -1566,10 +1582,13 @@ class _Exporter:
                 self._emit_list_adds(container_id, cid, style)
 
     def _emit_list_adds(self, container: str, after: str | None, style: str | None) -> None:
-        # reversed for the same reason as _emit_anchored_adds
-        for prop in reversed(self._pop_adds(container, after)):
+        # creation-order pool, for the same reason as _emit_anchored_adds
+        pool = self._pop_adds(container, after)
+        while pool:
+            pool.sort(key=lambda p: self._card_order.get(p.id, 0))
+            prop = pool.pop(0)
             self._emit_add_paragraphs(prop, style=style)
-            self._emit_list_adds(container, prop.id, style)
+            pool += self._pop_adds(container, prop.id)
 
     # -- tables ----------------------------------------------------------------------
     def emit_table(
@@ -1792,8 +1811,10 @@ class _Exporter:
         """Insert pending row-adds as fully-inserted (w:ins) table rows,
         each positioned right after its anchor ``w:tr`` (the container start
         when ``first``)."""
-        props = self._pop_adds(container, after)
-        for prop in props:
+        pool = self._pop_adds(container, after)
+        while pool:
+            pool.sort(key=lambda p: self._card_order.get(p.id, 0))
+            prop = pool.pop(0)
             new_row = table.add_row()  # appended; repositioned below
             payload_cells = [
                 c
@@ -1811,10 +1832,12 @@ class _Exporter:
                 )
             if first:
                 table.rows[0]._tr.addprevious(new_row._tr)
+                first = False  # later siblings chain after this row
             else:
                 anchor_tr.addnext(new_row._tr)
-            # chained adds anchor on the row just inserted
-            self._emit_row_adds(table, new_row._tr, container, prop.id, ncols)
+            anchor_tr = new_row._tr
+            # chained adds anchor on the row just inserted; they join the pool
+            pool += self._pop_adds(container, prop.id)
 
 
 # --------------------------------------------------------------------------

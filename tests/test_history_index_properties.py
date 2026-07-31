@@ -21,6 +21,7 @@ from hypothesis import HealthCheck, example, given, settings
 from hypothesis import strategies as st
 
 import aimformat as aim
+from aimformat.errors import InvalidOperation
 
 BOT = aim.agent("history-index-property")
 ME = aim.human("history-index-reviewer")
@@ -135,7 +136,11 @@ def _apply_operation(doc: aim.AimDocument, operation: str, choice: int, step: in
             at=_ts(step),
         )
     elif operation == "delete" and live:
-        doc.delete_chunk(live[choice % len(live)], author=ME, at=_ts(step))
+        try:
+            doc.delete_chunk(live[choice % len(live)], author=ME, at=_ts(step))
+        except InvalidOperation:
+            pass  # direct deletes refuse while pending cards anchor on the target
+
     elif operation == "move" and len(live) >= 2:
         target = live[choice % len(live)]
         after = live[-1] if target == live[0] else None
@@ -176,6 +181,20 @@ def _apply_operation(doc: aim.AimDocument, operation: str, choice: int, step: in
         ("prune", 0),
         ("flatten", 0),
         ("add", 1),
+    ]
+)
+@example(
+    # the same-anchor rebind points a pending card at the block an accepted
+    # sibling landed; deleting that block then dangled the card and every
+    # later propose failed projection, until removal rebinding
+    operations=[
+        ("propose", 0),
+        ("propose", 0),
+        ("accept", 0),
+        ("add", 0),
+        ("add", 0),
+        ("delete", 2),
+        ("propose", 0),
     ]
 )
 @settings(
