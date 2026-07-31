@@ -437,6 +437,28 @@ class TestResolve:
         md = aim.to_markdown(doc, pending="criticmarkup")
         assert "PAYLOAD-A" in md
 
+    def test_resolved_move_split_survives_stamp_ties(self):
+        # round-6 finding: with every stamp identical (one-second _now_iso),
+        # a REJECTED move sitting between two same-anchor adds must still
+        # split their grouping — its resolution event records the lane
+        # ordinal (lane_before), which stamps cannot reconstruct
+        import aimformat as aim
+
+        doc = aim.new_document(title="T")
+        for i, cid in enumerate(("x", "y", "z")):
+            doc.add_chunk(f'<p data-aim="{cid}">{cid}</p>', author=BOT, at=ts(i))
+        a = doc.propose_add('<p data-aim="a">A.</p>', author=BOT, after="x", at=ts(7))
+        m = doc.propose_move("x", author=BOT, container="body", after="z", at=ts(7))
+        b = doc.propose_add('<p data-aim="b">B.</p>', author=BOT, after="x", at=ts(7))
+        doc.reject(m.id, decided_by=ME, at=ts(8))
+        ev = next(e for e in doc.history if e.get("proposal") == m.id)
+        assert ev.get("lane_before") == [a.id]
+        doc.accept(a.id, decided_by=ME, at=ts(9))
+        assert doc.proposal(b.id).anchor_after == "x"  # split: never grouped onto a
+        doc.accept(b.id, decided_by=ME, at=ts(10))
+        assert doc.body_ids == ["x", "b", "a", "y", "z"]
+        assert doc.verify() == []
+
     def test_direct_delete_rebinds_pending_cards_to_predecessor(self, basic_doc):
         # deleting the block a card is anchored on must not dangle the card
         # (one dangler makes the whole lane unprojectable): it rebinds to the

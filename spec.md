@@ -747,7 +747,7 @@ find-in-page, or the accessibility tree.
 | kind | required fields | optional fields | state-changing |
 |---|---|---|---|
 | `direct_edit` | `seq, kind, t, target, action, author, batch` | `before, after, anchor, from, to, origin, explanation, source` | yes |
-| `resolution` | `seq, kind, t, proposal, target, action, decision, proposed_by, proposed_at, decided_by, batch` | `before, proposed, applied, anchor, from, to, superseded_by, explanation, source` | only if `decision:"accepted"` |
+| `resolution` | `seq, kind, t, proposal, target, action, decision, proposed_by, proposed_at, decided_by, batch` | `before, proposed, applied, anchor, from, to, superseded_by, explanation, source, lane_before` | only if `decision:"accepted"` |
 | `checkpoint` | `seq, kind, t, label, doc_hash` | | no |
 
 `action` ∈ `add | modify | delete | move`; `decision` ∈ `accepted |
@@ -755,7 +755,12 @@ rejected | superseded`; `origin` ∈ `user | undo | redo | reconcile`.
 
 One **resolution event per proposal lifetime**: creation is not logged
 separately; `proposed_at`/`proposed_by` travel inside the resolution, so
-chronology survives without duplicating pending content. **`applied` vs
+chronology survives without duplicating pending content. A **move**
+resolution additionally records `lane_before` — the ids of the pending
+cards that sat on the earlier side of the move in the dependency-adjusted
+lane order at resolution. This preserves the zone-split ordinal (§5.4):
+`data-at` cannot reconstruct it (one-second precision ties), and the
+card's lane slot dies with the card. **`applied` vs
 `proposed`**: accept-with-tweaks is a plain `accepted` where
 `applied ≠ proposed` (the field is omitted when identical) — not a fourth
 decision type. This preserves "verbatim AI vs human-corrected" attribution
@@ -1200,7 +1205,7 @@ Literal paint (`color` `background-color` `border-color`) is since spec 0.3 (S03
 - `move`: payloadless; requires `data-for` `data-anchor-container`
 
 - `direct_edit` events — required: `seq` `kind` `t` `target` `action` `author` `batch`; optional: `before` `after` `anchor` `from` `to` `origin` `explanation` `source`
-- `resolution` events — required: `seq` `kind` `t` `proposal` `target` `action` `decision` `proposed_by` `proposed_at` `decided_by` `batch`; optional: `before` `proposed` `applied` `anchor` `from` `to` `superseded_by` `explanation` `source`
+- `resolution` events — required: `seq` `kind` `t` `proposal` `target` `action` `decision` `proposed_by` `proposed_at` `decided_by` `batch`; optional: `before` `proposed` `applied` `anchor` `from` `to` `superseded_by` `explanation` `source` `lane_before`
 - `checkpoint` events — required: `seq` `kind` `t` `label` `doc_hash`
 
 ### A.6 Page setup

@@ -3042,6 +3042,13 @@ class AimDocument:
                 if decision == "accepted":
                     dst = effective_anchor = self._effective_anchor(prop)
                 data["to"] = dst.to_obj()
+                if prop.id in ordered_ids:
+                    # the zone-split ordinal (§5.4): which pending cards sat
+                    # on the earlier side of this move when it resolved.
+                    # data-at cannot reconstruct it (one-second precision
+                    # ties), and the card's lane slot dies with the card —
+                    # so the resolution event preserves it
+                    data["lane_before"] = ordered_ids[: ordered_ids.index(prop.id)]
                 if decision == "accepted":
                     _no_delete_move(prop.target or "", "move proposal")
                     nested_parent = self._nested_move_parent(prop.target or "")
@@ -3202,8 +3209,8 @@ class AimDocument:
                     for c in cards0
                     if c.get("data-action") == "move" and c.get("data-for") == after
                 ]
-                move_stamps = [
-                    ev.get("proposed_at") or ""
+                move_events = [
+                    (ev.get("lane_before"), ev.get("proposed_at") or "")
                     for ev in self._history_events()
                     if ev.kind == "resolution" and ev.action == "move" and ev.target == after
                 ]
@@ -3216,12 +3223,16 @@ class AimDocument:
                     other_el = holder if holder is not None else c
                     other_pos = pos0.get(other_el.get("id") or "", big0)
                     other_stamp = other_el.get("data-at") or ""
-                    split = (
-                        other_pos < own_pos and any(other_pos < mp < own_pos for mp in move_pos)
-                    ) or (
-                        other_stamp < own_stamp
-                        and any(other_stamp < ms < own_stamp for ms in move_stamps)
-                    )
+                    split = other_pos < own_pos and any(other_pos < mp < own_pos for mp in move_pos)
+                    for lane_before, move_stamp in move_events:
+                        if lane_before is not None:
+                            # recorded ordinal: mate on the earlier side of
+                            # the resolved move, this card on the later side
+                            oid = other_el.get("id") or ""
+                            if oid in lane_before and prop.id not in lane_before:
+                                split = True
+                        elif other_stamp < own_stamp and other_stamp < move_stamp < own_stamp:
+                            split = True
                     if split:
                         raise InvalidOperation(
                             f"proposal {prop.id!r} sits on the later side of a zone "
@@ -3550,12 +3561,14 @@ class AimDocument:
 
         resolved_pos = pos_of(resolved.id)
         resolved_holder_pos = resolved_pos
+        resolved_holder_id = resolved.id
         resolved_stamp = resolved.at or ""
         if resolved.anchor_after is not None and ids.is_valid_proposal_id(resolved.anchor_after):
             parent = by_id.get(resolved.anchor_after)
             rh = self._zone_holder(parent, by_id) if parent is not None else None
             if rh is not None:
                 resolved_holder_pos = pos_of(rh.get("id"))
+                resolved_holder_id = rh.get("id") or resolved.id
                 resolved_stamp = rh.get("data-at") or resolved_stamp
         resolved_rank = (max(resolved_holder_pos, resolved_pos), resolved_pos)
 
@@ -3589,12 +3602,25 @@ class AimDocument:
                     continue
                 if lo < pos_of(c.get("id")) < hi:
                     return False
+            holder_id = holder.get("id") or ""
             holder_stamp = holder.get("data-at") or ""
             s_lo, s_hi = min(resolved_stamp, holder_stamp), max(resolved_stamp, holder_stamp)
             for ev in self._history_events():
-                if ev.kind == "resolution" and ev.action == "move" and ev.target == block:
-                    if s_lo < (ev.get("proposed_at") or "") < s_hi:
+                if ev.kind != "resolution" or ev.action != "move" or ev.target != block:
+                    continue
+                lane_before = ev.get("lane_before")
+                if lane_before is not None:
+                    # the recorded split ordinal: the two holders group only
+                    # when they sat on the SAME side of the move (a card
+                    # proposed after the move's resolution is on the later
+                    # side by construction — it is absent from the list)
+                    if (resolved_holder_id in lane_before) != (holder_id in lane_before):
                         return False
+                    continue
+                # legacy event without the ordinal: stamp interval,
+                # best-effort at one-second precision
+                if s_lo < (ev.get("proposed_at") or "") < s_hi:
+                    return False
             return True
 
         # the resolved card's own chain ancestors must never be captured by

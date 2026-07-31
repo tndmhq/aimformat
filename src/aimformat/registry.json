@@ -743,7 +743,8 @@
           "to",
           "superseded_by",
           "explanation",
-          "source"
+          "source",
+          "lane_before"
         ]
       },
       "checkpoint": {
