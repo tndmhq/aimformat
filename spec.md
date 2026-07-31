@@ -698,8 +698,16 @@ one-line "why".
   delete/move whose dissolve would merge cards onto such a block, whose
   vacated cards still carry chain descendants proposed after it, or whose
   application would silently change an earlier-proposed pending move's
-  source geometry. Creation order resolves the earlier card first, so an
-  in-order resolution never hits any of these refusals.
+  source geometry; and accepting a delete/move whose dissolve would stack
+  a second dissolved zone onto a tail already carrying chained cards
+  (which zone each card came from is not tracked). Creation order
+  resolves the earlier card first — and never dissolves at all, since
+  cards anchored on a removal target were proposed before it and have
+  already resolved — so an in-order resolution never hits any of these
+  refusals. A **direct** delete refuses outright while pending cards
+  anchor on its target: a dissolve mutates cards without an event of its
+  own, which `undo` could not reverse (resolutions are not undoable, so
+  accepted delete proposals dissolve freely).
 - Scope of the guarantee: for **move-free lanes** (adds, chains, and
   deletes) every completed resolution order converges to the
   creation-order result (property-tested). Agents CAN emit moves — the

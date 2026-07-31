@@ -1793,8 +1793,18 @@ class AimDocument:
             raise TargetNotFound(f"no chunk {cid!r}")
         anchor = self._anchor_of(cid)
         self._guard_geometry_dependents(None, vacated_block=cid, incoming_dst=None)
-        if self._cards_anchored_on(cid):
-            self._guard_dissolve_target(cid, anchor, None)
+        anchored = self._cards_anchored_on(cid)
+        if anchored:
+            # a dissolve mutates pending cards, and a direct edit's event
+            # records only the body change — undo() could restore the block
+            # but not the cards. Direct deletes therefore refuse; resolve or
+            # re-anchor the cards first (accepted delete PROPOSALS dissolve:
+            # resolutions are not undoable)
+            names = ", ".join(repr(c.get("id") or "") for c in anchored)
+            raise InvalidOperation(
+                f"cannot delete {cid!r}: pending cards ({names}) anchor on it — "
+                "resolve or re-anchor them first"
+            )
         self._state.remove(cid)
         self._rebind_removed_anchor(cid, anchor)
         data = {
@@ -3032,6 +3042,7 @@ class AimDocument:
                 )
                 if self._cards_anchored_on(prop.target or ""):
                     self._guard_dissolve_target(prop.target or "", removed_anchor, prop)
+                    self._guard_dissolve_stacking(prop.target or "", removed_anchor, prop)
                 data["anchor"] = removed_anchor.to_obj()
                 self._state.remove(prop.target or "")
                 self._rebind_removed_anchor(prop.target or "", removed_anchor)
@@ -3110,6 +3121,7 @@ class AimDocument:
                         ]
                         if vacated:
                             self._guard_dissolve_target(prop.target or "", src, prop)
+                            self._guard_dissolve_stacking(prop.target or "", src, prop)
                             self._guard_vacated_descendants(vacated, later_ids, prop)
                         move_source = src
                     data["anchor"] = dst.to_obj()
@@ -3411,6 +3423,52 @@ class AimDocument:
             seen.add(cid)
             card = parent
 
+    def _dissolve_tail(
+        self,
+        cards: list[Element],
+        dissolved_ids: set[str | None],
+        anchor: Anchor,
+    ) -> str | None:
+        """The merged zone's last pending position card (dissolve chains
+        attach here), or None when the zone has no pending cards."""
+        by_id = {c.get("id"): c for c in cards}
+        key = (anchor.container, anchor.after, anchor.shell)
+        tail: str | None = None
+        for c in cards:
+            if (
+                c.get("id") not in dissolved_ids
+                and c.get("data-action") in ("add", "move")
+                and self._card_zone(c, by_id) == key
+            ):
+                tail = c.get("id")
+        return tail
+
+    def _guard_dissolve_stacking(self, removed: str, anchor: Anchor, prop: Proposal) -> None:
+        """Refuse a dissolve whose tail already carries dissolve-chained
+        dependents: stacking a second dissolved zone onto the same tail
+        loses which zone each card came from, and with it their geometric
+        order. In creation order a dissolve never fires at all (cards
+        anchored on the target were proposed before it and have already
+        resolved), so an in-order resolution never hits this."""
+        sec = self._state.section("aim-proposals")
+        if sec is None:
+            return
+        cards = list(sec.elements())
+        dissolved_ids = {c.get("id") for c in cards if c.get("data-anchor-after") == removed}
+        if not dissolved_ids:
+            return
+        tail = self._dissolve_tail(cards, dissolved_ids, anchor)
+        if tail is None:
+            return
+        dependents = [c for c in cards if c.get("data-anchor-after") == tail]
+        if dependents:
+            names = ", ".join(repr(c.get("id") or "") for c in dependents)
+            raise InvalidOperation(
+                f"accepting {prop.id!r} would stack a second dissolved zone onto "
+                f"{tail!r}, which already carries chained cards ({names}) — "
+                "resolve those first"
+            )
+
     def _rebind_removed_anchor(
         self, removed: str, anchor: Anchor, *, only: set[str | None] | None = None
     ) -> None:
@@ -3437,16 +3495,7 @@ class AimDocument:
         }
         if not dissolved_ids:
             return
-        by_id = {c.get("id"): c for c in cards}
-        key = (anchor.container, anchor.after, anchor.shell)
-        tail: str | None = None
-        for c in cards:
-            if (
-                c.get("id") not in dissolved_ids
-                and c.get("data-action") in ("add", "move")
-                and self._card_zone(c, by_id) == key
-            ):
-                tail = c.get("id")
+        tail = self._dissolve_tail(cards, dissolved_ids, anchor)
         for card in cards:
             if card.get("id") not in dissolved_ids:
                 continue
@@ -3458,8 +3507,10 @@ class AimDocument:
             if tail is not None and not (
                 card.get("data-action") == "move" and card.get("data-for") == anchor.after
             ):
+                # the tail shares the exact zone (shell included): the card
+                # KEEPS its shell, so a later chain bypass can restore a
+                # concrete in-shell anchor instead of a bare container slot
                 card.set("data-anchor-after", tail)
-                card.remove_attr("data-anchor-shell")  # the chain's zone supplies it
                 continue
             if anchor.after is None:
                 card.remove_attr("data-anchor-after")
@@ -3696,11 +3747,17 @@ class AimDocument:
                     card.set("data-anchor-after", new_after or "")
                 elif reselected is not None:
                     card.set("data-anchor-after", reselected)
-                else:  # no remaining tail: rebind to the resolved card's anchor
+                else:  # no remaining tail: rebind to the resolved card's
+                    # anchor, shell included — a dissolved thead row must
+                    # stay a thead row when its chain is bypassed
                     if resolved.anchor_after is None:
                         card.remove_attr("data-anchor-after")
                     else:
                         card.set("data-anchor-after", resolved.anchor_after)
+                    if resolved.anchor_shell is None:
+                        card.remove_attr("data-anchor-shell")
+                    else:
+                        card.set("data-anchor-shell", resolved.anchor_shell)
         for card in rebound:
             card.set("data-anchor-after", landed)
         if vacated_ids:

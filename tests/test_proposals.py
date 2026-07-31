@@ -529,16 +529,82 @@ class TestResolve:
         assert doc.body_ids == truth
         assert doc.verify() == []
 
-    def test_direct_delete_rebinds_pending_cards_to_predecessor(self, basic_doc):
-        # deleting the block a card is anchored on must not dangle the card
-        # (one dangler makes the whole lane unprojectable): it rebinds to the
-        # removed block's own anchor, like a chained add on a rejected parent
+    def test_direct_delete_refuses_with_anchored_pending_cards(self, basic_doc):
+        # a dissolve mutates pending cards without an event, which undo()
+        # cannot reverse — a DIRECT delete refuses instead: resolve or
+        # re-anchor first (accepted delete PROPOSALS still dissolve;
+        # resolutions are not undoable) — round-9 review finding
         p = basic_doc.propose_add('<p data-aim="n1">One.</p>', author=BOT, after="intro", at=ts(7))
-        basic_doc.delete_chunk("intro", author=ME, at=ts(8))
-        assert basic_doc.proposal(p.id).anchor_after == "h1"
-        basic_doc.accept(p.id, decided_by=ME, at=ts(9))
+        with pytest.raises(InvalidOperation, match="anchor on it"):
+            basic_doc.delete_chunk("intro", author=ME, at=ts(8))
+        basic_doc.accept(p.id, decided_by=ME, at=ts(8))
+        basic_doc.delete_chunk("intro", author=ME, at=ts(9))
         assert basic_doc.body_ids == ["h1", "n1"]
         assert basic_doc.verify() == []
+
+    def test_stacked_dissolves_refuse_rather_than_merge_zones(self):
+        # round-9 finding: two dissolves collapsing DIFFERENT zones onto one
+        # pending tail lose which zone each card came from; the second
+        # dissolve refuses until the first tail's chained cards resolve
+        import aimformat as aim
+
+        doc = aim.new_document(title="T")
+        for i, cid in enumerate(("x", "y", "z")):
+            doc.add_chunk(f'<p data-aim="{cid}">{cid}</p>', author=BOT, at=ts(i))
+        a = doc.propose_add('<p data-aim="a">A.</p>', author=BOT, after="z", at=ts(3))
+        dy = doc.propose_delete("y", author=BOT, at=ts(4))
+        b = doc.propose_add('<p data-aim="b">B.</p>', author=BOT, after="x", at=ts(5))
+        h = doc.propose_add('<p data-aim="h">H.</p>', author=BOT, after=None, at=ts(6))
+        dx = doc.propose_delete("x", author=BOT, at=ts(7))
+        dz = doc.propose_delete("z", author=BOT, at=ts(8))
+
+        doc.accept(dy.id, decided_by=ME, at=ts(9))
+        doc.accept(dx.id, decided_by=ME, at=ts(10))
+        assert doc.proposal(b.id).anchor_after == h.id  # dissolved onto tail H
+        with pytest.raises(InvalidOperation, match="stack a second dissolved zone"):
+            doc.accept(dz.id, decided_by=ME, at=ts(11))
+        # resolving the tail unblocks the lane
+        doc.reject(h.id, decided_by=ME, at=ts(11))
+        doc.accept(dz.id, decided_by=ME, at=ts(12))
+        doc.accept(b.id, decided_by=ME, at=ts(13))
+        doc.accept(a.id, decided_by=ME, at=ts(14))
+        assert doc.body_ids == ["b", "a"]
+        assert doc.verify() == []
+
+    def test_dissolve_retains_table_shell(self):
+        # round-9 finding: a dissolved thead row keeps its shell through the
+        # chain AND through a chain bypass — it must never fall back to a
+        # bare container slot outside its row section
+        import aimformat as aim
+
+        doc = aim.new_document(title="T")
+        doc.add_chunk(
+            '<table data-aim-container="tbl"><thead>'
+            '<tr data-aim="hh"><th>head</th></tr></thead><tbody>'
+            '<tr data-aim="r1"><td>one</td></tr></tbody></table>',
+            author=BOT,
+            at=ts(0),
+        )
+        t = doc.propose_add(
+            "<tr><th>T</th></tr>", author=BOT, container="tbl", after=None, at=ts(1)
+        )
+        doc._card_el(t.id).set("data-anchor-shell", "thead")  # foreign-authored
+        assert doc.proposal(t.id).anchor_shell == "thead"
+        a = doc.propose_add(
+            "<tr><th>A</th></tr>", author=BOT, container="tbl", after="hh", at=ts(2)
+        )
+        d = doc.propose_delete("hh", author=BOT, at=ts(3))
+        doc.accept(d.id, decided_by=ME, at=ts(4))
+        assert doc.proposal(a.id).anchor_after == t.id
+        assert doc.proposal(a.id).anchor_shell == "thead"  # retained
+        doc.reject(t.id, decided_by=ME, at=ts(5))
+        assert doc.proposal(a.id).anchor_shell == "thead"  # restored on bypass
+        doc.accept(a.id, decided_by=ME, at=ts(6))
+        html = doc._state.serial("tbl") or ""
+        head = html.index("<thead")
+        body = html.index("<tbody")
+        assert head < html.index("<th>A</th>") < body
+        assert doc.verify() == []
 
     def test_accepted_delete_rebinds_pending_cards_to_predecessor(self, basic_doc):
         p = basic_doc.propose_add('<p data-aim="n1">One.</p>', author=BOT, after="h1", at=ts(7))
