@@ -682,13 +682,14 @@ one-line "why".
   — they meant "after the block where it was"; cards created after it were
   proposed against the projection with the block at its destination, and
   follow it there.
-- Sibling grouping never spans an intervening move PROPOSAL of the anchor
-  block — whatever that move's eventual outcome: cards (their chain
-  holders, for chained cards) proposed before and after it made their
-  claims against potentially different geometries and belong to different
-  zones. The split reads proposal times from the permanent record (cards
-  and resolution events alike), so it is itself independent of when the
-  move resolves.
+- Sibling grouping never spans a PENDING move of the anchor block: cards
+  (their chain holders, for chained cards) on either side of it made their
+  claims against potentially different geometries and do not group while
+  the move is undecided. Once it resolves the zone re-unifies — an
+  accepted move relocates content per the vacation rule above; a rejected
+  move leaves plain creation order among the cards still pending. Orders
+  that interleaved acceptances around the pending move are part of the
+  move-space limitation below.
 - A resolution **refuses rather than guesses** whenever its landing or its
   rebinds depend on another card that is still undecided: accepting a card
   whose anchor block has an earlier-proposed pending move, or whose anchor
@@ -747,7 +748,7 @@ find-in-page, or the accessibility tree.
 | kind | required fields | optional fields | state-changing |
 |---|---|---|---|
 | `direct_edit` | `seq, kind, t, target, action, author, batch` | `before, after, anchor, from, to, origin, explanation, source` | yes |
-| `resolution` | `seq, kind, t, proposal, target, action, decision, proposed_by, proposed_at, decided_by, batch` | `before, proposed, applied, anchor, from, to, superseded_by, explanation, source, lane_before` | only if `decision:"accepted"` |
+| `resolution` | `seq, kind, t, proposal, target, action, decision, proposed_by, proposed_at, decided_by, batch` | `before, proposed, applied, anchor, from, to, superseded_by, explanation, source` | only if `decision:"accepted"` |
 | `checkpoint` | `seq, kind, t, label, doc_hash` | | no |
 
 `action` ∈ `add | modify | delete | move`; `decision` ∈ `accepted |
@@ -755,12 +756,7 @@ rejected | superseded`; `origin` ∈ `user | undo | redo | reconcile`.
 
 One **resolution event per proposal lifetime**: creation is not logged
 separately; `proposed_at`/`proposed_by` travel inside the resolution, so
-chronology survives without duplicating pending content. A **move**
-resolution additionally records `lane_before` — the ids of the pending
-cards that sat on the earlier side of the move in the dependency-adjusted
-lane order at resolution. This preserves the zone-split ordinal (§5.4):
-`data-at` cannot reconstruct it (one-second precision ties), and the
-card's lane slot dies with the card. **`applied` vs
+chronology survives without duplicating pending content. **`applied` vs
 `proposed`**: accept-with-tweaks is a plain `accepted` where
 `applied ≠ proposed` (the field is omitted when identical) — not a fourth
 decision type. This preserves "verbatim AI vs human-corrected" attribution
@@ -1205,7 +1201,7 @@ Literal paint (`color` `background-color` `border-color`) is since spec 0.3 (S03
 - `move`: payloadless; requires `data-for` `data-anchor-container`
 
 - `direct_edit` events — required: `seq` `kind` `t` `target` `action` `author` `batch`; optional: `before` `after` `anchor` `from` `to` `origin` `explanation` `source`
-- `resolution` events — required: `seq` `kind` `t` `proposal` `target` `action` `decision` `proposed_by` `proposed_at` `decided_by` `batch`; optional: `before` `proposed` `applied` `anchor` `from` `to` `superseded_by` `explanation` `source` `lane_before`
+- `resolution` events — required: `seq` `kind` `t` `proposal` `target` `action` `decision` `proposed_by` `proposed_at` `decided_by` `batch`; optional: `before` `proposed` `applied` `anchor` `from` `to` `superseded_by` `explanation` `source`
 - `checkpoint` events — required: `seq` `kind` `t` `label` `doc_hash`
 
 ### A.6 Page setup

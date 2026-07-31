@@ -3042,13 +3042,6 @@ class AimDocument:
                 if decision == "accepted":
                     dst = effective_anchor = self._effective_anchor(prop)
                 data["to"] = dst.to_obj()
-                if prop.id in ordered_ids:
-                    # the zone-split ordinal (§5.4): which pending cards sat
-                    # on the earlier side of this move when it resolved.
-                    # data-at cannot reconstruct it (one-second precision
-                    # ties), and the card's lane slot dies with the card —
-                    # so the resolution event preserves it
-                    data["lane_before"] = ordered_ids[: ordered_ids.index(prop.id)]
                 if decision == "accepted":
                     _no_delete_move(prop.target or "", "move proposal")
                     nested_parent = self._nested_move_parent(prop.target or "")
@@ -3203,16 +3196,10 @@ class AimDocument:
                 pos0 = {pid: i for i, pid in enumerate(ordered0)}
                 big0 = len(pos0) + 1
                 own_pos = pos0.get(prop.id, big0)
-                own_stamp = prop.at or ""
                 move_pos = [
                     pos0.get(c.get("id") or "", big0)
                     for c in cards0
                     if c.get("data-action") == "move" and c.get("data-for") == after
-                ]
-                move_events = [
-                    (ev.get("lane_before"), ev.get("proposed_at") or "")
-                    for ev in self._history_events()
-                    if ev.kind == "resolution" and ev.action == "move" and ev.target == after
                 ]
                 for c in cards0:
                     if c.get("id") == prop.id or c.get("data-action") not in ("add", "move"):
@@ -3222,17 +3209,7 @@ class AimDocument:
                     holder = self._zone_holder(c, by_id0)
                     other_el = holder if holder is not None else c
                     other_pos = pos0.get(other_el.get("id") or "", big0)
-                    other_stamp = other_el.get("data-at") or ""
                     split = other_pos < own_pos and any(other_pos < mp < own_pos for mp in move_pos)
-                    for lane_before, move_stamp in move_events:
-                        if lane_before is not None:
-                            # recorded ordinal: mate on the earlier side of
-                            # the resolved move, this card on the later side
-                            oid = other_el.get("id") or ""
-                            if oid in lane_before and prop.id not in lane_before:
-                                split = True
-                        elif other_stamp < own_stamp and other_stamp < move_stamp < own_stamp:
-                            split = True
                     if split:
                         raise InvalidOperation(
                             f"proposal {prop.id!r} sits on the later side of a zone "
@@ -3561,67 +3538,51 @@ class AimDocument:
 
         resolved_pos = pos_of(resolved.id)
         resolved_holder_pos = resolved_pos
-        resolved_holder_id = resolved.id
-        resolved_stamp = resolved.at or ""
         if resolved.anchor_after is not None and ids.is_valid_proposal_id(resolved.anchor_after):
             parent = by_id.get(resolved.anchor_after)
             rh = self._zone_holder(parent, by_id) if parent is not None else None
             if rh is not None:
                 resolved_holder_pos = pos_of(rh.get("id"))
-                resolved_holder_id = rh.get("id") or resolved.id
-                resolved_stamp = rh.get("data-at") or resolved_stamp
         resolved_rank = (max(resolved_holder_pos, resolved_pos), resolved_pos)
+
+        # one pass over the lane: holders, zones, and pending-move positions
+        # by target — same_zone_side and the rebind scan below stay O(lane)
+        # per acceptance instead of rescanning per candidate
+        holder_of: dict[str, Element | None] = {}
+        zone_of: dict[str, tuple[str, str | None, str | None] | None] = {}
+        pending_move_pos: dict[str, list[int]] = {}
+        for c in cards:
+            cid = c.get("id") or ""
+            holder_of[cid] = self._zone_holder(c, by_id)
+            zone_of[cid] = self._card_zone(c, by_id)
+            if c.get("data-action") == "move" and c.get("data-for"):
+                pending_move_pos.setdefault(c.get("data-for") or "", []).append(pos_of(cid))
 
         def zone_rank(card: Element) -> tuple[int, int]:
             own = pos_of(card.get("id"))
-            holder = self._zone_holder(card, by_id)
+            holder = holder_of.get(card.get("id") or "")
             if holder is None:
                 return (own, own)
             return (max(pos_of(holder.get("id")), own), own)
 
         def same_zone_side(card: Element) -> bool:
-            """A move of the zone's anchor block PROPOSED between the two
-            cards' chain holders splits the zone — whatever that move's
-            outcome: the holders made their claims against potentially
-            different geometries and must not group as siblings. Pending
-            moves compare by lane position (canonical); moves that already
-            resolved exist only in history, so their recorded proposal time
-            is compared against the holders' stamps — exact for SDK lanes,
-            best-effort for a foreign lane whose stamps disagree with its
-            card order."""
+            """A PENDING move of the zone's anchor block sitting between the
+            two cards' chain holders splits the zone: the holders made their
+            claims against potentially different geometries and must not
+            group as siblings. Once that move resolves the zone re-unifies —
+            an accepted move relocates content per the vacation rule, and a
+            rejected move leaves plain creation order among the cards still
+            pending (orders interleaved around the pending move fall under
+            §5.4's documented move-space limitation)."""
             block = anchor_key[1]
             if block is None:
                 return True
-            holder = self._zone_holder(card, by_id)
+            holder = holder_of.get(card.get("id") or "")
             if holder is None:
                 return True
             hpos = pos_of(holder.get("id"))
             lo, hi = min(resolved_holder_pos, hpos), max(resolved_holder_pos, hpos)
-            for c in cards:
-                if c.get("data-action") != "move" or c.get("data-for") != block:
-                    continue
-                if lo < pos_of(c.get("id")) < hi:
-                    return False
-            holder_id = holder.get("id") or ""
-            holder_stamp = holder.get("data-at") or ""
-            s_lo, s_hi = min(resolved_stamp, holder_stamp), max(resolved_stamp, holder_stamp)
-            for ev in self._history_events():
-                if ev.kind != "resolution" or ev.action != "move" or ev.target != block:
-                    continue
-                lane_before = ev.get("lane_before")
-                if lane_before is not None:
-                    # the recorded split ordinal: the two holders group only
-                    # when they sat on the SAME side of the move (a card
-                    # proposed after the move's resolution is on the later
-                    # side by construction — it is absent from the list)
-                    if (resolved_holder_id in lane_before) != (holder_id in lane_before):
-                        return False
-                    continue
-                # legacy event without the ordinal: stamp interval,
-                # best-effort at one-second precision
-                if s_lo < (ev.get("proposed_at") or "") < s_hi:
-                    return False
-            return True
+            return not any(lo < mp < hi for mp in pending_move_pos.get(block, ()))
 
         # the resolved card's own chain ancestors must never be captured by
         # the same-zone rebind: a child accepted first lands at the zone
@@ -3649,7 +3610,7 @@ class AimDocument:
             # rebinding it onto `landed` would read "move X after X",
             # turning it into an unresolvable card
             and card.get("data-for") != landed
-            and self._card_zone(card, by_id) == anchor_key
+            and zone_of.get(card.get("id") or "") == anchor_key
             and same_zone_side(card)
         ]
         # a chained candidate whose HOLDER is also being rebound must not be
@@ -3659,7 +3620,7 @@ class AimDocument:
         prelim_ids = {c.get("id") for c in prelim}
         rebound = []
         for card in prelim:
-            holder = self._zone_holder(card, by_id)
+            holder = holder_of.get(card.get("id") or "")
             if (
                 holder is not None
                 and holder.get("id") != card.get("id")
@@ -3683,6 +3644,35 @@ class AimDocument:
                 and (card.get("id") or "") not in later_ids
                 and card.get("data-action") in ("add", "move")
             }
+        # rejecting a card that a dissolve made a zone TAIL must hand its
+        # dependents to the REMAINING tail of that zone — binding them to the
+        # raw anchor would cut them in front of zone-mates that creation
+        # order puts first (round-7 review finding)
+        reselected: str | None = None
+        if decision != "accepted":
+            if resolved.anchor_after is not None and ids.is_valid_proposal_id(
+                resolved.anchor_after
+            ):
+                parent = by_id.get(resolved.anchor_after)
+                rzone = zone_of.get(parent.get("id") or "") if parent is not None else None
+            else:
+                rzone = (
+                    resolved.anchor_container or "body",
+                    resolved.anchor_after,
+                    resolved.anchor_shell,
+                )
+            if rzone is not None:
+                best = -1
+                for c in cards:
+                    cid = c.get("id") or ""
+                    if (
+                        c.get("data-action") in ("add", "move")
+                        and zone_of.get(cid) == rzone
+                        and best < pos_of(cid) < resolved_pos
+                    ):
+                        best = pos_of(cid)
+                        reselected = cid
+
         for card in cards:
             if card.get("data-anchor-after") == resolved.id:
                 if decision == "accepted":
@@ -3692,7 +3682,9 @@ class AimDocument:
                         else self._payload_root_id(resolved.payload_html or "")
                     )
                     card.set("data-anchor-after", new_after or "")
-                else:  # rejected/superseded: rebind to the resolved card's anchor
+                elif reselected is not None:
+                    card.set("data-anchor-after", reselected)
+                else:  # no remaining tail: rebind to the resolved card's anchor
                     if resolved.anchor_after is None:
                         card.remove_attr("data-anchor-after")
                     else:

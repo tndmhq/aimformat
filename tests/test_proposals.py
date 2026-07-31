@@ -437,11 +437,11 @@ class TestResolve:
         md = aim.to_markdown(doc, pending="criticmarkup")
         assert "PAYLOAD-A" in md
 
-    def test_resolved_move_split_survives_stamp_ties(self):
-        # round-6 finding: with every stamp identical (one-second _now_iso),
-        # a REJECTED move sitting between two same-anchor adds must still
-        # split their grouping — its resolution event records the lane
-        # ordinal (lane_before), which stamps cannot reconstruct
+    def test_rejected_move_reunifies_the_zone(self):
+        # a move proposal splits its block's zone only WHILE PENDING; once
+        # rejected, the zone re-unifies and plain creation order applies
+        # among the cards still pending (§5.4 — orders interleaved around
+        # the pending move fall under the documented move-space limitation)
         import aimformat as aim
 
         doc = aim.new_document(title="T")
@@ -451,12 +451,48 @@ class TestResolve:
         m = doc.propose_move("x", author=BOT, container="body", after="z", at=ts(7))
         b = doc.propose_add('<p data-aim="b">B.</p>', author=BOT, after="x", at=ts(7))
         doc.reject(m.id, decided_by=ME, at=ts(8))
-        ev = next(e for e in doc.history if e.get("proposal") == m.id)
-        assert ev.get("lane_before") == [a.id]
         doc.accept(a.id, decided_by=ME, at=ts(9))
-        assert doc.proposal(b.id).anchor_after == "x"  # split: never grouped onto a
+        assert doc.proposal(b.id).anchor_after == "a"  # re-unified: plain siblings
         doc.accept(b.id, decided_by=ME, at=ts(10))
-        assert doc.body_ids == ["x", "b", "a", "y", "z"]
+        assert doc.body_ids == ["x", "a", "b", "y", "z"]
+        assert doc.verify() == []
+
+    def test_rejecting_a_dissolve_tail_reselects_the_remaining_tail(self):
+        # round-7 finding: rejecting the zone-tail card a dissolve chained
+        # onto must hand its dependents to the REMAINING tail of that zone,
+        # not to the raw block — otherwise they cut in front of zone-mates
+        # that creation order puts first
+        import aimformat as aim
+
+        def lane():
+            doc = aim.new_document(title="T")
+            for i, cid in enumerate(("x", "y", "z")):
+                doc.add_chunk(f'<p data-aim="{cid}">{cid}</p>', author=BOT, at=ts(i))
+            a = doc.propose_add('<p data-aim="a">A.</p>', author=BOT, after="z", at=ts(3))
+            b = doc.propose_add('<p data-aim="b">B.</p>', author=BOT, after=a.id, at=ts(4))
+            c = doc.propose_add('<p data-aim="c">C.</p>', author=BOT, after="y", at=ts(5))
+            d = doc.propose_delete("z", author=BOT, at=ts(6))
+            e = doc.propose_add('<p data-aim="e">E.</p>', author=BOT, after=b.id, at=ts(7))
+            f = doc.propose_add('<p data-aim="f">F.</p>', author=BOT, after="y", at=ts(8))
+            return doc, {"a": a, "b": b, "c": c, "d": d, "e": e, "f": f}
+
+        doc, p = lane()
+        for key in ("a", "b", "c", "d", "e"):
+            doc.accept(p[key].id, decided_by=ME, at=ts(9))
+        doc.reject(p["f"].id, decided_by=ME, at=ts(9))
+        truth = doc.body_ids
+
+        doc, p = lane()
+        doc.accept(p["d"].id, decided_by=ME, at=ts(9))
+        assert doc.proposal(p["a"].id).anchor_after == p["f"].id  # dissolved onto tail F
+        doc.accept(p["b"].id, decided_by=ME, at=ts(10))
+        doc.accept(p["e"].id, decided_by=ME, at=ts(11))
+        doc.reject(p["f"].id, decided_by=ME, at=ts(12))
+        # F's rejection re-selects C — the remaining tail of the merged zone
+        assert doc.proposal(p["a"].id).anchor_after == p["c"].id
+        doc.accept(p["a"].id, decided_by=ME, at=ts(13))
+        doc.accept(p["c"].id, decided_by=ME, at=ts(14))
+        assert doc.body_ids == truth == ["x", "y", "c", "a", "b", "e"]
         assert doc.verify() == []
 
     def test_direct_delete_rebinds_pending_cards_to_predecessor(self, basic_doc):
