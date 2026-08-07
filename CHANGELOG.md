@@ -26,6 +26,10 @@ existing concepts (`docs/log/2026-08-06_2022_decision_editor-reload-sdk-surface.
   over editing the file as text (each edit lands attributed and undoable at
   write time); hand-editing stays legal with `aim reconcile` right after,
   and raw-text authoring of *new* documents stays first-class.
+- **A leading UTF-8 BOM is tolerated** at parse *and* in the verifier's
+  canonical-form check (tolerant reader; the canonical serialization never
+  writes one, so the next save drops it). A BOM-prefixed file previously
+  failed C001 and opened read-only in consumers.
 
 ## 0.5.1 — 2026-07-31
 

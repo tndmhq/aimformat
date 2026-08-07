@@ -1171,7 +1171,14 @@ def lint(doc: AimDocument, *, source_text: str | None = None) -> list[Finding]:
 
 
 def lint_text(text: str) -> list[Finding]:
-    """Lint document text. Never raises: hostile input becomes findings."""
+    """Lint document text. Never raises: hostile input becomes findings.
+
+    A leading UTF-8 BOM is transport noise, not document text (same
+    tolerant-reader rule as the parser): it is dropped before both the
+    parse and the canonical-form comparison, so a BOM alone never fails
+    C001 — the next canonical save simply writes the file without it.
+    """
+    text = text.removeprefix("\ufeff")
     try:
         doc = AimDocument.loads(text)
     except (ParseError, AimError) as exc:
