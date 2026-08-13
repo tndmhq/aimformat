@@ -20,14 +20,15 @@ on:
     types: [opened, ready_for_review, synchronize]
     # Skip runs that cannot need a code review. NOT ignored on purpose:
     # *.md in general — spec.md and REVIEW.md specify behavior and always
-    # get a round (AGENTS.md convention 7). The workflow file itself IS
-    # ignored: the reviewer must not review PRs that edit its own
-    # instructions (self-skip; those PRs get maintainer + Codex review).
+    # get a round (AGENTS.md convention 7), and docs/log too: plan entries
+    # specify intended behavior (codex #36 round 2). The workflow file
+    # itself IS ignored: the reviewer must not review PRs that edit its
+    # own instructions (self-skip; those PRs get maintainer + Codex
+    # review).
     paths-ignore:
       - '.github/workflows/claude-review.yml'
       - '**/package-lock.json'
       - '**/*.lock'
-      - 'docs/log/**'
 
 permissions:
   contents: read
@@ -64,10 +65,17 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          if gh api --paginate \
+          # FAIL CLOSED: an errored files query must not run the review — on
+          # a mixed PR editing this workflow, "query failed" and "not
+          # touched" would otherwise be indistinguishable (codex #36 r2)
+          if ! files=$(gh api --paginate \
                "repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/files" \
-               --jq '.[].filename' \
-             | grep -qx '.github/workflows/claude-review.yml'; then
+               --jq '.[].filename'); then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "changed-files query failed; failing closed (no review)."
+            exit 0
+          fi
+          if printf '%s\n' "$files" | grep -qx '.github/workflows/claude-review.yml'; then
             echo "skip=true" >> "$GITHUB_OUTPUT"
             echo "PR edits the reviewer's own workflow; skipping the review."
           else
@@ -77,6 +85,21 @@ jobs:
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           fetch-depth: 1
+      # The PR discussion is fetched HERE, by trusted workflow code, not by
+      # the model: prefix-matching cannot pin `gh api` to GET (a repeated
+      # `-X DELETE` later in the command wins with gh 2.96), so the model
+      # gets no `gh api` at all (codex #36 r2) — and --paginate here also
+      # closes the first-page-only gap the model's own query had.
+      - name: Prefetch the PR discussion for the reviewer
+        if: steps.selfskip.outputs.skip == 'false'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh pr view "${{ github.event.pull_request.number }}" --comments \
+            > /tmp/pr-discussion.txt || true
+          gh api --paginate \
+            "repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/comments" \
+            > /tmp/pr-inline-comments.json || echo '[]' > /tmp/pr-inline-comments.json
       - if: steps.selfskip.outputs.skip == 'false'
         uses: anthropics/claude-code-action@37b464ce72700f7b2c5ff8d2db7fa7b15df792f5 # v1.0.169
         with:
@@ -114,18 +137,20 @@ jobs:
             - Public API stability of the SDK/CLI/MCP surface: pre-1.0, but
               breaking changes must be called out, not slipped in.
             - Python/TS parity: reader-visible behavior changes need the
-              parity goldens regenerated, not hand-patched.
+              parity goldens regenerated, not hand-patched — EXCEPT the
+              documented unit-test-only cases (docs/knowledge/
+              architecture.md, TS parity exceptions), where a TS unit test
+              is required and a Python-generated golden is forbidden.
             - Docs sync: README, docs/for-agents.md, and the skill must stay
               consistent with code changes they describe.
 
             Process:
             1. Read REVIEW.md.
-            2. Read the existing PR discussion BEFORE reviewing — use
-               `gh pr view ${{ github.event.pull_request.number }} --comments`
-               and `gh api -X GET repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/comments`
-               (inline review comments, e.g. from Codex; always pass
-               `-X GET` — it is the only form the tool allowlist permits).
-               Skip any finding another reviewer already made.
+            2. Read the existing PR discussion BEFORE reviewing — it is
+               pre-fetched for you: /tmp/pr-discussion.txt (PR body and
+               comments) and /tmp/pr-inline-comments.json (every inline
+               review comment, e.g. from Codex, all pages). Skip any
+               finding another reviewer already made.
             3. Review the diff (`gh pr diff`) against the checked-out code.
             4. Report your findings as your response text — it is delivered
                in the single tracking comment, updated in place on re-runs.
@@ -134,11 +159,12 @@ jobs:
             This review is advisory only: never approve, request changes, or
             block the PR. If nothing meets the bar, say exactly:
             "No findings above the bar."
-          # gh api is pinned to `-X GET`: a bare `gh api …` (or any -X
-          # POST/PATCH/DELETE form) does not match the prefix, so a
-          # prompt-injected diff cannot turn the reviewer's
-          # `pull-requests: write` token into mutations (codex #36).
+          # NO `gh api` for the model: prefix matching cannot pin it to GET
+          # (a repeated `-X DELETE` later in the command wins), so the
+          # discussion is pre-fetched by trusted workflow code above and
+          # the model keeps only inherently read-only commands
+          # (codex #36 rounds 1+2).
           claude_args: |
             --max-turns 90
             --model sonnet
-            --allowedTools "Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh api -X GET repos/${{ github.repository }}/pulls/*)"
+            --allowedTools "Bash(gh pr view:*),Bash(gh pr diff:*)"
