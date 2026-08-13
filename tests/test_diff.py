@@ -367,3 +367,35 @@ def test_diff_to_obj_carries_changed_ids(doc):
     doc.add_chunk('<p data-aim="pz">Tail.</p>', author=BOT, at=ts(11))
     obj = aim.diff_documents(old, doc).to_obj()
     assert obj["changed_ids"] == ["h1", "pz"]
+
+
+def test_divergence_bool_payload_event_is_drift(doc):
+    # codex #35 round 3: a replayable-looking appended event with a bool
+    # where markup belongs raised AttributeError through the replay guard
+    old = snap(doc)
+    text = doc.dumps()
+    marker = "\n</script>"
+    idx = text.index(marker)
+    bogus = (
+        '\n{"action":"modify","after":true,"before":true,"author":'
+        '{"type":"agent","model":"m"},"batch":"bx","kind":"direct_edit",'
+        '"seq":99,"t":"2026-01-01T00:00:00Z","target":"p1"}'
+    )
+    tampered = aim.loads(text[:idx] + bogus + text[idx:])
+    div = aim.classify_divergence(old, tampered)
+    assert div.content_drift and not div.explained
+
+
+def test_divergence_malformed_proposal_actor_degrades(doc):
+    # codex #35 round 3: a hand-mangled pending card (bogus data-author)
+    # must degrade to "no lane information", never crash the classifier
+    old = snap(doc)
+    doc.propose_modify(
+        "p1", '<p data-aim="p1">Prop.</p>', author=BOT, explanation="e", at=ts(9)
+    )
+    text = doc.dumps()
+    assert 'data-author="agent:m"' in text or "data-author" in text
+    tampered_text = text.replace("data-author=\"", "data-author=\"bogus ", 1)
+    tampered = aim.loads(tampered_text)
+    div = aim.classify_divergence(old, tampered)
+    assert div.new_proposals == ()  # degraded, not crashed

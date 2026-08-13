@@ -161,6 +161,19 @@ def _optional_serial(el: Element | None) -> str | None:
     return serialize(el) if el is not None else None
 
 
+def _proposal_ids(doc: AimDocument) -> list[str]:
+    """Pending-lane ids, hostile-input-safe. The lane of an EXTERNALLY
+    edited file is untrusted: a malformed card (bogus ``data-author``,
+    broken attributes) raises from the lazy proposal parse, and a reload
+    classifier must degrade to "no lane information" rather than crash the
+    consumer (codex #35 round 3). The content comparison still drives
+    drift, so a mangled lane never hides a body change."""
+    try:
+        return [p.id for p in doc.proposals]
+    except Exception:
+        return []
+
+
 def diff_documents(old: AimDocument, new: AimDocument) -> DocumentDiff:
     """Unit-level diff between two parsed versions of a document.
 
@@ -246,19 +259,15 @@ def classify_divergence(old: AimDocument, new: AimDocument) -> Divergence:
     try:
         old_events = old._history_events()
         new_events_all = new._history_events()
-    except AimError:
+    except Exception:
         # History parsing is lazy: loads() succeeds on a file whose appended
-        # log line is not even JSON, and the HistoryError surfaces HERE, not
-        # at parse (codex #35 round 2). An unreadable log cannot account for
-        # the body — that is drift by definition, never a crash in the
-        # reload consumer.
-        def _pids(doc: AimDocument) -> list[str]:
-            try:
-                return [p.id for p in doc.proposals]
-            except AimError:
-                return []
-
-        old_pids_f, new_pids_f = _pids(old), _pids(new)
+        # log line is not even JSON (HistoryError), or whose lane carries a
+        # mangled actor the index build trips over (ValueError) — hostile
+        # bytes surface HERE, not at parse (codex #35 rounds 2+3). Same
+        # categorical boundary as the replay below: an unreadable log
+        # cannot account for the body — drift, never a crash in the reload
+        # consumer.
+        old_pids_f, new_pids_f = _proposal_ids(old), _proposal_ids(new)
         return Divergence(
             changed=document_text(old._fragment) != document_text(new._fragment),
             new_events=(),
@@ -276,8 +285,8 @@ def classify_divergence(old: AimDocument, new: AimDocument) -> Divergence:
         else ()
     )
 
-    old_pids = [p.id for p in old.proposals]
-    new_pids = [p.id for p in new.proposals]
+    old_pids = _proposal_ids(old)
+    new_pids = _proposal_ids(new)
     # sets built ONCE: rebuilding them per candidate id made classification
     # quadratic in lane size (~3.3 s at 10k pending proposals, codex #35)
     old_pid_set = set(old_pids)
@@ -291,11 +300,16 @@ def classify_divergence(old: AimDocument, new: AimDocument) -> Divergence:
     else:
         try:
             content_drift = new.state_at(old.seq).doc_hash != old.doc_hash
-        except (AimError, KeyError, IndexError, TypeError, ValueError):
-            # A structurally malformed appended event (missing "kind", wrong
-            # shapes) is exactly a replay the log cannot account for — the
-            # contract says that classifies as drift, it must never escape
-            # as a raw exception to the reload consumer (codex #35).
+        except Exception:
+            # Replaying HOSTILE appended events (a hand-edited log) can
+            # raise nearly anything — missing "kind" (KeyError), a bool
+            # where markup belongs (AttributeError), and whatever shape
+            # comes next; two rounds of enumerating exception types each
+            # missed one (codex #35 rounds 1+3). The boundary is
+            # categorical: a replay that does not complete is a log that
+            # cannot account for the body — drift, never a crash. A
+            # genuine SDK bug lands on the safe side (adopt-and-attribute)
+            # rather than taking the reload consumer down.
             content_drift = True
 
     return Divergence(
