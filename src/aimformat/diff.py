@@ -305,15 +305,22 @@ def classify_divergence(old: AimDocument, new: AimDocument) -> Divergence:
         if not history_rewritten
         else ()
     )
-    # An appended event whose kind the registry does not know is invalid,
-    # and state_at SKIPS unknown kinds as non-state-changing — the replay
-    # would reproduce old's hash and hand the consumer a bogus event marked
-    # "explained" (codex #35 round 4). An untrustworthy suffix is drift,
-    # and its events are not surfaced.
-    suffix_invalid = any(
-        not isinstance(e.data, dict) or e.data.get("kind") not in _KNOWN_KINDS
-        for e in appended
-    )
+    # Every appended event must FULLY validate, not merely carry a known
+    # kind: a registry-known `checkpoint` missing its required doc_hash
+    # still passed a kind check, and state_at skipped it as
+    # non-state-changing, so the replay reproduced old's hash and marked
+    # the corrupt suffix explained (codex #35 rounds 4+5). Run the SDK's own
+    # Event.validate() — any failure means the suffix is untrustworthy:
+    # drift, and its events are never surfaced.
+    def _event_valid(e: Event) -> bool:
+        if not isinstance(e.data, dict) or e.data.get("kind") not in _KNOWN_KINDS:
+            return False
+        try:
+            return not e.validate()
+        except Exception:
+            return False
+
+    suffix_invalid = any(not _event_valid(e) for e in appended)
     if suffix_invalid:
         appended = ()
 

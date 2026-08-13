@@ -435,3 +435,19 @@ def test_divergence_unreadable_lane_makes_no_removal_claims(doc):
     div = aim.classify_divergence(old, tampered)
     assert div.removed_proposals == ()
     assert div.new_proposals == ()
+
+
+def test_divergence_incomplete_checkpoint_is_drift(doc):
+    # codex #35 round 5: a registry-KNOWN checkpoint missing its required
+    # doc_hash passed a kind-only check; Event.validate() catches it, so the
+    # corrupt suffix classifies as drift instead of "explained"
+    old = snap(doc)
+    text = doc.dumps()
+    idx = text.index("\n</script>")
+    bogus = (
+        '\n{"kind":"checkpoint","seq":99,"t":"2026-01-01T00:00:00Z",'
+        '"author":{"type":"agent","model":"m"},"batch":"bx"}'
+    )
+    tampered = aim.loads(text[:idx] + bogus + text[idx:])
+    div = aim.classify_divergence(old, tampered)
+    assert div.content_drift and not div.explained and div.new_events == ()
