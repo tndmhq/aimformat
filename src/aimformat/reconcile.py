@@ -217,6 +217,16 @@ class _Unit:
     is_container: bool
 
 
+def _runs_legal(member_tag: str, cont_tag: str | None) -> bool:
+    """Whether consecutive same-id members form a legal run HERE. Runs are
+    an item-carrier affordance (li/tr… inside their containers, §4.2);
+    same-id adjacency anywhere else — body, slides — is a duplicate-id
+    conflict for :func:`_fixup_ids` to repair, not a unit. Grouping it as
+    one unit records serializations ``DocState.serial`` will never
+    reproduce, so the synthesized events could not verify."""
+    return cont_tag is not None and cont_tag in REGISTRY.item_carriers.get(member_tag, ())
+
+
 def _units(state: DocState) -> dict[str, _Unit]:
     """Addressable units in document order: top constructs, container items
     (runs grouped), nested containers. Unmarked elements yield no unit."""
@@ -226,14 +236,14 @@ def _units(state: DocState) -> dict[str, _Unit]:
         if cont.tag == "table":
             bare = [c for c in cont.elements() if c.tag not in REGISTRY.table_shells]
             if bare:
-                visit(bare, cid, None)
+                visit(bare, cid, None, cont.tag)
             for child in cont.elements():
                 if child.tag in REGISTRY.table_shells:
-                    visit(child.elements(), cid, child.tag)
+                    visit(child.elements(), cid, child.tag, cont.tag)
         else:
-            visit(cont.elements(), cid, None)
+            visit(cont.elements(), cid, None, cont.tag)
 
-    def visit(members: list[Element], scope: str, shell: str | None) -> None:
+    def visit(members: list[Element], scope: str, shell: str | None, cont_tag: str | None) -> None:
         i = 0
         while i < len(members):
             el = members[i]
@@ -247,13 +257,14 @@ def _units(state: DocState) -> dict[str, _Unit]:
             group = [el]
             j = i + 1
             if kid:
-                while j < len(members) and members[j].chunk_id == kid:
-                    group.append(members[j])
-                    j += 1
+                if _runs_legal(el.tag, cont_tag):
+                    while j < len(members) and members[j].chunk_id == kid:
+                        group.append(members[j])
+                        j += 1
                 out[kid] = _Unit(kid, scope, shell, "".join(serialize(m) for m in group), False)
             i = j
 
-    visit(state.constructs(), "body", None)
+    visit(state.constructs(), "body", None, None)
     return out
 
 
@@ -315,14 +326,14 @@ def _fixup_ids(work: AimDocument, expected_alive: set[str]) -> list[tuple[str | 
         if cont.tag == "table":
             bare = [c for c in cont.elements() if c.tag not in REGISTRY.table_shells]
             if bare:
-                visit(bare)
+                visit(bare, cont.tag)
             for child in cont.elements():
                 if child.tag in REGISTRY.table_shells:
-                    visit(child.elements())
+                    visit(child.elements(), cont.tag)
         else:
-            visit(cont.elements())
+            visit(cont.elements(), cont.tag)
 
-    def visit(members: list[Element]) -> None:
+    def visit(members: list[Element], cont_tag: str | None) -> None:
         i = 0
         while i < len(members):
             el = members[i]
@@ -342,7 +353,11 @@ def _fixup_ids(work: AimDocument, expected_alive: set[str]) -> list[tuple[str | 
             val = el.chunk_id
             group = [el]
             j = i + 1
-            if val:  # a run shares one id across consecutive members
+            # a run shares one id across consecutive members — but only
+            # where runs are legal (item carriers); same-id adjacency at
+            # body level or in a slide is a duplicate-id conflict, and each
+            # later claimant gets its own fresh id below
+            if val and _runs_legal(el.tag, cont_tag):
                 while (
                     j < len(members)
                     and members[j].chunk_id == val
@@ -357,7 +372,7 @@ def _fixup_ids(work: AimDocument, expected_alive: set[str]) -> list[tuple[str | 
                 seen.add(val)
             i = j
 
-    visit(state.constructs())
+    visit(state.constructs(), None)
 
     # markers nested inside chunk subtrees: rename only real collisions
     # (with a unit id, or with an id history/pending burned); other nested

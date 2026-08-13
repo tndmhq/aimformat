@@ -39,6 +39,7 @@ from .convert import (
     to_pdf,
 )
 from .css import css_stats, generate_aim_css
+from .diff import Divergence, DocumentDiff, classify_divergence, diff_documents
 from .document import LAST, AimDocument, Anchor, Chunk, Proposal, load, loads, new_document
 from .errors import AimError, HistoryError, InvalidOperation, ParseError, TargetNotFound
 from .events import Actor, Event, agent, external, human, parse_actor
@@ -60,6 +61,8 @@ __all__ = [
     "Proposal",
     "Event",
     "Actor",
+    "Divergence",
+    "DocumentDiff",
     "Finding",
     "LAST",
     "PageSetup",
@@ -76,6 +79,8 @@ __all__ = [
     "agent",
     "external",
     "parse_actor",
+    "diff_documents",
+    "classify_divergence",
     "render_note",
     "from_docling",
     "to_docx",

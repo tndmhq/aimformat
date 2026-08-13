@@ -3,6 +3,35 @@
 All notable changes to the spec and the reference toolkit. The package
 version tracks the spec version it implements (0.x minors may break).
 
+## Unreleased
+
+The SDK surface a live consumer needs when a `.aim` file changes under it
+(an editor pane, a watcher, a CI bot): what changed, and does the file's own
+history explain it. No spec, event, or format changes — SDK/CLI surface over
+existing concepts (`docs/log/2026-08-06_2022_decision_editor-reload-sdk-surface.md`).
+
+- **`diff_documents(old, new)` / `aim diff OLD NEW`** — unit-level diff
+  between two parsed versions: added / deleted / modified / moved unit ids
+  (chunks, runs, containers — reconcile's unit identity) plus theme /
+  doc-settings / declared-version flags. Containers compare by skeleton, so
+  a member edit marks the member, not every ancestor container; movers are
+  the complement of the longest stable subsequence, so an insert does not
+  "move" its neighbors.
+- **`classify_divergence(old, new)`** — the reload-tier classifier for a
+  consumer that held *old*: `new_events` (appended log suffix),
+  `history_rewritten` (flatten/prune/hand rewrite), `new_proposals` /
+  `removed_proposals`, and `content_drift` (the body is not explained by the
+  log — the raw-write case `doc.reconcile()` adopts).
+- Skill: for edits to *existing* documents, prefer the CLI/SDK/MCP paths
+  over editing the file as text (each edit lands attributed and undoable at
+  write time); hand-editing stays legal with `aim reconcile` right after,
+  and raw-text authoring of *new* documents stays first-class.
+- **A leading UTF-8 BOM parses** (tolerant reader; previously it was a
+  hard parse failure). Canonical conformance stays byte-exact: `aim lint`
+  reports C001 for a BOM-prefixed file, in agreement with
+  `aim normalize --check`, and one normalize pass (or any canonical save)
+  drops the BOM.
+
 ## 0.5.1 — 2026-07-31
 
 Pending-lane resolution became order-independent where it can be, and

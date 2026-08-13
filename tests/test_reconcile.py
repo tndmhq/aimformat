@@ -278,6 +278,25 @@ class TestStructuralEdits:
         assert doc.chunk("intro").text == "We looked at the numbers."
         assert doc.chunk(new).text == "A pasted copy."
 
+    def test_adjacent_duplicated_id_at_body_level_is_a_conflict_not_a_run(self, basic_doc):
+        """Two consecutive body-level <p> sharing one id: runs are an
+        item-carrier affordance, so this is a duplicate to repair. Grouping
+        it as a run recorded a serialization DocState.serial never
+        reproduces, and the synthesized event could not verify (found by
+        the desktop editor's adoption flow)."""
+        text = basic_doc.dumps().replace(
+            '<p data-aim="intro">Intro paragraph.</p>',
+            '<p data-aim="intro">Intro paragraph.</p>\n<p data-aim="intro">A pasted twin.</p>',
+            1,
+        )
+        doc = aim.loads(text)
+        report = reconciled(doc)
+        [(old, new)] = report.assigned_ids
+        assert old == "intro" and new != "intro"
+        assert doc.chunk("intro").text == "Intro paragraph."
+        assert doc.chunk(new).text == "A pasted twin."
+        assert not doc.chunk(new).is_run
+
 
 # ===========================================================================
 class TestContainers:

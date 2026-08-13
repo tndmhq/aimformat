@@ -479,3 +479,14 @@ def test_S031_slide_marked_as_chunk(good_text=None):
         '<h2 style="left:60px; top:50px; width:600px">T</h2></aim-slide>\n</body>',
     )
     assert "S031" in codes(text)
+
+
+def test_bom_lints_c001_but_parses():
+    # codex #35: canonical conformance is BYTE-exact (spec §12) — the
+    # verifier must agree with `aim normalize --check` about a BOM'd file.
+    # The tolerant parse still reads it; C001 reports the noncanonical form.
+    doc = aim.new_document(title="BOM")
+    doc.add_chunk('<p data-aim="p1">Body.</p>', author=BOT)
+    findings = aim.lint_text("﻿" + doc.dumps())
+    assert [f.code for f in findings] == ["C001"]
+    assert aim.lint_text(doc.dumps()) == []

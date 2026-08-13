@@ -48,7 +48,15 @@ trusting it (stale caches are legal). Skip the embedded stylesheet and elide
   Never silently rewrite someone's document — the pending lane is the
   format's whole point.
 - **Explicitly commanded edits → edit directly** (recorded in history with
-  you as author). Use the SDK for direct edits, or hand-edit + reconcile.
+  you as author), via the CLI, SDK, or MCP tools.
+
+For edits to an **existing** document, prefer those tooling paths over
+editing the file as text: each edit lands attributed and undoable in history
+at write time, so an editor or reviewer following the file sees exactly what
+you changed. Hand-editing stays legal — run `aim reconcile FILE` right after
+so the change is adopted into history (until then, undo in a live editor
+targets the wrong, older event). Authoring a **new** document as raw text is
+first-class; finish with `aim lint`.
 
 Always attribute yourself: pass `--author agent:<your-exact-model-id>`.
 Write explanations that stand alone — raw-tier readers see the explanation,
@@ -115,12 +123,14 @@ Also: `aim.lint(doc)`, `doc.verify()` (history chain), `doc.reconcile()`,
 
 ## Hand-editing fallback (no tooling)
 
-Editing as plain text is legal. Keep the invariants: every `data-aim` id
-stays stable (never renumber or reuse); new content gets a fresh unique id
-(`^[a-z0-9][a-z0-9_-]{0,63}$`; `p-` prefix is reserved for proposals); the
-`<aim-proposals>` appendix and the history script are append-only tool
-lanes — do not rewrite them by hand. Then `aim lint FILE` and
-`aim reconcile FILE` (records your edit as an attributed history event).
+Editing as plain text is legal — the preferred path for *new* documents, the
+fallback for *existing* ones (see above). Keep the invariants: every
+`data-aim` id stays stable (never renumber or reuse); new content gets a
+fresh unique id (`^[a-z0-9][a-z0-9_-]{0,63}$`; `p-` prefix is reserved for
+proposals); the `<aim-proposals>` appendix and the history script are
+append-only tool lanes — do not rewrite them by hand. Then `aim lint FILE`
+and, on an existing document, `aim reconcile FILE` immediately (records your
+edit as an attributed history event).
 
 ## Validate after every write
 

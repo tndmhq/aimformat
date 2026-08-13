@@ -134,6 +134,7 @@ checkpoints still verify. If you hand-edit, do not touch
 | `aim reject FILE [PID...] [--all]` | reject pending proposals by id, or all of them |
 | `aim flatten FILE` | drop history (and embeddings) → clean file |
 | `aim reconcile FILE` | detect out-of-band edits; append reconcile events to history |
+| `aim diff OLD NEW` | unit-level diff between two versions of a document: added/deleted/modified/moved unit ids plus theme/settings/version flags; `--format json` for machine reads |
 | `aim css` | print the generated `aim.css` for this spec version |
 | `aim import IN -o F.aim` | convert md/txt/docx/pdf to `.aim` (DOCX imports natively with styling preserved; PDF is structure-only via docling) |
 | `aim export F.aim -o OUT` | convert `.aim` to docx/md/html/pdf (chosen by output extension); a `.aim.html` target is not a conversion — it writes the document itself under the compatibility alias (§10), history and pending lane intact |
