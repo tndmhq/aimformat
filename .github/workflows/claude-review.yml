@@ -40,19 +40,45 @@ concurrency:
 
 jobs:
   review:
+    # Both the PR AUTHOR and the TRIGGERING ACTOR must be allowlisted: on
+    # `synchronize`/`ready_for_review` the PR author stays whoever opened
+    # the PR, so gating on the author alone would let any collaborator who
+    # can push to a maintainer's branch run the reviewer with the secret
+    # (codex #36).
     if: >
       ${{
         !github.event.pull_request.draft &&
         github.event.pull_request.head.repo.full_name == github.repository &&
-        contains(fromJSON('["lucacampanella"]'), github.event.pull_request.user.login)
+        contains(fromJSON('["lucacampanella"]'), github.event.pull_request.user.login) &&
+        contains(fromJSON('["lucacampanella"]'), github.actor)
       }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      # paths-ignore skips a PR only when EVERY changed file is ignored, so
+      # a PR editing this workflow ALONGSIDE code would still run its
+      # modified reviewer with the secret. Enforce the self-skip on mixed
+      # PRs too (codex #36).
+      - name: Self-skip when the PR touches this workflow
+        id: selfskip
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh api --paginate \
+               "repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/files" \
+               --jq '.[].filename' \
+             | grep -qx '.github/workflows/claude-review.yml'; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "PR edits the reviewer's own workflow; skipping the review."
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+      - if: steps.selfskip.outputs.skip == 'false'
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           fetch-depth: 1
-      - uses: anthropics/claude-code-action@37b464ce72700f7b2c5ff8d2db7fa7b15df792f5 # v1.0.169
+      - if: steps.selfskip.outputs.skip == 'false'
+        uses: anthropics/claude-code-action@37b464ce72700f7b2c5ff8d2db7fa7b15df792f5 # v1.0.169
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           # track_progress forces tag mode on pull_request events — the mode
@@ -69,14 +95,16 @@ jobs:
             You are an automated PR reviewer. The review contract in REVIEW.md
             at the repository root is BINDING — read it first and follow it
             exactly: hard cap of 5 findings ranked by severity with
-            [critical]/[bug]/[question] tags, nits banned, "not confident ->
+            [critical]/[major]/[minor] tags, nits banned, "not confident ->
             silent".
 
             Review focus for THIS repo (the .aim format: spec + SDK +
             conformance suite):
-            - Spec conformance: `spec.md` snippets must lint; behavior
-              changes must update the ok/nok conformance kit
-              (`tests/fixtures/`).
+            - Spec conformance: `spec.md` snippets must lint; changes to
+              LINT or CONFORMANCE behavior (rule codes, canonical form,
+              what parses) must update the ok/nok kit (`tests/fixtures/`) —
+              spec-compliant SDK changes with targeted tests legitimately
+              leave it untouched.
             - Registry discipline: `registry.json` is the single vocabulary
               source of truth; spec Appendix A, `examples/`, and
               `ts/src/registry.data.ts` are GENERATED from it — flag any
@@ -94,9 +122,10 @@ jobs:
             1. Read REVIEW.md.
             2. Read the existing PR discussion BEFORE reviewing — use
                `gh pr view ${{ github.event.pull_request.number }} --comments`
-               and `gh api repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/comments`
-               (inline review comments, e.g. from Codex). Skip any finding
-               another reviewer already made.
+               and `gh api -X GET repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/comments`
+               (inline review comments, e.g. from Codex; always pass
+               `-X GET` — it is the only form the tool allowlist permits).
+               Skip any finding another reviewer already made.
             3. Review the diff (`gh pr diff`) against the checked-out code.
             4. Report your findings as your response text — it is delivered
                in the single tracking comment, updated in place on re-runs.
@@ -105,7 +134,11 @@ jobs:
             This review is advisory only: never approve, request changes, or
             block the PR. If nothing meets the bar, say exactly:
             "No findings above the bar."
+          # gh api is pinned to `-X GET`: a bare `gh api …` (or any -X
+          # POST/PATCH/DELETE form) does not match the prefix, so a
+          # prompt-injected diff cannot turn the reviewer's
+          # `pull-requests: write` token into mutations (codex #36).
           claude_args: |
             --max-turns 90
             --model sonnet
-            --allowedTools "Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh api repos/${{ github.repository }}/pulls/*)"
+            --allowedTools "Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh api -X GET repos/${{ github.repository }}/pulls/*)"
