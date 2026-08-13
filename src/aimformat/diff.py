@@ -50,6 +50,12 @@ class DocumentDiff:
     theme_changed: bool
     doc_settings_changed: bool
     version_changed: bool
+    # Ids present in *new* that a viewer should mark: added ∪ modified ∪
+    # moved, in *new*'s DOCUMENT order (a unit can be in more than one
+    # category). A field, not a property: the categories are each ordered
+    # subsequences, but their concatenation is not — only the constructor
+    # holds the full new-order to merge against (codex #35).
+    changed_ids: tuple[str, ...]
 
     @property
     def changed(self) -> bool:
@@ -62,19 +68,6 @@ class DocumentDiff:
             or self.doc_settings_changed
             or self.version_changed
         )
-
-    @property
-    def changed_ids(self) -> tuple[str, ...]:
-        """Ids present in *new* that a viewer should mark: added + modified
-        + moved, in *new*'s document order, deduplicated (a unit can be both
-        modified and moved)."""
-        seen: set[str] = set()
-        out: list[str] = []
-        for uid in self.added + self.modified + self.moved:
-            if uid not in seen:
-                seen.add(uid)
-                out.append(uid)
-        return tuple(out)
 
     def to_obj(self) -> dict:
         """A JSON-ready projection (CLI ``--format json``, wire payloads)."""
@@ -144,11 +137,20 @@ def _stable_ids(old_order: list[str], new_order: list[str]) -> set[str]:
     return stable
 
 
-def _container_skeleton(doc: AimDocument, uid: str) -> str | None:
-    node = doc._state.container_node(uid)
-    if node is None or not isinstance(node, Element):
-        return None
-    return _skeleton(node)
+def _container_skeletons(doc: AimDocument) -> dict[str, str]:
+    """Every container's skeleton, collected in ONE tree walk.
+
+    A per-uid ``container_node`` lookup restarts the walk from the top, so
+    comparing N containers cost O(N * tree) — ~2.8 s just to say "no
+    changes" on a flat 1,200-container document (codex #35). One pass over
+    the constructs makes the whole comparison linear.
+    """
+    out: dict[str, str] = {}
+    for construct in doc._state.constructs():
+        for el in construct.iter():
+            if isinstance(el, Element) and el.container_id is not None:
+                out[el.container_id] = _skeleton(el)
+    return out
 
 
 def _optional_serial(el: Element | None) -> str | None:
@@ -169,6 +171,8 @@ def diff_documents(old: AimDocument, new: AimDocument) -> DocumentDiff:
     added = tuple(uid for uid in new_units if uid not in old_units)
     deleted = tuple(uid for uid in old_units if uid not in new_units)
 
+    old_skeletons = _container_skeletons(old)
+    new_skeletons = _container_skeletons(new)
     modified: list[str] = []
     for uid in new_units:
         if uid not in survivors:
@@ -177,7 +181,7 @@ def diff_documents(old: AimDocument, new: AimDocument) -> DocumentDiff:
         if ou.is_container != nu.is_container:
             modified.append(uid)  # a kind flip is a rewrite of the unit
         elif nu.is_container:
-            if _container_skeleton(old, uid) != _container_skeleton(new, uid):
+            if old_skeletons.get(uid) != new_skeletons.get(uid):
                 modified.append(uid)
         elif ou.serial != nu.serial:
             modified.append(uid)
@@ -203,11 +207,13 @@ def diff_documents(old: AimDocument, new: AimDocument) -> DocumentDiff:
         if old_order != new_order:
             moved |= set(new_order) - _stable_ids(old_order, new_order)
 
+    changed_set = set(added) | set(modified) | moved
     return DocumentDiff(
         added=added,
         deleted=deleted,
         modified=tuple(modified),
         moved=tuple(uid for uid in new_units if uid in moved),
+        changed_ids=tuple(uid for uid in new_units if uid in changed_set),
         theme_changed=(
             _optional_serial(old._state.theme_el()) != _optional_serial(new._state.theme_el())
         ),
@@ -246,6 +252,10 @@ def classify_divergence(old: AimDocument, new: AimDocument) -> Divergence:
 
     old_pids = [p.id for p in old.proposals]
     new_pids = [p.id for p in new.proposals]
+    # sets built ONCE: rebuilding them per candidate id made classification
+    # quadratic in lane size (~3.3 s at 10k pending proposals, codex #35)
+    old_pid_set = set(old_pids)
+    new_pid_set = set(new_pids)
 
     if history_rewritten:
         # No shared log to judge against; the caller adopts wholesale.
@@ -255,14 +265,18 @@ def classify_divergence(old: AimDocument, new: AimDocument) -> Divergence:
     else:
         try:
             content_drift = new.state_at(old.seq).doc_hash != old.doc_hash
-        except AimError:
+        except (AimError, KeyError, IndexError, TypeError, ValueError):
+            # A structurally malformed appended event (missing "kind", wrong
+            # shapes) is exactly a replay the log cannot account for — the
+            # contract says that classifies as drift, it must never escape
+            # as a raw exception to the reload consumer (codex #35).
             content_drift = True
 
     return Divergence(
         changed=document_text(old._fragment) != document_text(new._fragment),
         new_events=appended,
         history_rewritten=history_rewritten,
-        new_proposals=tuple(pid for pid in new_pids if pid not in set(old_pids)),
-        removed_proposals=tuple(pid for pid in old_pids if pid not in set(new_pids)),
+        new_proposals=tuple(pid for pid in new_pids if pid not in old_pid_set),
+        removed_proposals=tuple(pid for pid in old_pids if pid not in new_pid_set),
         content_drift=content_drift,
     )

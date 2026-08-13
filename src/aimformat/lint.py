@@ -1173,14 +1173,15 @@ def lint(doc: AimDocument, *, source_text: str | None = None) -> list[Finding]:
 def lint_text(text: str) -> list[Finding]:
     """Lint document text. Never raises: hostile input becomes findings.
 
-    A leading UTF-8 BOM is transport noise, not document text (same
-    tolerant-reader rule as the parser): it is dropped before both the
-    parse and the canonical-form comparison, so a BOM alone never fails
-    C001 — the next canonical save simply writes the file without it.
+    A leading UTF-8 BOM parses (tolerant-reader rule, same as the parser),
+    but the canonical-form comparison stays BYTE-EXACT: spec §12 defines
+    canonical conformance on the bytes, and `aim normalize --check` judges
+    the same bytes — the verifier and the normalizer must never disagree
+    about one file (codex #35). A BOM'd file therefore lints C001, and one
+    normalize pass (or any canonical save) repairs it.
     """
-    text = text.removeprefix("\ufeff")
     try:
-        doc = AimDocument.loads(text)
+        doc = AimDocument.loads(text.removeprefix("\ufeff"))
     except (ParseError, AimError) as exc:
         return [Finding("S000", ERROR, f"parse failed: {exc}")]
     try:

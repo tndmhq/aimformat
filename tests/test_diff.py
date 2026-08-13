@@ -321,3 +321,28 @@ def test_cli_diff(tmp_path, doc, capsys):
 
     assert main(["diff", str(old_path), str(old_path)]) == 0
     assert "no unit-level differences" in capsys.readouterr().out
+
+
+def test_diff_changed_ids_document_order(doc):
+    # codex #35: an early modify plus a late add must come back in NEW
+    # document order — the category tuples are each ordered, their
+    # concatenation is not (the old property returned the add first)
+    old = snap(doc)
+    doc.modify_chunk("h1", '<h1 data-aim="h1">Title, retouched</h1>', author=BOT, at=ts(10))
+    doc.add_chunk('<p data-aim="pnew">New closer.</p>', author=BOT, at=ts(11))
+    d = aim.diff_documents(old, doc)
+    assert d.changed_ids == ("h1", "pnew")
+
+
+def test_divergence_malformed_appended_event_is_drift(doc):
+    # codex #35: an appended history line that parses as JSON but lacks
+    # "kind" made state_at() raise KeyError THROUGH classify_divergence.
+    # A replay the log cannot account for is the definition of drift.
+    old = snap(doc)
+    text = doc.dumps()
+    marker = "\n</script>"
+    idx = text.index(marker)
+    bogus = '\n{"seq": 99, "t": "2026-01-01T00:00:00Z"}'
+    tampered = aim.loads(text[:idx] + bogus + text[idx:])
+    div = aim.classify_divergence(old, tampered)
+    assert div.content_drift and not div.explained
