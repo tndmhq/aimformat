@@ -346,3 +346,24 @@ def test_divergence_malformed_appended_event_is_drift(doc):
     tampered = aim.loads(text[:idx] + bogus + text[idx:])
     div = aim.classify_divergence(old, tampered)
     assert div.content_drift and not div.explained
+
+
+def test_divergence_unparseable_appended_history_is_drift(doc):
+    # codex #35 round 2: history parsing is LAZY — loads() succeeds on a
+    # file whose appended log line is not JSON at all, and the HistoryError
+    # surfaced from the events extraction, not the replay guard.
+    old = snap(doc)
+    text = doc.dumps()
+    marker = "\n</script>"
+    idx = text.index(marker)
+    tampered = aim.loads(text[:idx] + "\n{this is not json" + text[idx:])
+    div = aim.classify_divergence(old, tampered)
+    assert div.content_drift and not div.explained
+
+
+def test_diff_to_obj_carries_changed_ids(doc):
+    old = snap(doc)
+    doc.modify_chunk("h1", '<h1 data-aim="h1">Title 2</h1>', author=BOT, at=ts(10))
+    doc.add_chunk('<p data-aim="pz">Tail.</p>', author=BOT, at=ts(11))
+    obj = aim.diff_documents(old, doc).to_obj()
+    assert obj["changed_ids"] == ["h1", "pz"]

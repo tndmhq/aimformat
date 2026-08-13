@@ -76,6 +76,10 @@ class DocumentDiff:
             "deleted": list(self.deleted),
             "modified": list(self.modified),
             "moved": list(self.moved),
+            # the merged new-document ordering is not recoverable from the
+            # category arrays alone — wire consumers highlighting in order
+            # need it carried, not re-derived (codex #35 round 2)
+            "changed_ids": list(self.changed_ids),
             "theme_changed": self.theme_changed,
             "doc_settings_changed": self.doc_settings_changed,
             "version_changed": self.version_changed,
@@ -239,8 +243,30 @@ def classify_divergence(old: AimDocument, new: AimDocument) -> Divergence:
     old's seq and must reproduce old's hash. A replay that fails counts as
     drift — the log cannot account for the body.
     """
-    old_events = old._history_events()
-    new_events_all = new._history_events()
+    try:
+        old_events = old._history_events()
+        new_events_all = new._history_events()
+    except AimError:
+        # History parsing is lazy: loads() succeeds on a file whose appended
+        # log line is not even JSON, and the HistoryError surfaces HERE, not
+        # at parse (codex #35 round 2). An unreadable log cannot account for
+        # the body — that is drift by definition, never a crash in the
+        # reload consumer.
+        def _pids(doc: AimDocument) -> list[str]:
+            try:
+                return [p.id for p in doc.proposals]
+            except AimError:
+                return []
+
+        old_pids_f, new_pids_f = _pids(old), _pids(new)
+        return Divergence(
+            changed=document_text(old._fragment) != document_text(new._fragment),
+            new_events=(),
+            history_rewritten=False,
+            new_proposals=tuple(p for p in new_pids_f if p not in set(old_pids_f)),
+            removed_proposals=tuple(p for p in old_pids_f if p not in set(new_pids_f)),
+            content_drift=True,
+        )
     old_lines = [event.to_json() for event in old_events]
     new_lines = [event.to_json() for event in new_events_all]
     history_rewritten = new_lines[: len(old_lines)] != old_lines
