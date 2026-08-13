@@ -43,9 +43,20 @@ jobs:
   review:
     # Both the PR AUTHOR and the TRIGGERING ACTOR must be allowlisted: on
     # `synchronize`/`ready_for_review` the PR author stays whoever opened
-    # the PR, so gating on the author alone would let any collaborator who
-    # can push to a maintainer's branch run the reviewer with the secret
-    # (codex #36).
+    # the PR, so gating on the author alone would review commits pushed by
+    # someone else (codex #36).
+    #
+    # SCOPE OF THIS GATE (codex #36 round 3): for same-repo `pull_request`
+    # runs, GitHub loads THIS FILE from the PR's own merge revision — so
+    # nothing written here can defend against a same-repo pusher, who could
+    # edit the gate in the very commit they push. The actual security
+    # boundary is (a) repository push access — everyone with it is trusted
+    # by definition, today only the maintainer — and (b) GitHub's own rule
+    # that fork-originated `pull_request` runs receive no secrets. The
+    # conditions here are review hygiene and clean skips (drafts, wrong
+    # author, forks) plus defense-in-depth, not the boundary itself. If
+    # non-maintainer push access is ever granted, revisit: the secret
+    # would need an environment-level home this file cannot override.
     if: >
       ${{
         !github.event.pull_request.draft &&
@@ -92,15 +103,29 @@ jobs:
       # closes the first-page-only gap the model's own query had.
       - name: Prefetch the PR discussion for the reviewer
         if: steps.selfskip.outputs.skip == 'false'
+        id: prefetch
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh pr view "${{ github.event.pull_request.number }}" --comments \
-            > /tmp/pr-discussion.txt || true
-          gh api --paginate \
-            "repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/comments" \
-            > /tmp/pr-inline-comments.json || echo '[]' > /tmp/pr-inline-comments.json
-      - if: steps.selfskip.outputs.skip == 'false'
+          # FAIL CLOSED (codex #36 round 3): reviewing without the inline
+          # discussion breaks the contract's skip-known-findings rule and
+          # silently re-reports resolved issues — a transient API error
+          # must skip the run, not empty the discussion.
+          if ! gh pr view "${{ github.event.pull_request.number }}" --comments \
+               > /tmp/pr-discussion.txt; then
+            echo "ok=false" >> "$GITHUB_OUTPUT"
+            echo "PR discussion prefetch failed; skipping the review."
+            exit 0
+          fi
+          if ! gh api --paginate \
+               "repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/comments" \
+               > /tmp/pr-inline-comments.json; then
+            echo "ok=false" >> "$GITHUB_OUTPUT"
+            echo "inline-comment prefetch failed; skipping the review."
+            exit 0
+          fi
+          echo "ok=true" >> "$GITHUB_OUTPUT"
+      - if: steps.selfskip.outputs.skip == 'false' && steps.prefetch.outputs.ok == 'true'
         uses: anthropics/claude-code-action@37b464ce72700f7b2c5ff8d2db7fa7b15df792f5 # v1.0.169
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
