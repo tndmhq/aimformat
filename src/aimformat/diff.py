@@ -320,7 +320,22 @@ def classify_divergence(old: AimDocument, new: AimDocument) -> Divergence:
         except Exception:
             return False
 
-    suffix_invalid = any(not _event_valid(e) for e in appended)
+    # A trustworthy suffix needs BOTH: every event valid on its own, AND the
+    # new history internally consistent as a whole — strictly ascending,
+    # unique, gap-free seqs (codex #35 rounds 4-6). A checkpoint reusing
+    # old's last seq passes per-event validation yet makes new's history
+    # non-ascending; state_at then leaves the body unchanged and the
+    # classifier would mark the corrupt suffix "explained". This mirrors the
+    # structural half of verify() (the doc_hash replay half IS the drift
+    # check below), so per-invariant whack-a-mole stops here.
+    new_seqs = [e.data.get("seq") for e in new_events_all]
+    seqs_consistent = (
+        all(isinstance(s, int) for s in new_seqs)
+        and len(set(new_seqs)) == len(new_seqs)
+        and new_seqs == sorted(new_seqs)
+        and all(b == a + 1 for a, b in zip(new_seqs, new_seqs[1:]))
+    )
+    suffix_invalid = any(not _event_valid(e) for e in appended) or not seqs_consistent
     if suffix_invalid:
         appended = ()
 

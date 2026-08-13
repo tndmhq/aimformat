@@ -451,3 +451,21 @@ def test_divergence_incomplete_checkpoint_is_drift(doc):
     tampered = aim.loads(text[:idx] + bogus + text[idx:])
     div = aim.classify_divergence(old, tampered)
     assert div.content_drift and not div.explained and div.new_events == ()
+
+
+def test_divergence_reused_seq_checkpoint_is_drift(doc):
+    # codex #35 round 6: a checkpoint reusing old's last seq passes
+    # per-event validation but breaks the strictly-ascending suffix
+    # invariant; new.verify() flags it, so the classifier must too
+    old = snap(doc)
+    last_seq = old.seq
+    text = doc.dumps()
+    idx = text.index("\n</script>")
+    bogus = (
+        f'\n{{"kind":"checkpoint","seq":{last_seq},"t":"2026-01-01T00:00:00Z",'
+        '"author":{"type":"agent","model":"m"},"batch":"bx",'
+        '"doc_hash":"sha256:deadbeef"}'
+    )
+    tampered = aim.loads(text[:idx] + bogus + text[idx:])
+    div = aim.classify_divergence(old, tampered)
+    assert div.content_drift and not div.explained and div.new_events == ()
