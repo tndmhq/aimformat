@@ -399,3 +399,39 @@ def test_divergence_malformed_proposal_actor_degrades(doc):
     tampered = aim.loads(tampered_text)
     div = aim.classify_divergence(old, tampered)
     assert div.new_proposals == ()  # degraded, not crashed
+
+
+def test_divergence_unknown_kind_suffix_is_drift_not_explained(doc):
+    # codex #35 round 4: state_at SKIPS unknown kinds as non-state-changing,
+    # so a kind:"bogus" suffix replayed to old's exact hash and came back
+    # "explained" with the invalid event in new_events
+    old = snap(doc)
+    text = doc.dumps()
+    idx = text.index("\n</script>")
+    bogus = (
+        '\n{"author":{"type":"agent","model":"m"},"batch":"bx",'
+        '"kind":"bogus","seq":99,"t":"2026-01-01T00:00:00Z"}'
+    )
+    tampered = aim.loads(text[:idx] + bogus + text[idx:])
+    div = aim.classify_divergence(old, tampered)
+    assert div.content_drift and not div.explained
+    assert div.new_events == ()  # an untrusted suffix is never surfaced
+
+
+def test_divergence_unreadable_lane_makes_no_removal_claims(doc):
+    # codex #35 round 4: one mangled card degraded the whole lane to [],
+    # which reported every VALID old proposal as removed — an editor
+    # reacting to removed_proposals dismissed real pending cards
+    doc.propose_modify(
+        "p1", '<p data-aim="p1">Keep me.</p>', author=BOT, explanation="e", at=ts(8)
+    )
+    old = snap(doc)
+    doc.propose_modify(
+        "p2", '<p data-aim="p2">Second card.</p>', author=BOT, explanation="e", at=ts(9)
+    )
+    text = doc.dumps()
+    # mangle ONLY the second card's author; the first stays valid on disk
+    tampered = aim.loads(text.replace('data-author="', 'data-author="bogus ', 1))
+    div = aim.classify_divergence(old, tampered)
+    assert div.removed_proposals == ()
+    assert div.new_proposals == ()

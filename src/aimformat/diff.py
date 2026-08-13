@@ -29,6 +29,7 @@ from .dom import Element
 from .errors import AimError
 from .events import Event
 from .reconcile import _skeleton, _units
+from .registry import REGISTRY
 
 __all__ = ["Divergence", "DocumentDiff", "classify_divergence", "diff_documents"]
 
@@ -161,17 +162,37 @@ def _optional_serial(el: Element | None) -> str | None:
     return serialize(el) if el is not None else None
 
 
-def _proposal_ids(doc: AimDocument) -> list[str]:
-    """Pending-lane ids, hostile-input-safe. The lane of an EXTERNALLY
-    edited file is untrusted: a malformed card (bogus ``data-author``,
-    broken attributes) raises from the lazy proposal parse, and a reload
-    classifier must degrade to "no lane information" rather than crash the
-    consumer (codex #35 round 3). The content comparison still drives
-    drift, so a mangled lane never hides a body change."""
+#: appended events must carry a registry-known kind to count as explained
+_KNOWN_KINDS = frozenset(REGISTRY.raw["events"]["kinds"])
+
+
+def _lane_diff(
+    old_pids: list[str] | None, new_pids: list[str] | None
+) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    """new/removed proposal-id tuples; an UNREADABLE side makes no claims
+    in either direction (unreadable is not empty — codex #35 round 4)."""
+    if old_pids is None or new_pids is None:
+        return (), ()
+    old_set, new_set = set(old_pids), set(new_pids)
+    return (
+        tuple(p for p in new_pids if p not in old_set),
+        tuple(p for p in old_pids if p not in new_set),
+    )
+
+
+def _proposal_ids(doc: AimDocument) -> list[str] | None:
+    """Pending-lane ids, hostile-input-safe; ``None`` when the lane cannot
+    be read at all. The lane of an EXTERNALLY edited file is untrusted: a
+    malformed card (bogus ``data-author``, broken attributes) raises from
+    the lazy proposal parse, and a reload classifier must degrade rather
+    than crash the consumer (codex #35 round 3). Unreadable is NOT empty:
+    collapsing it to [] reported every still-valid proposal as removed,
+    and an editor acting on removed_proposals dismissed real pending cards
+    (round 4). The content comparison still drives drift either way."""
     try:
         return [p.id for p in doc.proposals]
     except Exception:
-        return []
+        return None
 
 
 def diff_documents(old: AimDocument, new: AimDocument) -> DocumentDiff:
@@ -267,13 +288,13 @@ def classify_divergence(old: AimDocument, new: AimDocument) -> Divergence:
         # categorical boundary as the replay below: an unreadable log
         # cannot account for the body — drift, never a crash in the reload
         # consumer.
-        old_pids_f, new_pids_f = _proposal_ids(old), _proposal_ids(new)
+        new_p, removed_p = _lane_diff(_proposal_ids(old), _proposal_ids(new))
         return Divergence(
             changed=document_text(old._fragment) != document_text(new._fragment),
             new_events=(),
             history_rewritten=False,
-            new_proposals=tuple(p for p in new_pids_f if p not in set(old_pids_f)),
-            removed_proposals=tuple(p for p in old_pids_f if p not in set(new_pids_f)),
+            new_proposals=new_p,
+            removed_proposals=removed_p,
             content_drift=True,
         )
     old_lines = [event.to_json() for event in old_events]
@@ -284,15 +305,23 @@ def classify_divergence(old: AimDocument, new: AimDocument) -> Divergence:
         if not history_rewritten
         else ()
     )
+    # An appended event whose kind the registry does not know is invalid,
+    # and state_at SKIPS unknown kinds as non-state-changing — the replay
+    # would reproduce old's hash and hand the consumer a bogus event marked
+    # "explained" (codex #35 round 4). An untrustworthy suffix is drift,
+    # and its events are not surfaced.
+    suffix_invalid = any(
+        not isinstance(e.data, dict) or e.data.get("kind") not in _KNOWN_KINDS
+        for e in appended
+    )
+    if suffix_invalid:
+        appended = ()
 
-    old_pids = _proposal_ids(old)
-    new_pids = _proposal_ids(new)
-    # sets built ONCE: rebuilding them per candidate id made classification
-    # quadratic in lane size (~3.3 s at 10k pending proposals, codex #35)
-    old_pid_set = set(old_pids)
-    new_pid_set = set(new_pids)
+    new_p, removed_p = _lane_diff(_proposal_ids(old), _proposal_ids(new))
 
-    if history_rewritten:
+    if suffix_invalid:
+        content_drift = True
+    elif history_rewritten:
         # No shared log to judge against; the caller adopts wholesale.
         content_drift = False
     elif not appended:
@@ -316,7 +345,7 @@ def classify_divergence(old: AimDocument, new: AimDocument) -> Divergence:
         changed=document_text(old._fragment) != document_text(new._fragment),
         new_events=appended,
         history_rewritten=history_rewritten,
-        new_proposals=tuple(pid for pid in new_pids if pid not in old_pid_set),
-        removed_proposals=tuple(pid for pid in old_pids if pid not in new_pid_set),
+        new_proposals=new_p,
+        removed_proposals=removed_p,
         content_drift=content_drift,
     )
