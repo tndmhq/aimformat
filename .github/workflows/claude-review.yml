@@ -1,0 +1,111 @@
+# Claude auto-review on maintainers' PRs (plan: docs/log/2026-07-16_1539_plan_claude-review-ci.md).
+# Advisory only — posts ONE sticky comment (updated in place on re-runs),
+# never blocks merge. Bound by REVIEW.md like every AI reviewer here.
+#
+# PUBLIC-REPO HARDENING: the job runs only for PRs (a) authored by an
+# allowlisted maintainer and (b) from a same-repo branch. Fork PRs and
+# non-allowlisted authors skip cleanly — no secret exposure, no red X. Plain
+# `pull_request` already withholds secrets from fork runs; the explicit guard
+# is for clean skips and to future-proof against the trigger ever becoming
+# `pull_request_target` (never do that).
+#
+# Auth: CLAUDE_CODE_OAUTH_TOKEN (repo secret, shared with claude.yml). The
+# action exchanges an OIDC token for the Claude GitHub App installation
+# token, hence `id-token: write` — the app (github.com/apps/claude) must be
+# installed on this repo (it is; claude.yml uses the same path).
+name: claude-review
+
+on:
+  pull_request:
+    types: [opened, ready_for_review, synchronize]
+    # Skip runs that cannot need a code review. NOT ignored on purpose:
+    # *.md in general — spec.md and REVIEW.md specify behavior and always
+    # get a round (AGENTS.md convention 7). The workflow file itself IS
+    # ignored: the reviewer must not review PRs that edit its own
+    # instructions (self-skip; those PRs get maintainer + Codex review).
+    paths-ignore:
+      - '.github/workflows/claude-review.yml'
+      - '**/package-lock.json'
+      - '**/*.lock'
+      - 'docs/log/**'
+
+permissions:
+  contents: read
+  pull-requests: write
+  id-token: write
+
+concurrency:
+  group: claude-review-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  review:
+    if: >
+      ${{
+        !github.event.pull_request.draft &&
+        github.event.pull_request.head.repo.full_name == github.repository &&
+        contains(fromJSON('["lucacampanella"]'), github.event.pull_request.user.login)
+      }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 1
+      - uses: anthropics/claude-code-action@37b464ce72700f7b2c5ff8d2db7fa7b15df792f5 # v1.0.169
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          # track_progress forces tag mode on pull_request events — the mode
+          # that actually creates and updates the single tracking comment.
+          # Without it the action runs, costs tokens, and posts nothing
+          # (verified in the action source at the pinned SHA — see the tndm
+          # twin of this workflow).
+          track_progress: true
+          use_sticky_comment: true
+          prompt: |
+            REPO: ${{ github.repository }}
+            PR NUMBER: ${{ github.event.pull_request.number }}
+
+            You are an automated PR reviewer. The review contract in REVIEW.md
+            at the repository root is BINDING — read it first and follow it
+            exactly: hard cap of 5 findings ranked by severity with
+            [critical]/[bug]/[question] tags, nits banned, "not confident ->
+            silent".
+
+            Review focus for THIS repo (the .aim format: spec + SDK +
+            conformance suite):
+            - Spec conformance: `spec.md` snippets must lint; behavior
+              changes must update the ok/nok conformance kit
+              (`tests/fixtures/`).
+            - Registry discipline: `registry.json` is the single vocabulary
+              source of truth; spec Appendix A, `examples/`, and
+              `ts/src/registry.data.ts` are GENERATED from it — flag any
+              hand-edit of generated artifacts.
+            - Round-trip integrity: parse -> serialize must stay canonical;
+              doc-hash stability across load/dumps.
+            - Public API stability of the SDK/CLI/MCP surface: pre-1.0, but
+              breaking changes must be called out, not slipped in.
+            - Python/TS parity: reader-visible behavior changes need the
+              parity goldens regenerated, not hand-patched.
+            - Docs sync: README, docs/for-agents.md, and the skill must stay
+              consistent with code changes they describe.
+
+            Process:
+            1. Read REVIEW.md.
+            2. Read the existing PR discussion BEFORE reviewing — use
+               `gh pr view ${{ github.event.pull_request.number }} --comments`
+               and `gh api repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/comments`
+               (inline review comments, e.g. from Codex). Skip any finding
+               another reviewer already made.
+            3. Review the diff (`gh pr diff`) against the checked-out code.
+            4. Report your findings as your response text — it is delivered
+               in the single tracking comment, updated in place on re-runs.
+               Do NOT post additional comments or inline comments yourself.
+
+            This review is advisory only: never approve, request changes, or
+            block the PR. If nothing meets the bar, say exactly:
+            "No findings above the bar."
+          claude_args: |
+            --max-turns 90
+            --model sonnet
+            --allowedTools "Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh api repos/${{ github.repository }}/pulls/*)"
