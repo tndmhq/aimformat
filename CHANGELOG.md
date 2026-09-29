@@ -3,7 +3,7 @@
 All notable changes to the spec and the reference toolkit. The package
 version tracks the spec version it implements (0.x minors may break).
 
-## Unreleased
+## 0.5.2 — 2026-09-29
 
 The SDK surface a live consumer needs when a `.aim` file changes under it
 (an editor pane, a watcher, a CI bot): what changed, and does the file's own

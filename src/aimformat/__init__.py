@@ -51,7 +51,7 @@ from .pagesetup import PageSetup, default_page_setup, page_css
 from .reconcile import ReconcileReport
 from .registry import REGISTRY
 
-__version__ = "0.5.1"
+__version__ = "0.5.2"
 SPEC_VERSION = REGISTRY.spec_version
 
 __all__ = [
