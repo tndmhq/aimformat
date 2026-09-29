@@ -390,12 +390,10 @@ def test_divergence_malformed_proposal_actor_degrades(doc):
     # codex #35 round 3: a hand-mangled pending card (bogus data-author)
     # must degrade to "no lane information", never crash the classifier
     old = snap(doc)
-    doc.propose_modify(
-        "p1", '<p data-aim="p1">Prop.</p>', author=BOT, explanation="e", at=ts(9)
-    )
+    doc.propose_modify("p1", '<p data-aim="p1">Prop.</p>', author=BOT, explanation="e", at=ts(9))
     text = doc.dumps()
     assert 'data-author="agent:m"' in text or "data-author" in text
-    tampered_text = text.replace("data-author=\"", "data-author=\"bogus ", 1)
+    tampered_text = text.replace('data-author="', 'data-author="bogus ', 1)
     tampered = aim.loads(tampered_text)
     div = aim.classify_divergence(old, tampered)
     assert div.new_proposals == ()  # degraded, not crashed
@@ -422,9 +420,7 @@ def test_divergence_unreadable_lane_makes_no_removal_claims(doc):
     # codex #35 round 4: one mangled card degraded the whole lane to [],
     # which reported every VALID old proposal as removed — an editor
     # reacting to removed_proposals dismissed real pending cards
-    doc.propose_modify(
-        "p1", '<p data-aim="p1">Keep me.</p>', author=BOT, explanation="e", at=ts(8)
-    )
+    doc.propose_modify("p1", '<p data-aim="p1">Keep me.</p>', author=BOT, explanation="e", at=ts(8))
     old = snap(doc)
     doc.propose_modify(
         "p2", '<p data-aim="p2">Second card.</p>', author=BOT, explanation="e", at=ts(9)

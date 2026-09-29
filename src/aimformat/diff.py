@@ -22,11 +22,11 @@ from __future__ import annotations
 import bisect
 from copy import deepcopy
 from dataclasses import dataclass
+from itertools import pairwise
 
 from .canonical import document_text, serialize
 from .document import AimDocument
 from .dom import Element
-from .errors import AimError
 from .events import Event
 from .reconcile import _skeleton, _units
 from .registry import REGISTRY
@@ -305,6 +305,7 @@ def classify_divergence(old: AimDocument, new: AimDocument) -> Divergence:
         if not history_rewritten
         else ()
     )
+
     # Every appended event must FULLY validate, not merely carry a known
     # kind: a registry-known `checkpoint` missing its required doc_hash
     # still passed a kind check, and state_at skipped it as
@@ -328,12 +329,11 @@ def classify_divergence(old: AimDocument, new: AimDocument) -> Divergence:
     # classifier would mark the corrupt suffix "explained". This mirrors the
     # structural half of verify() (the doc_hash replay half IS the drift
     # check below), so per-invariant whack-a-mole stops here.
-    new_seqs = [e.data.get("seq") for e in new_events_all]
-    seqs_consistent = (
-        all(isinstance(s, int) for s in new_seqs)
-        and len(set(new_seqs)) == len(new_seqs)
-        and new_seqs == sorted(new_seqs)
-        and all(b == a + 1 for a, b in zip(new_seqs, new_seqs[1:]))
+    raw_seqs = [e.data.get("seq") for e in new_events_all]
+    new_seqs = [s for s in raw_seqs if isinstance(s, int)]
+    # consecutive (+1 each step) implies unique and ascending
+    seqs_consistent = len(new_seqs) == len(raw_seqs) and all(
+        b == a + 1 for a, b in pairwise(new_seqs)
     )
     suffix_invalid = any(not _event_valid(e) for e in appended) or not seqs_consistent
     if suffix_invalid:
