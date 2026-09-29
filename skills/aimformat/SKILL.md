@@ -1,6 +1,6 @@
 ---
 name: aimformat
-description: Work with AIM documents (.aim files) — the open HTML-based format with stable chunk ids, an in-file suggestions lane (track changes), and append-only edit history. Use whenever a .aim file (or a .aim.html file, the same format under its compatibility alias) is involved in any way: reading or summarizing one, editing content, proposing or accepting/rejecting suggestions, importing (md/txt/docx/pdf to .aim) or exporting (.aim to docx/md/html/pdf), validating or repairing after hand edits, or when the user mentions an AIM document, aimformat, or pending suggestions in a file. Do NOT use for ordinary HTML files without data-aim attributes, or for track changes in other formats like .docx.
+description: "Work with AIM documents (.aim files) — the open HTML-based format with stable chunk ids, an in-file suggestions lane (track changes), and append-only edit history. Use whenever a .aim file (or a .aim.html file, the same format under its compatibility alias) is involved in any way: reading or summarizing one, editing content, proposing or accepting/rejecting suggestions, importing (md/txt/docx/pdf to .aim) or exporting (.aim to docx/md/html/pdf), validating or repairing after hand edits, or when the user mentions an AIM document, aimformat, or pending suggestions in a file. Do NOT use for ordinary HTML files without data-aim attributes, or for track changes in other formats like .docx."
 license: MIT
 compatibility: Requires Python 3.10+ (pip install aimformat). CLI-based; no network access needed.
 metadata:

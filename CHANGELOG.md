@@ -3,6 +3,13 @@
 All notable changes to the spec and the reference toolkit. The package
 version tracks the spec version it implements (0.x minors may break).
 
+## Unreleased
+
+- **The Agent Skill installs with strict YAML loaders again.** The skill's
+  `description` carried an unquoted `: `, so `npx skills add
+  tndmhq/aimformat` rejected the frontmatter and installed nothing. It is
+  quoted now, with a test that keeps every plain frontmatter value parseable.
+
 ## 0.5.1 — 2026-07-31
 
 Pending-lane resolution became order-independent where it can be, and
