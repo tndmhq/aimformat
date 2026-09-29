@@ -188,7 +188,13 @@ class _Reader(HTMLParser):
 
 
 def parse_html(text: str) -> Fragment:
-    """Parse *text* into a :class:`Fragment` (document or fragment)."""
+    """Parse *text* into a :class:`Fragment` (document or fragment).
+
+    Tolerant reader: a leading UTF-8 BOM (editors and some agent toolchains
+    prepend one) is accepted and dropped — the canonical serialization
+    never writes it back, so the first save normalizes the file.
+    """
+    text = text.removeprefix("\ufeff")
     reader = _Reader()
     try:
         reader.feed(text)

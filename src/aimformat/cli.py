@@ -14,6 +14,7 @@
     aim gc FILE             collect dead asset symbols
     aim normalize FILE      rewrite in canonical form (lossless, idempotent)
     aim reconcile FILE      detect out-of-band edits; append reconcile events
+    aim diff OLD NEW        unit-level diff between two versions of a document
     aim css                 print the generated aim.css for this spec version
     aim import IN -o F.aim  convert md/txt/docx/pdf to .aim
     aim export F.aim -o OUT convert .aim to docx/md/html/pdf (by extension)
@@ -427,6 +428,34 @@ def _cmd_reconcile(args: argparse.Namespace) -> int:
     return 1 if report.residual else 0
 
 
+def _cmd_diff(args: argparse.Namespace) -> int:
+    from .diff import diff_documents
+
+    diff = diff_documents(AimDocument.load(args.old), AimDocument.load(args.new))
+    if args.format == "json":
+        print(json.dumps(diff.to_obj(), indent=2))
+        return 0
+    if not diff.changed:
+        print("no unit-level differences")
+        return 0
+    for label, ids in (
+        ("added", diff.added),
+        ("deleted", diff.deleted),
+        ("modified", diff.modified),
+        ("moved", diff.moved),
+    ):
+        if ids:
+            print(f"{label}: {' '.join(ids)}")
+    for label, flag in (
+        ("theme", diff.theme_changed),
+        ("doc settings", diff.doc_settings_changed),
+        ("declared version", diff.version_changed),
+    ):
+        if flag:
+            print(f"{label} changed")
+    return 0
+
+
 def _cmd_css(args: argparse.Namespace) -> int:
     if args.stats:
         s = css_stats()
@@ -737,6 +766,16 @@ def build_parser() -> argparse.ArgumentParser:
         help="report drift without modifying anything; exit 1 when drift is found",
     )
     p.set_defaults(func=_cmd_reconcile)
+
+    p = sub.add_parser(
+        "diff",
+        help="unit-level diff between two versions of a document "
+        "(added/deleted/modified/moved unit ids + theme/settings/version flags)",
+    )
+    p.add_argument("old")
+    p.add_argument("new")
+    p.add_argument("--format", choices=["text", "json"], default="text")
+    p.set_defaults(func=_cmd_diff)
 
     p = sub.add_parser("css", help="print the generated aim.css")
     p.add_argument("--stats", action="store_true")

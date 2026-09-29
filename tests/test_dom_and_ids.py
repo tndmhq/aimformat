@@ -88,3 +88,12 @@ class TestIds:
         doc = aim.new_document(title="T")
         c = doc.add_chunk('<p data-aim="Not Valid!">x</p>', author=BOT, at=ts(0))
         assert ids.is_valid_chunk_id(c.id)
+
+
+def test_parse_tolerates_utf8_bom():
+    """Tolerant reader: a leading BOM parses; canonical form never has one."""
+    doc = aim.new_document(title="BOM")
+    doc.add_chunk('<p data-aim="p1">Body.</p>', author=BOT)
+    reparsed = aim.loads("\ufeff" + doc.dumps())
+    assert reparsed.doc_hash == doc.doc_hash
+    assert not reparsed.dumps().startswith("\ufeff")

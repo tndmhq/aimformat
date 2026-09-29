@@ -154,6 +154,7 @@ aim.to_docx(doc, "out.docx", pending="reject-all")
 | direct edits | `add_chunk`, `modify_chunk`, `delete_chunk`, `move_chunk`, `set_theme`, `doc.batch()` |
 | pending lane | `propose_modify/add/delete/move/theme`, `amend_proposal` (replace a pending payload/explanation in place, unrecorded), `accept` (with optional `applied=` tweaks), `reject`; supersede and chain rebinding are automatic |
 | history | `verify`, `state_at(seq)`, `checkpoint`, `undo`, `redo`, `flatten`, `prune`, `reconcile` (repair out-of-band edits / adopt hand-written files) |
+| compare versions | `diff_documents` (unit-level: added/deleted/modified/moved), `classify_divergence` (did the log grow, was it rewritten, does it explain the body) |
 | caches | `set_summary`, `generate_toc`, `set_embedding`, `stale_embeddings` |
 | assets | `pack_assets` (data-URIs into the content-addressed registry), `gc_assets` |
 | convert | `from_path`, `from_text`, `from_markdown`, `from_docx`, `from_pdf`, `from_docling`; `to_markdown`, `to_html`, `to_pdf`, `to_docx` |
