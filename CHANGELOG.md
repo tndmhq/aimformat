@@ -31,6 +31,10 @@ existing concepts (`docs/log/2026-08-06_2022_decision_editor-reload-sdk-surface.
   reports C001 for a BOM-prefixed file, in agreement with
   `aim normalize --check`, and one normalize pass (or any canonical save)
   drops the BOM.
+- **The Agent Skill installs with strict YAML loaders again.** The skill's
+  `description` carried an unquoted `: `, so `npx skills add
+  tndmhq/aimformat` rejected the frontmatter and installed nothing. It is
+  quoted now, with a test that keeps every plain frontmatter value parseable.
 
 ## 0.5.1 — 2026-07-31
 

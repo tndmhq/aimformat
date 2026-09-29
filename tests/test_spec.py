@@ -53,6 +53,23 @@ def test_skill_format_reference_tracks_the_spec_version():
     assert "aim-doc+json" in ref and "aim-page-break" in ref
 
 
+def test_skill_frontmatter_scalars_parse_as_strict_yaml():
+    """Unquoted top-level frontmatter values must be valid YAML plain
+    scalars. The description once carried a bare ": " ("in any way: reading"),
+    which lenient loaders accept but strict ones reject, so
+    `npx skills add tndmhq/aimformat` found no skill at all. Stdlib check of
+    the two plain-scalar breakers: ": " and " #"."""
+    text = (ROOT / "skills" / "aimformat" / "SKILL.md").read_text("utf-8")
+    front = text.split("---\n")[1]
+    for line in front.splitlines():
+        m = re.match(r"([a-z_-]+): (.+)$", line)
+        if not m or m.group(2)[0] in "\"'>|":
+            continue
+        assert ": " not in m.group(2) and " #" not in m.group(2), (
+            f"frontmatter key {m.group(1)!r} needs quoting"
+        )
+
+
 def test_spec_prints_the_canonical_note():
     """§2.5's printed note must BE the canonical note for the current spec
     version — the printed v0.1 text failed `aim note --check` when copied,
