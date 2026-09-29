@@ -1,0 +1,196 @@
+# Claude auto-review on maintainers' PRs (plan: docs/log/2026-07-16_1539_plan_claude-review-ci.md).
+# Advisory only — posts ONE sticky comment (updated in place on re-runs),
+# never blocks merge. Bound by REVIEW.md like every AI reviewer here.
+#
+# PUBLIC-REPO HARDENING: the job runs only for PRs (a) authored by an
+# allowlisted maintainer and (b) from a same-repo branch. Fork PRs and
+# non-allowlisted authors skip cleanly — no secret exposure, no red X. Plain
+# `pull_request` already withholds secrets from fork runs; the explicit guard
+# is for clean skips and to future-proof against the trigger ever becoming
+# `pull_request_target` (never do that).
+#
+# Auth: CLAUDE_CODE_OAUTH_TOKEN (repo secret, shared with claude.yml). The
+# action exchanges an OIDC token for the Claude GitHub App installation
+# token, hence `id-token: write` — the app (github.com/apps/claude) must be
+# installed on this repo (it is; claude.yml uses the same path).
+name: claude-review
+
+on:
+  pull_request:
+    types: [opened, ready_for_review, synchronize]
+    # Skip runs that cannot need a code review. NOT ignored on purpose:
+    # *.md in general — spec.md and REVIEW.md specify behavior and always
+    # get a round (AGENTS.md convention 7), and docs/log too: plan entries
+    # specify intended behavior (codex #36 round 2). The workflow file
+    # itself IS ignored: the reviewer must not review PRs that edit its
+    # own instructions (self-skip; those PRs get maintainer + Codex
+    # review).
+    paths-ignore:
+      - '.github/workflows/claude-review.yml'
+      - '**/package-lock.json'
+      - '**/*.lock'
+
+permissions:
+  contents: read
+  pull-requests: write
+  id-token: write
+
+concurrency:
+  group: claude-review-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  review:
+    # Both the PR AUTHOR and the TRIGGERING ACTOR must be allowlisted: on
+    # `synchronize`/`ready_for_review` the PR author stays whoever opened
+    # the PR, so gating on the author alone would review commits pushed by
+    # someone else (codex #36).
+    #
+    # SCOPE OF THIS GATE (codex #36 round 3): for same-repo `pull_request`
+    # runs, GitHub loads THIS FILE from the PR's own merge revision — so
+    # nothing written here can defend against a same-repo pusher, who could
+    # edit the gate in the very commit they push. The actual security
+    # boundary is (a) repository push access — everyone with it is trusted
+    # by definition, today only the maintainer — and (b) GitHub's own rule
+    # that fork-originated `pull_request` runs receive no secrets. The
+    # conditions here are review hygiene and clean skips (drafts, wrong
+    # author, forks) plus defense-in-depth, not the boundary itself. If
+    # non-maintainer push access is ever granted, revisit: the secret
+    # would need an environment-level home this file cannot override.
+    if: >
+      ${{
+        !github.event.pull_request.draft &&
+        github.event.pull_request.head.repo.full_name == github.repository &&
+        contains(fromJSON('["lucacampanella"]'), github.event.pull_request.user.login) &&
+        contains(fromJSON('["lucacampanella"]'), github.actor)
+      }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      # paths-ignore skips a PR only when EVERY changed file is ignored, so
+      # a PR editing this workflow ALONGSIDE code would still run its
+      # modified reviewer with the secret. Enforce the self-skip on mixed
+      # PRs too (codex #36).
+      - name: Self-skip when the PR touches this workflow
+        id: selfskip
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # FAIL CLOSED: an errored files query must not run the review — on
+          # a mixed PR editing this workflow, "query failed" and "not
+          # touched" would otherwise be indistinguishable (codex #36 r2)
+          if ! files=$(gh api --paginate \
+               "repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/files" \
+               --jq '.[].filename'); then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "changed-files query failed; failing closed (no review)."
+            exit 0
+          fi
+          if printf '%s\n' "$files" | grep -qx '.github/workflows/claude-review.yml'; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "PR edits the reviewer's own workflow; skipping the review."
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+      - if: steps.selfskip.outputs.skip == 'false'
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 1
+      # The PR discussion is fetched HERE, by trusted workflow code, not by
+      # the model: prefix-matching cannot pin `gh api` to GET (a repeated
+      # `-X DELETE` later in the command wins with gh 2.96), so the model
+      # gets no `gh api` at all (codex #36 r2) — and --paginate here also
+      # closes the first-page-only gap the model's own query had.
+      - name: Prefetch the PR discussion for the reviewer
+        if: steps.selfskip.outputs.skip == 'false'
+        id: prefetch
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # FAIL CLOSED (codex #36 round 3): reviewing without the inline
+          # discussion breaks the contract's skip-known-findings rule and
+          # silently re-reports resolved issues — a transient API error
+          # must skip the run, not empty the discussion.
+          if ! gh pr view "${{ github.event.pull_request.number }}" --comments \
+               > /tmp/pr-discussion.txt; then
+            echo "ok=false" >> "$GITHUB_OUTPUT"
+            echo "PR discussion prefetch failed; skipping the review."
+            exit 0
+          fi
+          if ! gh api --paginate \
+               "repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/comments" \
+               > /tmp/pr-inline-comments.json; then
+            echo "ok=false" >> "$GITHUB_OUTPUT"
+            echo "inline-comment prefetch failed; skipping the review."
+            exit 0
+          fi
+          echo "ok=true" >> "$GITHUB_OUTPUT"
+      - if: steps.selfskip.outputs.skip == 'false' && steps.prefetch.outputs.ok == 'true'
+        uses: anthropics/claude-code-action@37b464ce72700f7b2c5ff8d2db7fa7b15df792f5 # v1.0.169
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          # track_progress forces tag mode on pull_request events — the mode
+          # that actually creates and updates the single tracking comment.
+          # Without it the action runs, costs tokens, and posts nothing
+          # (verified in the action source at the pinned SHA:
+          # modes/detector.ts, create-initial.ts, entrypoints/run.ts).
+          track_progress: true
+          use_sticky_comment: true
+          prompt: |
+            REPO: ${{ github.repository }}
+            PR NUMBER: ${{ github.event.pull_request.number }}
+
+            You are an automated PR reviewer. The review contract in REVIEW.md
+            at the repository root is BINDING — read it first and follow it
+            exactly: hard cap of 5 findings ranked by severity with
+            [critical]/[major]/[minor] tags, nits banned, "not confident ->
+            silent".
+
+            Review focus for THIS repo (the .aim format: spec + SDK +
+            conformance suite):
+            - Spec conformance: `spec.md` snippets must lint; changes to
+              LINT or CONFORMANCE behavior (rule codes, canonical form,
+              what parses) must update the ok/nok kit (`tests/fixtures/`) —
+              spec-compliant SDK changes with targeted tests legitimately
+              leave it untouched.
+            - Registry discipline: `registry.json` is the single vocabulary
+              source of truth; spec Appendix A and `ts/src/registry.data.ts`
+              are generated from it, and `examples/` is generated by the SDK
+              (scripts/gen_examples.py) — flag any hand-edit of a generated
+              artifact.
+            - Round-trip integrity: parse -> serialize must stay canonical;
+              doc-hash stability across load/dumps.
+            - Public API stability of the SDK/CLI/MCP surface: pre-1.0, but
+              breaking changes must be called out, not slipped in.
+            - Python/TS parity: reader-visible behavior changes need the
+              parity goldens regenerated, not hand-patched — EXCEPT the
+              documented unit-test-only cases (docs/knowledge/
+              architecture.md, TS parity exceptions), where a TS unit test
+              is required and a Python-generated golden is forbidden.
+            - Docs sync: README, docs/for-agents.md, and the skill must stay
+              consistent with code changes they describe.
+
+            Process:
+            1. Read REVIEW.md.
+            2. Read the existing PR discussion BEFORE reviewing — it is
+               pre-fetched for you: /tmp/pr-discussion.txt (PR body and
+               comments) and /tmp/pr-inline-comments.json (every inline
+               review comment, e.g. from Codex, all pages). Skip any
+               finding another reviewer already made.
+            3. Review the diff (`gh pr diff`) against the checked-out code.
+            4. Report your findings as your response text — it is delivered
+               in the single tracking comment, updated in place on re-runs.
+               Do NOT post additional comments or inline comments yourself.
+
+            This review is advisory only: never approve, request changes, or
+            block the PR. If nothing meets the bar, say exactly:
+            "No findings above the bar."
+          # NO `gh api` for the model: prefix matching cannot pin it to GET
+          # (a repeated `-X DELETE` later in the command wins), so the
+          # discussion is pre-fetched by trusted workflow code above and
+          # the model keeps only inherently read-only commands
+          # (codex #36 rounds 1+2).
+          claude_args: |
+            --max-turns 90
+            --model sonnet
+            --allowedTools "Bash(gh pr view:*),Bash(gh pr diff:*)"
