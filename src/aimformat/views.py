@@ -36,6 +36,7 @@ from typing import Any, Literal
 from .canonical import serialize, serialize_run
 from .document import AimDocument, Proposal
 from .dom import Element, Text
+from .errors import AimError
 from .events import Actor
 
 __all__ = [
@@ -188,11 +189,53 @@ def _elide_value(value: Any) -> Any:
     return value
 
 
+def _actor_obj_str(obj: Any) -> str | None:
+    """:func:`_actor` for an actor object read from history JSON."""
+    if not isinstance(obj, dict) or "type" not in obj:
+        return None
+    value = obj.get("model") or obj.get("id")
+    return f"{obj['type']}:{value}" if value else str(obj["type"])
+
+
+def review_view(doc: AimDocument) -> dict[str, Any] | None:
+    """The review policy as data for an agent (spec §5.6): None when off,
+    ``{"agents": "auto", "by": "human:…"}`` when proposals from agents and
+    tools are accepted as they arrive, ``{"malformed": …}`` when unreadable."""
+    try:
+        policy = doc.review_policy
+    except AimError as exc:
+        return {"malformed": str(exc)}
+    if policy is None:
+        return None
+    return {"agents": policy.agents, "by": _actor(policy.by)}
+
+
+def recent_auto_batches(doc: AimDocument, limit: int = 3) -> list[dict[str, Any]]:
+    """The newest auto-accepted batches (the ids ``aim_undo`` takes)."""
+    try:
+        batches = doc.auto_accepted_batches(max_batches=limit)
+    except AimError:
+        return []
+    return [
+        {
+            "batch": b["batch"],
+            "via": b["via"],
+            "decided_by": _actor_obj_str(b["decided_by"]),
+            "t": b["t"],
+            "targets": b["targets"],
+            "undone": b["undone"],
+            "revertable": b["revertable"],
+        }
+        for b in batches
+    ]
+
+
 def full_projection(doc: AimDocument, *, include_history: bool = False) -> dict:
     """The whole-document projection (``aim_read`` mode ``full``): title,
     language, spec version, seq, doc_hash, summary with its staleness flag,
-    the table of contents, every chunk's HTML and the pending lane — data
-    URIs elided, the stylesheet never included. The table of contents is
+    the table of contents, every chunk's HTML, the pending lane, the review
+    policy and the recent auto-accepted batches — data URIs elided, the
+    stylesheet never included. The table of contents is
     never stale: the stored cache when it matches the document, else derived
     from the headings (``toc_source`` says which; both are None when the
     document has no heading or slide to outline)."""
@@ -237,6 +280,8 @@ def full_projection(doc: AimDocument, *, include_history: bool = False) -> dict:
             }
             for p in doc.proposals
         ],
+        "review": review_view(doc),
+        "recent_auto_batches": recent_auto_batches(doc),
     }
     if include_history:
         # elided like every other projection: raw add/modify payloads would
@@ -761,8 +806,17 @@ def _header(doc: AimDocument, view: _View) -> str:
     chunks = sum(1 for u in view.walk if u.kind == "chunk")
     return (
         f"{_clean(doc.title) or '(untitled)'} | spec {doc.spec_version} | seq {doc.seq} | "
-        f"{chunks} chunks | {len(doc.proposals)} pending{_summary(doc)}"
+        f"{chunks} chunks | {len(doc.proposals)} pending{_review(doc)}{_summary(doc)}"
     )
+
+
+def _review(doc: AimDocument) -> str:
+    """`` | review: auto`` when proposals from agents are applied as they
+    arrive (§5.6) — a reader of any view must know its proposals will not wait."""
+    view = review_view(doc)
+    if view is None:
+        return ""
+    return " | review: malformed" if "malformed" in view else f" | review: {view['agents']}"
 
 
 def short_header(doc: AimDocument) -> str:

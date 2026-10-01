@@ -71,6 +71,11 @@ class OpsResult:
     batch: str | None
     results: list[dict[str, Any]] = field(default_factory=list)
     superseded: list[str] = field(default_factory=list)
+    #: proposals the batch's close accepted (review policy or ``accept=True``,
+    #: spec §5.6), in creation order
+    accepted: list[str] = field(default_factory=list)
+    #: why in-scope proposals were left pending instead (None: nothing deferred)
+    pending_reason: str | None = None
 
 
 def ops_from_args(
@@ -225,12 +230,23 @@ def apply_ops(
     author: Actor,
     explanation: str | None = None,
     single: bool = False,
+    accept: bool = False,
+    accept_by: Actor | None = None,
 ) -> OpsResult:
     """Apply *ops* to *doc* in memory, all-or-nothing, in one batch.
+
+    ``accept``/``accept_by`` (proposals only) ask for every card of the
+    batch to be accepted when the batch closes (``auto: "request"``, spec
+    §5.6); without them the document's review policy decides.
 
     Raises :class:`OpError` naming the failing op; the caller must then
     discard *doc* (it may hold the earlier ops' changes) and write nothing.
     """
+    if kind == "edit" and (accept or accept_by is not None):
+        raise OpError("aim: accept applies to proposals only")
+    if accept_by is not None and not accept:
+        raise OpError("aim: accept_by needs accept")
+    ask: dict[str, Any] = {"accept": True, "accept_by": accept_by} if accept else {}
     actions = EDIT_ACTIONS if kind == "edit" else PROPOSE_ACTIONS
     themed = "set_theme" if kind == "edit" else "theme"
     stubs = _Stubs(doc)
@@ -300,7 +316,9 @@ def apply_ops(
                                 f"{key[0]!r}; one modify-or-delete and one move per target"
                             )
                         cards[key] = i
-                    item = _propose(doc, action, target, html, container, after, op, author, why)
+                    item = _propose(
+                        doc, action, target, html, container, after, op, author, why, ask
+                    )
                 if action == "add":
                     new_id = item.id if kind == "edit" else _proposed_root(doc, item.id)
                     if new_id:
@@ -318,7 +336,13 @@ def apply_ops(
             result.results.append(entry)
     if kind == "propose":
         after_ids = {p.id for p in doc.proposals}
-        result.superseded = sorted(before - after_ids)
+        outcome = doc.last_auto_accept
+        new_cards = [r["id"] for r in result.results]
+        if outcome is not None:
+            result.accepted = [pid for pid in new_cards if pid in outcome.accepted]
+            if any(pid in outcome.deferred for pid in new_cards):
+                result.pending_reason = outcome.reason
+        result.superseded = sorted(before - after_ids - set(result.accepted))
     return result
 
 
@@ -432,30 +456,36 @@ def _propose(
     op: dict[str, Any],
     author: Actor,
     why: str | None,
+    ask: dict[str, Any],
 ) -> _Done:
     if action == "modify":
         assert target is not None and html is not None
-        p = doc.propose_modify(target, html, author=author, explanation=why)
+        p = doc.propose_modify(target, html, author=author, explanation=why, **ask)
     elif action == "replace_text":
         assert target is not None
         p = doc.propose_replace_text(
-            target, op["old_text"], op["new_text"], author=author, explanation=why
+            target, op["old_text"], op["new_text"], author=author, explanation=why, **ask
         )
     elif action == "add":
         assert html is not None
         p = doc.propose_add(
-            html, author=author, container=container, after=_anchor(after), explanation=why
+            html, author=author, container=container, after=_anchor(after), explanation=why, **ask
         )
         return _Done(action, p.id, None, container)
     elif action == "delete":
         assert target is not None
-        p = doc.propose_delete(target, author=author, explanation=why)
+        p = doc.propose_delete(target, author=author, explanation=why, **ask)
     elif action == "move":
         assert target is not None
         p = doc.propose_move(
-            target, author=author, container=container, after=_anchor(after), explanation=why
+            target,
+            author=author,
+            container=container,
+            after=_anchor(after),
+            explanation=why,
+            **ask,
         )
     else:
-        p = doc.propose_theme(op.get("theme_slots") or {}, author=author, explanation=why)
+        p = doc.propose_theme(op.get("theme_slots") or {}, author=author, explanation=why, **ask)
         return _Done(action, p.id, "aim:theme", container)
     return _Done(action, p.id, target, container)

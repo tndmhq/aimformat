@@ -17,6 +17,8 @@ import {
   PAGE_DEFAULT,
   PAGE_ORIENTATIONS,
   PAGE_SIZES_MM,
+  REVIEW_AGENTS,
+  REVIEW_RESERVED_AGENTS,
   SCRIPT_TYPES,
   SPEC_VERSION,
   TABLE_SHELLS,
@@ -105,6 +107,16 @@ export interface PageSetup {
   readonly pageHeightMm: number;
   readonly contentWidthMm: number;
   readonly contentHeightMm: number;
+}
+
+/** The document's review policy (spec §5.6, the `review` field of the
+ * aim:doc settings block). `auto` is true only for the implemented value
+ * `"auto"`: agent and external proposals are accepted as they arrive. */
+export interface ReviewPolicy {
+  readonly agents: string;
+  readonly auto: boolean;
+  /** The human whose standing consent the policy records. */
+  readonly by: Author;
 }
 
 /** The embedded machine-managed stylesheet (spec §3.4). */
@@ -214,6 +226,77 @@ function pageSetupFromObj(obj: unknown): PageSetup {
     );
   }
   return setup;
+}
+
+// -- versions (mirrors registry.py) -----------------------------------------
+
+function versionKey(value: string): number[] | null {
+  const parts = value.split(".");
+  if (parts.length === 0 || !parts.every((p) => /^[0-9]+$/.test(p))) {
+    return null;
+  }
+  return parts.map((p) => parseInt(p, 10));
+}
+
+/** Whether this build implements a document declaring *declared* (same or
+ * older), compared like Python tuples. */
+function implementsVersion(declared: string | null): boolean {
+  if (declared === null) return false;
+  const mine = versionKey(SPEC_VERSION);
+  const theirs = versionKey(declared);
+  if (mine === null || theirs === null) return false;
+  for (let i = 0; i < Math.min(mine.length, theirs.length); i++) {
+    if (theirs[i]! !== mine[i]!) return theirs[i]! < mine[i]!;
+  }
+  return theirs.length <= mine.length;
+}
+
+// -- review policy (mirrors review.py) --------------------------------------
+
+/** Validate one `review` object (the D007 rule). *lenient*: the document
+ * declares a version this build does not implement, so an unknown `agents`
+ * value is read (never honoured) instead of rejected. */
+function reviewPolicyFromObj(obj: unknown, lenient: boolean): ReviewPolicy {
+  if (typeof obj !== "object" || obj === null || Array.isArray(obj)) {
+    throw new AimParseError("review policy must be a JSON object");
+  }
+  const review = obj as JsonObject;
+  const agents = review["agents"];
+  if (typeof agents !== "string") {
+    throw new AimParseError("review policy needs an 'agents' string");
+  }
+  if (!REVIEW_AGENTS.includes(agents) && !lenient) {
+    const reserved = REVIEW_RESERVED_AGENTS.includes(agents);
+    throw new AimParseError(
+      `review policy agents '${agents}' is ` +
+        (reserved ? "reserved and not defined yet" : "not a registered value") +
+        ` (registered: ${[...REVIEW_AGENTS].sort().join(", ")})`,
+    );
+  }
+  const by = review["by"];
+  if (
+    typeof by !== "object" ||
+    by === null ||
+    Array.isArray(by) ||
+    (by as JsonObject)["type"] !== "human"
+  ) {
+    throw new AimParseError("review policy 'by' must be a human actor object");
+  }
+  const actor = by as JsonObject;
+  for (const key of ["id", "model"]) {
+    if (key in actor && typeof actor[key] !== "string") {
+      throw new AimParseError(`review policy 'by.${key}' must be a string`);
+    }
+  }
+  return {
+    agents,
+    auto: agents === "auto",
+    by: {
+      type: "human",
+      id: "id" in actor ? (actor["id"] as string) : null,
+      model: "model" in actor ? (actor["model"] as string) : null,
+    },
+  };
 }
 
 /** The canonical aim-note comment body for a spec version (spec §2.5). */
@@ -413,6 +496,18 @@ export class AimDocument {
       return pageSetupFromObj(PAGE_DEFAULT as unknown as JsonObject);
     }
     return pageSetupFromObj(page);
+  }
+
+  /** The review policy (spec §5.6), or null when it is off. Throws
+   * `AimParseError` on a malformed policy (lint D007). Read-only, like the
+   * rest of this library: switching it is a Python SDK write. */
+  get reviewPolicy(): ReviewPolicy | null {
+    const settings = this.docSettings;
+    if (!("review" in settings)) return null;
+    return reviewPolicyFromObj(
+      settings["review"],
+      !implementsVersion(this.specVersion),
+    );
   }
 
   /** The embedded stylesheet, or null when the document omits it. */

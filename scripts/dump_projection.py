@@ -179,6 +179,18 @@ def _asset_ids(state: DocState) -> list[str]:
     return [s.get("id") or "" for s in svg.elements() if s.tag == "symbol"]
 
 
+def _review_policy(doc: AimDocument) -> dict | None:
+    policy = doc.review_policy
+    if policy is None:
+        return None
+    by = policy.by
+    return {
+        "agents": policy.agents,
+        "auto": policy.auto,
+        "by": {"type": by.type, "id": by.id, "model": by.model},
+    }
+
+
 def projection(doc: AimDocument) -> dict:
     state = doc._state
     resolved = doc.page_setup.resolved()
@@ -204,6 +216,7 @@ def projection(doc: AimDocument) -> dict:
             "contentWidthMm": resolved["content_width_mm"],
             "contentHeightMm": resolved["content_height_mm"],
         },
+        "reviewPolicy": _review_policy(doc),
         "nodes": _nodes(state, chunk_by_id),
         "chunks": chunks,
         "containers": doc.containers,

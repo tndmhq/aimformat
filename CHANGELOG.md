@@ -5,10 +5,17 @@ version tracks the spec version it implements (0.x minors may break).
 
 ## 0.6.0 — unreleased
 
-Spec v0.6. Decisions IMPORT-D9 to IMPORT-D16 in `docs/log/` (2026-10-01).
-Every v0.5 document stays valid and unchanged, and nothing is migrated.
-Documents these importers write declare 0.6, which a 0.5 tool reports as a
-newer version (S002) with an unknown event kind (H003).
+Spec v0.6: a history that records where it begins (`baseline`), and the
+review policy with auto-accepted resolutions. Decisions IMPORT-D9 to
+IMPORT-D16 and the `auto-accept-*` / `batch-undo-and-version-events`
+entries in `docs/log/` (2026-10-01). Every v0.5 document stays valid and
+unchanged, and nothing is migrated. Documents that use the new history
+event or field, or the review policy, declare 0.6: a 0.5 tool reports a
+newer version (S002) and an unknown event kind or field (H003).
+
+**Documents with a baseline, a review policy or auto-accepted history need
+aimformat 0.6 or newer.** Upgrade with `uvx aimformat@latest` or
+`pip install -U aimformat`.
 
 ### Baseline history and TOC cache (format change)
 
@@ -58,6 +65,72 @@ newer version (S002) with an unknown event kind (H003).
   meta block with neither summary nor TOC. A baseline under a declaration
   below 0.6 is S034. New conformance fixtures for each, plus `ok_baseline`
   and `ok_historyless`.
+
+### Review policy and auto-accepted resolutions (format change)
+
+A person can let agent changes apply as they arrive ("auto-accept") and
+still have the history say which acceptances nobody reviewed at the time.
+Decisions: `docs/log/2026-10-01_2121_decision_auto-accept-*.md` and
+`docs/log/2026-10-01_2121_decision_batch-undo-and-version-events.md`.
+
+#### Spec
+
+- **Review policy (§5.6).** The `aim:doc` settings block gains
+  `"review": {"agents": "auto", "by": {"type": "human", ...}}`. Absent means
+  off. While it is on, proposals by `agent` and `external` actors are
+  accepted in the batch that created them, in creation order, all or
+  nothing; proposals by people wait, and so does a proposal that replaced a
+  person's pending suggestion. The policy changes only by a direct edit;
+  a proposal can never change it. `"required"` is reserved (Appendix C).
+- **`auto` resolution marker (§6.2).** `"policy"` or `"request"` on an
+  ordinary `accepted` resolution, `decided_by` a human, no `applied`.
+- **Version floor (§3.7).** Both constructs are since 0.6: S035 when a
+  document declaring an older version carries them. D007 for a malformed
+  policy. A document that declares a version newer than the tool reports
+  unknown event fields as H010 warnings instead of H003 errors, and
+  `reconcile`/`diff` accept them.
+- §6.6 (informative): undo may be grouped by batch, and an `aim:version`
+  upgrade is never inverted by undo.
+
+#### SDK
+
+- `doc.review_policy`, `doc.set_review_policy("auto" | None, by=, author=)`;
+  `aimformat.ReviewPolicy`, `aimformat.AutoAcceptOutcome`.
+- Every `propose_*`, `propose_page_setup` included, takes
+  `accept=None | True | False` and `accept_by=`; `doc.batch(auto_accept=)`
+  sets the same for a whole batch. Acceptance runs when the outermost batch
+  closes; the result is in `doc.last_auto_accept`, and a `propose_*` call
+  that owned its batch returns `Proposal.resolution`. A refused acceptance
+  leaves the cards pending and never raises.
+- `doc.auto_accept(pids, via=, decided_by=)` applies the policy to cards
+  that already exist (hosts watching writers that do not honour it).
+- `doc.resolution_of(pid)`, `doc.auto_accepted_batches()`.
+- `undo`/`redo(whole_batch=True, batch=)`, `revert_batch(batch)` (a true
+  undo when the batch is on top, otherwise conflict-checked ordinary edits
+  whose `source` names the reverted batch), `unrevert_batch(batch)`.
+- **Behaviour change:** undo and redo step over `aim:version` upgrades
+  instead of trying to invert them, so a paint, typography or policy
+  upgrade no longer blocks undo of the edits below it. Undo (and redo)
+  also refuse to remove a block that pending proposals target or anchor on,
+  the same rule a direct delete follows.
+- `aim:doc` proposals keep the live review policy when accepted (the
+  resolution records `applied` when the payload disagreed).
+
+#### CLI and MCP
+
+- `aim propose ... --accept [--accept-for human:ID]`; `aim review FILE
+  [--agents auto|off --request "..." --by human:ID]`; `aim undo|redo FILE
+  [--batch B | --one]` (default: the newest batch); `aim show` prints the
+  policy and marks auto-accepted resolutions.
+- MCP: `aim_propose(accept=, accept_for=)` reports `accepted`,
+  `auto`, `decided_by`, `batch`; new `aim_review` (switching on needs
+  `user_request`, the person's words, kept in the history), `aim_undo` and
+  `aim_redo` (both require a `batch`), for eleven tools in all. `aim_read` reports `review` and
+  `recent_auto_batches`. `AIMFORMAT_MCP_REVIEW=off` stops agents from
+  switching auto-accept on or passing `accept=true` to `aim_propose`
+  (`aim_resolve` and `aim_edit` are unaffected; it is not access control). The server
+  instructions say when an agent may change the policy and never to edit
+  history to clear lint errors.
 
 ### Agent read and edit surface (no format change)
 

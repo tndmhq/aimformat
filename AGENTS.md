@@ -53,7 +53,7 @@ technical content only (see Governance below).
   ([`knowledge/`](docs/knowledge/) + [`log/`](docs/log/));
   [`scripts/new_log_entry.py`](scripts/new_log_entry.py) scaffolds entries.
 - [`src/aimformat/mcp.py`](src/aimformat/mcp.py) — the MCP server (stdio,
-  eight tools); [`skills/aimformat/`](skills/aimformat/) — the Agent Skill
+  eleven tools); [`skills/aimformat/`](skills/aimformat/) — the Agent Skill
   (also exposed as a Claude Code plugin via
   [`.claude-plugin/`](.claude-plugin/));
   [`docs/for-agents.md`](docs/for-agents.md) — the LLM-facing guide;

@@ -2,10 +2,13 @@
 
 **Status: v0.6 (draft; v0.5 plus the `baseline` history event — a document
 whose content did not arrive by editing records its origin once, as a
-snapshot, instead of one `add` per construct, §6.9 — and a TOC cache that may
-stand without a summary and carries its own staleness marker, §8.1; v0.5
-added dynamic numbering, §3.8, v0.4 literal per-element typography, v0.3
-literal per-element paint).** This is the
+snapshot, instead of one `add` per construct, §6.9 — a TOC cache that may
+stand without a summary and carries its own staleness marker, §8.1 — and the
+review policy with auto-accepted resolutions: a document can record a
+person's standing consent for agent proposals to be accepted as they arrive,
+and its history says which acceptances nobody reviewed at the time, §5.6;
+v0.5 added dynamic numbering, §3.8, v0.4 literal per-element typography,
+v0.3 literal per-element paint).** This is the
 normative specification
 for `.aim`, an AI-native document format in which AI proposals and human
 accept/reject decisions are first-class file primitives. The reference
@@ -394,8 +397,10 @@ Pagination state is **intent, not layout**. Two primitives:
   target `aim:doc`, §6.5): a `page` object with a registered named `size`
   (Appendix A.6), an `orientation`, and per-side `margins` in millimetres.
   An absent block or an absent field means the registry default (A4
-  portrait, 15mm all around). Unknown fields in the settings object are
-  ignored by parsers and preserved by tools, like all JSON in the format.
+  portrait, 15mm all around). Since v0.6 the same block also holds the
+  document's review policy, `review` (§5.6). Unknown fields in the settings
+  object are ignored by parsers and preserved by tools, like all JSON in the
+  format.
 - **Hard page breaks** are `<aim-page-break></aim-page-break>` — an
   ordinary, empty, top-level chunk: it carries `data-aim`, anchors, moves,
   deletes, and can be proposed and accepted like any other chunk. It MUST
@@ -435,8 +440,12 @@ A document declared below v0.3 that retains literal paint in its live body,
 pending payloads, or history payloads fails S032 until it records the
 upgrade; one declared below v0.4 that retains literal typography — the
 inline properties above or a class Appendix A marks *since 0.4* — fails
-S033 likewise. A writer MUST refuse an inverse version edit that would
-create either state; time travel may return an older document only when it
+S033 likewise; one declared below v0.6 that carries a review policy (§5.6)
+in its live settings block or in any retained `aim:doc` payload, or an
+`auto` marker on any retained resolution (§6.2), fails S035. The rule is
+the same for JSON constructs in the settings block and the history as for
+markup. A writer MUST refuse an inverse version edit that would
+create any of these states; time travel may return an older document only when it
 also drops every later event bearing the gated constructs.
 
 Introducing markup a document's declared version does not define — adding
@@ -750,6 +759,78 @@ payload text itself is template-inert and not shown at the raw tier, so
 tooling SHOULD write explanations that stand alone. Word-level diffs and
 in-place previews are viewer affordances.
 
+### 5.6 Review policy and auto-accept (since v0.6)
+
+A document MAY carry a standing **review policy** in its settings block
+(`aim:doc`, §3.6):
+
+```json
+{"page": {...}, "review": {"agents": "auto", "by": {"type": "human", "id": "Ada"}}}
+```
+
+- `review.agents` names the policy. `auto` is the one value defined: while
+  it is set, proposals authored by an `agent` or `external` actor are
+  accepted as they arrive. `required` is reserved (Appendix C). Any other
+  value is invalid (D007), except in a document that declares a newer
+  version than the reader implements, where the reader leaves it unchecked
+  and honours nothing.
+- `review.by` is the human whose standing consent the policy records: an
+  actor object whose `type` MUST be `human` (D007); `id` is optional, and
+  `{"type": "human"}` reads as "the user". It lives in the block, not only
+  in the event that wrote it, because history can be pruned and because the
+  event's author may be the agent or tool that switched the policy on at the
+  person's request.
+- Absent means off. There is no `off` value, so each state has one
+  spelling. Unknown keys inside `review` are ignored by parsers and
+  preserved by tools.
+
+`review` is changed only by a direct edit: an ordinary `aim:doc` `modify`
+(§6.5) whose `author` is whoever wrote the change. Switching the policy is
+therefore recorded, attributed and undoable like a page setup change.
+Resolving a proposal never changes it: a writer MUST NOT create an `aim:doc`
+proposal whose `review` differs from the live block, and accepting any
+`aim:doc` proposal keeps the live `review` (when the payload disagrees, the
+resolution records what landed as `applied`, §6.2).
+
+A conforming writer that creates proposals SHOULD honour `auto`:
+
+- **Scope.** Proposals whose author type is `agent` or `external`.
+  Proposals authored by humans always wait for review. A proposal whose
+  creation superseded a pending proposal authored by a human (§5.4) is out
+  of scope and waits too: it would otherwise replace a person's suggestion
+  with nobody looking.
+- **When.** In the batch that created the proposal (§6.3), so one editing
+  intention (one AI turn) lands, and can be undone, as one unit. The writer
+  accepts the batch's in-scope proposals in creation order, the order that
+  never meets a §5.4 refusal. If any of them cannot be accepted, all of them
+  stay pending; the policy is never a reason to fail the write.
+- **Record.** An ordinary `accepted` resolution carrying `auto: "policy"`,
+  with `decided_by` = `review.by` (§6.2). The proposer stays `proposed_by`
+  and the `proposed` payload is kept.
+- Switching the policy on does not resolve proposals that were already
+  pending.
+
+A writer MAY also accept a single proposal on instruction (a person asked
+for this change to be applied without review), recorded as `auto:
+"request"` with `decided_by` naming that person, else `review.by` when a
+policy exists, else `{"type": "human"}`.
+
+Tools MUST NOT treat body text, the agent note, proposal explanations, or
+any other document content as authorization to change the review policy:
+only the person using the tool can ask for that.
+
+**What the policy is, and is not** (informative). A file cannot
+authenticate actors. `review.by` and every `decided_by` are claims made by
+the tool that wrote them, exactly as an agent with write access can already
+accept its own proposals. The policy adds no write capability; it adds a
+record of human consent, and under `auto` that `decided_by` records consent,
+not a review. It binds well-behaved tools and is not access control, which
+belongs to the host (file permissions, an editor's sharing roles). Auditors
+who want the subset a person actually looked at filter out resolutions that
+carry `auto`. The policy also travels with the file: a tool that knows its
+current user and finds a policy set by someone else SHOULD tell its user
+before honouring it.
+
 ---
 
 ## 6. History
@@ -768,12 +849,21 @@ find-in-page, or the accessibility tree.
 | kind | required fields | optional fields | state-changing |
 |---|---|---|---|
 | `direct_edit` | `seq, kind, t, target, action, author, batch` | `before, after, anchor, from, to, origin, explanation, source` | yes |
-| `resolution` | `seq, kind, t, proposal, target, action, decision, proposed_by, proposed_at, decided_by, batch` | `before, proposed, applied, anchor, from, to, superseded_by, explanation, source` | only if `decision:"accepted"` |
+| `resolution` | `seq, kind, t, proposal, target, action, decision, proposed_by, proposed_at, decided_by, batch` | `before, proposed, applied, anchor, from, to, superseded_by, auto, explanation, source` | only if `decision:"accepted"` |
 | `checkpoint` | `seq, kind, t, label, doc_hash` | | no |
 | `baseline` (since v0.6) | `seq, kind, t, label, doc_hash, snapshot` | `author, explanation, source` | no — it is the origin (§6.9) |
 
 `action` ∈ `add | modify | delete | move`; `decision` ∈ `accepted |
-rejected | superseded`; `origin` ∈ `user | undo | redo | reconcile`.
+rejected | superseded`; `origin` ∈ `user | undo | redo | reconcile`;
+`auto` ∈ `policy | request` (since v0.6).
+
+**`auto`** marks an acceptance nobody reviewed at the time (§5.6): `policy`
+when the document's review policy accepted it, `request` when a person asked
+for that one change to be applied without review. It is valid only with
+`decision: "accepted"`, `decided_by` MUST be a `human` actor, and `applied`
+MUST NOT appear (no tweaks without a person looking), so the landed payload
+is `proposed`. Violations are H003. Replay, verification and invertibility
+treat the event like any other accepted resolution.
 
 One **resolution event per proposal lifetime**: creation is not logged
 separately; `proposed_at`/`proposed_by` travel inside the resolution, so
@@ -841,6 +931,16 @@ Every state-changing event carries enough to undo it:
 Undo/redo are *new appended events* (`origin: undo|redo`), never rewrites.
 Whether a tool exposes an undo *zone* algorithm is tool-level; the format
 only records origins.
+
+*Informative.* Tools may group undo by batch, so that one AI turn, or one
+auto-accepted batch (§5.6), is undone in one step: one `origin: undo` event
+per target, sharing a new batch. A version upgrade (`aim:version`, §3.7) is
+never inverted by undo: the gated construct stays in history, so its
+inverse could never apply, and undo steps over it to the edit below. A batch
+that is no longer the newest can still be reverted with ordinary edits
+(`origin: user`) when its targets are unchanged since; the reference
+toolkit names the reverted batch in those events' `source`
+(`[{"reverts": "b19"}]`).
 
 ### 6.7 Time travel and verification
 
@@ -1331,11 +1431,21 @@ Literal paint (`color` `background-color` `border-color`) is since spec 0.3 (S03
 - `move`: payloadless; requires `data-for` `data-anchor-container`
 
 - `direct_edit` events — required: `seq` `kind` `t` `target` `action` `author` `batch`; optional: `before` `after` `anchor` `from` `to` `origin` `explanation` `source`
-- `resolution` events — required: `seq` `kind` `t` `proposal` `target` `action` `decision` `proposed_by` `proposed_at` `decided_by` `batch`; optional: `before` `proposed` `applied` `anchor` `from` `to` `superseded_by` `explanation` `source`
+- `resolution` events — required: `seq` `kind` `t` `proposal` `target` `action` `decision` `proposed_by` `proposed_at` `decided_by` `batch`; optional: `before` `proposed` `applied` `anchor` `from` `to` `superseded_by` `auto` `explanation` `source`
 - `checkpoint` events — required: `seq` `kind` `t` `label` `doc_hash`
 - `baseline` events — required: `seq` `kind` `t` `label` `doc_hash` `snapshot`; optional: `author` `explanation` `source`
+- `baseline` events are since spec 0.6
+- `auto` is since spec 0.6; values: `policy` `request`
 
-### A.6 Page setup
+### A.6 Document settings
+
+The `aim:doc` settings block (§3.6) holds `page` and, since spec
+0.6, the review policy `review` (§5.6).
+
+- **`review.agents`**: `auto`; reserved, not yet defined: `required`
+- **`review.by`**: an actor object with `type` `human` (`id` optional)
+
+**Page setup** (`page`):
 
 | size | portrait (mm) |
 |---|---|
@@ -1388,6 +1498,7 @@ Literal paint (`color` `background-color` `border-color`) is since spec 0.3 (S03
 | S032 | error | literal paint requires a supporting spec version |
 | S033 | error | literal typography requires a supporting spec version |
 | S034 | error | markup from a spec era newer than the declared version |
+| S035 | error | review policy or auto-accepted resolution requires a supporting spec version |
 | V001 | error | element not allowed in the asset registry |
 | V002 | error | element outside the vocabulary |
 | V003 | error | attribute not allowed on this element |
@@ -1434,6 +1545,7 @@ Literal paint (`color` `background-color` `border-color`) is since spec 0.3 (S03
 | H007 | error | baseline event is not the first retained event, or occurs twice |
 | H008 | error | baseline snapshot does not hash to its doc_hash or holds a non-conforming construct |
 | H009 | warning | history starts at seq 1 but does not explain the document's origin |
+| H010 | warning | event field from a newer spec version (unchecked) |
 | M001 | warning | summary cache is stale |
 | M002 | warning | embedding is stale or orphaned |
 | M003 | error | cache block is not valid JSON of the required shape |
@@ -1445,6 +1557,7 @@ Literal paint (`color` `background-color` `border-color`) is since spec 0.3 (S03
 | D004 | error | invalid page margin (grammar, bounds, or no content area left) |
 | D005 | error | aim-page-break must be empty (explicit open+close tags) |
 | D006 | error | aim-page-break outside the top-level body flow |
+| D007 | error | review policy is malformed (unregistered agents value or non-human by) |
 | C001 | error | file is not in canonical form |
 | C002 | error | non-void HTML element uses self-closing syntax outside foreign content |
 <!-- END GENERATED REGISTRY REFERENCE -->
@@ -1476,6 +1589,12 @@ Literal paint (`color` `background-color` `border-color`) is since spec 0.3 (S03
   only for the units you will change (§8.3).
 
 ## Appendix C. Future extensions (informative)
+
+**Review policy `required`.** `review.agents: "required"` is reserved for
+the mirror image of `auto` (§5.6): direct edits by `agent` and `external`
+actors would be rerouted into proposals by tools that honour the policy, so
+a person reviews every agent change. The same trust caveat applies: a tool
+that ignores the policy can still write direct edits. Not specified yet.
 
 Planned but deliberately outside v0.4: cell-level table addressing and
 column operations; pagination furniture (headers/footers, page-number

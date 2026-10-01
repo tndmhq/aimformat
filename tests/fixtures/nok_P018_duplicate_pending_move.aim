@@ -369,8 +369,8 @@ aim-assets{display:none}
 <p data-aim="p1">One paragraph &amp; some text.</p>
 <ul data-aim-container="l1"><li data-aim="i1">First</li><li data-aim="i2">Run…</li><li data-aim="i2">…run</li></ul>
 <aim-proposals>
-<aim-proposal id="p-dmk29o7r" data-action="move" data-anchor-after="l1" data-anchor-container="body" data-at="2026-07-07T12:00:03Z" data-author="agent" data-author-model="claude-opus-4-8" data-batch="b4" data-for="p1"></aim-proposal>
-<aim-proposal id="p-phr9kjho" data-action="move" data-anchor-after="p1" data-anchor-container="body" data-at="2026-07-07T12:00:04Z" data-author="agent" data-author-model="claude-opus-4-8" data-batch="b5" data-for="p1"></aim-proposal>
+<aim-proposal id="p-icip40b5" data-action="move" data-anchor-after="l1" data-anchor-container="body" data-at="2026-07-07T12:00:03Z" data-author="agent" data-author-model="claude-opus-4-8" data-batch="b4" data-for="p1"></aim-proposal>
+<aim-proposal id="p-3g4vu1pq" data-action="move" data-anchor-after="p1" data-anchor-container="body" data-at="2026-07-07T12:00:04Z" data-author="agent" data-author-model="claude-opus-4-8" data-batch="b5" data-for="p1"></aim-proposal>
 </aim-proposals>
 <script type="application/aim-history+jsonl">
 

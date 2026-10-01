@@ -258,6 +258,34 @@ def theme_doc_meta_doc() -> aim.AimDocument:
     return doc
 
 
+def review_policy_doc() -> aim.AimDocument:
+    """Review policy on (spec §5.6): an auto-accepted agent batch in the
+    history and a human proposal still pending."""
+    doc = aim.new_document(title="Auto-accept")
+    doc.add_chunk('<p data-aim="p1">First draft.</p>', author=ME, at=t(0))
+    doc.set_review_policy(
+        "auto",
+        by=aim.human("ada"),
+        author=ME,
+        explanation="Apply AI edits as they arrive.",
+        at=t(1),
+    )
+    with doc.batch():
+        doc.propose_modify("p1", '<p data-aim="p1">Second draft.</p>', author=BOT, at=t(2))
+        doc.propose_add('<p data-aim="p2">An added line.</p>', author=BOT, at=t(3))
+    doc.propose_delete("p2", author=ME, explanation="Too long.", at=t(4))
+    return doc
+
+
+def unnamed_policy_doc() -> aim.AimDocument:
+    """A policy whose consenting human is unnamed, plus a per-call accept."""
+    doc = aim.new_document(title="Unnamed consent")
+    doc.add_chunk('<p data-aim="p1">Hello.</p>', author=ME, at=t(0))
+    doc.set_review_policy("auto", by=aim.Actor("human"), author=aim.external("aim-mcp"), at=t(1))
+    doc.propose_modify("p1", '<p data-aim="p1">Hello there.</p>', author=ME, accept=True, at=t(2))
+    return doc
+
+
 def assets_doc() -> aim.AimDocument:
     """Packed assets: data-URI images hoisted into the registry."""
     doc = aim.new_document(title="Assets — packed registry")
@@ -602,6 +630,8 @@ FIXTURES = {
     "unicode-attrs": unicode_attrs_doc,
     "flattened": flattened_doc,
     "empty-registry": empty_registry_doc,
+    "review-policy": review_policy_doc,
+    "unnamed-policy": unnamed_policy_doc,
 }
 
 # intentionally NOT lint-clean (see module docstring); builders return text

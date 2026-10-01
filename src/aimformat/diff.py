@@ -313,11 +313,15 @@ def classify_divergence(old: AimDocument, new: AimDocument) -> Divergence:
     # the corrupt suffix explained (codex #35 rounds 4+5). Run the SDK's own
     # Event.validate() — any failure means the suffix is untrustworthy:
     # drift, and its events are never surfaced.
+    # a document declaring a version this tool does not implement may carry
+    # event fields from that later spec: unknown, not untrustworthy
+    newer_spec = not REGISTRY.implements(new._state.spec_version())
+
     def _event_valid(e: Event) -> bool:
         if not isinstance(e.data, dict) or e.data.get("kind") not in _KNOWN_KINDS:
             return False
         try:
-            return not e.validate()
+            return not e.validate(newer_spec=newer_spec)
         except Exception:
             return False
 

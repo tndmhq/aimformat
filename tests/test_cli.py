@@ -222,7 +222,8 @@ def contract(tmp_path):
 
 class TestShowModes:
     def test_overview_is_unchanged(self, capsys, monkeypatch):
-        """No flags: byte-for-byte the pre-0.6 output (golden captured from 0.5.2)."""
+        """No flags: byte-for-byte the pinned overview (captured from 0.5.2; 0.6.0 adds
+        only the Review line and auto/batch marks on history lines)."""
         monkeypatch.chdir(ROOT)
         assert main(["show", "examples/proposal.aim"]) == 0
         assert capsys.readouterr().out == (GOLDENS / "show-proposal.txt").read_text()
@@ -408,3 +409,89 @@ class TestReplaceTextCommand:
         assert main(argv) == 1
         assert "not found" in capsys.readouterr().err
         assert contract.read_bytes() == before
+
+
+class TestReviewAndBatchUndo:
+    """`aim review`, `aim propose --accept`, `aim undo|redo` (spec §5.6, §6.6)."""
+
+    @pytest.fixture
+    def plain(self, tmp_path, basic_doc):
+        path = tmp_path / "doc.aim"
+        basic_doc.save(path)
+        return path
+
+    def test_review_shows_off_then_on(self, plain, capsys):
+        assert main(["review", str(plain)]) == 0
+        assert "Review: off" in capsys.readouterr().out
+        assert main(["review", str(plain), "--agents", "auto"]) == 2  # no --request
+        assert (
+            main(
+                [
+                    "review",
+                    str(plain),
+                    "--agents",
+                    "auto",
+                    "--request",
+                    "apply your edits",
+                    "--by",
+                    "human:Ada",
+                ]
+            )
+            == 0
+        )
+        assert "auto-accept on (for Ada)" in capsys.readouterr().out
+        doc = aim.load(plain)
+        assert doc.review_policy.by == aim.human("Ada")
+        assert doc.history[-1].get("explanation") == "User asked: 'apply your edits'"
+        assert main(["review", str(plain), "--format", "json"]) == 0
+        assert json.loads(capsys.readouterr().out)["review"]["agents"] == "auto"
+        assert main(["show", str(plain)]) == 0
+        assert "Review: auto-accept on (for Ada)" in capsys.readouterr().out
+        assert main(["review", str(plain), "--agents", "off"]) == 0
+        assert aim.load(plain).review_policy is None
+
+    def test_propose_accept_then_undo_and_redo_the_batch(self, plain, capsys):
+        argv = ["propose", "modify", str(plain), "intro", "--html"]
+        argv += ['<p data-aim="intro">Now.</p>', "--author", "agent:m", "--accept"]
+        argv += ["--accept-for", "human:Ada", "--format", "json"]
+        assert main(argv) == 0
+        out = json.loads(capsys.readouterr().out)
+        assert (out["accepted"], out["auto"], out["decided_by"]) == (True, "request", "human:Ada")
+        assert aim.load(plain).chunk("intro").text == "Now."
+        assert main(["show", str(plain)]) == 0
+        assert "(auto: request)" in capsys.readouterr().out
+        assert main(["undo", str(plain)]) == 0
+        assert aim.load(plain).chunk("intro").text == "Intro paragraph."
+        assert main(["redo", str(plain)]) == 0
+        assert aim.load(plain).chunk("intro").text == "Now."
+        assert not [f for f in aim.lint_path(plain) if f.level == "error"]
+
+    def test_undo_batch_reverts_and_redo_batch_restores(self, plain, capsys):
+        main(["propose", "delete", str(plain), "intro", "--accept", "--format", "json"])
+        batch = json.loads(capsys.readouterr().out)["batch"]
+        doc = aim.load(plain)
+        doc.modify_chunk("h1", '<h1 data-aim="h1">Later</h1>', author=BOT, at=ts(30))
+        doc.save(plain)
+        assert main(["undo", str(plain), "--batch", batch, "--format", "json"]) == 0
+        revert = json.loads(capsys.readouterr().out)["batch"]
+        assert [c.id for c in aim.load(plain).chunks] == ["h1", "intro"]
+        assert main(["redo", str(plain), "--batch", revert]) == 0
+        assert [c.id for c in aim.load(plain).chunks] == ["h1"]
+        assert aim.load(plain).chunk("h1").text == "Later"
+
+    def test_show_prints_the_batch_ids_undo_takes(self, plain, capsys):
+        # docs point agents at `aim show` for the id `aim undo --batch` takes
+        main(["propose", "delete", str(plain), "intro", "--accept", "--format", "json"])
+        batch = json.loads(capsys.readouterr().out)["batch"]
+        assert main(["show", str(plain)]) == 0
+        line = next(ln for ln in capsys.readouterr().out.splitlines() if "(auto: request)" in ln)
+        assert line.endswith(f"[{batch}]")
+        assert main(["undo", str(plain), "--batch", batch]) == 0
+        assert [c.id for c in aim.load(plain).chunks] == ["h1", "intro"]
+
+    def test_accept_for_needs_accept(self, plain, capsys):
+        argv = ["propose", "delete", str(plain), "intro", "--accept-for", "human:Ada"]
+        assert main(argv) == 2
+
+    def test_one_and_batch_are_exclusive(self, plain):
+        assert main(["undo", str(plain), "--one", "--batch", "b1"]) == 2
