@@ -21,7 +21,7 @@ name collision with AimStack's `aim`). `python -m aimformat.cli` also works.
 | compare versions | `aim.diff_documents(old, new)` → `DocumentDiff` (added/deleted/modified/moved unit ids) · `aim.classify_divergence(old, new)` → `Divergence` (new_events, new/removed proposals, history_rewritten, content_drift) |
 | time travel | `doc.state_at(seq)` · `doc.checkpoint(label)` · `doc.undo(author=…)` · `doc.redo(author=…)` · `doc.flatten()` · `doc.prune(before=…)` |
 | caches | `doc.set_summary(text, model=…)` · `doc.generate_toc()` · `doc.set_embedding(…)` · `doc.stale_embeddings()` |
-| interop | `aim.from_path(p)` (md/txt/docx/pdf/.aim) · `aim.from_text` · `aim.from_markdown` · `aim.from_docling` · `aim.to_docx(doc, p, pending=…)` · `aim.to_markdown` · `aim.to_html` · `aim.to_pdf` |
+| interop | `aim.from_path(p)` (md/txt/docx/pdf/.aim) · `aim.from_text` · `aim.from_markdown` · `aim.from_docling` · `aim.to_docx(doc, p, pending=…)` · `aim.to_markdown` · `aim.to_html` · `aim.to_pdf` · `aim.to_print_html(doc, pending=…, extra_css=…)` (exact HTML `to_pdf` prints; for a caller with its own Chromium) |
 
 Notes: `after=` accepts an id, `None` (first position), or the default
 `aim.LAST` (end of container). Direct edits and resolutions append history
