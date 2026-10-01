@@ -798,7 +798,8 @@ A conforming writer that creates proposals SHOULD honour `auto`:
   Proposals authored by humans always wait for review. A proposal whose
   creation superseded a pending proposal authored by a human (§5.4) is out
   of scope and waits too: it would otherwise replace a person's suggestion
-  with nobody looking.
+  with nobody looking. So is one that superseded a proposal already out of
+  scope for this reason (an agent revising its own replacement).
 - **When.** In the batch that created the proposal (§6.3), so one editing
   intention (one AI turn) lands, and can be undone, as one unit. The writer
   accepts the batch's in-scope proposals in creation order, the order that

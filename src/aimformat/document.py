@@ -2726,7 +2726,8 @@ class AimDocument:
 
         When the batch is the top of the undo stack this is a true undo
         (``undo(whole_batch=True, batch=batch)``): ``origin: "undo"`` events,
-        and :meth:`redo` brings it back. Otherwise the batch's inverse is
+        and :meth:`redo` brings it back, unless that undo would change the
+        live review policy. Otherwise the batch's inverse is
         written as ordinary direct edits (``origin: "user"``) in one new
         batch, newest change first, whose ``source`` names the reverted batch
         (``[{"reverts": batch}]``); undoing that new batch brings the changes
@@ -2746,8 +2747,15 @@ class AimDocument:
         if all(ev.seq in undone for ev in events):
             raise InvalidOperation(f"batch {batch!r} is already undone")
         top = list(self._top_batch_or_empty())
-        if top and top[0].batch == batch and {e.seq for e in top} == {e.seq for e in events}:
+        if (
+            top
+            and top[0].batch == batch
+            and {e.seq for e in top} == {e.seq for e in events}
+            and not self._inverse_switches_review(top)
+        ):
             return self.undo(author=author, at=at, whole_batch=True, batch=batch)
+        # not on top, or a true undo would flip the live review policy: write
+        # the inverse as ordinary edits, which keep it (§5.6)
         live = [ev for ev in events if ev.seq not in undone]
         reverted_auto = any(ev.kind == "resolution" and ev.get("auto") for ev in live)
         explanation = (
@@ -2772,6 +2780,17 @@ class AimDocument:
             return self._write_revert(
                 live, author=author, at=at, explanation=explanation, batch=batch
             )
+
+    def _inverse_switches_review(self, events: Iterable[Event]) -> bool:
+        """Whether inverting *events* (newest first, as undo/redo writes
+        them) would change the live review policy (§5.6)."""
+        doc_events = [ev for ev in events if ev.target == "aim:doc"]
+        if not doc_events:
+            return False
+        trial = self._clone()
+        for ev in doc_events:  # only the settings block carries ``review``
+            trial._apply_data(trial._inverse_data(ev))
+        return trial._live_review() != self._live_review()
 
     def _top_batch_or_empty(self) -> list[Event]:
         try:
@@ -2822,11 +2841,21 @@ class AimDocument:
         *batch* is the batch the revert wrote (its events' ``batch``). A true
         undo is redone (``redo(whole_batch=True)``); a revert written as
         ordinary edits is undone (``undo(whole_batch=True, batch=batch)``).
-        Either way only that batch, and only while it is on top."""
+        Either way only that batch, and only while it is on top. Like
+        :meth:`revert_batch` it keeps the live review policy: a redo that
+        would switch it refuses (a plain :meth:`redo` still can)."""
         events = [ev for ev in self._history_events() if ev.batch == batch and ev.state_changing]
         if not events:
             raise InvalidOperation(f"batch {batch!r} has no changes")
         if all(ev.origin == "undo" for ev in events):
+            targets = self._top_batch(self._redo_candidates(), batch, verb="redo")
+            if self._inverse_switches_review(targets):
+                # same rule as revert_batch: bringing changes back keeps the
+                # live review policy (§5.6); a plain redo() still can
+                raise InvalidOperation(
+                    f"batch {batch!r} would switch the review policy back; switch it "
+                    "with set_review_policy (aim review / aim_review)"
+                )
             return self.redo(author=author, at=at, whole_batch=True, batch=batch)
         if all(
             any(isinstance(s, dict) and s.get("reverts") for s in (ev.get("source") or []))
@@ -3955,22 +3984,36 @@ class AimDocument:
             self._batch = None
 
     def _replaced_human_ids(self, pids: set[str], *, own_batch: bool) -> set[str]:
-        """Cards among *pids* whose creation superseded a human-authored card
-        (§5.4 supersession records ``superseded_by``). With *own_batch* only
-        the open batch's trailing events are read: supersession happens
-        inside the creating ``propose_*`` call."""
+        """Cards among *pids* that replaced a human-authored card (§5.6),
+        directly or through a chain of supersessions: an agent revising its
+        own card that had replaced a person's suggestion still replaces that
+        suggestion (§5.4 supersession records ``superseded_by``).
+
+        One newest-first pass: a card's supersessions are written by its
+        creating call, so they precede every event that supersedes the card
+        itself. With *own_batch* the scan stops at the open batch's start
+        unless a chain leads further back (a card created in an earlier
+        batch was replaced in this one)."""
         found: set[str] = set()
+        # card id -> the candidates whose supersession chain reaches it
+        roots: dict[str, set[str]] = {pid: {pid} for pid in pids}
+        reached_back = False
         current = self._batch
         for ev in reversed(self._history_events()):
-            if own_batch and ev.batch != current:
+            if own_batch and ev.batch != current and not reached_back:
                 break
-            if (
-                ev.kind == "resolution"
-                and ev.decision == "superseded"
-                and ev.get("superseded_by") in pids
-                and (ev.get("proposed_by") or {}).get("type") == "human"
-            ):
-                found.add(ev.get("superseded_by"))
+            if ev.kind != "resolution" or ev.decision != "superseded":
+                continue
+            heirs = roots.get(ev.get("superseded_by") or "")
+            if not heirs:
+                continue
+            if (ev.get("proposed_by") or {}).get("type") == "human":
+                found |= heirs
+                continue
+            older = ev.get("proposal")
+            if older:
+                roots.setdefault(older, set()).update(heirs)
+                reached_back = True
         return found
 
     def _run_auto_accept(

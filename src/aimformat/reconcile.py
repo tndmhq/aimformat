@@ -546,8 +546,12 @@ def _ev_doc_settings(
     source: list[str] | None = None,
 ) -> None:
     before = S._state.serial("aim:doc")
+    # a settings block carrying ``review`` is a 0.6 construct (§5.6): record
+    # the version upgrade it needs, as the markup builders do
+    S._preflight_feature_upgrade(after, lambda trial: trial._state.set_doc_settings_markup(after))
+    upgrade_batch = S._ensure_feature_version(after, author=author, at=at)
     S._state.set_doc_settings_markup(after)
-    data = _base(S, author, at, source=source)
+    data = _base(S, author, at, batch=upgrade_batch, source=source)
     data.update({"target": "aim:doc", "action": "modify"})
     if before is not None:
         data["before"] = before

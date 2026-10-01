@@ -146,6 +146,23 @@ class TestVersionFloor:
         assert older.state_at(seq0).spec_version == "0.5"
         assert older.verify() == []
 
+    def test_reconcile_of_a_hand_added_policy_records_the_upgrade(self):
+        older = _declared("0.5")
+        older.set_page_setup({"size": "A5"}, author=ME, at=ts(2))
+        assert older.spec_version == "0.5"
+        settings = {**older.doc_settings, "review": {"agents": "auto", "by": ADA.to_obj()}}
+        text = older.dumps().replace(
+            older._state.serial("aim:doc"), older._settings_script(settings)
+        )
+        edited = aim.loads(text)
+        edited.reconcile(author=MCP, at=ts(3))
+        upgrade, edit = edited.history[-2:]
+        assert (upgrade.target, upgrade.get("after")) == ("aim:version", "0.6")
+        assert edit.target == "aim:doc" and upgrade.batch == edit.batch
+        assert edited.review_policy == ReviewPolicy("auto", ADA)
+        assert edited.verify() == []
+        assert _errors(edited) == []
+
     def test_a_policy_under_an_05_declaration_is_s035(self, basic_doc):
         basic_doc.set_review_policy("auto", by=ADA, author=ADA, at=ts(2))
         stale = basic_doc.dumps().replace(

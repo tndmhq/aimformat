@@ -1209,3 +1209,58 @@ def test_replace_text_proposals_follow_the_review_policy(tmp_path):
     out = _payload(_call("aim_propose", {**args, "old_text": "Original", "new_text": "First"}))
     assert out["accepted"] is True and out["auto"] == "policy"
     assert aim.load(path).chunk("p1").text == "First text."
+
+
+def _settings_html(settings: dict) -> str:
+    return f'<script type="application/aim-doc+json">\n{json.dumps(settings)}\n</script>'
+
+
+def test_edit_cannot_change_the_review_policy(tmp_path, monkeypatch):
+    """aim_edit on aim:doc would otherwise switch auto-accept on with no
+    user_request and past AIMFORMAT_MCP_REVIEW=off; aim_review is the only
+    way (spec §5.6)."""
+    path = _make_doc(tmp_path)
+    monkeypatch.setenv("AIMFORMAT_MCP_REVIEW", "off")
+    before = path.read_text()
+    review = {"agents": "auto", "by": {"type": "human", "id": "Owner"}}
+    msg = _error_text(
+        _call(
+            "aim_edit",
+            {
+                "path": str(path),
+                "action": "modify",
+                "target": "aim:doc",
+                "html": _settings_html({"review": review}),
+                "author": "agent:m",
+            },
+        )
+    )
+    assert "cannot change the review policy" in msg
+    assert path.read_text() == before
+    # and it cannot drop a policy either; a page setup edit keeping it works
+    doc = aim.load(path)
+    doc.set_review_policy("auto", by=aim.human("Ada"), author=aim.human("Ada"))
+    doc.save(path)
+    page = {"size": "A5", "orientation": "portrait", "margins": {}}
+    args = {"path": str(path), "action": "modify", "target": "aim:doc", "author": "agent:m"}
+    msg = _error_text(_call("aim_edit", {**args, "html": _settings_html({"page": page})}))
+    assert "cannot change the review policy" in msg
+    live = aim.load(path).doc_settings["review"]
+    out = _payload(
+        _call("aim_edit", {**args, "html": _settings_html({"page": page, "review": live})})
+    )
+    assert out["lint_errors"] == 0
+    after = aim.load(path)
+    assert after.page_setup.size == "A5" and after.review_policy is not None
+
+
+def test_undo_of_switching_auto_accept_off_keeps_it_off(tmp_path, monkeypatch):
+    path = _make_doc(tmp_path)
+    monkeypatch.setenv("AIMFORMAT_MCP_REVIEW", "off")
+    doc = aim.load(path)
+    doc.set_review_policy("auto", by=aim.human("Ada"), author=aim.human("Ada"))
+    doc.save(path)
+    _payload(_call("aim_review", {"path": str(path), "auto": False}))
+    batch = aim.load(path).history[-1].batch
+    assert _call("aim_undo", {"path": str(path), "batch": batch, "author": "agent:m"}).isError
+    assert aim.load(path).review_policy is None

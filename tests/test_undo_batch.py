@@ -161,6 +161,45 @@ class TestRevertBatch:
         assert basic_doc.dumps() == before
         assert basic_doc.review_policy is not None
 
+    def test_on_top_a_policy_switch_off_is_not_undone(self, basic_doc):
+        """A batch that switched auto-accept off is on top: reverting it
+        must not turn auto-accept back on (the revert keeps the live
+        policy, on top or not), so it refuses like the non-top case."""
+        basic_doc.set_review_policy("auto", by=ADA, author=ADA, at=ts(5))
+        basic_doc.set_review_policy(None, author=ADA, at=ts(6))
+        batch = basic_doc.history[-1].batch
+        before = basic_doc.dumps()
+        with pytest.raises(aim.InvalidOperation, match="only switched the review policy"):
+            basic_doc.revert_batch(batch, author=BOT, at=ts(7))
+        assert basic_doc.dumps() == before
+        assert basic_doc.review_policy is None
+
+    def test_on_top_a_page_setup_revert_keeps_the_live_policy(self, basic_doc):
+        basic_doc.set_review_policy("auto", by=ADA, author=ADA, at=ts(5))
+        with basic_doc.batch() as batch:
+            basic_doc.set_page_setup({"size": "A5"}, author=ADA, at=ts(6))
+            basic_doc.set_review_policy(None, author=ADA, at=ts(7))
+        events = basic_doc.revert_batch(batch, author=BOT, at=ts(8))
+        assert basic_doc.page_setup.size == "A4"
+        assert basic_doc.review_policy is None
+        assert {e.origin for e in events} == {"user"}
+        basic_doc.unrevert_batch(events[0].batch, author=BOT, at=ts(9))
+        assert basic_doc.page_setup.size == "A5"
+        assert basic_doc.review_policy is None
+        assert basic_doc.verify() == []
+        assert _errors(basic_doc) == []
+
+    def test_unrevert_does_not_redo_a_policy_switch(self, basic_doc):
+        basic_doc.set_review_policy("auto", by=ADA, author=ADA, at=ts(5))
+        (undo,) = basic_doc.undo(author=ADA, at=ts(6), whole_batch=True)
+        assert basic_doc.review_policy is None
+        before = basic_doc.dumps()
+        with pytest.raises(aim.InvalidOperation, match="switch the review policy back"):
+            basic_doc.unrevert_batch(undo.batch, author=BOT, at=ts(7))
+        assert basic_doc.dumps() == before
+        basic_doc.redo(author=ADA, at=ts(8), whole_batch=True)  # a plain redo still can
+        assert basic_doc.review_policy is not None
+
     def test_unknown_batch(self, turned):
         doc, _ = turned
         with pytest.raises(aim.InvalidOperation, match="no changes"):

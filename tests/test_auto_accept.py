@@ -263,6 +263,31 @@ class TestBatchClose:
         assert auto_doc.resolution_of(human.id).decision == "superseded"
         assert [p.id for p in auto_doc.proposals] == [replacing.id]
 
+    @pytest.mark.parametrize("shape", ["one batch", "two calls", "kept pending first"])
+    def test_a_revision_of_a_card_that_replaced_a_person_stays_pending(self, auto_doc, shape):
+        """The agent revising its own card, which had replaced a person's
+        suggestion, still replaces that suggestion: the exclusion follows the
+        supersession chain, inside one batch and across batches (§5.6)."""
+        human = auto_doc.propose_modify(
+            "intro", '<p data-aim="intro">Mine.</p>', author=ME, at=ts(6)
+        )
+        v1 = '<p data-aim="intro">Bot 1.</p>'
+        v2 = '<p data-aim="intro">Bot 2.</p>'
+        if shape == "one batch":
+            with auto_doc.batch():
+                auto_doc.propose_modify("intro", v1, author=BOT, at=ts(7))
+                second = auto_doc.propose_modify("intro", v2, author=BOT, at=ts(8))
+        else:
+            keep = False if shape == "kept pending first" else None
+            auto_doc.propose_modify("intro", v1, author=BOT, at=ts(7), accept=keep)
+            second = auto_doc.propose_modify("intro", v2, author=BOT, at=ts(8))
+        out = auto_doc.last_auto_accept
+        assert out.accepted == () and out.deferred == (second.id,)
+        assert "replaces a suggestion from a person" in out.reason
+        assert auto_doc.chunk("intro").text == "Intro paragraph."
+        assert [p.id for p in auto_doc.proposals] == [second.id]
+        assert auto_doc.resolution_of(human.id).decision == "superseded"
+
     def test_auto_turn_equals_accept_all_on_the_same_lane(self, basic_doc):
         manual = aim.loads(basic_doc.dumps())
         auto = _with_policy(aim.loads(basic_doc.dumps()))
@@ -288,6 +313,17 @@ class TestExistingCards:
         assert out.batch == batch and out.accepted == (a.id, b.id)
         assert basic_doc.resolution_of(a.id).batch == batch
         assert basic_doc.verify() == []
+
+    def test_a_card_that_replaced_a_person_through_a_chain_is_deferred(self, basic_doc):
+        basic_doc.propose_modify("intro", '<p data-aim="intro">Mine.</p>', author=ME, at=ts(6))
+        basic_doc.propose_modify("intro", '<p data-aim="intro">A.</p>', author=TOOL, at=ts(7))
+        last = basic_doc.propose_modify(
+            "intro", '<p data-aim="intro">B.</p>', author=TOOL, at=ts(8)
+        )
+        _with_policy(basic_doc)
+        out = basic_doc.auto_accept([last.id], at=ts(9))
+        assert out.accepted == () and out.deferred == (last.id,)
+        assert basic_doc.chunk("intro").text == "Intro paragraph."
 
     def test_policy_via_needs_a_policy_and_skips_people(self, basic_doc):
         p = basic_doc.propose_delete("intro", author=ME, at=ts(6))

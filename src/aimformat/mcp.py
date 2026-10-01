@@ -12,9 +12,10 @@ batch undo/redo — few workflow-shaped tools, not a 1:1 SDK mapping.
 
 Set ``AIMFORMAT_MCP_REVIEW=off`` to stop agents from switching auto-accept on
 or passing ``accept=true`` to aim_propose (switching it off and honouring a
-policy already in a file still work). It is not access control: aim_resolve
-and aim_edit still change the file, so a host that wants no agent-applied
-changes must not expose those.
+policy already in a file still work). aim_edit never changes the policy, and
+aim_undo/aim_redo keep it. It is not access control: aim_resolve and aim_edit
+still change the file, so a host that wants no agent-applied changes must not
+expose those.
 
 Wire shape: every result is ONE compact text block (JSON for structured
 results, plain text for the reading views) — no ``structuredContent`` and no
@@ -40,6 +41,7 @@ from .document import AimDocument
 from .errors import AimError
 from .events import Actor, human, parse_actor
 from .lint import lint_path
+from .pagesetup import doc_settings_element, parse_doc_settings
 
 _INSTRUCTIONS = """\
 aimformat: read and edit .aim documents (HTML with stable chunk ids, a \
@@ -190,6 +192,26 @@ def _actor(spec: str | None):
     return parse_actor(spec or "external:aim-mcp")
 
 
+def _refuse_review_edit(doc: AimDocument, html: str) -> None:
+    """aim_edit never changes the review policy: an ``aim:doc`` modify whose
+    ``review`` differs from the live block is refused, so aim_review (gated
+    by user_request and ``AIMFORMAT_MCP_REVIEW``) is the only way to switch
+    it (spec §5.6)."""
+    try:
+        wanted = parse_doc_settings(doc_settings_element(html).raw).get("review")
+    except AimError:
+        return  # malformed payload: modify_chunk reports it
+    try:
+        live = doc.doc_settings.get("review")
+    except AimError:
+        live = None
+    if wanted != live:
+        raise ValueError(
+            "aim: aim_edit cannot change the review policy; keep the document's "
+            '"review" value as it is, and use aim_review only when the user asks'
+        )
+
+
 def _save_and_lint(doc: AimDocument, path: str) -> dict[str, Any]:
     doc.save(path)
     errors = [f for f in lint_path(path) if f.level == "error"]
@@ -207,6 +229,10 @@ def _write(
     accept_by: Actor | None = None,
 ) -> str:
     doc = _load(path)
+    if kind == "edit":
+        for op in ops:
+            if op.get("action") == "modify" and op.get("target") == "aim:doc" and op.get("html"):
+                _refuse_review_edit(doc, op["html"])
     try:
         res = apply_ops(
             doc,
