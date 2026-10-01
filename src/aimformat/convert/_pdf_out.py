@@ -35,7 +35,7 @@ from ..document import AimDocument
 from ..pagesetup import page_css
 from ._html_out import to_html
 
-__all__ = ["to_pdf"]
+__all__ = ["to_pdf", "to_print_html"]
 
 # Print scale bridging CSS px to typographic points: 1 px = 0.75 pt, so ×4/3
 # makes W canvas px fill W pt of paper (the canvas-pt convention). Slightly
@@ -103,7 +103,28 @@ def _slide_page_css(doc: AimDocument) -> str:
     return "\n".join(pages) + "\n@media print{" + "".join(assigns) + "}"
 
 
-def _print_html(doc: AimDocument, pending: str, extra_css: str | None) -> str:
+def to_print_html(doc: AimDocument, *, pending: str = "keep", extra_css: str | None = None) -> str:
+    """The exact HTML :func:`to_pdf` prints, for callers that print with a
+    Chromium of their own (an Electron ``webContents.printToPDF``, a browser
+    service) instead of Playwright.
+
+    Carries the document's ``@page`` rule, one named page per slide sized to
+    its canvas, then *extra_css*, all spliced before the document's theme
+    block so the theme still wins. ``pending`` is as in :func:`to_pdf`:
+    ``"accept-all"`` / ``"reject-all"`` resolve on a throwaway copy first
+    (page geometry and slide pages follow the resolved state); other values
+    go to :func:`to_html`, which raises ``InvalidOperation`` on unknown ones.
+
+    To match :func:`to_pdf` page for page, print with background graphics on
+    and the CSS page size preferred (Playwright ``print_background=True,
+    prefer_css_page_size=True``; Electron ``printBackground: true,
+    preferCSSPageSize: true``).
+
+    The result is NOT a conforming `.aim` document (it carries a free
+    ``<style>`` block, lint X005) and must never be saved as one. Its exact
+    bytes are not a stable contract between versions; "what to_pdf prints"
+    is. Needs no optional extra.
+    """
     if pending in ("accept-all", "reject-all"):
         # resolve the pending lane FIRST (on a throwaway copy), so the
         # @page rule and the printed HTML read the same document state — a
@@ -140,8 +161,11 @@ def to_pdf(
     changes memo prints as part of the document). ``extra_css`` is spliced
     into the print copy after the ``@page`` rule — the hook callers use for
     print-only additions such as ``@font-face`` for embedded fonts.
+
+    The printed HTML is exactly :func:`to_print_html` for the same
+    arguments; callers with their own Chromium can print that instead.
     """
-    html = _print_html(doc, pending, extra_css)
+    html = to_print_html(doc, pending=pending, extra_css=extra_css)
     try:
         from playwright.sync_api import sync_playwright
     except ImportError as exc:  # pragma: no cover - exercised without extra
