@@ -1314,35 +1314,78 @@ class AimDocument:
     # -- chunk views -------------------------------------------------------------
     @property
     def chunks(self) -> list[Chunk]:
-        out: list[Chunk] = []
-        seen: set[str] = set()
+        """Every chunk in document order — one tree walk.
 
-        def emit(cid: str) -> None:
-            if cid in seen:
-                return
-            seen.add(cid)
-            parent, members = self._state.find_chunk(cid)
+        Semantics are those of :meth:`DocState.find_chunk` +
+        :meth:`DocState.container_of_chunk` per id (pinned by
+        ``tests/test_chunk_lookup.py``): an id's members are its hits under
+        the parent of its first hit (template subtrees skipped), and its
+        container is the nearest ``data-aim-container`` at or above that
+        parent — ``body`` for top-level constructs."""
+        state = self._state
+        order: list[str] = []
+        seen: set[str] = set()
+        # id -> [(parent, element, container-at-parent)] in pre-order
+        hits: dict[str, list[tuple[Element, Element, str]]] = {}
+        top_ids: set[str] = set()
+
+        def walk(parent: Element, container: str, in_template: bool) -> None:
+            inner = parent.container_id or container
+            for child in parent.elements():
+                skipped = in_template or child.tag == "template"
+                cid = child.chunk_id
+                if cid:
+                    if cid not in seen:
+                        seen.add(cid)
+                        order.append(cid)
+                    if not skipped:
+                        hits.setdefault(cid, []).append((parent, child, inner))
+                walk(child, inner, skipped)
+
+        for top in state.constructs():
+            for marker in (top.chunk_id, top.container_id):
+                if marker:
+                    top_ids.add(marker)
+            if top.chunk_id:
+                if top.chunk_id not in seen:
+                    seen.add(top.chunk_id)
+                    order.append(top.chunk_id)
+                hits.setdefault(top.chunk_id, []).append((state.body, top, "body"))
+            walk(top, "body", False)
+
+        out: list[Chunk] = []
+        for cid in order:
+            found = hits.get(cid, [])
+            members = [el for p, el, _ in found if p is found[0][0]] if found else []
+            if cid in top_ids:
+                container = "body"
+            elif not found:
+                raise TargetNotFound(f"chunk {cid!r} not found")
+            else:
+                container = found[0][2]
             out.append(
                 Chunk(
                     id=cid,
-                    container=self._state.container_of_chunk(cid),
+                    container=container,
                     tags=tuple(m.tag for m in members),
                     html=serialize_run(members),
                     text="".join(m.text() for m in members),
                 )
             )
-
-        for top in self._state.constructs():
-            for el in top.iter():
-                if el.chunk_id:
-                    emit(el.chunk_id)
         return out
 
     def chunk(self, cid: str) -> Chunk:
-        for c in self.chunks:
-            if c.id == cid:
-                return c
-        raise TargetNotFound(f"no chunk {cid!r}")
+        """One chunk view by id — a direct lookup, not a scan of ``chunks``."""
+        _parent, members = self._state.find_chunk(cid)
+        if not members:
+            raise TargetNotFound(f"no chunk {cid!r}")
+        return Chunk(
+            id=cid,
+            container=self._state.container_of_chunk(cid),
+            tags=tuple(m.tag for m in members),
+            html=serialize_run(members),
+            text="".join(m.text() for m in members),
+        )
 
     @property
     def containers(self) -> list[str]:

@@ -36,6 +36,23 @@ aim show FILE --format json    # title, seq, doc_hash, chunk ids, pending propos
 aim lint FILE --format json    # conformance findings
 ```
 
+On a long document, do not read it whole — orient, locate, then fetch only
+what you will change:
+
+```sh
+aim show FILE --mode toc                  # outline + id ranges, clause numbers ("1.1.8")
+aim search FILE "query"                   # ranked chunk ids + snippets; "quoted" = required phrase
+aim show FILE --mode text                 # every chunk as plain text with its id (LOSSY)
+aim show FILE --mode skeleton             # every id with tag, classes, first words
+aim show FILE --mode chunks --ids ID,A..B # exact HTML for the units you will edit
+```
+
+**The text view is for reading only**: it drops classes, styles and
+attributes, and a modify replaces the whole chunk, so build every edit
+payload from `--mode chunks`. Read output shows long `data:` URIs as
+`[elided: 2KB, sha256:…]` stubs; leave a stub exactly as it is in your edit
+and the tooling restores the data.
+
 Reading the raw file: the head's `application/aim-meta+json` script carries a
 summary and TOC — check `summary.doc_hash` against `aim hash FILE` before
 trusting it (stale caches are legal). Skip the embedded stylesheet and elide
@@ -48,7 +65,7 @@ trusting it (stale caches are legal). Skip the embedded stylesheet and elide
   Never silently rewrite someone's document — the pending lane is the
   format's whole point.
 - **Explicitly commanded edits → edit directly** (recorded in history with
-  you as author), via the CLI, SDK, or MCP tools.
+  you as author), via `aim edit …`, the SDK, or the MCP tools.
 
 For edits to an **existing** document, prefer those tooling paths over
 editing the file as text: each edit lands attributed and undoable in history
@@ -88,6 +105,9 @@ aim propose add    FILE --html '<p>…</p>' [--container ID] [--after ID|first]
 aim propose delete FILE TARGET
 aim propose move   FILE TARGET [--container ID] [--after ID|first]
 aim propose theme  FILE --set slot=value
+aim propose batch  FILE OPS.json   # or - for stdin: up to 25 cards, all-or-nothing
+aim edit {modify,add,delete,move,theme} FILE …   # same arguments: direct edits
+aim edit batch     FILE OPS.json   # up to 100 edits, all-or-nothing, one history batch
 
 aim accept FILE PID... | --all     # resolve (human decision)
 aim reject FILE PID... | --all
@@ -97,7 +117,12 @@ aim import IN -o FILE.aim          # md/txt/docx/pdf → .aim (Word redlines →
 aim export FILE.aim -o OUT.docx    # or .md/.html/.pdf; --pending tracked|accept-all|…
 ```
 
-`lint`, `show`, `note`, `propose`, `accept`, and `reject` take
+A batch is a JSON array of ops `{"action", "target", "html", "container",
+"after", "theme_slots", "explanation"}`; a later op refers back to an earlier
+one with `$N` (e.g. `"after": "$0"` = right after what ops[0] added). One
+failing op aborts the whole batch with nothing written.
+
+`lint`, `show`, `search`, `note`, `propose`, `edit`, `accept`, and `reject` take
 `--format json` for machine-readable output. Exit codes everywhere: 0 ok,
 1 domain/lint failure, 2 usage; `-o OUT` writes elsewhere (default in place).
 
@@ -146,7 +171,9 @@ fix-when-convenient. Format details when you need them:
 
 MCP-capable clients can skip the shell:
 `{"mcpServers": {"aimformat": {"command": "aimformat", "args": ["mcp"]}}}` —
-six tools: aim_read, aim_edit, aim_propose, aim_resolve, aim_lint,
+seven tools: aim_read (`mode` full | toc | skeleton | text | chunks, the
+same views as `aim show --mode`), aim_search, aim_edit and aim_propose
+(one op, or a batch via `ops` with `$N`), aim_resolve, aim_lint,
 aim_export.
 
 ## Human handoff

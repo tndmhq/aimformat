@@ -10,6 +10,8 @@ Every v0.5 document stays valid and unchanged, and nothing is migrated.
 Documents these importers write declare 0.6, which a 0.5 tool reports as a
 newer version (S002) with an unknown event kind (H003).
 
+### Baseline history and TOC cache (format change)
+
 - **New `baseline` history event (§6.9).** It makes the current state the
   origin of the log and carries that state once, as a `snapshot` of exactly
   the lines `doc_hash` hashes. Verification, time travel and reconcile work
@@ -56,6 +58,77 @@ newer version (S002) with an unknown event kind (H003).
   meta block with neither summary nor TOC. A baseline under a declaration
   below 0.6 is S034. New conformance fixtures for each, plus `ok_baseline`
   and `ok_historyless`.
+
+### Agent read and edit surface (no format change)
+
+The agent read and edit surface: what a read costs now follows what the
+agent needs, not the size of the file, and related edits land in one call.
+No format, conformance or history change of its own; its spec text is
+informative only (§8.3, Appendix B). Decisions: `docs/log/` entries
+READS-D1…D12 (2026-10-01, `agent-read-*`, `agent-*`, `cli-*`, `mcp-*`,
+`sdk-views-module`, `spec-partial-reads-informative`,
+`elision-stubs-round-trip`).
+
+#### Added
+
+- **`aimformat.views`** — pure read views over a document: `units`,
+  `numbering_labels` (the outline numbers of §3.8, which exist only as CSS
+  counters in the file), `outline`, `resolve_refs`, `search`, and the
+  renderers `render_toc`, `render_skeleton`, `render_text`, `render_chunks`,
+  `render_search`; plus `elide` and `full_projection`.
+- **`aim_read(mode=…)`** — `full` (default, unchanged keys), `toc` (headings,
+  slides and `num-1`/`num-2` blocks with their id ranges), `skeleton` (every
+  id with tag, classes and the first `words` words), `text` (a deliberately
+  lossy plain-text view keyed by id, never an edit payload) and `chunks`
+  (exact HTML for `ids`: chunk, container or proposal ids, `aim:theme`, or
+  inclusive `a..b` ranges, each under a context line with its container,
+  numbering label and pending cards).
+- **`aim_search(path, query, k)`** — the seventh MCP tool: BM25 over each
+  chunk's text-view rendering, numbering labels included; dotted numbers
+  (`1.1.8`) stay whole, CJK text is indexed as character pairs, a term with
+  no exact match matches near forms (`subprocessors` → `Subprocessor`), and
+  quoted phrases filter. Standard library only.
+- **Batch ops** — `aim_edit` and `aim_propose` accept `ops: [...]`:
+  all-or-nothing, one history batch (or one proposal batch), `$N`
+  back-references to earlier ops, at most 100 edits / 25 proposals per call.
+  Single-op arguments keep working; a single `aim_edit` now returns the `id`
+  it created or targeted, and `aim_propose` reports `superseded` cards.
+- **CLI parity** — `aim show --mode toc|skeleton|text|chunks|full` (with
+  `--ids`, `--words`, `--format json`; the default overview is
+  byte-identical), `aim search`, a new `aim edit
+  {modify,add,delete,move,theme,batch}` verb for direct edits, and `aim
+  propose batch`.
+
+#### Changed
+
+- **MCP results are sent once, as one compact text block** — no
+  `structuredContent` and no `outputSchema` (FastMCP sent every result twice:
+  structured, and as an indented JSON copy). JSON results are compact and
+  keep non-ASCII text as characters. Clients reading `structuredContent`
+  must parse the text block instead. On a 81-chunk contract an `aim_read`
+  dropped from 13.8k to 6.4k tokens on the wire (6.5k to 5.6k in the text
+  block).
+- **A leaner tool list** — no generated titles, no `anyOf [T, null]`, no
+  `$ref`/`$defs`, one-line descriptions, `Literal` enums (including inside
+  `ops` items): 1,815 → 1,321 tokens for seven tools instead of six, guarded
+  by a byte-budget test. An unknown `action` is now rejected by argument
+  validation (the error lists the allowed values).
+- **Elision stubs follow §8.3**: `[elided: <size>, sha256:<16 hex>]` instead
+  of `[data-uri elided]`.
+
+#### Fixed
+
+- **Editing a chunk with an inline image no longer destroys the image.**
+  The MCP and CLI write paths restore each elision stub to the data URI it
+  stands for (by hash), and refuse a stub that matches nothing in the
+  document; previously the stub was written into `src`.
+
+#### Performance
+
+- `AimDocument.chunks` is one tree walk and `chunk()` a direct lookup
+  (both were quadratic). A 100-edit batch on a 775-chunk document takes
+  0.35 s; the same document's `doc.chunks` went from about 0.9 s to a few
+  milliseconds. Results are unchanged (pinned against the old walk).
 
 ## 0.5.3 — unreleased
 

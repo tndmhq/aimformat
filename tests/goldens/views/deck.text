@@ -1,0 +1,11 @@
+Pilot read-out | spec 0.6 | seq 3 | 5 chunks | 1 pending
+(text view: lossy, for reading only. Classes, styles and attributes are omitted. Fetch exact HTML with mode=chunks before you edit a chunk.)
+[s1] <slide>
+  [band]
+  [t1] ## Documents that review themselves
+  [st1] Pilot read-out — July 2026
+[s2] <slide>
+  [t2] ## Next steps
+  [b2] Extend the pilot to the briefs team for Q4.
+## pending (1)
+[p-apth0vo6] modify b2 by agent:claude-opus-4-8: Name the date. → Extend the pilot to the briefs team for Q4; decision review on 15 August.

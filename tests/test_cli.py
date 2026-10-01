@@ -199,3 +199,174 @@ class TestNormalizeCommand:
         # interior damage stays flagged by its dedicated rules, untouched
         # by the lossless re-speller
         assert any(f.code in ("X006", "H005") for f in lint_path(crlf))
+
+
+# --------------------------------------------------------------------------- 0.6 agent surface
+GOLDENS = Path(__file__).resolve().parent / "goldens" / "views"
+ROOT = Path(__file__).resolve().parent.parent
+
+
+@pytest.fixture
+def contract(tmp_path):
+    doc = aim.new_document(title="Contract")
+    with doc.batch():
+        doc.add_chunk('<h1 data-aim="h1" class="num-1">Definitions</h1>', author=BOT)
+        doc.add_chunk('<p data-aim="a1" class="num-2">Terms mean things.</p>', author=BOT)
+        doc.add_chunk(
+            '<p data-aim="a2" class="num-2">"Subprocessor" means a vendor.</p>', author=BOT
+        )
+    path = tmp_path / "c.aim"
+    doc.save(path)
+    return path
+
+
+class TestShowModes:
+    def test_overview_is_unchanged(self, capsys, monkeypatch):
+        """No flags: byte-for-byte the pre-0.6 output (golden captured from 0.5.2)."""
+        monkeypatch.chdir(ROOT)
+        assert main(["show", "examples/proposal.aim"]) == 0
+        assert capsys.readouterr().out == (GOLDENS / "show-proposal.txt").read_text()
+        assert main(["show", "examples/proposal.aim", "--format", "json"]) == 0
+        assert capsys.readouterr().out == (GOLDENS / "show-proposal.json").read_text()
+
+    def test_text_modes_print_what_mcp_returns(self, contract, capsys):
+        from aimformat import views
+
+        doc = aim.load(contract)
+        for mode, expected in (
+            ("toc", views.render_toc(doc)),
+            ("skeleton", views.render_skeleton(doc)),
+            ("text", views.render_text(doc)),
+        ):
+            assert main(["show", str(contract), "--mode", mode]) == 0
+            assert capsys.readouterr().out == expected + "\n"
+        assert main(["show", str(contract), "--mode", "chunks", "--ids", "a1,a2"]) == 0
+        assert capsys.readouterr().out == views.render_chunks(doc, ["a1", "a2"]) + "\n"
+        assert main(["show", str(contract), "--mode", "full"]) == 0
+        assert json.loads(capsys.readouterr().out) == views.full_projection(doc)
+
+    def test_json_forms(self, contract, capsys):
+        assert main(["show", str(contract), "--mode", "toc", "--format", "json"]) == 0
+        toc = json.loads(capsys.readouterr().out)
+        assert toc[0]["first"] == "h1" and toc[0]["label"] == "1."
+        assert main(["show", str(contract), "--mode", "skeleton", "--format", "json"]) == 0
+        units = json.loads(capsys.readouterr().out)
+        assert [u["id"] for u in units] == ["h1", "a1", "a2"]
+        assert (
+            main(["show", str(contract), "--mode", "chunks", "--ids", "a1..a2", "--format", "json"])
+            == 0
+        )
+        got = json.loads(capsys.readouterr().out)
+        assert [c["id"] for c in got["chunks"]] == ["a1", "a2"] and got["missing"] == []
+
+    def test_exit_codes(self, contract, capsys):
+        assert main(["show", str(contract), "--mode", "chunks", "--ids", "nope"]) == 1
+        assert "[missing] nope" in capsys.readouterr().out
+        assert main(["show", str(contract), "--mode", "chunks", "--ids", "a1,nope"]) == 0
+        capsys.readouterr()
+        assert main(["show", str(contract), "--mode", "chunks"]) == 2
+        assert main(["show", str(contract), "--mode", "chunks", "--ids", "a2..h1"]) == 2
+        assert "reversed range" in capsys.readouterr().err
+        assert main(["show", str(contract), "--mode", "skeleton", "--words", "99"]) == 2
+        assert main(["show", str(contract), "--ids", "a1"]) == 2
+        assert main(["show", str(contract), "--mode", "text", "--ids", "a1"]) == 2
+
+
+class TestSearchCommand:
+    def test_text_and_json(self, contract, capsys):
+        assert main(["search", str(contract), "subprocessors"]) == 0
+        out = capsys.readouterr().out.splitlines()
+        assert out[1].startswith("[a2] § 1. Definitions | ")
+        assert main(["search", str(contract), "1.2", "--format", "json", "-k", "1"]) == 0
+        hits = json.loads(capsys.readouterr().out)
+        assert [h["id"] for h in hits] == ["a2"]
+        assert main(["search", str(contract), "x", "-k", "0"]) == 2
+
+
+class TestEditAndBatchCommands:
+    def test_edit_each_action(self, contract, capsys):
+        f = str(contract)
+        assert (
+            main(["edit", "modify", f, "a1", "--html", '<p data-aim="a1" class="num-2">New.</p>'])
+            == 0
+        )
+        assert capsys.readouterr().out.splitlines() == ["a1", f"wrote {f}"]
+        assert main(["edit", "add", f, "--html", "<p>Added.</p>", "--after", "a1"]) == 0
+        new_id = capsys.readouterr().out.splitlines()[0]
+        doc = aim.load(contract)
+        assert [c.id for c in doc.chunks] == ["h1", "a1", new_id, "a2"]
+        assert main(["edit", "move", f, new_id, "--after", "first"]) == 0
+        assert main(["edit", "delete", f, new_id]) == 0
+        assert main(["edit", "theme", f, "--set", "brand-1=#333333"]) == 0
+        doc = aim.load(contract)
+        assert doc.theme["--aim-brand-1"] == "#333333"
+        assert [c.id for c in doc.chunks] == ["h1", "a1", "a2"]
+        assert not doc.proposals  # direct edits, not cards
+        assert {ev.action for ev in doc.history[-4:]} == {"add", "move", "delete", "modify"}
+
+    def test_edit_error_exits_one_and_writes_nothing(self, contract, capsys):
+        before = contract.read_bytes()
+        assert main(["edit", "delete", str(contract), "ghost"]) == 1
+        assert "ghost" in capsys.readouterr().err
+        assert contract.read_bytes() == before
+
+    def test_edit_batch_from_file(self, contract, tmp_path, capsys):
+        ops = [
+            {"action": "add", "html": "<h2>New</h2>", "after": "a2"},
+            {"action": "add", "html": "<p>Under.</p>", "after": "$0"},
+        ]
+        ops_file = tmp_path / "ops.json"
+        ops_file.write_text(json.dumps(ops))
+        assert main(["edit", "batch", str(contract), str(ops_file), "--format", "json"]) == 0
+        out = json.loads(capsys.readouterr().out)
+        assert out["ok"] and len(out["results"]) == 2
+        doc = aim.load(contract)
+        assert [c.id for c in doc.chunks][-2:] == [r["id"] for r in out["results"]]
+        assert {ev.get("batch") for ev in doc.history[-2:]} == {out["batch"]}
+
+    def test_propose_batch_from_stdin(self, contract, capsys, monkeypatch):
+        import io
+
+        ops = [
+            {
+                "action": "modify",
+                "target": "a1",
+                "html": '<p data-aim="a1" class="num-2">Better.</p>',
+            },
+            {"action": "delete", "target": "a2", "explanation": "Unused."},
+        ]
+        monkeypatch.setattr("sys.stdin", io.StringIO(json.dumps(ops)))
+        assert main(["propose", "batch", str(contract), "-", "--explanation", "Tidy."]) == 0
+        lines = capsys.readouterr().out.splitlines()
+        assert lines[0].startswith("ops[0] p-") and lines[0].endswith("-> a1")
+        doc = aim.load(contract)
+        assert [p.explanation for p in doc.proposals] == ["Tidy.", "Unused."]
+        assert len({p.batch for p in doc.proposals}) == 1
+
+    def test_batch_input_errors(self, contract, tmp_path, capsys):
+        bad = tmp_path / "bad.json"
+        bad.write_text("{not json")
+        assert main(["edit", "batch", str(contract), str(bad)]) == 2
+        bad.write_text('{"action": "add"}')
+        assert main(["edit", "batch", str(contract), str(bad)]) == 2
+        bad.write_text(json.dumps([{"action": "delete", "target": "a1"}] * 26))
+        assert main(["propose", "batch", str(contract), str(bad)]) == 2
+
+    def test_edit_restores_elided_images(self, tmp_path, capsys):
+        from aimformat import views
+
+        uri = "data:image/png;base64," + "QUJD" * 100
+        doc = aim.new_document(title="Img")
+        doc.add_chunk(
+            f'<figure data-aim="fig"><img alt="x" src="{uri}">'
+            "<figcaption>cap</figcaption></figure>",
+            author=BOT,
+        )
+        path = tmp_path / "img.aim"
+        doc.save(path)
+        html = views.render_chunks(doc, ["fig"]).splitlines()[2]
+        assert uri not in html
+        new = html.replace(">cap<", ">fixed<")
+        assert main(["edit", "modify", str(path), "fig", "--html", new]) == 0
+        live = aim.load(path).chunk("fig").html
+        assert uri in live and "fixed" in live

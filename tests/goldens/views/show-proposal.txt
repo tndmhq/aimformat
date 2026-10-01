@@ -1,0 +1,17 @@
+'Q3 Services Proposal — Acme GmbH' — spec 0.6, seq 11, 10 chunks, 2 pending
+doc_hash sha256:7dacc169d788df7fbafaf43ee368f207dd1a1ec5f2c3fa1d42ad613382e3503c
+pending:
+  p-o47rcqcq  add     into pr      agent  Client asked for rollout as its own line.
+  p-d40h99g2  modify  aim:theme    agent  Client brand refresh: teal primary.
+history:
+     1  add        ttl          
+     2  add        intro        
+     3  add        scope        
+     4  add        hd           
+     5  add        dl           
+     6  add        pr           
+     7  resolution intro        accepted
+     8  resolution d1           rejected
+     9  modify     aim:doc      
+    10  add        mgm8cu6l     
+    11  checkpoint              sent-to-client

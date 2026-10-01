@@ -1,0 +1,40 @@
+Numbering fixture | spec 0.6 | seq 20 | 22 chunks | 0 pending
+(text view: lossy, for reading only. Classes, styles and attributes are omitted. Fetch exact HTML with mode=chunks before you edit a chunk.)
+[s1] # 1. Scope
+[s1a] 1.1 Level two.
+[s1a1] 1.1.1 Level three.
+[s1a1a] 1.1.1.1 Level four.
+[gap] Unnumbered text between numbered blocks changes nothing.
+[s1a2] 1.1.2 Back to level three.
+[s1b] 1.1 Restarted level two.
+[art] # Article 2 Definitions
+[art1] 2.1 Under the article.
+[sec] Section 2 Prefixed.
+[code] \[not-an-id] a pre line
+  second line
+[marks] Keep ~~struck~~, **bold**, *em*, a link, line / break.
+[grid] <table>
+  | Merged {2 cols} |
+  | Tall {2 rows} | Cell |
+  | Below |
+[roman] <list>
+  [r1] iii. Third, roman
+  [r2] iv. Fourth, roman
+      - bullet under it
+[alpha] <list>
+  A) Alpha one
+  B) Alpha two
+[bare] <list>
+  1 Bare one
+[multi] <list>
+  1 One
+    1.1 One-one
+      1.1.1 One-one-one
+  2 Two
+[bul] <list>
+  - Plain bullet
+[items] <list>
+  [it1] 1. 2.3 Numbered paragraph inside an item.
+[sl] <slide>
+  [slt] ## Slide title
+  [sln] 3. Numbered on a slide.

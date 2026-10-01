@@ -1,0 +1,19 @@
+Q3 Services Proposal — Acme GmbH | spec 0.6 | seq 11 | 10 chunks | 2 pending | summary: "Three-year services proposal for Acme GmbH: €358k over two phases (pending: rollout line item), projected €2.1M savings. One pending pricing row and a theme swap await review."
+(text view: lossy, for reading only. Classes, styles and attributes are omitted. Fetch exact HTML with mode=chunks before you edit a chunk.)
+[ttl] # Q3 Services Proposal — Acme GmbH
+[intro] Acme saves €2.1M over three years by consolidating vendor tooling onto one platform.
+[scope] ## Scope
+  Consolidate authoring, review, and delivery onto one platform across all three business units.
+[mgm8cu6l] --- page break ---
+[hd] ## Deliverables
+[dl] <list>
+  [d1] - Discovery workshop and audit
+  [d2] - Platform implementation…
+    - …with staged rollout support
+[pr] <table>
+  [r0] | Phase | Weeks | Fee |
+  [r1] | Discovery | 4 | €48,000 |
+  [r2] | Implementation | 16 | €310,000 |
+## pending (2)
+[p-o47rcqcq] add into pr after r2 by agent:claude-opus-4-8: Client asked for rollout as its own line. → | Rollout & training | 8 | €95,000 |
+[p-d40h99g2] modify aim:theme by agent:claude-opus-4-8: Client brand refresh: teal primary. → :root{--aim-brand-1:#0f766e}

@@ -1,0 +1,39 @@
+{
+  "file": "examples/proposal.aim",
+  "title": "Q3 Services Proposal \u2014 Acme GmbH",
+  "lang": "en",
+  "spec_version": "0.6",
+  "seq": 11,
+  "doc_hash": "sha256:7dacc169d788df7fbafaf43ee368f207dd1a1ec5f2c3fa1d42ad613382e3503c",
+  "summary_stale": false,
+  "canonical_note": true,
+  "chunk_ids": [
+    "ttl",
+    "intro",
+    "scope",
+    "mgm8cu6l",
+    "hd",
+    "d1",
+    "d2",
+    "r0",
+    "r1",
+    "r2"
+  ],
+  "proposals": [
+    {
+      "id": "p-o47rcqcq",
+      "action": "add",
+      "target": null,
+      "author": "agent:claude-opus-4-8",
+      "explanation": "Client asked for rollout as its own line."
+    },
+    {
+      "id": "p-d40h99g2",
+      "action": "modify",
+      "target": "aim:theme",
+      "author": "agent:claude-opus-4-8",
+      "explanation": "Client brand refresh: teal primary."
+    }
+  ],
+  "history_events": 11
+}

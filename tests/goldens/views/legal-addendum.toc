@@ -1,0 +1,11 @@
+Definitions | spec 0.6 | seq 1 | 81 chunks | 0 pending
+[fknp79c4..ujebcmnd] # (untitled) (12)
+[9ha6tubb..c5ndnmn2] # 1. Definitions (21)
+[b8kpg2ee..5mp4ljt9] ## 1.1 In this Addendum, the following terms shall have … (18)
+[h83pnfua..h83pnfua] ## 1.2 The terms, "Commission", "Controller", "Data Subject", "Member State", … (1)
+[c5ndnmn2..c5ndnmn2] ## 1.3 The word "include" shall be construed to mean … (1)
+[l4jgjumm..r1bljta4] # 2. Authority (2)
+[hbt7g4om..rh0f8qmv] # 3. Processing of Company Personal Data (46)
+[ei1vhe30..sfml981k] ## 3.1 Vendor and each Vendor Affiliate shall: (3)
+[9esjqtk3..189gg9lr] ## 3.2 Each Company Group Member: (5)
+[ir1jqn5s..rh0f8qmv] ## 3.3 Annex 1 to this Addendum sets out certain … (37)

@@ -1,0 +1,85 @@
+Definitions | spec 0.6 | seq 1 | 81 chunks | 0 pending
+(text view: lossy, for reading only. Classes, styles and attributes are omitted. Fetch exact HTML with mode=chunks before you edit a chunk.)
+[fknp79c4] [image: image]
+  [image: image]
+  [image: image]
+[82btodlc] **Example Data Protection Addendum Addressing Article 28 GDPR (Processor Terms) and Incorporating Standard Contractual Clauses for Controller to Processor Transfers of Personal Data from the EEA to a Third Country**
+[hgpdk1ef] **Version Date: 14 July 2017**
+[gusbno3s] This example data protection addendum was prepared in consultation with various member organisations of the Regulatory Standards Forum meeting as the Article 28 GDPR working group co-chaired by Alex Moreau of Harbour Legal and Jamie Whitfield of Bertram Vale. The members of the working group are grateful to the RSF for their support.
+[ov76vobr] The new EU General Data Protection Regulation 2016/679, amongst other things imposes stringent new requirements for the appointment of processors by controllers including prescribing various matters which must be stipulated in a contract or other legal act (Article 28). Although GDPR anticipates that the European Commission and supervisory authorities may lay down or adopt standard contractual clauses to meet these requirements, there is currently no such example template. In the meantime, organisations face a very sizeable task of "re-papering" supply chain arrangements where processors are appointed to process on behalf of controllers prior to the application of GDPR on 25 May 2018.
+[bi3vs1fs] The membership of the RSF therefore thought it would be helpful to develop a suggested set of processor terms to help inform organisations of the new requirements and how they might be addressed in a contract. Although the membership of the working group were largely from the financial services sector, it is hoped that the drafting proposed may also be of assistance to controllers and processors across other sectors.
+[s8uhef5c] This template is no more than a suggested example approach. There is no requirement to use this template or if it is used, to use it as drafted. Organisations should feel free to amend, cherry pick or ignore this template entirely.
+[cd3lds7n] ***IMPORTANT NOTE: This template and the commentary contained in it are not legal advice and any organisation using this template should not rely upon it as such. GDPR is a complex*** ***principle based*** ***law which is open to interpretation and also contains numerous areas where Member States are permitted to gold plate the core GDPR*** ***requirements There*** ***is currently very limited guidance and commentary on Article 28 GDPR and it is possible that supervisory authorities and courts will take different views to those expressed in this example data protection addendum. GDPR also creates significant compliance risk introducing fines of up to 4% of annual worldwide turnover for the most serious*** ***breaches and*** ***the risk of private claims for compensation. It is strongly recommended that organisations seek legal advice on how to prepare for GDPR, including in relation to the re-papering of contracts with data processors / data controllers.***
+[k59stvnv] --- page break ---
+[g9cns3te] This Data Protection Addendum ("**Addendum**") forms part of the _____________________ ("**Principal Agreement**") between: (i) _______________ **(**"**Vendor**"**)** acting on its own behalf and as agent for each Vendor Affiliate; and (ii) [***Note: data controller legal entity to be included here*****]** ("**Company**") acting on its own behalf and as agent for each Company Affiliate.
+[e3os84eb] The terms used in this Addendum shall have the meanings set forth in this Addendum. Capitalized terms not otherwise defined herein shall have the meaning given to them in the Principal Agreement. Except as modified below, the terms of the Principal Agreement shall remain in full force and effect.
+[ujebcmnd] In consideration of the mutual obligations set out herein, the parties hereby agree that the terms and conditions set out below shall be added as an Addendum to the Principal Agreement. Except where the context requires otherwise, references in this Addendum to the Principal Agreement are to the Principal Agreement as amended by, and including, this Addendum.
+[9ha6tubb] # 1. **Definitions**
+[b8kpg2ee] 1.1 In this Addendum, the following terms shall have the meanings set out below and cognate terms shall be construed accordingly:
+[1p2d9u9t] 1.1.1 "**Applicable Laws**" means (a) European Union or Member State laws with respect to any Company Personal Data in respect of which any Company Group Member is subject to EU Data Protection Laws; and (b) any other applicable law with respect to any Company Personal Data in respect of which any Company Group Member is subject to any other Data Protection Laws;
+[6lktiipc] 1.1.2 "**Company Affiliate**" means an entity that owns or controls, is owned or controlled by or is or under common control or ownership with Company, where control is defined as the possession, directly or indirectly, of the power to direct or cause the direction of the management and policies of an entity, whether through ownership of voting securities, by contract or otherwise;
+[nfl0kcs7] 1.1.3 "**Company Group Member**" means Company or any Company Affiliate;
+[qv9ln89m] 1.1.4 "**Company Personal Data**" means any Personal Data Processed by a Contracted Processor on behalf of a Company Group Member pursuant to or in connection with the Principal Agreement;
+[ha1o97an] 1.1.5 "**Contracted Processor**" means Vendor or a Subprocessor;
+[gsda5u68] 1.1.6 "**Data Protection Laws**" means EU Data Protection Laws and, to the extent applicable, the data protection or privacy laws of any other country;
+[algr0j9h] 1.1.7 "**EEA**" means the European Economic Area;
+[p1c89hjs] 1.1.8 "**EU Data Protection Laws**" means EU Directive 95/46/EC, as transposed into domestic legislation of each Member State and as amended, replaced or superseded from time to time, including by the GDPR and laws implementing or supplementing the GDPR;
+[a0sb6971] 1.1.9 "**GDPR**" means EU General Data Protection Regulation 2016/679;
+[b3sqfkef] 1.1.10 "**Restricted Transfer**" means:
+[3n6v391m] 1.1.10.1 a transfer of Company Personal Data from any Company Group Member to a Contracted Processor; or
+[bqspdjmv] 1.1.10.2 an onward transfer of Company Personal Data from a Contracted Processor to a Contracted Processor, or between two establishments of a Contracted Processor,
+[sj47kp7k] in each case, where such transfer would be prohibited by Data Protection Laws (or by the terms of data transfer agreements put in place to address the data transfer restrictions of Data Protection Laws) in the absence of the Standard Contractual Clauses to be established under section [6.4.3 or] 12 below;
+[o85hj6v6] 1.1.11 "**Services**" means the services and other activities to be supplied to or carried out by or on behalf of Vendor for Company Group Members pursuant to the Principal Agreement;
+[0duv85lj] 1.1.12 "**Standard** **Contractual Clauses**" means the contractual clauses set out in Annex 2, amended as indicated (in square brackets and italics) in that Annex and under section 13.4;
+[9t64i6kb] 1.1.13 "**Subprocessor**" means any person (including any third party and any Vendor Affiliate, but excluding an employee of Vendor or any of its sub-contractors) appointed by or on behalf of Vendor or any Vendor Affiliate to Process Personal Data on behalf of any Company Group Member in connection with the Principal Agreement; and
+[5mp4ljt9] 1.1.14 "**Vendor Affiliate**" means an entity that owns or controls, is owned or controlled by or is or under common control or ownership with Vendor, where control is defined as the possession, directly or indirectly, of the power to direct or cause the direction of the management and policies of an entity, whether through ownership of voting securities, by contract or otherwise.
+[h83pnfua] 1.2 The terms, "**Commission**", "**Controller**", "**Data Subject**", "**Member State**", "**Personal Data**", "**Personal Data Breach**", "**Processing**" and "**Supervisory Authority**" shall have the same meaning as in the GDPR, and their cognate terms shall be construed accordingly.
+[c5ndnmn2] 1.3 The word "**include**" shall be construed to mean include without limitation, and cognate terms shall be construed accordingly.
+[l4jgjumm] # 2. **Authority**
+[r1bljta4] Vendor warrants and represents that, before any Vendor Affiliate Processes any Company Personal Data on behalf of any Company Group Member, Vendor's entry into this Addendum as agent for and on behalf of that Vendor Affiliate will have been duly and effectively authorised (or subsequently ratified) by that Vendor Affiliate.
+[hbt7g4om] # 3. **Processing of Company Personal Data**
+[ei1vhe30] 3.1 Vendor and each Vendor Affiliate shall:
+[pf9p2376] 3.1.1 comply with all applicable Data Protection Laws in the Processing of Company Personal Data; and
+[sfml981k] 3.1.2 not Process Company Personal Data other than on the relevant Company Group Member’s documented instructions unless Processing is required by Applicable Laws to which the relevant Contracted Processor is subject, in which case Vendor or the relevant Vendor Affiliate shall to the extent permitted by Applicable Laws inform the relevant Company Group Member of that legal requirement before the relevant Processing of that Personal Data.
+[9esjqtk3] 3.2 Each Company Group Member:
+[lervlv58] 3.2.1 instructs Vendor and each Vendor Affiliate (and authorises Vendor and each Vendor Affiliate to instruct each Subprocessor) to:
+[86jel2ar] 3.2.1.1 Process Company Personal Data; and
+[3oubk9pe] 3.2.1.2 in particular, transfer Company Personal Data to any country or territory,
+[189gg9lr] as reasonably necessary for the provision of the Services and consistent with the Principal Agreement; and warrants and represents that it is and will at all relevant times remain duly and effectively authorised to give the instruction set out in section 3.2.1 on behalf of each relevant Company Affiliate.
+[ir1jqn5s] 3.3 Annex 1 to this Addendum sets out certain information regarding the Contracted Processors' Processing of the Company Personal Data as required by article 28(3) of the GDPR (and, possibly, equivalent requirements of other Data Protection Laws). Company may make reasonable amendments to Annex 1 by written notice to Vendor from time to time as Company reasonably considers necessary to meet those requirements. Nothing in Annex 1 (including as amended pursuant to this section 3.3) confers any right or imposes any obligation on any party to this Addendum.
+[mc4aupea] Appendix 1 to the Standard Contractual Clauses
+[5kn6lqi0] This Appendix forms part of the Clauses and must be completed and signed by the parties
+[l0i6g725] The Member States may complete or specify, according to their national procedures, any additional necessary information to be contained in this Appendix
+[ca3nncgc] **Data exporter**
+[v905okjd] The data exporter is:
+[7e0i8qqk] \[TO BE COMPLETED]
+[5nfci89h] **Data importer**
+[cvhqhhtp] The data importer is:
+[7utd8m2f] \[TO BE COMPLETED]
+[mgv6120e] **Data subjects**
+[30h3lq2v] The personal data transferred concern the following categories of data subjects:
+[gl38rhi4] \[TO BE COMPLETED]
+[l4ddvn54] **Categories of data**
+[t0qerqs6] The personal data transferred concern the following categories of data:
+[k4eon7dn] \[TO BE COMPLETED]
+[5ncir0is] **Special categories of data (if appropriate)**
+[b6ls692t] The personal data transferred concern the following special categories of data:
+[mlp67avu] \[TO BE COMPLETED]
+[v5polotv] **Processing operations**
+[j0al55i2] The personal data transferred will be subject to the following basic processing activities:
+[nt67lfbq] \[TO BE COMPLETED]
+[44ulpbil] DATA EXPORTER
+[u7jurcst] \[*Populated with details of, and deemed to be signed on behalf of, the data exporter:*]
+[a0gmpdi7] Name:………………………………
+[ivbo15if] Authorised Signature ……………………
+[s77a6nqs] DATA IMPORTER
+[iomsqht9] \[*Populated with details of, and deemed to be signed on behalf of, the data importer:*]
+[1f2bh74g] Name:………………………………
+[cru734v9] Authorised Signature ……………………
+[v31n2qqk] Appendix 2 to the Standard Contractual Clauses
+[3qvf1eju] --- page break ---
+[113ssn0i] This Appendix forms part of the Clauses and must be completed and signed by the parties.
+[82j9vml7] **Description of the technical and organisational security measures implemented by the data importer in accordance with Clauses 4(d) and 5(c):**
+[vqp7ps37] \[TO BE COMPLETED]**ANNEX 3: LIST OF MANDATED AUDITORS**
+[tsn493kf] --- page break ---
+[rh0f8qmv] \[TO BE COMPLETED]

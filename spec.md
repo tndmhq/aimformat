@@ -1000,6 +1000,25 @@ data-URIs to `…[elided: 480KB, sha256:ab12…]` stubs, optionally drop
 history and embeddings. The raw file is already dumb-reader-friendly by
 ordering; projection makes smart readers cheap.
 
+Agent tooling should also offer partial reads, so that what a read costs
+follows what the agent needs rather than the size of the file:
+
+- an outline derived from heading chunks and outline-numbered blocks, with
+  the range of units each entry covers;
+- an id skeleton: every chunk and container id with its tag and a short
+  text prefix;
+- the exact serialization of a chosen set or range of units;
+- a ranked search over chunk text.
+
+Rendering outline numbering (§3.8) into these views lets references like
+"clause 1.1.8" be resolved. A plain-text rendering keyed by chunk id is a
+useful reading view, but it is lossy: it drops markup, classes and styles.
+It is never an edit payload. A `modify` replaces the target's whole
+serialization (§6.6), so an edit must start from the exact serialization of
+that chunk. A tool that elides data URIs on read should restore its own
+stubs on write, or refuse a payload that contains one: a stub written into a
+document destroys the asset it stood for.
+
 ---
 
 ## 9. Assets
@@ -1443,7 +1462,9 @@ Literal paint (`color` `background-color` `border-color`) is since spec 0.3 (S03
   tier, a proposal's `data-explanation` should carry the change's meaning
   by itself.
 - **Agent read path**: read the metadata cache first; verify
-  `summary.doc_hash` against the document before trusting it.
+  `summary.doc_hash` against the document before trusting it; then, for a
+  long document, read the outline or search, and fetch exact serializations
+  only for the units you will change (§8.3).
 
 ## Appendix C. Future extensions (informative)
 

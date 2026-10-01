@@ -43,8 +43,37 @@ section numbers below (§) point into it.
    - optionally drop the history and embeddings scripts when you only need
      the current state.
 
+4. **Long documents: outline, search, fetch.** Do not load a long
+   document whole. Orient, locate, then fetch exact HTML only for what you
+   will change:
+   - `aim show FILE --mode toc` — the outline: headings, slides and
+     outline-numbered blocks (`num-1`/`num-2`) with their rendered numbers
+     (`1.1`, `Article 2`) and the id range each covers, e.g.
+     `[mclcsff0..1si6ueap] # 1. Definitions (21)`;
+   - `aim search FILE "query"` — ranked chunk ids with a snippet and the
+     section each sits in; quote a phrase to require it, and search for a
+     clause number (`1.1.8`) to find that clause;
+   - `aim show FILE --mode text` — the whole document as one plain-text line
+     per chunk with its id, numbering labels and list markers included, at
+     roughly the cost of a Markdown export. **It is lossy and for reading
+     only**: classes, styles and attributes are dropped, so it is never an
+     edit payload;
+   - `aim show FILE --mode skeleton` — every id with its tag, classes and
+     first words: the cheap view of *structure* (text is for content);
+   - `aim show FILE --mode chunks --ids ID,ID,A..B` — the exact HTML of the
+     units you will edit (an inclusive `a..b` range pastes straight from the
+     outline). A container id returns the whole container. Each unit comes
+     under a context line naming its container, numbering label and any
+     pending card that targets or anchors on it.
+
 `aim show FILE --format json` gives you a machine-readable overview —
-chunks, pending lane, history — without writing the projection yourself.
+chunks, pending lane, history — without writing the projection yourself;
+every `--mode` has a `--format json` form too.
+
+Read output elides long `data:` URIs to `[elided: 2KB, sha256:119ce553db486ea5]`
+stubs. **Keep a stub exactly as it is when you edit that chunk**: the CLI
+and MCP write paths put the original data back (a stub that matches nothing
+in the document is refused).
 
 ## Choosing how to edit
 
@@ -60,7 +89,8 @@ One decision rule:
   apply it directly; the edit is recorded as an invertible history event
   with you as the author.
 
-Do both through tooling. The `aimformat` SDK/CLI is the reliable path — it
+Do both through tooling: `aim propose …` for suggestions, `aim edit …` for
+commanded edits. The `aimformat` SDK/CLI is the reliable path — it
 handles canonical serialization, id assignment, history events, and
 pending-lane invariants for you. Hand-editing (see below) is the fallback
 for when you have no tooling at all.
@@ -131,9 +161,14 @@ checkpoints still verify. If you hand-edit, do not touch
 | `aim hash FILE` | print the current `doc_hash` |
 | `aim new -o FILE` | scaffold a minimal valid document |
 | `aim show FILE` | human-readable chunks / pending-lane / history overview; `--format json` for machine reads |
+| `aim show FILE --mode toc\|skeleton\|text\|chunks\|full` | agent read views: outline with id ranges, id skeleton, lossy text view, exact HTML for `--ids ID,A..B`, the full JSON projection; `--words N` for the skeleton |
+| `aim search FILE QUERY [-k N]` | rank chunks by lexical relevance: ids, sections, snippets |
 | `aim note FILE...` | add or refresh the canonical agent-note head comment; `--check` verifies without writing; `--remove` strips it |
 | `aim normalize FILE [-o OUT] [--check]` | rewrite in canonical form; `--check` reports non-canonical input without writing |
 | `aim propose {modify,add,delete,move,theme} FILE ...` | append a proposal card to the pending lane |
+| `aim propose batch FILE OPS.json\|-` | append several cards at once, all-or-nothing (up to 25) |
+| `aim edit {modify,add,delete,move,theme} FILE ...` | apply a direct edit (only for changes the user commanded) |
+| `aim edit batch FILE OPS.json\|-` | apply several direct edits at once, all-or-nothing, one history batch (up to 100) |
 | `aim accept FILE [PID...] [--all]` | accept pending proposals by id, or all of them |
 | `aim reject FILE [PID...] [--all]` | reject pending proposals by id, or all of them |
 | `aim flatten FILE` | collapse history to one checkpoint (and drop embeddings) → clean file |
@@ -145,7 +180,7 @@ checkpoints still verify. If you hand-edit, do not touch
 | `aim export F.aim -o OUT` | convert `.aim` to docx/md/html/pdf (chosen by output extension); a `.aim.html` target is not a conversion — it writes the document itself under the compatibility alias (§10), history and pending lane intact |
 | `aim mcp` | run the MCP server (requires `pip install 'aimformat[mcp]'`) |
 
-Proposal subcommands:
+Proposal and edit subcommands (`aim edit` takes the same arguments):
 
 ```sh
 aim propose modify FILE TARGET --html STR | --html-file PATH
@@ -153,9 +188,28 @@ aim propose add    FILE --html STR | --html-file PATH [--container ID] [--after 
 aim propose delete FILE TARGET
 aim propose move   FILE TARGET [--container ID] [--after ID|first]
 aim propose theme  FILE --set slot=value [--set slot=value ...]
+aim propose batch  FILE OPS.json      # or - to read the JSON from stdin
 ```
 
-Flags shared by `propose`, `accept`, and `reject`:
+A batch is a JSON array of ops, each
+`{"action", "target", "html", "container", "after", "theme_slots", "explanation"}`
+(only `action` is required; actions are `add modify delete move theme` for
+proposals and `add modify delete move set_theme` for edits). Ops apply in
+order and all-or-nothing: if one fails, nothing is written and the error
+names it (`ops[3] (modify c42a): …`). A later op can refer back to an earlier
+one with `$N`:
+
+```json
+[{"action": "add", "html": "<h2>Risks</h2>", "after": "c42a"},
+ {"action": "add", "html": "<p>Supply is the main one.</p>", "after": "$0"}]
+```
+
+In `aim edit batch`, `$N` is the id ops[N] created (an add) or targeted. In
+`aim propose batch`, the `$N` of a proposed add is its proposal id and only
+works as the `after` of a later add into the same container; one card per
+target per batch (one modify-or-delete, one move).
+
+Flags shared by `propose`, `edit`, `accept`, and `reject`:
 
 - `--author TYPE:VALUE` — `human:ID`, `agent:MODEL` (use your exact model
   id), or `external:ID`; defaults to `external:aim-cli`. Always identify
@@ -209,16 +263,28 @@ assumes a trusted client. To confine it to one directory tree, set the
 export destinations) must then resolve inside that root. Unset means
 unscoped.
 
-Six tools:
+Seven tools:
 
-- `aim_read` — projected read: summary, TOC, chunks, pending lane
-  (stylesheet stripped, data URIs elided).
+- `aim_read` — read with a `mode`: `full` (default; JSON with every
+  chunk's HTML and the pending lane), `toc`, `skeleton` (`words` per unit),
+  `text` (the lossy reading view) or `chunks` (exact HTML for `ids`, ranges
+  `a..b` allowed). The same views as `aim show --mode`.
+- `aim_search` — rank chunks by lexical relevance to a query; returns ids
+  you then fetch with `mode=chunks`.
 - `aim_edit` — direct edits: add/modify/delete/move chunks, set theme;
-  recorded as history events.
-- `aim_propose` — create proposal cards in the pending lane.
+  recorded as history events. One op via the arguments, or up to 100 via
+  `ops` (same fields, all-or-nothing, one history batch, `$N` back-references).
+- `aim_propose` — create proposal cards in the pending lane; one, or up to
+  25 via `ops` (one proposal batch).
 - `aim_resolve` — accept or reject pending proposals.
-- `aim_lint` — run the conformance verifier, findings as structured data.
+- `aim_lint` — run the conformance verifier.
 - `aim_export` — convert to docx/md/html/pdf.
+
+Every result is one compact text block: JSON for `full` reads and for
+writes, plain text for the reading views. Writes return `seq`; if a write
+call times out, read the document again (`mode=toc` or `chunks`) and check
+`seq` before retrying, so a batch that did land is not applied twice. A
+batch of proposals on a very long document can take several seconds.
 
 ## Agent Skill
 

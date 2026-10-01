@@ -27,6 +27,7 @@ Quickstart::
 The format specification lives in ``spec.md`` at the repository root.
 """
 
+from . import views
 from .canonical import canonical_json, sha256_prefixed
 from .convert import (
     AimImportWarning,
@@ -116,4 +117,5 @@ __all__ = [
     "InvalidOperation",
     "HistoryError",
     "REGISTRY",
+    "views",
 ]
