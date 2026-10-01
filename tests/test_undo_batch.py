@@ -87,6 +87,67 @@ class TestWholeBatchUndo:
         assert _ids(doc) == ["h1", "intro", "a1", "a2"]
 
 
+_LIST = '<ul data-aim-container="lst1"><li data-aim="l1">One</li><li data-aim="l2">Two</li></ul>'
+
+
+@pytest.fixture
+def nested_turn(basic_doc) -> tuple[aim.AimDocument, str]:
+    """An auto-accepted agent turn that added a container with nested items."""
+    basic_doc.set_review_policy("auto", by=ADA, author=ADA, at=ts(5))
+    with basic_doc.batch() as batch:
+        basic_doc.propose_add(_LIST, author=BOT, after="intro", at=ts(6))
+    assert basic_doc.proposals == []
+    return basic_doc, batch
+
+
+def _person_card_inside(doc: aim.AimDocument, shape: str) -> None:
+    if shape == "modify":
+        doc.propose_modify("l2", '<li data-aim="l2">Mine.</li>', author=ME, at=ts(7))
+    elif shape == "anchored-add":
+        doc.propose_add(
+            '<li data-aim="l3">Three</li>', author=ME, container="lst1", after="l2", at=ts(7)
+        )
+    else:  # first in the container: anchored on the container, not an item
+        doc.propose_add(
+            '<li data-aim="l0">Zero</li>', author=ME, container="lst1", after=None, at=ts(7)
+        )
+
+
+class TestNestedDependents:
+    """Removing a container also removes every id inside it; a person's
+    pending card on a nested item must block the inverse like one on the
+    root does (P008/P011 otherwise)."""
+
+    @pytest.mark.parametrize("shape", ["modify", "anchored-add", "first-in-container"])
+    @pytest.mark.parametrize("how", ["undo", "revert-on-top", "revert-buried"])
+    def test_a_pending_card_on_a_nested_item_blocks_the_removal(self, nested_turn, shape, how):
+        doc, batch = nested_turn
+        _person_card_inside(doc, shape)
+        if how == "revert-buried":
+            doc.modify_chunk("h1", '<h1 data-aim="h1">Later</h1>', author=ME, at=ts(8))
+        before = doc.dumps()
+        with pytest.raises(aim.InvalidOperation, match="pending suggestions"):
+            if how == "undo":
+                doc.undo(author=ADA, at=ts(9), whole_batch=True)
+            else:
+                doc.revert_batch(batch, author=ADA, at=ts(9))
+        assert doc.dumps() == before
+        assert _errors(doc) == []
+
+    def test_single_step_undo_is_guarded_too(self, nested_turn):
+        doc, _ = nested_turn
+        _person_card_inside(doc, "modify")
+        with pytest.raises(aim.InvalidOperation, match="pending suggestions"):
+            doc.undo(author=ADA, at=ts(9))
+        assert doc.chunk("l2").text == "Two"
+
+    def test_without_dependents_the_container_goes(self, nested_turn):
+        doc, batch = nested_turn
+        doc.revert_batch(batch, author=ADA, at=ts(9))
+        assert "l2" not in _ids(doc)
+        assert _errors(doc) == []
+
+
 class TestRevertBatch:
     def test_on_top_it_is_a_true_undo(self, turned):
         doc, batch = turned

@@ -25,3 +25,32 @@ it, and add to this file rather than to a log entry.
   path over a projection, as `_propose_lane` already does for writing. Then
   raise the importer's default `max_proposals` and add a timing test at the
   new cap.
+
+## A direct `delete_chunk` can strand pending cards (P008/P011)
+
+- **Where:** `src/aimformat/document.py:1884` (`delete_chunk`); the only
+  dependent check is `_cards_anchored_on(cid)` at line 1898.
+- **What:** a direct delete refuses only when a pending add/move card's
+  `data-anchor-after` is the deleted id itself. It does not refuse when:
+  1. a pending proposal targets the deleted chunk (`propose_modify("a", …)`
+     then `delete_chunk("a")`): the file then fails lint with `P008 proposal
+     targets unknown chunk 'a'`;
+  2. a pending proposal targets a chunk nested inside a deleted container
+     (`propose_modify("l2", …)`, then `delete_chunk("<list container id>")`):
+     `P008 … 'l2'`;
+  3. a pending add/move card is anchored on a nested item
+     (`data-anchor-after="l2"`) or on the deleted container itself
+     (`data-anchor-container`): `P011 add anchor 'l2' is neither a chunk nor a
+     pending position card`.
+- **Repro:** add `<p data-aim="a">` and
+  `<ul data-aim-container="lista001"><li data-aim="l1">…</li><li data-aim="l2">…</li></ul>`,
+  create one of the pending cards above as a human, then call `delete_chunk`
+  on `a` or `lista001` and lint the result. Present on `main` before spec 0.6.
+- **Fix:** reuse the subtree rule that `_guard_removal_dependents` applies to
+  undo/redo/`revert_batch` (collect every id in the removed block's markup;
+  refuse if any pending card targets it or anchors on it via
+  `data-anchor-after` or `data-anchor-container`), and call it from
+  `delete_chunk` in place of the root-only `_cards_anchored_on` check. Check
+  whether `aim_edit`'s delete path and accepted delete *proposals* (which
+  dissolve anchored cards on purpose) need the same treatment for targeting
+  cards on nested ids.

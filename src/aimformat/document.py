@@ -2596,13 +2596,22 @@ class AimDocument:
 
     def _guard_removal_dependents(self, data: dict) -> None:
         """Refuse an inverse that would pull a block out from under pending
-        cards: removing a chunk that cards target or anchor on would leave
-        them dangling (P008/P011), the same rule a direct delete follows."""
+        cards: removing a block takes every chunk and container nested in it
+        too, so a card that targets or anchors on any of them would be left
+        dangling (P008/P011)."""
         target = data.get("target")
         if data.get("action") != "delete" or not target:
             return
-        dependents = [p.id for p in self.proposals if p.target == target]
-        dependents += [c.get("id") or "" for c in self._cards_anchored_on(target)]
+        markup = self._state.serial(target) or data.get("before") or ""
+        removed = {target, *_PAYLOAD_ID_RE.findall(markup)}
+        dependents = [p.id for p in self.proposals if p.target in removed]
+        sec = self._state.section("aim-proposals")
+        for card in sec.elements() if sec is not None else ():
+            if card.get("data-action") in ("add", "move") and (
+                card.get("data-anchor-after") in removed
+                or card.get("data-anchor-container") in removed
+            ):
+                dependents.append(card.get("id") or "")
         if dependents:
             raise InvalidOperation(
                 f"pending suggestions ({', '.join(sorted(set(dependents)))}) depend on "
