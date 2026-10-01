@@ -24,6 +24,12 @@ structure, marks, and the per-chunk pending lane survive. The same
 degradation contract as the Markdown exporter, on pages instead of ``---``.
 A faithful canvas export is the PDF's job (and a future PPTX exporter's).
 
+``roundtrip_marks=True`` additionally writes the DOCX round-trip convention
+(:mod:`aimformat.docx_marks`): one hidden point bookmark per exported
+paragraph of every unit, plus a text-free manifest part. The returned file
+can then be imported back onto the same document
+(:meth:`AimDocument.import_revision`) with its chunk ids intact.
+
 Pending ``move`` proposals of body-level blocks export as Word's own move
 revisions (``w:moveFrom``/``w:moveTo`` with a named range) when the block is
 paragraph text; a moved container, figure, rule or page break — which Word
@@ -46,7 +52,7 @@ import re
 from collections.abc import Mapping
 from dataclasses import replace
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from .document import AimDocument, Proposal, _ChainedAddCycle, resolution_order
 from .dom import Element, Text, parse_fragment
@@ -58,7 +64,18 @@ from .registry import REGISTRY
 if TYPE_CHECKING:  # pragma: no cover
     pass
 
-__all__ = ["to_docx"]
+__all__ = ["docx_bytes", "to_docx"]
+
+
+class _NullScope:
+    def __enter__(self) -> None:
+        return None
+
+    def __exit__(self, *exc: object) -> None:
+        return None
+
+
+_NULL_SCOPE = _NullScope()
 
 _PENDING_MODES = ("tracked", "accept-all", "reject-all")
 _MONO = "Consolas"
@@ -947,6 +964,13 @@ class _Exporter:
             self.paint.resolve(construct)
         self.out = docx_mod.Document()
         self.rev = _Revisions()
+        # round-trip marks (docx_marks): None = off. The unit stack names the
+        # units whose paragraphs are being emitted (outermost first); a None
+        # entry suppresses marking (pending adds, synthetic page breaks).
+        self._marks: list[tuple[Any, list[str]]] | None = None
+        self._unit_stack: list[str | None] = []
+        self._mark_count: dict[str, int] = {}
+        self._containers: set[str] = set()
         # numbering definitions created on demand: per-level literal prefixes
         # → abstractNumId, and the plain (non-restarting) instance for each
         self._num_abstracts: dict[tuple[tuple[int, str], ...], int] = {}
@@ -1011,6 +1035,90 @@ class _Exporter:
                 self.adds_by_anchor[("body", target)] = early
             if late:
                 self._after_move[target] = late
+
+    # -- round-trip marks ---------------------------------------------------------
+    def enable_marks(self) -> None:
+        """Record a marker for every paragraph a unit emits (docx_marks)."""
+        from .reconcile import _units
+
+        self._marks = []
+        self._containers = {
+            uid for uid, unit in _units(self.aim._state).items() if unit.is_container
+        }
+        add_paragraph = self.out.add_paragraph
+
+        def tracked_add_paragraph(*args, **kwargs):
+            para = add_paragraph(*args, **kwargs)
+            self._track(para._p)
+            return para
+
+        # every paragraph path (add_picture included) goes through here
+        self.out.add_paragraph = tracked_add_paragraph
+
+    def _track(self, p) -> None:
+        if self._marks is None or not self._unit_stack or self._unit_stack[-1] is None:
+            return
+        from .docx_marks import bookmark_name
+
+        names: list[str] = []
+        for uid in self._unit_stack:
+            if uid is None:
+                continue
+            k = self._mark_count.get(uid, 0) + 1
+            self._mark_count[uid] = k
+            if uid in self._containers:
+                if k == 1:
+                    names.append(bookmark_name(uid))
+            else:
+                names.append(bookmark_name(uid, k))
+        if names:
+            self._marks.append((p, names))
+
+    def _unit(self, uid: str | None):
+        """Context manager: paragraphs emitted inside belong to *uid*
+        (``None`` = emit unmarked)."""
+        exporter = self
+
+        class _Scope:
+            def __enter__(self) -> None:
+                exporter._unit_stack.append(uid)
+
+            def __exit__(self, *exc: object) -> None:
+                exporter._unit_stack.pop()
+
+        return _Scope()
+
+    def write_marks(self) -> None:
+        """Insert the recorded markers as collapsed bookmarks after each
+        paragraph's ``w:pPr``, with ids above any bookmark already present."""
+        if not self._marks:
+            return
+        from docx.oxml import OxmlElement
+        from docx.oxml.ns import qn
+
+        body = self.out.element.body
+        used = [
+            int(v)
+            for v in (b.get(qn("w:id")) for b in body.iter(qn("w:bookmarkStart")))
+            if v is not None and v.isdigit()
+        ]
+        next_id = max(used, default=0) + 1
+        for p, names in self._marks:
+            ppr = p.find(qn("w:pPr"))
+            cursor = ppr
+            for name in names:
+                start = OxmlElement("w:bookmarkStart")
+                start.set(qn("w:id"), str(next_id))
+                start.set(qn("w:name"), name)
+                end = OxmlElement("w:bookmarkEnd")
+                end.set(qn("w:id"), str(next_id))
+                next_id += 1
+                if cursor is None:
+                    p.insert(0, start)
+                else:
+                    cursor.addnext(start)
+                start.addnext(end)
+                cursor = end
 
     # -- top level -----------------------------------------------------------
     def run(self) -> None:
@@ -1095,6 +1203,10 @@ class _Exporter:
             pool += self._pop_adds(container, prop.id)
 
     def _emit_add_paragraphs(self, prop: Proposal, style: str | None = None) -> None:
+        with self._unit(None):  # a pending add is a card, not a unit
+            self._emit_add_paragraphs_unmarked(prop, style)
+
+    def _emit_add_paragraphs_unmarked(self, prop: Proposal, style: str | None = None) -> None:
         els = self._payload_elements(prop)
         slide_payload = any(el.tag == "aim-slide" for el in els)
         prior_break = self._break_before_next
@@ -1205,6 +1317,14 @@ class _Exporter:
 
     # -- constructs ------------------------------------------------------------
     def emit_construct(self, el: Element) -> None:
+        uid = el.chunk_id or el.container_id
+        if self._marks is None or not uid:
+            self._emit_construct(el)
+            return
+        with self._unit(uid):
+            self._emit_construct(el)
+
+    def _emit_construct(self, el: Element) -> None:
         if el.tag == "aim-slide":
             self.emit_slide(el)
             return
@@ -1631,7 +1751,8 @@ class _Exporter:
     def _page_break(self, prop: Proposal | None = None) -> None:
         from docx.enum.text import WD_BREAK
 
-        para = self.out.add_paragraph()
+        with self._unit(None):  # a synthetic boundary belongs to no unit
+            para = self.out.add_paragraph()
         if prop is None:
             para.add_run().add_break(WD_BREAK.PAGE)
         else:
@@ -1644,7 +1765,8 @@ class _Exporter:
         independently accept or reject both slides without losing the boundary
         or rendering two breaks when both are accepted.
         """
-        para = self.out.add_paragraph()
+        with self._unit(None):
+            para = self.out.add_paragraph()
         self.rev.replace_ins(
             para,
             [{"page_break": True}],
@@ -1786,36 +1908,48 @@ class _Exporter:
                 group.append(items[i])
             i += 1
             prop = (self.pending_del.get(cid) or self.pending_mod.get(cid)) if cid else None
-            for li in group:
-                nested = [c for c in li.elements() if c.tag in ("ul", "ol")]
-                content = Element("li")
-                content.children = [
-                    c for c in li.children if not (isinstance(c, Element) and c.tag in ("ul", "ol"))
-                ]
-                # the copy is synthetic, so it adopts the item's computed
-                # paint rather than resolving as if it were in the tree — but
-                # class/style must ride along: alignment and literal
-                # typography are read off the element itself
-                for attr in ("class", "style"):
-                    value = li.get(attr)
-                    if value:
-                        content.set(attr, value)
-                self.paint.adopt(content, li)
-                # the item's own paragraph draws from the list's definition at
-                # this depth; set for the emit call and cleared straight after,
-                # so nothing else picks it up
-                self._list_item_num = (num_id, level) if num_id is not None else None
-                try:
-                    if prop is not None:
-                        self.emit_tracked_chunk(content, prop, style=style, payload=li is group[-1])
-                    else:
-                        self.emit_block(content, cid, style=style)
-                finally:
-                    self._list_item_num = None
-                for sub in nested:
-                    self.emit_list(sub, level + 1, num_id)
+            with self._unit(cid) if self._marks is not None and cid else _NULL_SCOPE:
+                self._emit_list_group(group, prop, cid, style, num_id, level)
             if container_id and cid:
                 self._emit_list_adds(container_id, cid, style, num)
+
+    def _emit_list_group(
+        self,
+        group: list[Element],
+        prop: Proposal | None,
+        cid: str,
+        style: str | None,
+        num_id: int | None,
+        level: int,
+    ) -> None:
+        for li in group:
+            nested = [c for c in li.elements() if c.tag in ("ul", "ol")]
+            content = Element("li")
+            content.children = [
+                c for c in li.children if not (isinstance(c, Element) and c.tag in ("ul", "ol"))
+            ]
+            # the copy is synthetic, so it adopts the item's computed
+            # paint rather than resolving as if it were in the tree — but
+            # class/style must ride along: alignment and literal
+            # typography are read off the element itself
+            for attr in ("class", "style"):
+                value = li.get(attr)
+                if value:
+                    content.set(attr, value)
+            self.paint.adopt(content, li)
+            # the item's own paragraph draws from the list's definition at
+            # this depth; set for the emit call and cleared straight after,
+            # so nothing else picks it up
+            self._list_item_num = (num_id, level) if num_id is not None else None
+            try:
+                if prop is not None:
+                    self.emit_tracked_chunk(content, prop, style=style, payload=li is group[-1])
+                else:
+                    self.emit_block(content, cid, style=style)
+            finally:
+                self._list_item_num = None
+            for sub in nested:
+                self.emit_list(sub, level + 1, num_id)
 
     def _emit_list_adds(
         self,
@@ -1826,6 +1960,17 @@ class _Exporter:
     ) -> None:
         # creation-order pool, for the same reason as _emit_anchored_adds
         pool = self._pop_adds(container, after)
+        if pool:
+            with self._unit(None):
+                self._drain_list_adds(pool, container, style, num)
+
+    def _drain_list_adds(
+        self,
+        pool: list[Proposal],
+        container: str,
+        style: str | None,
+        num: tuple[int, int] | None,
+    ) -> None:
         while pool:
             pool.sort(key=lambda p: self._card_order.get(p.id, 0))
             prop = pool.pop(0)
@@ -1950,6 +2095,15 @@ class _Exporter:
         # row-adds only after the content loop: inserting rows mid-loop would
         # shift the (ri, ci) coordinates the loop and the merges rely on
         orig_trs = [r._tr for r in table.rows]  # 1:1 with the AIM rows
+        if self._marks is not None and force != "ins":
+            from docx.oxml.ns import qn
+
+            for ri, row in enumerate(rows):
+                first = orig_trs[ri].find(qn("w:tc") + "/" + qn("w:p"))
+                if first is None:
+                    continue
+                with self._unit(row.chunk_id) if row.chunk_id else _NULL_SCOPE:
+                    self._track(first)
         if force and prop is not None:
             # container-level tracked change: the table STRUCTURE itself is
             # pending, not just its text — without trPr markers, accepting
@@ -2107,19 +2261,93 @@ def _resolve_copy(doc: AimDocument, decision: str) -> AimDocument:
     return clone
 
 
-def to_docx(doc: AimDocument, path: str | Path, *, pending: str = "tracked") -> Path:
+def to_docx(
+    doc: AimDocument,
+    path: str | Path,
+    *,
+    pending: str = "tracked",
+    roundtrip_marks: bool = False,
+) -> Path:
     """Write *doc* to *path* as a .docx file.
 
     ``pending`` — what to do with the pending lane: ``"tracked"`` emits Word
     revision markup, ``"accept-all"``/``"reject-all"`` resolve a throwaway
     copy first (the original document is never mutated).
+
+    ``roundtrip_marks`` — also write the DOCX round-trip convention (hidden
+    bookmarks naming each unit, plus a text-free manifest part), so the file a
+    colleague edits and sends back can be imported onto *doc* with
+    :meth:`AimDocument.import_revision` and only their changes show. Off by
+    default until it has been checked against Microsoft Word.
     """
+    out = Path(path)
+    out.write_bytes(docx_bytes(doc, pending=pending, roundtrip_marks=roundtrip_marks))
+    return out
+
+
+def docx_bytes(
+    doc: AimDocument, *, pending: str = "tracked", roundtrip_marks: bool = False
+) -> bytes:
+    """:func:`to_docx` into memory."""
     if pending not in _PENDING_MODES:
         raise InvalidOperation(f"pending must be one of {_PENDING_MODES}, got {pending!r}")
     docx_mod = _require_docx()
     source = doc if pending == "tracked" else _resolve_copy(doc, pending)
     exporter = _Exporter(source, docx_mod)
+    if roundtrip_marks:
+        exporter.enable_marks()
     exporter.run()
-    out = Path(path)
-    exporter.out.save(str(out))
-    return out
+    if roundtrip_marks:
+        exporter.write_marks()
+        _attach_manifest(exporter.out, doc, source, pending)
+    buf = io.BytesIO()
+    exporter.out.save(buf)
+    return buf.getvalue()
+
+
+def _attach_manifest(out, doc: AimDocument, source: AimDocument, pending: str) -> None:
+    """Add the round-trip manifest as a custom XML part of the main document
+    (with its item-properties part, which Word expects beside it)."""
+    import uuid
+
+    from docx.opc.constants import CONTENT_TYPE as CT
+    from docx.opc.constants import RELATIONSHIP_TYPE as RT
+    from docx.opc.packuri import PackURI
+    from docx.opc.part import Part
+
+    from . import __version__
+    from .document import _now_iso
+    from .docx_marks import Manifest, ManifestUnit, manifest_xml, new_salt, unit_hash
+    from .reconcile import _units
+
+    salt = new_salt()
+    manifest = Manifest(
+        exporter=f"aimformat {__version__}",
+        base_doc_hash=doc.doc_hash,
+        base_seq=doc.seq,
+        pending=pending,
+        salt=salt,
+        exported_at=_now_iso(),
+        units=[
+            ManifestUnit(u.id, u.scope, u.shell, unit_hash(salt, u.serial))
+            for u in _units(source._state).values()
+        ],
+        cards=[p.id for p in doc.proposals],
+    )
+    package = out.part.package
+    taken = {str(p.partname) for p in package.iter_parts()}
+    n = 1
+    while f"/customXml/item{n}.xml" in taken or f"/customXml/itemProps{n}.xml" in taken:
+        n += 1
+    item = Part(PackURI(f"/customXml/item{n}.xml"), CT.XML, manifest_xml(manifest), package)
+    props_xml = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="no"?>'
+        '<ds:datastoreItem ds:itemID="{' + str(uuid.uuid4()).upper() + '}" '
+        'xmlns:ds="http://schemas.openxmlformats.org/officeDocument/2006/customXml">'
+        "<ds:schemaRefs/></ds:datastoreItem>"
+    ).encode("utf-8")
+    props = Part(
+        PackURI(f"/customXml/itemProps{n}.xml"), CT.OFC_CUSTOM_XML_PROPERTIES, props_xml, package
+    )
+    item.relate_to(props, RT.CUSTOM_XML_PROPS)
+    out.part.relate_to(item, RT.CUSTOM_XML)

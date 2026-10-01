@@ -430,8 +430,15 @@ def _fixup_ids(work: AimDocument, expected_alive: set[str]) -> list[tuple[str | 
 # the same data shapes the SDK operations write, plus origin: "reconcile"
 
 
-def _base(S: AimDocument, author: Actor, at: str | None, *, batch: str | None = None) -> dict:
-    return {
+def _base(
+    S: AimDocument,
+    author: Actor,
+    at: str | None,
+    *,
+    batch: str | None = None,
+    source: list[str] | None = None,
+) -> dict:
+    data = {
         "seq": S.seq + 1,
         "kind": "direct_edit",
         "t": at or _now_iso(),
@@ -439,50 +446,86 @@ def _base(S: AimDocument, author: Actor, at: str | None, *, batch: str | None = 
         "batch": batch or S._batch_id(),
         "origin": "reconcile",
     }
+    if source:
+        data["source"] = list(source)
+    return data
 
 
-def _ev_modify(S: AimDocument, target: str, after: str, author: Actor, at: str | None) -> None:
+def _ev_modify(
+    S: AimDocument,
+    target: str,
+    after: str,
+    author: Actor,
+    at: str | None,
+    *,
+    source: list[str] | None = None,
+) -> None:
     before = S._state.serial(target)
     S._preflight_feature_upgrade(after, lambda trial: trial._state.replace(target, after))
     upgrade_batch = S._ensure_feature_version(after, author=author, at=at)
     S._state.replace(target, after)
-    data = _base(S, author, at, batch=upgrade_batch)
+    data = _base(S, author, at, batch=upgrade_batch, source=source)
     data.update({"target": target, "action": "modify", "before": before, "after": after})
     S._append_event(data)
 
 
-def _ev_delete(S: AimDocument, target: str, author: Actor, at: str | None) -> None:
+def _ev_delete(
+    S: AimDocument, target: str, author: Actor, at: str | None, *, source: list[str] | None = None
+) -> None:
     before = S._state.serial(target)
     anchor = S._anchor_of(target)
     S._state.remove(target)
-    data = _base(S, author, at)
+    data = _base(S, author, at, source=source)
     data.update({"target": target, "action": "delete", "before": before, "anchor": anchor.to_obj()})
     S._append_event(data)
 
 
-def _ev_add(S: AimDocument, serial: str, anchor: Anchor, author: Actor, at: str | None) -> None:
+def _ev_add(
+    S: AimDocument,
+    serial: str,
+    anchor: Anchor,
+    author: Actor,
+    at: str | None,
+    *,
+    source: list[str] | None = None,
+) -> None:
     nodes = [n for n in parse_fragment(serial) if isinstance(n, Element)]
     target = nodes[0].chunk_id or nodes[0].container_id or ""
     S._preflight_feature_upgrade(serial, lambda trial: trial._state.insert(serial, anchor))
     upgrade_batch = S._ensure_feature_version(serial, author=author, at=at)
     S._state.insert(serial, anchor)
-    data = _base(S, author, at, batch=upgrade_batch)
+    data = _base(S, author, at, batch=upgrade_batch, source=source)
     data.update({"target": target, "action": "add", "anchor": anchor.to_obj(), "after": serial})
     S._append_event(data)
 
 
-def _ev_move(S: AimDocument, target: str, to: Anchor, author: Actor, at: str | None) -> None:
+def _ev_move(
+    S: AimDocument,
+    target: str,
+    to: Anchor,
+    author: Actor,
+    at: str | None,
+    *,
+    source: list[str] | None = None,
+) -> None:
     src = S._anchor_of(target)
     S._state.move(target, to)
-    data = _base(S, author, at)
+    data = _base(S, author, at, source=source)
     data.update({"target": target, "action": "move", "from": src.to_obj(), "to": to.to_obj()})
     S._append_event(data)
 
 
-def _ev_theme(S: AimDocument, after: str | None, author: Actor, at: str | None) -> None:
+def _ev_theme(
+    S: AimDocument,
+    after: str | None,
+    author: Actor,
+    at: str | None,
+    *,
+    source: list[str] | None = None,
+) -> None:
     before = S._state.serial("aim:theme")
     S._state.set_theme_markup(after)
-    data = _base(S, author, at)
+    data = _base(S, author, at, source=source)
     data.update({"target": "aim:theme", "action": "modify"})
     if before is not None:
         data["before"] = before
@@ -491,10 +534,17 @@ def _ev_theme(S: AimDocument, after: str | None, author: Actor, at: str | None) 
     S._append_event(data)
 
 
-def _ev_doc_settings(S: AimDocument, after: str | None, author: Actor, at: str | None) -> None:
+def _ev_doc_settings(
+    S: AimDocument,
+    after: str | None,
+    author: Actor,
+    at: str | None,
+    *,
+    source: list[str] | None = None,
+) -> None:
     before = S._state.serial("aim:doc")
     S._state.set_doc_settings_markup(after)
-    data = _base(S, author, at)
+    data = _base(S, author, at, source=source)
     data.update({"target": "aim:doc", "action": "modify"})
     if before is not None:
         data["before"] = before
@@ -507,19 +557,26 @@ def _ev_doc_settings(S: AimDocument, after: str | None, author: Actor, at: str |
 # the drive: append the edit script E -> A
 
 
-def _drive(S: AimDocument, work: AimDocument, author: Actor, at: str | None) -> None:
+def _drive(
+    S: AimDocument,
+    work: AimDocument,
+    author: Actor,
+    at: str | None,
+    *,
+    source: list[str] | None = None,
+) -> None:
     E = _units(S._state)
     A = _units(work._state)
 
     e_theme = S._state.serial("aim:theme")
     a_theme = work._state.serial("aim:theme")
     if e_theme != a_theme:
-        _ev_theme(S, a_theme, author, at)
+        _ev_theme(S, a_theme, author, at, source=source)
 
     e_doc = S._state.serial("aim:doc")
     a_doc = work._state.serial("aim:doc")
     if e_doc != a_doc:
-        _ev_doc_settings(S, a_doc, author, at)
+        _ev_doc_settings(S, a_doc, author, at, source=source)
 
     gone = {uid for uid in E if uid not in A}
     both = [uid for uid in E if uid in A]
@@ -575,11 +632,11 @@ def _drive(S: AimDocument, work: AimDocument, author: Actor, at: str | None) -> 
         or (uid in A and covered_a(uid) and not covered_e(uid))
     ]
     for uid in reversed(doomed):
-        _ev_delete(S, uid, author, at)
+        _ev_delete(S, uid, author, at, source=source)
 
     for uid in both:
         if uid in whole:
-            _ev_modify(S, uid, A[uid].serial, author, at)
+            _ev_modify(S, uid, A[uid].serial, author, at, source=source)
 
     for uid in both:
         if E[uid].is_container or A[uid].is_container:
@@ -587,7 +644,7 @@ def _drive(S: AimDocument, work: AimDocument, author: Actor, at: str | None) -> 
         if covered_e(uid) or covered_a(uid):
             continue
         if E[uid].serial != A[uid].serial:
-            _ev_modify(S, uid, A[uid].serial, author, at)
+            _ev_modify(S, uid, A[uid].serial, author, at, source=source)
 
     # order walk: per scope in A document order, place every unit — add what
     # is missing, move what sits elsewhere. Interiors already materialized by
@@ -601,13 +658,13 @@ def _drive(S: AimDocument, work: AimDocument, author: Actor, at: str | None) -> 
         for uid in uids:
             want = Anchor(scope, prev, shell=(shell or None) if prev is None else None)
             if not S._state.exists(uid):
-                _ev_add(S, A[uid].serial, want, author, at)
+                _ev_add(S, A[uid].serial, want, author, at, source=source)
             else:
                 cur = S._anchor_of(uid)
                 if (cur.container, cur.after) != (scope, prev) or (
                     prev is None and (shell or None) is not None and cur.shell != shell
                 ):
-                    _ev_move(S, uid, want, author, at)
+                    _ev_move(S, uid, want, author, at, source=source)
             prev = uid
 
 

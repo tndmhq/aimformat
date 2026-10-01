@@ -145,6 +145,35 @@ READS-D1…D13 (2026-10-01/02, `agent-read-*`, `agent-*`, `cli-*`, `mcp-*`,
   0.35 s; the same document's `doc.chunks` went from about 0.9 s to a few
   milliseconds. Results are unchanged (pinned against the old walk).
 
+### DOCX round trip with colleagues (no format change)
+
+DOCX round trip with colleagues: a Word file that comes back can be imported
+as a revision of the document it was exported from, with the same chunk ids,
+so only the colleague's changes show. No `.aim` grammar, event, or version
+change. Decisions: `docs/log/2026-10-01_2132_decision_docx-roundtrip-*.md`
+(ROUNDTRIP-D1 to D13, awaiting review).
+
+- **`to_docx(..., roundtrip_marks=True)` / `aim export --roundtrip-marks`
+  / MCP `aim_export(roundtrip_marks=True)`** write one hidden point bookmark
+  per exported paragraph of every unit and a text-free manifest part
+  (`urn:aimformat:docx-roundtrip:1`, described in
+  `docs/interop/docx-roundtrip.md`). Off by default until the convention has
+  been checked against Microsoft Word; default exports are byte-for-byte
+  unchanged.
+- **`AimDocument.import_revision(source)` / `aim import X.docx --onto F.aim`
+  / MCP `aim_import_revision`** import the returned file onto the original:
+  one batch of pending proposals by `human:docx:<name from the file>`
+  (or `--as edits`: direct edits with `origin: "reconcile"` and a
+  `docx-sha256:` source). Conversion noise is not reported, text edits keep
+  the original markup, splits and merges are linked with `data-depends-on`,
+  changes colliding with edits made since the export are reported as
+  conflicts, and re-importing the same file writes nothing new (unless the
+  first import's proposals were rejected). Returns a
+  `RevisionImportReport` (`--format json`).
+- `propose_delete(..., depends_on=)` — a delete card can name the card it is
+  coupled with, like the other proposal kinds.
+- `aim_import_revision` is the eighth MCP tool.
+
 ## 0.5.3 — unreleased
 
 ### Word tracked changes import as proposals (no format change)

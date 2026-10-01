@@ -116,6 +116,8 @@ aim note FILE [--check|--remove]   # the agent-note header (spec §2.5)
 aim reconcile FILE                 # adopt out-of-band (hand) edits into history
 aim import IN -o FILE.aim          # md/txt/docx/pdf → .aim (Word redlines → pending proposals)
 aim export FILE.aim -o OUT.docx    # or .md/.html/.pdf; --pending tracked|accept-all|…
+aim export FILE.aim -o OUT.docx --roundtrip-marks   # a .docx that will come back
+aim import BACK.docx --onto FILE.aim --format json  # its edits → proposals, same ids
 ```
 
 To change a few words, use `replace-text` (op `replace_text` with
@@ -129,6 +131,11 @@ A batch is a JSON array of ops `{"action", "target", "html", "old_text",
 "new_text", "container", "after", "theme_slots", "explanation"}`; a later op refers back to an earlier
 one with `$N` (e.g. `"after": "$0"` = right after what ops[0] added). One
 failing op aborts the whole batch with nothing written.
+
+**A Word file came back from someone?** Never `aim import` it as a new
+document: `--onto` the original keeps every chunk id, writes only their
+changes (pending proposals by `human:docx:<name>`), and the JSON report
+lists exactly which ids changed — read those, not the whole file.
 
 `lint`, `show`, `search`, `note`, `propose`, `edit`, `accept`, and `reject` take
 `--format json` for machine-readable output. Exit codes everywhere: 0 ok,
@@ -179,10 +186,10 @@ fix-when-convenient. Format details when you need them:
 
 MCP-capable clients can skip the shell:
 `{"mcpServers": {"aimformat": {"command": "aimformat", "args": ["mcp"]}}}` —
-seven tools: aim_read (`mode` full | toc | skeleton | text | chunks, the
+eight tools: aim_read (`mode` full | toc | skeleton | text | chunks, the
 same views as `aim show --mode`), aim_search, aim_edit and aim_propose
 (one op, or a batch via `ops` with `$N`), aim_resolve, aim_lint,
-aim_export.
+aim_export, aim_import_revision.
 
 ## Human handoff
 

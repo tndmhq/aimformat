@@ -84,19 +84,27 @@ from ._docx_seam import (
     model_dump,
     open_docx_package,
     paragraph_checkbox,
+    paragraph_marker_names,
     paragraph_math_text,
     paragraph_run_baseline,
+    parse_docx,
     picture_relationships,
     resolve_color,
     shading_hex,
     symbol_char,
     table_look_val,
+    table_row_marker_names,
     textbox_paragraph_pairs,
     twips_to_mm,
 )
 from ._report import CommentNote, ImportReport, ImportResult, RevisionNote
 
 __all__ = ["convert_docx", "import_docx_source"]
+
+#: Transient attribute carrying round-trip marker names on a block root, list
+#: item or table row (``convert_docx_marked`` only). Never reaches a document:
+#: the revision importer reads and strips it before anything is stored.
+MARK_ATTR = "data-aim-mark"
 
 _HEADING_STYLE = re.compile(r"^[Hh]eading\s*([1-9])$")
 _ALIGN_CLASS = {
@@ -564,6 +572,16 @@ def _safe_theme_slots(parsed: ParsedDocx) -> dict[str, str]:
     return out
 
 
+def convert_docx_marked(source: bytes) -> list[str]:
+    """The importer's block markups for *source*, with each paragraph's
+    round-trip markers carried as :data:`MARK_ATTR` on the block, item, or row
+    it became (lists and tables already containerized). A marker on a
+    paragraph that emits nothing (an empty paragraph) is forwarded to the next
+    block that is emitted. Internal: the revision importer's input."""
+    conv = _Converter(parse_docx(source), marks=True)
+    return [_containerize(markup) for markup in conv.blocks()]
+
+
 class _Converter:
     """One parsed DOCX → an ordered list of .aim block markups.
 
@@ -575,10 +593,12 @@ class _Converter:
     the markup is otherwise identical to an untracked conversion.
     """
 
-    def __init__(self, parsed: ParsedDocx, *, track_src: bool = False):
+    def __init__(self, parsed: ParsedDocx, *, track_src: bool = False, marks: bool = False):
         self.p = parsed
         self.track_src = track_src
         self._src: str | None = None  # source key(s) of the paragraph being walked
+        # round-trip markers waiting for the next emitted block (None = off)
+        self._pending_marks: list[str] | None = [] if marks else None
         self.title_text: str | None = None
         self._blocks: list[str] = []
         # consecutive list paragraphs buffer:
@@ -642,6 +662,27 @@ class _Converter:
                 "left": margin(getattr(margins, "left", None)),
             },
         }
+
+    # -- round-trip markers ------------------------------------------------
+
+    def _collect_marks(self, elem: Any) -> None:
+        if self._pending_marks is not None and elem is not None:
+            self._pending_marks.extend(paragraph_marker_names(elem))
+
+    def _mark_attr(self) -> str:
+        """The pending markers as an attribute string, consumed."""
+        if not self._pending_marks:
+            return ""
+        value = " ".join(self._pending_marks)
+        self._pending_marks = []
+        return f' {MARK_ATTR}="{escape_attr(value)}"'
+
+    def _stamp(self, markup: str) -> str:
+        """Put the pending markers on *markup*'s root element."""
+        attr = self._mark_attr()
+        if not attr:
+            return markup
+        return re.sub(r"^<([a-z][a-z0-9-]*)", lambda m: f"<{m.group(1)}{attr}", markup, count=1)
 
     # -- numbering ---------------------------------------------------------
 
@@ -835,6 +876,7 @@ class _Converter:
             self._blocks.append(self._page_break("#before"))
 
         self._emitted_images = set()
+        self._collect_marks(elem)
         inline, trailing_break = self._inline_markup(para, style_id)
         inline = self._with_supplements(inline, elem)
 
@@ -897,7 +939,7 @@ class _Converter:
             if heading is not None:
                 self._flush_items()
                 self._blocks.append(
-                    self._block(f"h{heading}", inline, effective, clause, prefix_attr)
+                    self._stamp(self._block(f"h{heading}", inline, effective, clause, prefix_attr))
                 )
             elif label or clause:
                 # A numbered clause that is not a visual heading stays an
@@ -906,7 +948,9 @@ class _Converter:
                 # clauses of a contract are interleaved with prose, and a
                 # list would either swallow that prose or fragment.
                 self._flush_items()
-                self._blocks.append(self._block("p", inline, effective, clause, prefix_attr))
+                self._blocks.append(
+                    self._stamp(self._block("p", inline, effective, clause, prefix_attr))
+                )
             elif num_pr.get("num_id") is not None:
                 if draw is not None and draw.restarted and self._items:
                     # Word's "restart numbering" mid-list: close the run so a
@@ -922,7 +966,7 @@ class _Converter:
                         int(num_pr["num_id"]),
                         int(num_pr.get("ilvl") or 0),
                         inline,
-                        self._class_attr(effective) + self._src_attr(),
+                        self._class_attr(effective) + self._src_attr() + self._mark_attr(),
                         (draw.value if draw is not None and draw.value else 1),
                     )
                 )
@@ -934,12 +978,12 @@ class _Converter:
                 self._flush_items()
                 attr = self._class_attr(effective)
                 self._blocks.extend(
-                    f"<figure{attr}{self._src_attr(f'#fig{i}')}>{img}</figure>"
+                    self._stamp(f"<figure{attr}{self._src_attr(f'#fig{i}')}>{img}</figure>")
                     for i, img in enumerate(_IMG_TAG.findall(inline))
                 )
             else:
                 self._flush_items()
-                self._blocks.append(self._block("p", inline, effective))
+                self._blocks.append(self._stamp(self._block("p", inline, effective)))
         elif clause:
             # An empty numbered paragraph still draws its number in Word, and
             # the next clause carries on from it. The CSS counters advance on
@@ -948,10 +992,10 @@ class _Converter:
             # still reads as authoritative. (The baked path needs no such
             # branch: its label is the text.)
             self._flush_items()
-            self._blocks.append(self._block("p", "", effective, clause, prefix_attr))
+            self._blocks.append(self._stamp(self._block("p", "", effective, clause, prefix_attr)))
         if trailing_break:
             self._flush_items()
-            self._blocks.append(self._page_break("#after"))
+            self._blocks.append(self._stamp(self._page_break("#after")))
 
         # Pictures dpc's typed model cannot see — grouped DrawingML artwork
         # (a row of logos) and legacy VML — follow their anchor as figures.
@@ -979,7 +1023,7 @@ class _Converter:
                 # a figure each would stack them down the page instead
                 self._flush_items()
                 self._blocks.append(
-                    f"<figure{self._src_attr('#pic')}>{''.join(recovered)}</figure>"
+                    self._stamp(f"<figure{self._src_attr('#pic')}>{''.join(recovered)}</figure>")
                 )
 
         # textbox content (w:txbxContent) has no place in reading order, so it
@@ -1385,6 +1429,9 @@ class _Converter:
             grid.append(cells)
         head: list[str] = []
         body: list[str] = []
+        row_marks = (
+            table_row_marker_names(elem, len(rows)) if self._pending_marks is not None else None
+        )
         for ri, cells in enumerate(grid):
             header_row = bool(getattr(getattr(rows[ri], "tr_pr", None), "tbl_header", None))
             out: list[str] = []
@@ -1405,7 +1452,10 @@ class _Converter:
                 )
                 out.append(f"<{tag}{attrs}>{self._cell_markup(cell)}</{tag}>")
                 col += colspan
-            row_html = f"<tr{row_srcs[ri]}>" + "".join(out) + "</tr>"
+            if row_marks is not None:
+                self._pending_marks = (self._pending_marks or []) + row_marks[ri]
+            mark = self._mark_attr() if row_marks is not None else ""
+            row_html = f"<tr{row_srcs[ri]}{mark}>" + "".join(out) + "</tr>"
             (head if header_row else body).append(row_html)
         html = f"<table{table_src}>"
         if head:

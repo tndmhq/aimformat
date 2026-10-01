@@ -1065,6 +1065,11 @@ pass of pack/flatten/prune.
   (`.gitattributes`: `*.aim linguist-language=HTML`).
 - There is no container format in this version: a single text file is the
   format.
+- *(Informative.)* Exporters to word-processor formats MAY carry chunk ids
+  so an edited copy can be imported back as a revision of the same document.
+  The reference toolkit's DOCX convention (hidden bookmarks plus a text-free
+  manifest part) is described in `docs/interop/docx-roundtrip.md`; it is not
+  part of this specification.
 
 ---
 
@@ -1458,6 +1463,10 @@ Literal paint (`color` `background-color` `border-color`) is since spec 0.3 (S03
 - **Deep links**: `data-aim` ids have no native `#fragment` targets;
   viewers and exporters MAY synthesize anchors using the convention
   `#aim:<chunk-id>`.
+- **Round trips keep identity**: a tool importing an edited export of a
+  document SHOULD import it onto that document (matching units by any
+  identity the export carried, then by content) rather than as a new
+  document, so id-keyed diffs show only the edits.
 - **Explanations stand alone**: because payloads are invisible at the raw
   tier, a proposal's `data-explanation` should carry the change's meaning
   by itself.

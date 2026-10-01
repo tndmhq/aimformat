@@ -177,7 +177,8 @@ checkpoints still verify. If you hand-edit, do not touch
 | `aim diff OLD NEW` | unit-level diff between two versions of a document: added/deleted/modified/moved unit ids plus theme/settings/version flags; `--format json` for machine reads |
 | `aim css` | print the generated `aim.css` for this spec version |
 | `aim import IN -o F.aim` | convert md/txt/docx/pdf to `.aim` (DOCX imports natively with styling preserved, and its Word tracked changes become pending proposals on the original text — `--tracked accept\|reject` imports resolved text instead; Word comments are reported on stderr, never stored; PDF is structure-only via docling) |
-| `aim export F.aim -o OUT` | convert `.aim` to docx/md/html/pdf (chosen by output extension); a `.aim.html` target is not a conversion — it writes the document itself under the compatibility alias (§10), history and pending lane intact |
+| `aim import X.docx --onto F.aim` | import a DOCX that came back from someone as a **revision of F.aim**: only their changes are written, on the same chunk ids, as pending proposals by them (`--as edits` for direct edits; `--dry-run`, `--format json`). Needs an export made with `--roundtrip-marks` for the best match; falls back to content matching without it |
+| `aim export F.aim -o OUT` | convert `.aim` to docx/md/html/pdf (chosen by output extension); a `.aim.html` target is not a conversion — it writes the document itself under the compatibility alias (§10), history and pending lane intact. `--roundtrip-marks` (docx) writes hidden chunk-id bookmarks so the file can come back with `aim import --onto` |
 | `aim mcp` | run the MCP server (requires `pip install 'aimformat[mcp]'`) |
 
 Proposal and edit subcommands (`aim edit` takes the same arguments):
@@ -265,7 +266,7 @@ assumes a trusted client. To confine it to one directory tree, set the
 export destinations) must then resolve inside that root. Unset means
 unscoped.
 
-Seven tools:
+Eight tools:
 
 - `aim_read` — read with a `mode`: `full` (default; JSON with every
   chunk's HTML and the pending lane), `toc`, `skeleton` (`words` per unit),
@@ -310,7 +311,33 @@ the change:
   it first, or send a full `modify` if you mean to replace it.
 - `aim_resolve` — accept or reject pending proposals.
 - `aim_lint` — run the conformance verifier.
-- `aim_export` — convert to docx/md/html/pdf.
+- `aim_export` — convert to docx/md/html/pdf (`roundtrip_marks=True` for a
+  .docx that will come back).
+- `aim_import_revision` — import a returned .docx onto the document it was
+  exported from; returns which ids changed and the new proposal ids.
+
+## DOCX round trip with a colleague
+
+When a document leaves as Word and comes back edited, import it **onto** the
+original instead of as a new file. Ids survive, so you read only what
+changed:
+
+```sh
+aim export brief.aim -o brief.docx --roundtrip-marks   # send this file
+# … the colleague edits brief.docx in Word and sends it back …
+aim import brief-returned.docx --onto brief.aim --format json
+```
+
+The report lists the modified/added/deleted/moved unit ids and the new
+proposal ids (one pending card per change, authored by
+`human:docx:<name from the file>` — an unverified name, not an account).
+Then read only those ids (`aim show brief.aim` lists the pending lane; read
+the changed chunks by id) instead of re-reading the whole document.
+Formatting Word could not carry is not reported as a change, and the
+colleague's text edits are replayed onto the document's own markup.
+Changes to units that were also edited here since the export are reported
+as conflicts and not written. Re-running the same import writes nothing
+new while its proposals are pending or after they were accepted.
 
 Every result is one compact text block: JSON for `full` reads and for
 writes, plain text for the reading views. Writes return `seq`; if a write

@@ -1720,3 +1720,43 @@ def textbox_paragraph_pairs(elem: Any) -> list[tuple[Any, Any]]:
             if parsed is not None:
                 out.append((parsed, p))
     return out
+
+
+# -- round-trip markers (aimformat.docx_marks) ---------------------------------
+
+_W_NS = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+_BOOKMARK_START = f"{{{_W_NS}}}bookmarkStart"
+_W_NAME = f"{{{_W_NS}}}name"
+
+
+def _marker_names(nodes: Any) -> list[str]:
+    return [
+        str(name) for node in nodes if (name := node.get(_W_NAME)) and str(name).startswith("_aim")
+    ]
+
+
+def paragraph_marker_names(elem: Any) -> list[str]:
+    """Round-trip marker names a ``w:p`` carries, in document order.
+
+    A bookmark start some writer relocated *between* paragraphs (a body-level
+    sibling) belongs to the paragraph that follows it, so the starts directly
+    preceding *elem* count as its own."""
+    if elem is None:
+        return []
+    before: list[Any] = []
+    prev = elem.getprevious()
+    while prev is not None and prev.tag == _BOOKMARK_START:
+        before.append(prev)
+        prev = prev.getprevious()
+    return _marker_names(reversed(before)) + _marker_names(elem.iter(_BOOKMARK_START))
+
+
+def table_row_marker_names(elem: Any, rows: int) -> list[list[str]] | None:
+    """Per-row round-trip marker names of a ``w:tbl``; ``None`` when the
+    source rows do not pair 1:1 with the parsed ones (wrapped rows)."""
+    if elem is None:
+        return None
+    trs = [child for child in elem if get_local_name(child) == "tr"]
+    if len(trs) != rows:
+        return None
+    return [_marker_names(tr.iter(_BOOKMARK_START)) for tr in trs]
