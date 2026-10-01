@@ -29,7 +29,7 @@ from typing import Any
 from ..canonical import escape_attr, escape_text
 from ..document import AimDocument, new_document
 from ..events import Actor, external
-from ..ingest import _containerize
+from ..ingest import _containerize, finish_import
 from ..registry import REGISTRY
 
 __all__ = ["from_markdown"]
@@ -296,5 +296,5 @@ def from_markdown(
     )
     with doc.batch():
         for markup in blocks:
-            doc.add_chunk(_containerize(markup), author=who, explanation="Imported from markdown")
-    return doc
+            doc.add_chunk(_containerize(markup), author=who)
+    return finish_import(doc, author=who, explanation="Imported from markdown")

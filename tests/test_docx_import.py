@@ -691,7 +691,9 @@ class TestNumberingVocabularyIsValid:
         # went unchecked: a num-3 in a 0.4 document linted clean
         doc = aim.new_document(title="Gate")
         doc.add_chunk('<p class="num-3">x</p>', author=aim.external("t"))
-        body = doc.dumps().replace('data-aim-version="0.5"', f'data-aim-version="{declared}"')
+        body = doc.dumps().replace(
+            f'data-aim-version="{REGISTRY.spec_version}"', f'data-aim-version="{declared}"'
+        )
         codes = {f.code for f in aim.lint(aim.loads(body)) if f.level == "error"}
         assert "S034" in codes, f"a 0.5 class went unchecked under {declared}"
 
@@ -706,7 +708,9 @@ class TestNumberingVocabularyIsValid:
         ):
             doc = aim.new_document(title="Gate")
             doc.add_chunk(markup, author=aim.external("t"))
-            body = doc.dumps().replace('data-aim-version="0.5"', 'data-aim-version="0.4"')
+            body = doc.dumps().replace(
+                f'data-aim-version="{REGISTRY.spec_version}"', 'data-aim-version="0.4"'
+            )
             codes = {f.code for f in aim.lint(aim.loads(body)) if f.level == "error"}
             assert "S034" in codes, f"{markup} went unchecked in a 0.4 document"
 

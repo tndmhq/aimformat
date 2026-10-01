@@ -75,6 +75,18 @@ def _elide(html: str) -> str:
     return _DATA_URI.sub("[data-uri elided]", html)
 
 
+def _elide_value(value: Any) -> Any:
+    """Elide data URIs anywhere in an event field — a baseline snapshot is a
+    nested object whose body lines carry the same blobs a payload would."""
+    if isinstance(value, str):
+        return _elide(value)
+    if isinstance(value, list):
+        return [_elide_value(v) for v in value]
+    if isinstance(value, dict):
+        return {k: _elide_value(v) for k, v in value.items()}
+    return value
+
+
 def _anchor(after: str | None):
     if after is None or after == "":
         return LAST
@@ -116,9 +128,13 @@ def create_server() -> FastMCP:
         """Read an .aim document as a projected, token-cheap view: title,
         summary (with staleness flag), table of contents, every chunk with
         its stable data-aim id, and the pending proposals awaiting a
-        decision. Long data: URIs are elided; the stylesheet is never
-        included. Start here before editing. Operates on any absolute path
-        on the host; intended for local, trusted stdio use only."""
+        decision. The table of contents is never stale: the stored cache
+        when it matches the document, else derived from the headings
+        (toc_source says which; both are null when the document has no
+        heading or slide to outline). Long data: URIs are elided; the stylesheet
+        is never included. Start here before editing. Operates on any
+        absolute path on the host; intended for local, trusted stdio use
+        only."""
         doc = _load(path)
         summary = None
         meta = doc.meta
@@ -127,6 +143,16 @@ def create_server() -> FastMCP:
                 "text": meta["summary"].get("text"),
                 "stale": meta["summary"].get("doc_hash") != doc.doc_hash,
             }
+        # A stale or missing cache is never served: derive the outline live
+        # (O(n)) — but only when the body HAS one. Without a heading or a
+        # slide the outline is one untitled entry repeating every chunk id
+        # the "chunks" list already carries: tokens for nothing.
+        toc: Any = None
+        toc_source: str | None = None
+        if doc.toc_is_fresh():
+            toc, toc_source = (meta or {}).get("toc"), "cache"
+        elif doc._has_outline():
+            toc, toc_source = doc.outline(), "derived"
         out: dict[str, Any] = {
             "title": doc.title,
             "lang": doc.lang,
@@ -134,7 +160,8 @@ def create_server() -> FastMCP:
             "seq": doc.seq,
             "doc_hash": doc.doc_hash,
             "summary": summary,
-            "toc": (meta or {}).get("toc"),
+            "toc": toc,
+            "toc_source": toc_source,
             "chunks": [
                 {"id": c.id, "container": c.container, "html": _elide(c.html)} for c in doc.chunks
             ],
@@ -156,8 +183,7 @@ def create_server() -> FastMCP:
             # would dump full base64 data URIs into model context — the
             # exact token blowup _elide exists to prevent
             out["history"] = [
-                {k: _elide(v) if isinstance(v, str) else v for k, v in ev.data.items()}
-                for ev in doc.history
+                {k: _elide_value(v) for k, v in ev.data.items()} for ev in doc.history
             ]
         return out
 

@@ -27,7 +27,7 @@ from .canonical import canonical_json, serialize, serialize_run
 from .css import generate_aim_css
 from .dom import Comment, Element, Fragment, Text, parse_fragment, parse_html
 from .errors import AimError, HistoryError, InvalidOperation, ParseError, TargetNotFound
-from .events import Actor, Event
+from .events import Actor, Event, snapshot_problems
 from .note import find_note, is_canonical, render_note
 from .pagesetup import (
     PageSetup,
@@ -242,6 +242,31 @@ class Proposal:
     depends_on: str | None
     batch: str | None
     anchor_shell: str | None = None  # thead/tbody/tfoot for table rows
+
+
+@dataclass(frozen=True)
+class _CardSpec:
+    """One card for :meth:`AimDocument._propose_lane` — the internal
+    batch-propose primitive (importers today, public batch operations later).
+
+    ``after`` names a CURRENT chunk to sit after (``None`` = first position);
+    ``after_card`` instead chains an add onto an earlier spec of the same
+    call (its index), exactly as ``propose_add(after=<pending add id>)``
+    does. ``batch_key`` groups cards into one ``data-batch``: every distinct
+    key gets its own fresh batch id.
+    """
+
+    action: str  # modify | add | delete | move
+    author: Actor
+    target: str | None = None
+    markup: str | None = None
+    container: str = "body"
+    after: str | None = None
+    after_card: int | None = None
+    shell: str | None = None
+    explanation: str | None = None
+    at: str | None = None
+    batch_key: str | None = None
 
 
 class _ChainedAddCycle(InvalidOperation):
@@ -500,6 +525,25 @@ def _set_card_payload(card: Element, payload: str) -> None:
     tmpl.children = list(parse_fragment(payload))
 
 
+def snapshot_hash(snap: dict) -> str:
+    """The ``doc_hash`` a baseline snapshot's lines hash to (§11.3)."""
+    return canonical.doc_hash(
+        snap["html"],
+        snap.get("theme"),
+        snap.get("body", []),
+        doc_settings_line=snap.get("doc"),
+    )
+
+
+def _snapshot_lines(snap: dict) -> list[str]:
+    lines = [snap["html"]]
+    if snap.get("doc"):
+        lines.append(snap["doc"])
+    if snap.get("theme"):
+        lines.append(snap["theme"])
+    return lines + list(snap.get("body", []))
+
+
 def resolution_order(
     proposals: Sequence[Proposal],
     doc: AimDocument | None = None,
@@ -656,6 +700,55 @@ class DocState:
             (serialize(c) for c in self.constructs()),
             doc_settings_line=(serialize(settings) if settings is not None else None),
         )
+
+    def snapshot(self) -> dict:
+        """The reduced projection (§11.3) written out as a baseline
+        ``snapshot``: exactly the lines ``doc_hash`` hashes, structured."""
+        snap: dict = {
+            "html": self.html_open_line(),
+            "body": [serialize(c) for c in self.constructs()],
+        }
+        settings = self.script("doc")
+        if settings is not None:
+            snap["doc"] = serialize(settings)
+        theme = self.theme_el()
+        if theme is not None:
+            snap["theme"] = serialize(theme)
+        return snap
+
+    def load_snapshot(self, snap: dict) -> None:
+        """Replace the hashed projection (declared version and the rest of the
+        ``<html>`` open tag, settings, theme, body constructs) with a
+        baseline snapshot's. Sections, caches and the head stay as they are."""
+        shell = next(
+            (n for n in parse_fragment(snap["html"] + "</html>") if isinstance(n, Element)), None
+        )
+        if shell is None or shell.tag != "html":
+            raise HistoryError("baseline snapshot 'html' is not an <html> open tag")
+        self.html.attrs = list(shell.attrs)
+        self.set_doc_settings_markup(snap.get("doc"))
+        self.set_theme_markup(snap.get("theme"))
+        for el in self.constructs():
+            self.body.children.remove(el)
+        insert_at = next(
+            (
+                i
+                for i, c in enumerate(self.body.children)
+                if isinstance(c, Element) and c.tag in _BODY_SECTIONS
+            ),
+            len(self.body.children),
+        )
+        for line in snap.get("body", []):
+            nodes = [n for n in parse_fragment(line) if isinstance(n, Element)]
+            if len(nodes) != 1:
+                raise HistoryError("a baseline snapshot entry is not exactly one construct")
+            self.body.children.insert(insert_at, nodes[0])
+            insert_at += 1
+
+    def snapshot_lines(self) -> list[str]:
+        """The projection as comparable lines, in snapshot order."""
+        snap = self.snapshot()
+        return _snapshot_lines(snap)
 
     # -- mutation ---------------------------------------------------------------
     def resolve_insert_point(self, anchor: Anchor) -> tuple[Element, int]:
@@ -966,11 +1059,13 @@ class AimDocument:
         upgrade would invalidate every checkpoint recorded under the old
         line. Documents carry their birth version; only :func:`new_document`
         stamps the current one. (The stylesheet is safe to refresh — it is
-        machine-managed and excluded from hashing.)"""
+        machine-managed and excluded from hashing — and so is a present TOC
+        cache, §8.1: it is rederived when its ``toc_doc_hash`` is stale.)"""
         css = self._state.css_el()
         if css is not None:
             css.raw = "\n" + generate_aim_css()
             css.set("data-aim-css", REGISTRY.spec_version)
+        self._refresh_toc()
         return canonical.document_text(self._fragment)
 
     def save(self, path: str | Path) -> None:
@@ -1277,8 +1372,8 @@ class AimDocument:
         # corrupt the cache or diverge it from the authoritative JSONL.
         return [Event(deepcopy(event.data)) for event in self._history_events()]
 
-    def _append_event(self, data: dict) -> Event:
-        index = self._get_history_index()
+    def _history_script(self) -> Element:
+        """The history block, created in its section slot when absent."""
         el = self._state.script("history")
         if el is None:
             el = Element("script", [("type", REGISTRY.script_types["history"])])
@@ -1289,6 +1384,11 @@ class AimDocument:
                 self._state.body.children.insert(idx, el)
             else:
                 self._state.body.children.append(el)
+        return el
+
+    def _append_event(self, data: dict) -> Event:
+        index = self._get_history_index()
+        el = self._history_script()
         body = (el.raw or "").rstrip("\n")
         line = canonical_json(data)
         el.raw = "\n" + (body + "\n" if body else "") + line + "\n"
@@ -1385,11 +1485,19 @@ class AimDocument:
         pending templates; raw history scripts are inert DOM text, so every
         markup field history retains is inspected separately."""
         floors = _payload_floors(serialize(self._state.body))
-        for event in self.history:
+        for event in self._history_events():
             for key in ("before", "after", "proposed", "applied"):
                 value = event.get(key)
                 if isinstance(value, str):
                     floors |= _payload_floors(value)
+            since = REGISTRY.event_since.get(event.kind if "kind" in event.data else "")
+            if since is not None:
+                floors.add(since)  # the event kind itself is newer markup
+            snap = event.get("snapshot")
+            if isinstance(snap, dict) and isinstance(snap.get("body"), list):
+                for line in snap["body"]:
+                    if isinstance(line, str):
+                        floors |= _payload_floors(line)
         return floors
 
     def _retains_literal_paint(self) -> bool:
@@ -1762,6 +1870,18 @@ class AimDocument:
         if explanation:
             data["explanation"] = explanation
         self._append_event(data)
+        if self._state.kind_of(cid) == "chunk":
+            # The normalized payload IS the chunk's canonical view (as in
+            # add_chunk): rebuilding every chunk view to find this one made
+            # each modify O(document), and bulk writers quadratic.
+            roots = [node for node in parse_fragment(payload) if isinstance(node, Element)]
+            return Chunk(
+                id=cid,
+                container=self._state.container_of_chunk(cid),
+                tags=tuple(root.tag for root in roots),
+                html=payload,
+                text="".join(root.text() for root in roots),
+            )
         try:
             return self.chunk(cid)
         except TargetNotFound:  # container target: synthesize the view
@@ -2217,36 +2337,33 @@ class AimDocument:
         sec = self._state.section("aim-proposals")
         if sec is None:
             return []
-        out = []
-        for card in sec.elements():
-            if card.tag != "aim-proposal":
-                continue
-            tmpl = next((c for c in card.elements() if c.tag == "template"), None)
-            payload = None
-            if tmpl is not None and tmpl.elements():
-                payload = "".join(serialize(e) for e in tmpl.elements())
-            author = Actor(
-                card.get("data-author") or "human",
-                id=card.get("data-author-id"),
-                model=card.get("data-author-model"),
-            )
-            out.append(
-                Proposal(
-                    id=card.get("id") or "",
-                    action=card.get("data-action") or "",
-                    target=card.get("data-for"),
-                    author=author,
-                    at=card.get("data-at") or "",
-                    explanation=card.get("data-explanation"),
-                    payload_html=payload,
-                    anchor_container=card.get("data-anchor-container"),
-                    anchor_after=card.get("data-anchor-after"),
-                    anchor_shell=card.get("data-anchor-shell"),
-                    depends_on=card.get("data-depends-on"),
-                    batch=card.get("data-batch"),
-                )
-            )
-        return out
+        return [self._proposal_of(card) for card in sec.elements() if card.tag == "aim-proposal"]
+
+    @staticmethod
+    def _proposal_of(card: Element) -> Proposal:
+        tmpl = next((c for c in card.elements() if c.tag == "template"), None)
+        payload = None
+        if tmpl is not None and tmpl.elements():
+            payload = "".join(serialize(e) for e in tmpl.elements())
+        author = Actor(
+            card.get("data-author") or "human",
+            id=card.get("data-author-id"),
+            model=card.get("data-author-model"),
+        )
+        return Proposal(
+            id=card.get("id") or "",
+            action=card.get("data-action") or "",
+            target=card.get("data-for"),
+            author=author,
+            at=card.get("data-at") or "",
+            explanation=card.get("data-explanation"),
+            payload_html=payload,
+            anchor_container=card.get("data-anchor-container"),
+            anchor_after=card.get("data-anchor-after"),
+            anchor_shell=card.get("data-anchor-shell"),
+            depends_on=card.get("data-depends-on"),
+            batch=card.get("data-batch"),
+        )
 
     def proposal(self, pid: str) -> Proposal:
         for p in self.proposals:
@@ -2327,7 +2444,7 @@ class AimDocument:
             tmpl.children = list(parse_fragment(payload))
             card.children.append(tmpl)
         self._proposals_section().children.append(card)
-        proposal = self.proposal(pid)
+        proposal = self._proposal_of(card)
         self._get_history_index().add_proposal(proposal)
         return proposal
 
@@ -2617,6 +2734,145 @@ class AimDocument:
                 at=at,
                 pid=pid,
             )
+
+    def _propose_lane(self, specs: Sequence[_CardSpec]) -> list[Proposal]:
+        """Write many pending cards in one pass — the batch-propose primitive.
+
+        Semantically identical to calling ``propose_*`` once per spec, in
+        order: the same id minting, card serialization and P-rule checks
+        (targets exist in the current body, reserved targets refused, no-op
+        edits refused, recorded anchors resolve in the current body or chain
+        onto a pending add). The difference is cost. ``propose_*`` replays
+        every earlier pending card on a fresh clone for each new card, which
+        is quadratic in the lane; this keeps ONE projection — the current
+        document with the existing lane applied in creation order — and
+        advances it by each new card as it is written.
+
+        Supersession is not part of a batch: a spec aiming at a target that
+        already carries a pending card of the same family (modify/delete, or
+        move) raises :class:`InvalidOperation`, as does a second such spec in
+        the same call. Nothing is written when a spec fails validation before
+        any card exists; callers that need all-or-nothing run this on a clone.
+        """
+        projection = self._clone()
+        decider = Actor("external", id="pending-projection")
+        for proposal in _creation_order(projection.proposals):
+            try:
+                projection.accept(proposal.id, decided_by=decider, at=proposal.at)
+            except AimError as exc:
+                raise InvalidOperation(
+                    f"pending proposal {proposal.id!r} cannot be projected: {exc}"
+                ) from exc
+        busy: set[tuple[str, str]] = set()
+        for p in self.proposals:
+            if p.target:
+                busy.add((p.target, "move" if p.action == "move" else "edit"))
+        batches: dict[str | None, str] = {}
+        made: list[Proposal] = []
+        saved_batch = self._batch
+        try:
+            for i, spec in enumerate(specs):
+                where = f"card {i} ({spec.action})"
+                payload: str | None = None
+                anchor: Anchor | None = None
+                target = spec.target
+                if spec.action in ("modify", "delete", "move"):
+                    if not target:
+                        raise InvalidOperation(f"{where}: needs a target")
+                    if spec.action != "modify":
+                        _no_delete_move(target, f"{spec.action} proposal")
+                    if target not in ("aim:doc", "aim:theme"):
+                        self._require_current_target(target)
+                    family = (target, "move" if spec.action == "move" else "edit")
+                    if family in busy:
+                        raise InvalidOperation(
+                            f"{where}: {target!r} already carries a pending "
+                            f"{'move' if family[1] == 'move' else 'modify/delete'}"
+                        )
+                    busy.add(family)
+                after: str | None = spec.after
+                if spec.after_card is not None:
+                    chained = made[spec.after_card]
+                    if chained.action != "add":
+                        raise InvalidOperation(f"{where}: can only chain onto an add")
+                    if (chained.anchor_container or "body") != spec.container:
+                        raise InvalidOperation(f"{where}: cannot chain across containers")
+                    after = self._payload_root_id(chained.payload_html or "")
+                if spec.action == "modify" and target == "aim:doc":
+                    payload = self._validated_doc_markup(spec.markup or "")
+                    if payload == self._state.serial("aim:doc"):
+                        raise _NoOpEdit(f"{where}: page setup is unchanged")
+                elif spec.action == "modify":
+                    assert target is not None
+                    _, normalized = self._normalize_payload(spec.markup or "", expect_id=target)
+                    if normalized == self._state.serial(target):
+                        raise _NoOpEdit(f"{where}: modify with identical content")
+                    try:
+                        projection.modify_chunk(
+                            target, spec.markup or "", author=spec.author, at=spec.at
+                        )
+                    except _NoOpEdit:
+                        pass  # a no-op only after earlier cards resolve — harmless
+                    payload = projection._state.serial(target)
+                elif spec.action == "add":
+                    chunk = projection.add_chunk(
+                        spec.markup or "",
+                        author=spec.author,
+                        container=spec.container,
+                        after=after,
+                        at=spec.at,
+                    )
+                    payload = chunk.html
+                    recorded = projection._history_events()[-1].get("anchor")
+                    anchor = self._card_position_anchor("add", Anchor.from_obj(recorded))
+                elif spec.action == "delete":
+                    assert target is not None
+                    projection.delete_chunk(target, author=spec.author, at=spec.at)
+                elif spec.action == "move":
+                    assert target is not None
+                    here = self._anchor_of(target)
+                    concrete = self._resolve_end_anchor(
+                        spec.container, after, exclude=target, shell=spec.shell
+                    )
+                    if spec.after_card is None and here == concrete:
+                        raise _NoOpEdit(f"{where}: move of {target!r} is a no-op")
+                    try:
+                        projection.move_chunk(
+                            target,
+                            author=spec.author,
+                            container=spec.container,
+                            after=after,
+                            shell=spec.shell,
+                            at=spec.at,
+                        )
+                        to = Anchor.from_obj(projection._history_events()[-1].get("to"))
+                    except _NoOpEdit:
+                        # a no-op only after earlier cards resolve — harmless
+                        to = projection._resolve_end_anchor(
+                            spec.container, after, exclude=target, shell=spec.shell
+                        )
+                    anchor = self._card_position_anchor("move", to)
+                else:
+                    raise InvalidOperation(f"{where}: unknown action {spec.action!r}")
+                if spec.batch_key not in batches:
+                    self._batch = None
+                    batches[spec.batch_key] = self._next_batch()
+                self._batch = batches[spec.batch_key]
+                made.append(
+                    self._new_card(
+                        action=spec.action,
+                        author=spec.author,
+                        target=target if spec.action != "add" else None,
+                        payload=payload,
+                        anchor=anchor,
+                        explanation=spec.explanation,
+                        depends_on=None,
+                        at=spec.at,
+                    )
+                )
+        finally:
+            self._batch = saved_batch
+        return made
 
     def amend_proposal(
         self,
@@ -3799,6 +4055,12 @@ class AimDocument:
     # -- verification & time travel ----------------------------------------------------------------
     def verify(self) -> list[str]:
         """Replay the history backwards over a copy; report chain problems."""
+        return self._verify(check_snapshot=True)
+
+    def _verify(self, *, check_snapshot: bool) -> list[str]:
+        """``check_snapshot=False`` leaves a baseline snapshot's own
+        consistency (it hashes to its doc_hash) to the caller — the linter
+        reports that as H008, the reconstruction mismatch as H006."""
         problems: list[str] = []
         events = self._history_events()
         if any(not isinstance(e.data.get("seq"), int) for e in events):
@@ -3812,6 +4074,13 @@ class AimDocument:
         if gaps:
             problems.append(f"history has internal seq gaps: {gaps}")
             return problems
+        baselines = [i for i, e in enumerate(events) if e.kind == "baseline"]
+        if baselines and baselines != [0]:
+            problems.append(
+                "a baseline must be the first retained event and occur once "
+                f"(found at seq {', '.join(str(events[i].seq) for i in baselines)})"
+            )
+            return problems
         clone = AimDocument(parse_html(canonical.document_text(self._fragment)))
         state = clone._state
         for ev in reversed(events):
@@ -3824,6 +4093,9 @@ class AimDocument:
                         f"mismatch — recorded {want}, reconstructed {got}"
                     )
                 continue
+            if ev.kind == "baseline":
+                problems += self._baseline_problems(ev, state, check_snapshot=check_snapshot)
+                continue
             if not ev.state_changing:
                 continue
             try:
@@ -3834,6 +4106,46 @@ class AimDocument:
                 # problem to report, never a verifier crash → S000 (AIM-05)
                 problems.append(f"seq {ev.seq}: replay failed — {type(exc).__name__}: {exc}")
         return problems
+
+    @staticmethod
+    def _baseline_problems(ev: Event, state: DocState, *, check_snapshot: bool) -> list[str]:
+        """The reconstruction at a baseline must equal its snapshot line for
+        line — which names the construct that diverged — and its doc_hash;
+        the snapshot must hash to the recorded doc_hash itself."""
+        snap = ev.get("snapshot")
+        shape = snapshot_problems(snap)
+        if shape:
+            return [f"baseline seq {ev.seq}: {shape[0]}"]
+        assert isinstance(snap, dict)
+        out: list[str] = []
+        recorded = ev.get("doc_hash")
+        if check_snapshot and snapshot_hash(snap) != recorded:
+            out.append(
+                f"baseline seq {ev.seq} ({ev.get('label')!r}): the snapshot does not hash "
+                f"to the recorded doc_hash {recorded}"
+            )
+        want, got = _snapshot_lines(snap), state.snapshot_lines()
+        if want != got:
+            index = next(
+                (i for i, (a, b) in enumerate(zip(want, got, strict=False)) if a != b),
+                min(len(want), len(got)),
+            )
+            body_at = index - (len(want) - len(snap.get("body", [])))
+            where = (
+                f"body construct {body_at + 1}"
+                if body_at >= 0
+                else "the <html>/settings/theme lines"
+            )
+            out.append(
+                f"baseline seq {ev.seq} ({ev.get('label')!r}): the document does not match "
+                f"its snapshot at {where} (external edit?)"
+            )
+        elif check_snapshot and state.doc_hash() != recorded:
+            out.append(
+                f"baseline seq {ev.seq} ({ev.get('label')!r}): doc_hash mismatch — recorded "
+                f"{recorded}, reconstructed {state.doc_hash()}"
+            )
+        return out
 
     def _invert_on(self, state: DocState, ev: Event, problems: list[str]) -> None:
         action, target = ev.action, ev.target or ""
@@ -3890,6 +4202,13 @@ class AimDocument:
     def state_at(self, seq: int) -> AimDocument:
         """Reconstruct the document as of *seq* (pending lane + caches dropped)."""
         events = self._history_events()
+        if events and events[0].kind == "baseline" and seq < events[0].seq:
+            # nothing before a baseline is recorded in the file: the state
+            # "before the import" is not the imported state, it is unknown
+            raise HistoryError(
+                f"cannot reconstruct below seq {events[0].seq}: the history begins with "
+                f"a baseline ({events[0].get('label')!r}) there"
+            )
         if events and seq < min(e.seq for e in events) - 1:
             raise HistoryError(
                 f"cannot reconstruct below seq {min(e.seq for e in events) - 1} (history pruned)"
@@ -3923,8 +4242,19 @@ class AimDocument:
         return clone
 
     # -- lifecycle operations --------------------------------------------------------------------
-    def flatten(self, *, drop_embeddings: bool = True) -> None:
-        """Drop the history (and by default the embeddings) — a clean file.
+    def flatten(
+        self, *, drop_embeddings: bool = True, label: str = "flatten", at: str | None = None
+    ) -> None:
+        """Collapse the history to one checkpoint (and by default drop the
+        embeddings) — a clean file (§6.8).
+
+        A document with history keeps exactly one event: a checkpoint at the
+        next seq, anchoring the current state's ``doc_hash``. The file is a
+        pruned log, valid at any version: ``verify()`` still detects a later
+        hand edit, and ``reconcile()`` refuses with the pruned-log message
+        instead of replaying from a wrong origin; :meth:`baseline` accepts
+        such a file as the new starting point. Seq never goes backwards. A
+        document without history stays without it.
 
         Ids the dropped log had burned stay burned on this instance (§4.4:
         an id is never reused within a document lifetime), so an id seen
@@ -3932,14 +4262,102 @@ class AimDocument:
         file carries no burn ledger — reloading it starts a fresh lifetime.
         """
         index = self._get_history_index()
-        for kind in ("history",) + (("embeddings",) if drop_embeddings else ()):
-            s = self._state.script(kind)
-            if s is not None:
-                self._state.body.children.remove(s)
-        index.replace_events([], None)
+        if drop_embeddings:
+            emb = self._state.script("embeddings")
+            if emb is not None:
+                self._state.body.children.remove(emb)
+        hist = self._state.script("history")
+        if index.events and hist is not None:
+            data = {
+                "seq": self.seq + 1,
+                "kind": "checkpoint",
+                "t": at or _now_iso(),
+                "label": label,
+                "doc_hash": self.doc_hash,
+            }
+            hist.raw = "\n" + canonical_json(data) + "\n"
+            index.replace_events([Event(deepcopy(data))], hist.raw)
+        else:
+            if hist is not None:
+                self._state.body.children.remove(hist)
+            index.replace_events([], None)
         # §9.3: gc is the final pass — a "clean file" must not ship the
         # dead blobs its dropped history kept alive
         self.gc_assets()
+
+    def _drop_history(self, *, drop_embeddings: bool = True) -> None:
+        """Remove the history block entirely (and the embeddings) — for
+        exports that are pages, not documents (``to_html``). Burned ids stay
+        burned on this instance."""
+        index = self._get_history_index()
+        for kind in ("history",) + (("embeddings",) if drop_embeddings else ()):
+            el = self._state.script(kind)
+            if el is not None:
+                self._state.body.children.remove(el)
+        index.replace_events([], None)
+        self.gc_assets()
+
+    def baseline(
+        self,
+        label: str,
+        *,
+        author: Actor | None = None,
+        explanation: str | None = None,
+        source: Sequence[str] | None = None,
+        at: str | None = None,
+    ) -> Event:
+        """Make the current state the origin of the history (§6.9, since 0.6).
+
+        Replaces the retained log with ONE ``baseline`` event at the next seq
+        (1 for a document without history) whose ``snapshot`` writes out the
+        current reduced projection. Time travel, verification and
+        reconciliation keep working from the file alone, starting here;
+        nothing before it can be undone or reconstructed. Pending proposals
+        and caches stay. Importers record one instead of an ``add`` per
+        construct, and it is the recovery for a file whose history cannot
+        explain its body ("accept the file as it is").
+
+        Recording a baseline raises the declared version to at least the one
+        that defines it (no version event: no earlier state is retained to
+        record it against, §3.7). Destructive to undo and provenance, so it
+        is an SDK/CLI verb only — never an MCP tool.
+        """
+        if not label:
+            raise InvalidOperation("a baseline needs a label")
+        from .reconcile import _fixup_ids  # lazy: reconcile imports this module
+
+        probe = self._clone()
+        if _fixup_ids(probe, probe._state.all_ids()):
+            # a snapshot with a missing, duplicated or invalid id would be an
+            # origin no later reconcile can converge from
+            raise InvalidOperation(
+                "cannot record a baseline: the body has units without a usable id "
+                "(missing, duplicated or invalid); reconcile() assigns them"
+            )
+        index = self._get_history_index()
+        seq = self.seq + 1
+        if not REGISTRY.version_includes(self.spec_version, REGISTRY.baseline_since):
+            self._state.set_spec_version(REGISTRY.baseline_since)
+        snap = self._state.snapshot()
+        data: dict = {
+            "seq": seq,
+            "kind": "baseline",
+            "t": at or _now_iso(),
+            "label": label,
+            "doc_hash": snapshot_hash(snap),
+            "snapshot": snap,
+        }
+        if author is not None:
+            data["author"] = author.to_obj()
+        if explanation:
+            data["explanation"] = explanation
+        if source:
+            data["source"] = list(source)
+        hist = self._history_script()
+        hist.raw = "\n" + canonical_json(data) + "\n"
+        index.replace_events([Event(deepcopy(data))], hist.raw)
+        self.gc_assets()  # §9.3: the dropped events may have kept blobs alive
+        return Event(deepcopy(data))
 
     def prune(self, *, before: int | str) -> int:
         """Truncate history before a seq or checkpoint label; returns dropped count.
@@ -3951,10 +4369,15 @@ class AimDocument:
         events = index.events
         if isinstance(before, str):
             match = next(
-                (e for e in events if e.kind == "checkpoint" and e.get("label") == before), None
+                (
+                    e
+                    for e in events
+                    if e.kind in ("checkpoint", "baseline") and e.get("label") == before
+                ),
+                None,
             )
             if match is None:
-                raise TargetNotFound(f"no checkpoint labeled {before!r}")
+                raise TargetNotFound(f"no checkpoint or baseline labeled {before!r}")
             cut = match.seq
         else:
             cut = before
@@ -4007,7 +4430,19 @@ class AimDocument:
         self._write_meta(meta)
 
     def generate_toc(self) -> list[dict]:
-        """Derive the TOC cache from heading chunks (deterministic)."""
+        """Derive the TOC cache from heading chunks (deterministic) and store
+        it with ``toc_doc_hash``, the ``doc_hash`` it was derived from (§8.1).
+        Once present, :meth:`dumps` keeps it fresh."""
+        toc = self.outline()
+        meta = self.meta or {}
+        meta["toc"] = toc
+        meta["toc_doc_hash"] = self.doc_hash
+        self._write_meta(meta)
+        return toc
+
+    def outline(self) -> list[dict]:
+        """The TOC derived live from the body (headings and slides), without
+        touching the cache — what :meth:`generate_toc` stores."""
         toc: list[dict] = []
         current: dict | None = None
         for top in self._state.constructs():
@@ -4030,10 +4465,45 @@ class AimDocument:
             else:
                 current = {"title": "", "level": 1, "chunks": [cid]}
                 toc.append(current)
-        meta = self.meta or {}
-        meta["toc"] = toc
-        self._write_meta(meta)
         return toc
+
+    def _has_outline(self) -> bool:
+        """Whether the body has anything to outline (a heading or a slide).
+        Without one, :meth:`outline` is a single untitled entry listing every
+        id — it costs tokens and outlines nothing."""
+        return any(
+            top.tag in ("h1", "h2", "h3", "h4", "h5", "h6", "aim-slide")
+            for top in self._state.constructs()
+        )
+
+    def toc_is_fresh(self) -> bool:
+        """Whether the stored TOC carries the current ``doc_hash`` (a TOC
+        without ``toc_doc_hash`` — written before v0.6 — cannot be judged
+        and counts as not fresh)."""
+        try:
+            meta = self.meta
+        except ParseError:
+            return False
+        return (
+            meta is not None
+            and isinstance(meta.get("toc"), list)
+            and meta.get("toc_doc_hash") == self.doc_hash
+        )
+
+    def _refresh_toc(self) -> None:
+        """dumps(): a present TOC is a machine-managed cache like aim.css —
+        rederived deterministically, outside doc_hash, never evented."""
+        try:
+            meta = self.meta
+        except ParseError:
+            return  # a malformed cache is lint's to report (M003), not ours
+        if meta is None or not isinstance(meta.get("toc"), list):
+            return
+        if meta.get("toc_doc_hash") == self.doc_hash:
+            return
+        meta["toc"] = self.outline()
+        meta["toc_doc_hash"] = self.doc_hash
+        self._write_meta(meta)
 
     def _write_meta(self, meta: dict) -> None:
         el = self._state.script("meta")

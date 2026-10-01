@@ -432,10 +432,14 @@ class TestHistoryAndCacheRules:
         )
         assert "H006" in codes(broken)
 
-    def test_H001_flattened_doc_warns_only(self, lifecycle_doc):
+    def test_H001_historyless_doc_warns_only(self, lifecycle_doc):
+        text = aim.to_html(lifecycle_doc)  # a page export drops the history
+        assert "H001" in warn_codes(text) and not codes(text)
+
+    def test_flattened_doc_is_a_pruned_log(self, lifecycle_doc):
         lifecycle_doc.flatten()
         text = lifecycle_doc.dumps()
-        assert "H001" in warn_codes(text) and not codes(text)
+        assert "H004" in warn_codes(text) and not codes(text)
 
     def test_H004_pruned_history_warns(self, lifecycle_doc):
         lifecycle_doc.prune(before="reviewed")

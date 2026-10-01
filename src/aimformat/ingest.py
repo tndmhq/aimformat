@@ -521,11 +521,34 @@ def from_docling(
     source_name = data.get("name") or "document"
     with doc.batch():
         for markup in blocks:
-            doc.add_chunk(
-                _containerize(markup),
-                author=who,
-                explanation=f"Imported from {source_name!r} via docling ingestion",
-            )
+            doc.add_chunk(_containerize(markup), author=who)
+    return finish_import(
+        doc, author=who, explanation=f"Imported from {source_name!r} via docling ingestion"
+    )
+
+
+def finish_import(
+    doc: AimDocument,
+    *,
+    author: Actor,
+    explanation: str,
+    source: list[str] | None = None,
+) -> AimDocument:
+    """Every importer's last step (spec §6.9, §8.1).
+
+    The imported state becomes the origin of the history: ONE ``baseline``
+    event carrying it, instead of an ``add`` per construct — the content did
+    not arrive by editing, so there is nothing to undo and no edit to
+    attribute construct by construct. The TOC cache is built when the body
+    has an outline (a heading or a slide); without one a TOC is a single
+    untitled entry listing every id, which costs tokens and outlines nothing.
+    """
+    # the per-construct events that built the body are scaffolding, not
+    # edits: dropped, so the baseline is the document's seq 1
+    doc._drop_history(drop_embeddings=False)
+    doc.baseline("import", author=author, explanation=explanation, source=source)
+    if doc._has_outline():
+        doc.generate_toc()
     return doc
 
 

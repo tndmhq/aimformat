@@ -292,3 +292,52 @@ def test_history_payloads_are_elided(tmp_path):
     dumped = json.dumps(out["history"])
     assert "A" * 64 not in dumped
     assert "[data-uri elided]" in dumped
+
+
+def test_read_never_serves_a_stale_outline(tmp_path):
+    # IMPORT-D13: no TOC cache (any 0.5 document) → derived live; a fresh
+    # cache → served as is; a cache a foreign writer left stale → derived
+    doc = aim.new_document(title="Outline")
+    doc.add_chunk('<h1 data-aim="h1">Intro</h1>', author=BOT)
+    doc.add_chunk('<p data-aim="p1">Text.</p>', author=BOT)
+    path = tmp_path / "outline.aim"
+    doc.save(path)
+    out = _payload(_call("aim_read", {"path": str(path)}))
+    assert out["toc_source"] == "derived"
+    assert out["toc"] == [{"title": "Intro", "level": 1, "chunks": ["h1", "p1"]}]
+
+    doc.generate_toc()
+    doc.save(path)
+    out = _payload(_call("aim_read", {"path": str(path)}))
+    assert out["toc_source"] == "cache"
+
+    text = path.read_text("utf-8").replace(">Intro</h1>", ">Overview</h1>")
+    path.write_text(text, "utf-8")
+    out = _payload(_call("aim_read", {"path": str(path)}))
+    assert out["toc_source"] == "derived"
+    assert out["toc"][0]["title"] == "Overview"
+
+
+def test_history_snapshots_are_elided(tmp_path):
+    # a baseline snapshot is a nested object carrying the body's blobs
+    uri = "data:image/png;base64," + "A" * 200
+    doc = aim.new_document(title="MCP fixture")
+    doc.add_chunk(f'<figure data-aim="fig"><img alt="dot" src="{uri}"></figure>', author=BOT)
+    doc.baseline("import")
+    path = tmp_path / "img.aim"
+    doc.save(path)
+    out = _payload(_call("aim_read", {"path": str(path), "include_history": True}))
+    dumped = json.dumps(out["history"])
+    assert "A" * 64 not in dumped and "[data-uri elided]" in dumped
+
+
+def test_read_does_not_repeat_every_id_for_a_headingless_body(tmp_path):
+    # without a heading or slide the live outline is one untitled entry
+    # listing every chunk id — the "chunks" list already carries them
+    doc = aim.new_document(title="Flat")
+    for i in range(3):
+        doc.add_chunk(f'<p data-aim="p{i}">Text {i}.</p>', author=BOT)
+    path = tmp_path / "flat.aim"
+    doc.save(path)
+    out = _payload(_call("aim_read", {"path": str(path)}))
+    assert out["toc"] is None and out["toc_source"] is None

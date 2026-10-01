@@ -8,7 +8,8 @@
     aim propose ACTION ...  append a proposal card to the pending lane
     aim accept FILE PID...  accept pending proposals (or --all)
     aim reject FILE PID...  reject pending proposals (or --all)
-    aim flatten FILE        drop history (+embeddings) -> clean file
+    aim flatten FILE        collapse history to one checkpoint (+drop embeddings)
+    aim baseline FILE       make the current state the history's origin
     aim pack FILE           hoist embedded data images into the asset registry
     aim prune FILE BEFORE   truncate history before a seq/checkpoint label
     aim gc FILE             collect dead asset symbols
@@ -338,6 +339,21 @@ def _cmd_flatten(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_baseline(args: argparse.Namespace) -> int:
+    from .events import parse_actor
+
+    doc = AimDocument.load(args.file)
+    doc.baseline(
+        args.label,
+        author=parse_actor(args.author) if args.author else None,
+        explanation=args.explanation,
+    )
+    out = Path(args.output or args.file)
+    doc.save(out)
+    print(f"wrote {out} (history now begins with baseline {args.label!r} at seq {doc.seq})")
+    return 0
+
+
 def _cmd_pack(args: argparse.Namespace) -> int:
     from .events import parse_actor
 
@@ -469,14 +485,23 @@ def _cmd_css(args: argparse.Namespace) -> int:
 
 
 def _cmd_import(args: argparse.Namespace) -> int:
-    from .convert import from_path
+    from .convert import from_path, import_docx
 
     out = Path(args.output)
     if out.exists() and not args.force:
         print(f"aim: {out} exists (use --force to overwrite)", file=sys.stderr)
         return 2
     try:
-        doc = from_path(args.input, title=args.title, lang=args.lang)
+        if Path(args.input).suffix.lower() == ".docx":
+            result = import_docx(
+                Path(args.input), title=args.title, lang=args.lang, tracked=args.tracked
+            )
+            doc = result.document
+            summary = result.report.summary()
+            if summary:
+                print(f"aim: {summary}", file=sys.stderr)
+        else:
+            doc = from_path(args.input, title=args.title, lang=args.lang)
     except UnicodeDecodeError:  # ValueError subclass: main() handles it
         raise
     except ValueError as exc:
@@ -692,12 +717,26 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser(
         "flatten",
-        help="drop history (and embeddings); modifies the file in place unless -o is given",
+        help="collapse history to one checkpoint (and drop embeddings); modifies the "
+        "file in place unless -o is given",
     )
     p.add_argument("file")
     p.add_argument("-o", "--output")
     p.add_argument("--keep-embeddings", action="store_true")
     p.set_defaults(func=_cmd_flatten)
+
+    p = sub.add_parser(
+        "baseline",
+        help="replace the history with one baseline event for the current state "
+        "(discards undo and provenance; the recovery when the history no longer "
+        "explains the body); modifies the file in place unless -o is given",
+    )
+    p.add_argument("file")
+    p.add_argument("-o", "--output")
+    p.add_argument("--label", default="baseline")
+    p.add_argument("--author", help="actor: human:ID | agent:MODEL | external:ID")
+    p.add_argument("--explanation")
+    p.set_defaults(func=_cmd_baseline)
 
     p = sub.add_parser(
         "pack",
@@ -787,6 +826,13 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--title", help="document title (default: derived from content or filename)")
     p.add_argument("--lang", default="en")
     p.add_argument("--force", action="store_true", help="overwrite an existing file")
+    p.add_argument(
+        "--tracked",
+        choices=("propose", "accept", "reject"),
+        default="propose",
+        help="Word tracked changes (.docx): pending proposals on the original text "
+        "(default), or import the accepted / rejected text",
+    )
     p.set_defaults(func=_cmd_import)
 
     p = sub.add_parser(

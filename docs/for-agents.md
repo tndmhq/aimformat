@@ -23,14 +23,18 @@ section numbers below (§) point into it.
 ## Read path
 
 1. **Read the metadata cache first.** The head contains
-   `<script type="application/aim-meta+json">` with one JSON object:
-   `summary {text, model, as_of_seq, doc_hash}` and an optional
-   `toc [{title, level, chunks: [ids]}]` (§8.1). This is the cheapest
-   orientation the file offers.
+   `<script type="application/aim-meta+json">` with one JSON object holding
+   an optional `summary {text, model, as_of_seq, doc_hash}` and an optional
+   `toc [{title, level, chunks: [ids]}]` with `toc_doc_hash` (§8.1). This is
+   the cheapest orientation the file offers; imported documents carry a TOC
+   when they have headings.
 2. **Verify before trusting.** The cache is derived and may be stale.
-   Compare `summary.doc_hash` against the document's current hash
-   (`aim hash FILE`, or `doc.doc_hash` in the SDK). If they differ, ignore
-   the summary and read the body.
+   Compare `summary.doc_hash` and `toc_doc_hash` against the document's
+   current hash (`aim hash FILE`, or `doc.doc_hash` in the SDK). If they
+   differ, ignore that cache and read the body (`doc.outline()` rebuilds the
+   TOC; the MCP `aim_read` tool never serves a stale one and says
+   `toc_source: "cache" | "derived"`, or `null` for both when the document
+   has no heading or slide to outline).
 3. **Project the file before loading it into context** (§8.3):
    - strip the embedded stylesheet (`<style data-aim-css="…">`) — it is
      machine-managed and regenerable, never content;
@@ -132,11 +136,12 @@ checkpoints still verify. If you hand-edit, do not touch
 | `aim propose {modify,add,delete,move,theme} FILE ...` | append a proposal card to the pending lane |
 | `aim accept FILE [PID...] [--all]` | accept pending proposals by id, or all of them |
 | `aim reject FILE [PID...] [--all]` | reject pending proposals by id, or all of them |
-| `aim flatten FILE` | drop history (and embeddings) → clean file |
+| `aim flatten FILE` | collapse history to one checkpoint (and drop embeddings) → clean file |
+| `aim baseline FILE` | make the current state the history's origin (one `baseline` line); discards undo — only when the user asks, e.g. to accept a hand-edited file whose history no longer explains it |
 | `aim reconcile FILE` | detect out-of-band edits; append reconcile events to history |
 | `aim diff OLD NEW` | unit-level diff between two versions of a document: added/deleted/modified/moved unit ids plus theme/settings/version flags; `--format json` for machine reads |
 | `aim css` | print the generated `aim.css` for this spec version |
-| `aim import IN -o F.aim` | convert md/txt/docx/pdf to `.aim` (DOCX imports natively with styling preserved; PDF is structure-only via docling) |
+| `aim import IN -o F.aim` | convert md/txt/docx/pdf to `.aim` (DOCX imports natively with styling preserved, and its Word tracked changes become pending proposals on the original text — `--tracked accept\|reject` imports resolved text instead; Word comments are reported on stderr, never stored; PDF is structure-only via docling) |
 | `aim export F.aim -o OUT` | convert `.aim` to docx/md/html/pdf (chosen by output extension); a `.aim.html` target is not a conversion — it writes the document itself under the compatibility alias (§10), history and pending lane intact |
 | `aim mcp` | run the MCP server (requires `pip install 'aimformat[mcp]'`) |
 
@@ -246,7 +251,12 @@ invariants or you will corrupt identity and history:
 - **Treat `<aim-proposals>` and the history script
   (`<script type="application/aim-history+jsonl">`) as append-only tool
   lanes.** Do not rewrite, reorder, or delete their existing entries by
-  hand; history verification is byte-exact and will flag you.
+  hand; history verification is byte-exact and will flag you. The history
+  may begin with one `baseline` line (v0.6, §6.9): the imported or adopted
+  origin written out as a snapshot. Never edit it — a global
+  find-and-replace over the raw file that also hits the snapshot breaks
+  verification (H008/H006), exactly as one hitting an earlier `add` payload
+  would.
 - **The `aim-meta` summary may now be stale.** That is tolerable — readers
   check `summary.doc_hash` before trusting it — but do not leave a wrong
   summary you know is misleading; deleting the whole meta script is always

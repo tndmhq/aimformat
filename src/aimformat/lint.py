@@ -1034,7 +1034,19 @@ class _Linter:
             # seq-ordering and chain checks below need well-formed seqs
             # and would otherwise crash into a generic S000 (AIM-05)
         seqs = [e.seq for e in events]
-        if seqs[0] != 1:
+        baselines = [e for e in events if e.kind == "baseline"]
+        misplaced = bool(baselines) and (len(baselines) > 1 or events[0].kind != "baseline")
+        if misplaced:
+            self.add(
+                "H007",
+                ERROR,
+                "a baseline must be the first retained event and occur once (found at seq "
+                + ", ".join(str(e.seq) for e in baselines)
+                + ")",
+            )
+        if events[0].kind == "baseline":
+            self.check_snapshot(events[0])
+        elif seqs[0] != 1:
             self.add("H004", WARNING, f"history starts at seq {seqs[0]} (pruned)")
         for line in (el.raw or "").split("\n"):
             if not line.strip():
@@ -1052,11 +1064,95 @@ class _Linter:
                     f"seq {obj.get('seq')}: history line is not canonical "
                     "JSON (sorted keys, compact, <\\/ escape)",
                 )
+        if misplaced:
+            return  # the chain cannot be replayed through it; H007 says why
         try:
-            for problem in self.doc.verify():
-                self.add("H006", ERROR, problem)
+            problems = self.doc._verify(check_snapshot=False)
         except HistoryError as exc:
             self.add("H002", ERROR, str(exc))
+            return
+        for problem in problems:
+            self.add("H006", ERROR, problem)
+        if not problems and seqs[0] == 1 and events[0].kind != "baseline":
+            self.check_origin()
+
+    def check_snapshot(self, event) -> None:
+        """H008: a baseline snapshot hashes to its doc_hash, and every entry
+        is exactly one construct passing the checks a pending payload passes
+        (elements, attributes, URLs, handlers, styles) — the snapshot feeds
+        reconcile's expected state, so it must not smuggle what lint would
+        refuse anywhere else."""
+        from .document import snapshot_hash
+        from .events import snapshot_problems
+
+        snap = event.get("snapshot")
+        where = str(event.data.get("seq"))
+        if snapshot_problems(snap):
+            return  # a shape problem is H003's, already reported
+        if snapshot_hash(snap) != event.get("doc_hash"):
+            self.add(
+                "H008", ERROR, "baseline snapshot does not hash to the recorded doc_hash", where
+            )
+        shell = [n for n in parse_fragment(snap["html"] + "</html>") if isinstance(n, Element)]
+        if len(shell) != 1 or shell[0].tag != "html" or shell[0].elements():
+            self.add("H008", ERROR, "baseline snapshot 'html' is not one <html> open tag", where)
+        else:
+            for name, _ in shell[0].attrs:
+                if name.startswith("on"):
+                    self.add("H008", ERROR, f"baseline snapshot <html> carries {name!r}", where)
+        if snap.get("theme") is not None:
+            theme = [n for n in parse_fragment(snap["theme"]) if isinstance(n, Element)]
+            if len(theme) != 1 or theme[0].tag != "style" or not theme[0].has("data-aim-theme"):
+                self.add("H008", ERROR, "baseline snapshot 'theme' is not the theme block", where)
+        if snap.get("doc") is not None:
+            settings = [n for n in parse_fragment(snap["doc"]) if isinstance(n, Element)]
+            if (
+                len(settings) != 1
+                or settings[0].tag != "script"
+                or settings[0].get("type") != REGISTRY.script_types["doc"]
+            ):
+                self.add("H008", ERROR, "baseline snapshot 'doc' is not the settings block", where)
+        for i, line in enumerate(snap["body"]):
+            label = f"{where}, snapshot construct {i + 1}"
+            nodes = [n for n in parse_fragment(line) if isinstance(n, Element)]
+            stray = [
+                n
+                for n in parse_fragment(line)
+                if not isinstance(n, Element) and str(getattr(n, "data", "")).strip()
+            ]
+            if len(nodes) != 1 or stray:
+                self.add("H008", ERROR, "snapshot entry is not exactly one construct", label)
+                continue
+            probe = _Linter(self.doc, None)
+            for el in nodes[0].iter():
+                probe.check_element(el, context="payload", where=label)
+            for finding in probe.findings:
+                if finding.level == ERROR:
+                    self.add(
+                        "H008",
+                        ERROR,
+                        f"snapshot entry fails {finding.code}: {finding.message}",
+                        label,
+                    )
+
+    def check_origin(self) -> None:
+        """H009 (warning): a log that starts at seq 1 claims to explain the
+        document from nothing, so replaying it backwards must reach an empty
+        body (and no settings block). A theme block nothing recorded is
+        tolerated: importers set it at creation, which reconcile already
+        aligns. A flattened-then-edited file trips this."""
+        try:
+            origin = self.doc.state_at(0)
+        except AimError:
+            return  # chain problems are H006's
+        state = origin._state
+        if state.constructs() or state.script("doc") is not None:
+            self.add(
+                "H009",
+                WARNING,
+                "the history starts at seq 1 but replaying it backwards does not reach an "
+                "empty document: the origin was never recorded (a baseline, §6.9, records it)",
+            )
 
     # -- caches ------------------------------------------------------------------------------------
     def caches(self) -> None:
@@ -1067,12 +1163,23 @@ class _Linter:
             meta = None
         if meta is not None:
             summary = meta.get("summary")
-            if summary is None:
-                self.add("M004", ERROR, "aim-meta block present but has no summary (§8.1)")
-            elif not isinstance(summary, dict):
+            toc = meta.get("toc")
+            if summary is None and toc is None:
+                self.add("M004", ERROR, "aim-meta block has neither a summary nor a toc (§8.1)")
+            elif summary is not None and not isinstance(summary, dict):
                 self.add("M003", ERROR, "aim-meta summary is not an object")
-            elif summary.get("doc_hash") not in (None, self.doc.doc_hash):
+            elif summary is not None and summary.get("doc_hash") not in (
+                None,
+                self.doc.doc_hash,
+            ):
                 self.add("M001", WARNING, "aim-meta summary is stale (doc_hash mismatch)")
+            if toc is not None and not isinstance(toc, list):
+                self.add("M003", ERROR, "aim-meta toc is not a list")
+            marker = meta.get("toc_doc_hash")
+            if marker is not None and not isinstance(marker, str):
+                self.add("M003", ERROR, "aim-meta toc_doc_hash is not a string")
+            elif marker is not None and marker != self.doc.doc_hash:
+                self.add("M005", WARNING, "aim-meta toc is stale (toc_doc_hash mismatch)")
         try:
             for emb in self.doc.stale_embeddings():
                 self.add(
