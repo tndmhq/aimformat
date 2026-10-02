@@ -28,13 +28,23 @@ from .views import DATA_URI, STUB
 
 Kind = Literal["edit", "propose"]
 
-EDIT_ACTIONS = ("add", "modify", "delete", "move", "set_theme")
-PROPOSE_ACTIONS = ("add", "modify", "delete", "move", "theme")
+EDIT_ACTIONS = ("add", "modify", "replace_text", "delete", "move", "set_theme")
+PROPOSE_ACTIONS = ("add", "modify", "replace_text", "delete", "move", "theme")
 OP_FIELDS = frozenset(
-    {"action", "target", "html", "container", "after", "theme_slots", "explanation"}
+    {
+        "action",
+        "target",
+        "html",
+        "old_text",
+        "new_text",
+        "container",
+        "after",
+        "theme_slots",
+        "explanation",
+    }
 )
 MAX_OPS: dict[Kind, int] = {"edit": 100, "propose": 25}
-_TARGETED = ("modify", "delete", "move")
+_TARGETED = ("modify", "replace_text", "delete", "move")
 _PAYLOAD = ("add", "modify")
 _BACKREF = re.compile(r"^\$(\d+)$")
 
@@ -69,6 +79,8 @@ def ops_from_args(
     target: str | None,
     html: str | None,
     container: str | None,
+    old_text: str | None = None,
+    new_text: str | None = None,
     after: str | None,
     theme_slots: dict[str, str] | None,
     explanation: str | None,
@@ -84,6 +96,8 @@ def ops_from_args(
             for name, value in (
                 ("target", target),
                 ("html", html),
+                ("old_text", old_text),
+                ("new_text", new_text),
                 ("container", container),
                 ("after", after),
                 ("theme_slots", theme_slots),
@@ -106,6 +120,8 @@ def ops_from_args(
     for key, value in (
         ("target", target),
         ("html", html),
+        ("old_text", old_text),
+        ("new_text", new_text),
         ("container", container),
         ("after", after),
         ("theme_slots", theme_slots),
@@ -180,6 +196,13 @@ def _require(op: dict[str, Any], *, themed: str) -> None:
         raise _Fail(f"{action} requires target (a chunk or container id)")
     if action in _PAYLOAD and op.get("html") is None:
         raise _Fail(f"{action} requires html (the payload markup)")
+    if action == "replace_text":
+        if op.get("html") is not None:
+            raise _Fail("replace_text takes old_text and new_text, not html")
+        if op.get("old_text") is None or op.get("new_text") is None:
+            raise _Fail("replace_text requires old_text and new_text ('' deletes)")
+    elif op.get("old_text") is not None or op.get("new_text") is not None:
+        raise _Fail(f"old_text/new_text belong to replace_text, not {action}")
     if action == themed and not op.get("theme_slots"):
         raise _Fail(f"{action} requires theme_slots")
 
@@ -231,7 +254,7 @@ def apply_ops(
                         f"unknown edit action {action!r} (use {' | '.join(EDIT_ACTIONS)})"
                         if kind == "edit"
                         else f"unknown proposal action {action!r} "
-                        "(use modify | add | delete | move | theme)"
+                        f"(use {' | '.join(PROPOSE_ACTIONS)})"
                     )
                 _require(op, themed=themed)
                 container = (
@@ -371,6 +394,9 @@ def _edit(
     if action == "modify":
         assert target is not None and html is not None
         doc.modify_chunk(target, html, author=author, explanation=why)
+    elif action == "replace_text":
+        assert target is not None
+        doc.replace_text(target, op["old_text"], op["new_text"], author=author, explanation=why)
     elif action == "delete":
         assert target is not None
         doc.delete_chunk(target, author=author, explanation=why)
@@ -400,6 +426,11 @@ def _propose(
     if action == "modify":
         assert target is not None and html is not None
         p = doc.propose_modify(target, html, author=author, explanation=why)
+    elif action == "replace_text":
+        assert target is not None
+        p = doc.propose_replace_text(
+            target, op["old_text"], op["new_text"], author=author, explanation=why
+        )
     elif action == "add":
         assert html is not None
         p = doc.propose_add(

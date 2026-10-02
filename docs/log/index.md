@@ -9,6 +9,7 @@ required to add entries.)
 
 | Date | Type | Entry | Status | What |
 |---|---|---|---|---|
+| 2026-10-02 01:01 | decision | [agent-replace-text](2026-10-02_0101_decision_agent-replace-text.md) | todo (proposed — awaiting founder approval) | READS-D13: aim_edit/aim_propose (and CLI, SDK) gain action replace_text {target, old_text, new_text}: old_text once in the chunk's text, only the changed span must sit in one text run, crossing markup refused (pure deletions allowed); one-word edits 2.0-6.0x smaller per call (3.45x over 615 corpus chunks) |
 | 2026-10-01 22:37 | report | [import-fidelity-implementation](2026-10-01_2237_report_import-fidelity-implementation.md) | active | Implementation of IMPORT-D1..D16 (tracked changes as proposals; baseline history; TOC freshness): what was built, measured sizes, deviations from the design |
 | 2026-10-01 21:41 | plan | [agent-read-edit-surface](2026-10-01_2141_plan_agent-read-edit-surface.md) | active | aim_read modes, aim_search, text view, batch ops, lean MCP wire, elision round-trip |
 | 2026-10-01 21:35 | decision | [import-tracked-changes-as-proposals](2026-10-01_2135_decision_import-tracked-changes-as-proposals.md) | todo (proposed, awaiting founder approval) | IMPORT-D1 (proposed): DOCX tracked changes become pending proposals on the ORIGINAL body (accept-all = Word accept-all, reject-all = Word reject-all); tracked=propose|accept|reject, max_revisions; SDK 0.5.3, no format change |

@@ -370,3 +370,27 @@ class TestEditAndBatchCommands:
         assert main(["edit", "modify", str(path), "fig", "--html", new]) == 0
         live = aim.load(path).chunk("fig").html
         assert uri in live and "fixed" in live
+
+
+class TestReplaceTextCommand:
+    """aim edit|propose replace-text (READS-D13)."""
+
+    def test_edit_and_propose(self, contract, capsys):
+        f = str(contract)
+        argv = ["edit", "replace-text", f, "a2", "--old", "a vendor", "--new", "a supplier"]
+        assert main(argv) == 0
+        assert capsys.readouterr().out.splitlines() == ["a2", f"wrote {f}"]
+        doc = aim.load(contract)
+        assert doc.chunk("a2").text == '"Subprocessor" means a supplier.'
+        assert doc.history[-1].action == "modify"
+        argv = ["propose", "replace-text", f, "a1", "--old", "things", "--new", "stuff"]
+        assert main(argv + ["--explanation", "Plainer."]) == 0
+        pid = capsys.readouterr().out.splitlines()[0]
+        assert "stuff" in aim.load(contract).proposal(pid).payload_html
+
+    def test_refusal_exits_one_and_writes_nothing(self, contract, capsys):
+        before = contract.read_bytes()
+        argv = ["edit", "replace-text", str(contract), "a2", "--old", "zebra", "--new", "x"]
+        assert main(argv) == 1
+        assert "not found" in capsys.readouterr().err
+        assert contract.read_bytes() == before

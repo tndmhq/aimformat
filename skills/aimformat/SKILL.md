@@ -102,11 +102,12 @@ the same element, so overriding one never means removing it. Details:
 aim propose modify FILE TARGET --html '<p data-aim="TARGET">…</p>' \
     --author agent:MODEL --explanation "why"
 aim propose add    FILE --html '<p>…</p>' [--container ID] [--after ID|first]
+aim propose replace-text FILE TARGET --old 'thirty days' --new 'sixty days'
 aim propose delete FILE TARGET
 aim propose move   FILE TARGET [--container ID] [--after ID|first]
 aim propose theme  FILE --set slot=value
 aim propose batch  FILE OPS.json   # or - for stdin: up to 25 cards, all-or-nothing
-aim edit {modify,add,delete,move,theme} FILE …   # same arguments: direct edits
+aim edit {modify,replace-text,add,delete,move,theme} FILE …   # same arguments: direct edits
 aim edit batch     FILE OPS.json   # up to 100 edits, all-or-nothing, one history batch
 
 aim accept FILE PID... | --all     # resolve (human decision)
@@ -117,8 +118,12 @@ aim import IN -o FILE.aim          # md/txt/docx/pdf → .aim (Word redlines →
 aim export FILE.aim -o OUT.docx    # or .md/.html/.pdf; --pending tracked|accept-all|…
 ```
 
-A batch is a JSON array of ops `{"action", "target", "html", "container",
-"after", "theme_slots", "explanation"}`; a later op refers back to an earlier
+To change a few words, use `replace-text` (op `replace_text` with
+`old_text`/`new_text`): `old_text` must occur once in the chunk's plain text,
+and the id and inline markup are kept — no need to resend the chunk's HTML.
+
+A batch is a JSON array of ops `{"action", "target", "html", "old_text",
+"new_text", "container", "after", "theme_slots", "explanation"}`; a later op refers back to an earlier
 one with `$N` (e.g. `"after": "$0"` = right after what ops[0] added). One
 failing op aborts the whole batch with nothing written.
 

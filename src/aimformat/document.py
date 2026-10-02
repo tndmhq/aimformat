@@ -1961,6 +1961,26 @@ class AimDocument:
                 id=cid, container=parent_container, tags=(root.tag,), html=payload, text=root.text()
             )
 
+    def replace_text(
+        self,
+        cid: str,
+        old_text: str,
+        new_text: str,
+        *,
+        author: Actor,
+        explanation: str | None = None,
+        at: str | None = None,
+    ) -> Chunk:
+        """Direct edit: replace the one occurrence of *old_text* in chunk
+        *cid*'s text with *new_text*, keeping the id and the inline markup
+        around it — a recorded ``modify`` like :meth:`modify_chunk`.
+        Matching and refusal rules: :mod:`aimformat.textedit` (decision
+        READS-D13)."""
+        from .textedit import replace_in_markup
+
+        markup = replace_in_markup(self.chunk(cid).html, old_text, new_text)
+        return self.modify_chunk(cid, markup, author=author, explanation=explanation, at=at)
+
     def delete_chunk(
         self,
         cid: str,
@@ -2611,6 +2631,24 @@ class AimDocument:
                 at=at,
                 pid=pid,
             )
+
+    def propose_replace_text(
+        self,
+        target: str,
+        old_text: str,
+        new_text: str,
+        *,
+        author: Actor,
+        explanation: str | None = None,
+        at: str | None = None,
+    ) -> Proposal:
+        """:meth:`propose_modify` whose payload is chunk *target*'s live
+        markup with the one occurrence of *old_text* replaced by *new_text*,
+        inline markup kept (see :meth:`replace_text`)."""
+        from .textedit import replace_in_markup
+
+        markup = replace_in_markup(self.chunk(target).html, old_text, new_text)
+        return self.propose_modify(target, markup, author=author, explanation=explanation, at=at)
 
     def propose_add(
         self,

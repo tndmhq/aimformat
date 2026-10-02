@@ -164,8 +164,8 @@ aim.to_docx(doc, "out.docx", pending="reject-all")
 |---|---|
 | load / create | `load`, `loads`, `new_document`, `doc.save`, `doc.dumps` |
 | read | `doc.chunks`, `doc.chunk(id)`, `doc.containers`, `doc.proposals`, `doc.history`, `doc.meta`, `doc.theme`, `doc.doc_hash`, `doc.seq` |
-| direct edits | `add_chunk`, `modify_chunk`, `delete_chunk`, `move_chunk`, `set_theme`, `doc.batch()` |
-| pending lane | `propose_modify/add/delete/move/theme`, `amend_proposal` (replace a pending payload/explanation in place, unrecorded), `accept` (with optional `applied=` tweaks), `reject`; supersede and chain rebinding are automatic |
+| direct edits | `add_chunk`, `modify_chunk`, `replace_text` (words inside a chunk, markup kept), `delete_chunk`, `move_chunk`, `set_theme`, `doc.batch()` |
+| pending lane | `propose_modify/replace_text/add/delete/move/theme`, `amend_proposal` (replace a pending payload/explanation in place, unrecorded), `accept` (with optional `applied=` tweaks), `reject`; supersede and chain rebinding are automatic |
 | history | `verify`, `state_at(seq)`, `checkpoint`, `undo`, `redo`, `flatten` (collapse to one checkpoint), `prune`, `baseline` (make the current state the origin), `reconcile` (repair out-of-band edits / adopt hand-written files) |
 | agent reads | `aimformat.views`: `render_toc`, `render_skeleton`, `render_text` (a lossy reading view), `render_chunks` (exact HTML for ids or `a..b` ranges), `search` (lexical ranking), `outline`, `units`, `numbering_labels` |
 | compare versions | `diff_documents` (unit-level: added/deleted/modified/moved), `classify_divergence` (did the log grow, was it rewritten, does it explain the body) |

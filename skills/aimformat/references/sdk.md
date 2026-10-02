@@ -13,8 +13,8 @@ name collision with AimStack's `aim`). `python -m aimformat.cli` also works.
 | save / serialize | `doc.save(path)` · `doc.dumps()` (canonical) |
 | read | `doc.title` · `doc.chunks` · `doc.chunk(id)` · `doc.containers` · `doc.proposals` · `doc.proposal(pid)` · `doc.history` · `doc.meta` · `doc.theme` · `doc.doc_hash` · `doc.seq` |
 | actors | `aim.human("ada")` · `aim.agent("model-id")` · `aim.external("tool")` · `aim.parse_actor("agent:model-id")` |
-| direct edits | `doc.add_chunk(markup, author=…, container="body", after=…)` · `doc.modify_chunk(id, markup, author=…)` · `doc.delete_chunk(id, author=…)` · `doc.move_chunk(id, author=…, container=…, after=…)` · `doc.set_theme({…}, author=…)` · `with doc.batch(): …` |
-| propose | `doc.propose_modify(id, markup, author=…, explanation=…)` · `propose_add(markup, …)` · `propose_delete(id, …)` · `propose_move(id, …)` · `propose_theme({…}, …)` → `Proposal` (`.id`) |
+| direct edits | `doc.add_chunk(markup, author=…, container="body", after=…)` · `doc.modify_chunk(id, markup, author=…)` · `doc.replace_text(id, old_text, new_text, author=…)` (words inside a chunk, markup kept) · `doc.delete_chunk(id, author=…)` · `doc.move_chunk(id, author=…, container=…, after=…)` · `doc.set_theme({…}, author=…)` · `with doc.batch(): …` |
+| propose | `doc.propose_modify(id, markup, author=…, explanation=…)` · `propose_replace_text(id, old_text, new_text, …)` · `propose_add(markup, …)` · `propose_delete(id, …)` · `propose_move(id, …)` · `propose_theme({…}, …)` → `Proposal` (`.id`) |
 | resolve | `doc.accept(pid, decided_by=…, applied=None, explanation=…)` · `doc.reject(pid, decided_by=…)` → resolution `Event` |
 | agent note | `doc.note` · `doc.set_note()` · `doc.remove_note()` · `doc.has_canonical_note()` |
 | verify / repair | `aim.lint(doc)` / `aim.lint_path(p)` → `[Finding]` · `doc.verify()` → `[problems]` · `doc.reconcile()` → `ReconcileReport` |

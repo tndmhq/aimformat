@@ -65,7 +65,7 @@ The agent read and edit surface: what a read costs now follows what the
 agent needs, not the size of the file, and related edits land in one call.
 No format, conformance or history change of its own; its spec text is
 informative only (§8.3, Appendix B). Decisions: `docs/log/` entries
-READS-D1…D12 (2026-10-01, `agent-read-*`, `agent-*`, `cli-*`, `mcp-*`,
+READS-D1…D13 (2026-10-01/02, `agent-read-*`, `agent-*`, `cli-*`, `mcp-*`,
 `sdk-views-module`, `spec-partial-reads-informative`,
 `elision-stubs-round-trip`).
 
@@ -93,6 +93,16 @@ READS-D1…D12 (2026-10-01, `agent-read-*`, `agent-*`, `cli-*`, `mcp-*`,
   back-references to earlier ops, at most 100 edits / 25 proposals per call.
   Single-op arguments keep working; a single `aim_edit` now returns the `id`
   it created or targeted, and `aim_propose` reports `superseded` cards.
+- **`replace_text`** — change words inside a chunk without resending its
+  HTML: `action: "replace_text"` with `target`, `old_text` (exactly once in
+  the chunk's plain text) and `new_text`, in `aim_edit`, `aim_propose`,
+  their `ops`, `aim edit|propose replace-text … --old --new`, and the SDK
+  (`doc.replace_text`, `doc.propose_replace_text`). The id, attributes and
+  inline markup are kept; only the changed span must sit inside one text
+  run, otherwise the call is refused (a pure deletion may cross runs).
+  Recorded as an ordinary `modify`. On the benchmark corpus a one-word edit
+  call is 2.0 to 6.0 times smaller (median per document), 3.45 times over
+  613 chunks (READS-D13).
 - **CLI parity** — `aim show --mode toc|skeleton|text|chunks|full` (with
   `--ids`, `--words`, `--format json`; the default overview is
   byte-identical), `aim search`, a new `aim edit

@@ -184,6 +184,7 @@ Proposal and edit subcommands (`aim edit` takes the same arguments):
 
 ```sh
 aim propose modify FILE TARGET --html STR | --html-file PATH
+aim propose replace-text FILE TARGET --old STR --new STR   # words inside a chunk
 aim propose add    FILE --html STR | --html-file PATH [--container ID] [--after ID|first]
 aim propose delete FILE TARGET
 aim propose move   FILE TARGET [--container ID] [--after ID|first]
@@ -192,9 +193,10 @@ aim propose batch  FILE OPS.json      # or - to read the JSON from stdin
 ```
 
 A batch is a JSON array of ops, each
-`{"action", "target", "html", "container", "after", "theme_slots", "explanation"}`
-(only `action` is required; actions are `add modify delete move theme` for
-proposals and `add modify delete move set_theme` for edits). Ops apply in
+`{"action", "target", "html", "old_text", "new_text", "container", "after", "theme_slots", "explanation"}`
+(only `action` is required; actions are `add modify replace_text delete move
+theme` for proposals and `add modify replace_text delete move set_theme` for
+edits). Ops apply in
 order and all-or-nothing: if one fails, nothing is written and the error
 names it (`ops[3] (modify c42a): …`). A later op can refer back to an earlier
 one with `$N`:
@@ -271,11 +273,30 @@ Seven tools:
   `a..b` allowed). The same views as `aim show --mode`.
 - `aim_search` — rank chunks by lexical relevance to a query; returns ids
   you then fetch with `mode=chunks`.
-- `aim_edit` — direct edits: add/modify/delete/move chunks, set theme;
+- `aim_edit` — direct edits: add/modify/replace_text/delete/move chunks, set theme;
   recorded as history events. One op via the arguments, or up to 100 via
   `ops` (same fields, all-or-nothing, one history batch, `$N` back-references).
 - `aim_propose` — create proposal cards in the pending lane; one, or up to
   25 via `ops` (one proposal batch).
+
+### Changing a few words: `replace_text`
+
+To change text inside a chunk, do not resend its HTML. `action:
+"replace_text"` with `target`, `old_text` and `new_text` (in `aim_edit`,
+`aim_propose`, their `ops`, and `aim edit|propose replace-text … --old
+--new`) keeps the chunk id, its attributes and every inline element around
+the change:
+
+- `old_text` is matched against the chunk's plain text (no tags; the text
+  view's `**`, `~~` and numbering labels are not part of it). Whitespace
+  runs match any whitespace. It must occur exactly once in the chunk;
+  quote more surrounding words when it does not. `new_text: ""` deletes.
+- Only the part that actually changes has to sit inside one text run, so
+  quoted context may cross `<strong>` or `<a>`. A change that itself
+  crosses inline markup (for example rewording half a bold phrase and the
+  plain text after it) is refused: use `modify` with the chunk's HTML, where
+  you decide the formatting. A pure deletion may cross runs.
+- Text inserted exactly at a markup boundary joins the run before it.
 - `aim_resolve` — accept or reject pending proposals.
 - `aim_lint` — run the conformance verifier.
 - `aim_export` — convert to docx/md/html/pdf.

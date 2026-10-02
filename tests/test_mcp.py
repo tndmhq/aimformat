@@ -363,7 +363,7 @@ def test_read_does_not_repeat_every_id_for_a_headingless_body(tmp_path):
 # --------------------------------------------------------------------------- 0.6 surface
 # READS-D9/D10: one compact text block per result; a lean tool list.
 
-SURFACE_BYTE_BUDGET = 5950  # compact tools/list + instructions; measured 5412 (0.6.0) + 10%
+SURFACE_BYTE_BUDGET = 6470  # compact tools/list + instructions; measured 5881 (0.6.0) + 10%
 
 
 def test_tool_list_is_lean():
@@ -902,4 +902,81 @@ def test_misspelt_op_field_is_refused(tmp_path):
     before = path.read_bytes()
     r = _ops("aim_edit", path, [{"action": "add", "html": "<p>x</p>", "anchor": "p1"}])
     assert r.isError and "anchor" in r.content[0].text
+    assert path.read_bytes() == before
+
+
+# ------------------------------------------------------------------ replace_text (READS-D13)
+def _rich_para(tmp_path):
+    doc = aim.new_document(title="Terms")
+    doc.add_chunk(
+        '<p data-aim="t1">Either party may terminate on <strong>written</strong> notice.</p>',
+        author=BOT,
+    )
+    path = tmp_path / "terms.aim"
+    doc.save(path)
+    return path
+
+
+def test_edit_replace_text_keeps_markup_and_id(tmp_path):
+    path = _rich_para(tmp_path)
+    args = {"path": str(path), "action": "replace_text", "target": "t1"}
+    args |= {"old_text": "on written", "new_text": "on 30 days' written"}
+    out = _payload(_call("aim_edit", args))
+    assert out["ok"] and out["id"] == "t1"
+    html = aim.load(path).chunk("t1").html
+    assert html == (
+        '<p data-aim="t1">Either party may terminate on 30 days\' '
+        "<strong>written</strong> notice.</p>"
+    )
+
+
+def test_propose_replace_text_and_batch_ops(tmp_path):
+    path = _rich_para(tmp_path)
+    out = _payload(
+        _call(
+            "aim_propose",
+            {
+                "path": str(path),
+                "action": "replace_text",
+                "target": "t1",
+                "old_text": "written",
+                "new_text": "prior written",
+                "explanation": "Stricter notice.",
+            },
+        )
+    )
+    card = aim.load(path).proposal(out["proposal"])
+    # an insertion at a markup boundary joins the run before it
+    assert card.action == "modify" and "on prior <strong>written</strong>" in card.payload_html
+    edit = _ops(
+        "aim_edit",
+        path,
+        [
+            {"action": "replace_text", "target": "t1", "old_text": "Either", "new_text": "Each"},
+            {
+                "action": "replace_text",
+                "target": "t1",
+                "old_text": "Each party",
+                "new_text": "A party",
+            },
+        ],
+    )
+    assert _payload(edit)["ok"]
+    assert aim.load(path).chunk("t1").text.startswith("A party may terminate")
+
+
+def test_replace_text_refusals_write_nothing(tmp_path):
+    path = _rich_para(tmp_path)
+    before = path.read_bytes()
+    base = {"path": str(path), "action": "replace_text", "target": "t1"}
+    r = _call("aim_edit", {**base, "old_text": "on written", "new_text": "by email"})
+    assert r.isError and "markup" in r.content[0].text  # crosses <strong>
+    r = _call("aim_edit", {**base, "old_text": "nothing like this", "new_text": "x"})
+    assert r.isError and "not found" in r.content[0].text
+    r = _call("aim_edit", {**base, "old_text": "on", "new_text": "x", "html": "<p>x</p>"})
+    assert r.isError and "html" in r.content[0].text
+    r = _call("aim_edit", {**base, "old_text": "Either"})
+    assert r.isError and "new_text" in r.content[0].text
+    r = _call("aim_edit", {"path": str(path), "action": "modify", "target": "t1", "old_text": "x"})
+    assert r.isError
     assert path.read_bytes() == before

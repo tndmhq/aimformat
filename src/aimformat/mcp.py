@@ -41,16 +41,18 @@ Read: aim_read mode=toc or text to orient (text is a lossy view), aim_search \
 to locate, then mode=chunks for the exact HTML of anything you will change.
 Write: aim_propose for reviewable or unsolicited changes (a human accepts or \
 rejects them); aim_edit only for changes the user explicitly commanded. Batch \
-related changes in one call with ops. Keep data-aim ids stable; the tools mint \
-ids for new content. Keep [elided: …] stubs as they are; they restore on write.
+related changes in one call with ops. To change words inside a chunk, use \
+action replace_text (old_text, new_text) instead of resending its HTML. Keep \
+data-aim ids stable; the tools mint ids for new content. Keep [elided: …] \
+stubs as they are; they restore on write.
 Set author to "agent:<your-model-id>". Writes save and re-lint; lint_errors > 0 \
 means fix before moving on. If a write times out, check seq before retrying.
 Paths are absolute host paths (local trusted stdio; AIMFORMAT_MCP_ROOT confines \
 them). Guide: https://aimformat.com/llms.txt"""
 
 ReadMode = Literal["full", "toc", "skeleton", "text", "chunks"]
-EditAction = Literal["add", "modify", "delete", "move", "set_theme"]
-ProposeAction = Literal["add", "modify", "delete", "move", "theme"]
+EditAction = Literal["add", "modify", "replace_text", "delete", "move", "set_theme"]
+ProposeAction = Literal["add", "modify", "replace_text", "delete", "move", "theme"]
 
 
 # no docstrings on these: pydantic would ship them as schema descriptions.
@@ -61,6 +63,8 @@ class EditOp(TypedDict, total=False):
     action: Required[EditAction]
     target: str
     html: str
+    old_text: str
+    new_text: str
     container: str
     after: str
     theme_slots: dict[str, str]
@@ -72,6 +76,8 @@ class ProposeOp(TypedDict, total=False):
     action: Required[ProposeAction]
     target: str
     html: str
+    old_text: str
+    new_text: str
     container: str
     after: str
     theme_slots: dict[str, str]
@@ -246,6 +252,8 @@ def create_server() -> FastMCP:
         action: EditAction | None = None,
         target: str | None = None,
         html: str | None = None,
+        old_text: str | None = None,
+        new_text: str | None = None,
         container: str | None = None,
         after: str | None = None,
         theme_slots: dict[str, str] | None = None,
@@ -255,14 +263,17 @@ def create_server() -> FastMCP:
     ) -> str:
         """Apply direct edits recorded in history (only for changes the user commanded). One
         op via the arguments, or up to 100 via ops (same fields; all-or-nothing, one batch).
-        add and modify take html; add and move take container (default body) and after (an
-        id, 'first', '$N' = the id ops[N] created or targeted, omitted = end); set_theme
+        add and modify take html; replace_text takes old_text (once in the chunk's text) and
+        new_text, keeping the markup; add and move take container (default body) and after
+        (an id, 'first', '$N' = the id ops[N] created or targeted, omitted = end); set_theme
         takes theme_slots."""
         try:
             batch, single = ops_from_args(
                 action=action,
                 target=target,
                 html=html,
+                old_text=old_text,
+                new_text=new_text,
                 container=container,
                 after=after,
                 theme_slots=theme_slots,
@@ -280,6 +291,8 @@ def create_server() -> FastMCP:
         action: ProposeAction | None = None,
         target: str | None = None,
         html: str | None = None,
+        old_text: str | None = None,
+        new_text: str | None = None,
         container: str | None = None,
         after: str | None = None,
         theme_slots: dict[str, str] | None = None,
@@ -296,6 +309,8 @@ def create_server() -> FastMCP:
                 action=action,
                 target=target,
                 html=html,
+                old_text=old_text,
+                new_text=new_text,
                 container=container,
                 after=after,
                 theme_slots=theme_slots,

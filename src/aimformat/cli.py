@@ -173,7 +173,9 @@ def _cli_ops(args: argparse.Namespace, kind: Kind) -> tuple[list[dict], bool] | 
             print(f"aim: {source}: expected a JSON array of ops", file=sys.stderr)
             return 2
         return ops, False
-    op: dict = {"action": args.action}
+    op: dict = {"action": args.action.replace("-", "_")}
+    if args.action == "replace-text":
+        op["old_text"], op["new_text"] = args.old, args.new
     if args.action == "theme":
         slots = _theme_slots(args.set)
         if slots is None:
@@ -864,6 +866,17 @@ def build_parser() -> argparse.ArgumentParser:
         pa.add_argument("file")
         pa.add_argument("target", help="chunk id to modify")
         payload(pa)
+        common(pa)
+
+        pa = actions.add_parser(
+            "replace-text",
+            help="replace text inside a chunk, keeping its id and inline markup "
+            "(OLD must occur once in the chunk's text)",
+        )
+        pa.add_argument("file")
+        pa.add_argument("target", help="chunk id")
+        pa.add_argument("--old", required=True, help="the text to replace (exactly once)")
+        pa.add_argument("--new", required=True, help="the replacement text ('' deletes)")
         common(pa)
 
         pa = actions.add_parser("add", help="insert new content")
