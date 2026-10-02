@@ -16,7 +16,7 @@ current document before any blob:
   <!--\naim-note: … -->                        ← agent note (§2.5)
   <title>…</title>
   <script type="application/aim-meta+json">…   ← summary and/or toc cache
-  <script type="application/aim-doc+json">…    ← page setup (aim:doc)
+  <script type="application/aim-doc+json">…    ← page setup + review policy (aim:doc)
   <style data-aim-css="0.6">…                  ← machine-managed stylesheet
   <style data-aim-theme>:root{--aim-brand-1:…} ← theme slots
 </head>
@@ -126,6 +126,14 @@ history event so earlier checkpoints still verify. Never edit
   carry tweaks (`applied=` payload).
 - An empty `<aim-proposals>` section is removed on resolve; its absence is
   normal.
+- Review policy (§5.6, since v0.6): `"review": {"agents": "auto", "by":
+  {"type": "human", …}}` in the `aim:doc` settings block means proposals by
+  agents and tools are accepted in the batch that created them, recorded as
+  `accepted` resolutions with `auto: "policy"` and `decided_by` = `by`.
+  `auto: "request"` marks a single change a person asked to apply without
+  review. Change the policy only with `set_review_policy` / `aim review` /
+  `aim_review`, and only when the person asks; a proposal can never change
+  it.
 
 ## History
 
@@ -176,6 +184,9 @@ M caches · C canonical form. Most common while editing:
 | X002/X004 | event handler / executable script (security) |
 | P008 | proposal targets an unknown id |
 | H006 | history chain broken (hand-edited history) |
+| S002 | the document is newer than your tool: upgrade aimformat, never edit history |
+| S035 | review policy or `auto` marker under a declaration older than 0.6 |
+| D007 | malformed review policy |
 | M001 | stale summary cache (warning) |
 | C001 | not in canonical form |
 

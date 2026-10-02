@@ -14,13 +14,15 @@ import base64
 import contextlib
 import datetime as _dt
 import hashlib
+import json
 import re
 from collections import Counter
-from collections.abc import Callable, Iterable, Sequence
+from collections.abc import Callable, Iterable, Iterator, Sequence
 from copy import deepcopy
 from dataclasses import dataclass
+from dataclasses import replace as _dc_replace
 from pathlib import Path
-from typing import TYPE_CHECKING, BinaryIO, Literal, TypeVar
+from typing import TYPE_CHECKING, BinaryIO, Literal, TypeVar, overload
 
 from . import canonical, ids
 from .canonical import canonical_json, serialize, serialize_run
@@ -37,6 +39,7 @@ from .pagesetup import (
     parse_doc_settings,
 )
 from .registry import REGISTRY, version_key
+from .review import POLICY, REQUEST, AutoAcceptOutcome, ReviewPolicy
 
 if TYPE_CHECKING:  # pragma: no cover - import cycle guard, typing only
     from .reconcile import ReconcileReport
@@ -64,6 +67,8 @@ _BODY_SECTIONS = ("aim-proposals", "aim-assets", "script")
 _RESERVED_TARGETS = ("aim:theme", "aim:doc", "aim:version")
 VERSION_TARGET = "aim:version"
 _PAYLOAD_ID_RE = re.compile(r'data-aim(?:-container)?="([^"]+)"')
+# lint codes of a pending card that no longer applies to the state (§5.2)
+_STRANDING_CODES = frozenset({"P008", "P011", "P016"})
 _T = TypeVar("_T")
 
 
@@ -85,10 +90,31 @@ def _no_delete_move(target: str, action: str) -> None:
         )
 
 
-def _payload_floors(markup: str | None) -> set[str]:
+def _settings_floor(el: Element) -> str | None:
+    """The floor an ``aim:doc`` settings script's JSON requires (§3.7):
+    ``review`` (the review policy, §5.6) is a 0.6 construct. Malformed JSON
+    sets no floor — D001 reports it."""
+    raw = el.raw or ""
+    if '"review"' not in raw:
+        return None
+    try:
+        obj = json.loads(raw.strip())
+    except ValueError:
+        return None
+    return REGISTRY.review_since if isinstance(obj, dict) and "review" in obj else None
+
+
+FloorPart = Literal["all", "review", "other"]
+
+
+def _payload_floors(markup: str | None, part: FloorPart = "all") -> set[str]:
     """The spec-version floors *markup*'s constructs require (spec §3.3):
     literal paint needs the paint era, literal typography (inline
-    font-size/font-family and the since-gated classes) the typography era.
+    font-size/font-family and the since-gated classes) the typography era,
+    and an ``aim:doc`` settings block carrying ``review`` the review-policy
+    era (§5.6). *part* narrows the scan to the review policy alone
+    (``"review"``) or to everything else (``"other"``): two features can
+    share an era, and lint names them separately (S035 vs S034).
 
     Parsed rather than pattern-matched: a text node may legitimately contain
     the characters ``style="color:#ff69b4"`` (a code sample), and a regex
@@ -99,8 +125,12 @@ def _payload_floors(markup: str | None) -> set[str]:
         return floors
     gated_classes = REGISTRY.class_floors
     gated_attrs = REGISTRY.attr_floors
+    settings = part != "other" and REGISTRY.script_types["doc"] in markup and '"review"' in markup
+    if part == "review" and not settings:
+        return floors
     if not (
-        any(p in markup for p in REGISTRY.paint_props)
+        settings
+        or any(p in markup for p in REGISTRY.paint_props)
         or any(p in markup for p in REGISTRY.typography_props)
         or any(c in markup for c in gated_classes)
         or any(a in markup for a in gated_attrs)
@@ -110,6 +140,12 @@ def _payload_floors(markup: str | None) -> set[str]:
         if not isinstance(node, Element):
             continue
         for el in node.iter():
+            if settings and el.tag == "script" and el.get("type") == REGISTRY.script_types["doc"]:
+                floor = _settings_floor(el)
+                if floor is not None:
+                    floors.add(floor)
+            if part == "review":
+                continue
             for piece in (el.get("style") or "").split(";"):
                 prop, sep, _ = piece.partition(":")
                 if not sep:
@@ -149,6 +185,8 @@ def _floor_label(floor: str) -> str:
         return "literal typography"
     if floor == REGISTRY.paint_since:
         return "literal paint"
+    if floor == REGISTRY.review_since:
+        return "a review policy or auto-accepted resolution"
     return "a newer-spec construct"
 
 
@@ -243,6 +281,19 @@ class Proposal:
     depends_on: str | None
     batch: str | None
     anchor_shell: str | None = None  # thead/tbody/tfoot for table rows
+    #: The ``accepted`` resolution event when the ``propose_*`` call that
+    #: returned this view also auto-accepted it (spec §5.6); else None.
+    resolution: Event | None = None
+
+
+@dataclass(frozen=True)
+class _BatchCard:
+    """A card created inside the open batch, with its per-call accept choice."""
+
+    pid: str
+    accept: bool | None
+    accept_by: Actor | None
+    at: str | None
 
 
 @dataclass(frozen=True)
@@ -1060,6 +1111,12 @@ class AimDocument:
         self._state = DocState(html)
         self._batch: str | None = None
         self._history_index: _HistoryIndex | None = None
+        # auto-accept bookkeeping for the open (outermost) batch, spec §5.6
+        self._batch_auto: bool | None = None
+        self._batch_cards: list[_BatchCard] = []
+        #: What the last batch close (or :meth:`auto_accept` call) accepted
+        #: and deferred; None when the last batch had no card in scope.
+        self.last_auto_accept: AutoAcceptOutcome | None = None
 
     # -- constructors ---------------------------------------------------------
     @classmethod
@@ -1487,10 +1544,25 @@ class AimDocument:
         edit that first puts a gated construct into a legacy document.
         """
         floor = _floor_of(markup)
-        declared = self._state.spec_version()
-        if floor is None or REGISTRY.version_includes(declared, floor):
+        if floor is None:
             return None
-        label = _floor_label(floor)
+        return self._ensure_version_floor(floor, author=author, at=at)
+
+    def _ensure_version_floor(
+        self, floor: str, *, author: Actor, at: str | None = None, label: str | None = None
+    ) -> str | None:
+        """Record the upgrade to *floor* when the declared version is older
+        (spec §3.7) — the construct-agnostic core of
+        :meth:`_ensure_feature_version`, also used for the JSON constructs
+        (the review policy and the ``auto`` resolution marker, §5.6) that
+        live in the settings block and history rather than in markup.
+
+        The upgrade event is authored by *author*: the author of the event
+        that needs it, never a stand-in."""
+        declared = self._state.spec_version()
+        if REGISTRY.version_includes(declared, floor):
+            return None
+        label = label or _floor_label(floor)
         if declared is None:
             raise InvalidOperation(
                 f"cannot add {label}: <html> declares no data-aim-version (S001)"
@@ -1532,35 +1604,58 @@ class AimDocument:
         construct added. Only the once-per-document older-version path pays
         for the clone.
         """
-        declared = self._state.spec_version()
         floor = _floor_of(markup)
+        if floor is not None:
+            self._preflight_version_floor(floor, operation)
+
+    def _preflight_version_floor(
+        self, floor: str, operation: Callable[[AimDocument], object]
+    ) -> None:
+        """:meth:`_preflight_feature_upgrade` for an explicit floor."""
+        declared = self._state.spec_version()
         if (
             declared is not None
-            and floor is not None
             and not REGISTRY.version_includes(declared, floor)
             and REGISTRY.implements(declared)
         ):
             operation(self._clone())
 
-    def _retained_floors(self) -> set[str]:
+    def _retained_floors(self, part: FloorPart = "all") -> set[str]:
         """Every gated-construct floor retained by live, pending, or
         historical state. The body serialization covers live constructs and
-        pending templates; raw history scripts are inert DOM text, so every
-        markup field history retains is inspected separately."""
-        floors = _payload_floors(serialize(self._state.body))
+        pending templates; the head settings block (where the review policy
+        lives, §5.6) sits outside the body and is inspected on its own; raw
+        history scripts are inert DOM text, so every markup field history
+        retains is inspected separately, along with the since-gated event
+        kinds (``baseline``) and fields (the ``auto`` resolution marker).
+        *part* as for :func:`_payload_floors`: the review policy and the
+        ``auto`` marker are the ``"review"`` part, everything else ``"other"``."""
+        review, other = part != "other", part != "review"
+        floors = _payload_floors(serialize(self._state.body), part)
+        settings = self._state.script("doc")
+        if review and settings is not None:
+            floor = _settings_floor(settings)
+            if floor is not None:
+                floors.add(floor)
+        field_floors = REGISTRY.event_field_floors
         for event in self._history_events():
             for key in ("before", "after", "proposed", "applied"):
                 value = event.get(key)
                 if isinstance(value, str):
-                    floors |= _payload_floors(value)
-            since = REGISTRY.event_since.get(event.kind if "kind" in event.data else "")
-            if since is not None:
-                floors.add(since)  # the event kind itself is newer markup
+                    floors |= _payload_floors(value, part)
+            if other:
+                since = REGISTRY.event_since.get(event.kind if "kind" in event.data else "")
+                if since is not None:
+                    floors.add(since)  # the event kind itself is newer markup
             snap = event.get("snapshot")
             if isinstance(snap, dict) and isinstance(snap.get("body"), list):
                 for line in snap["body"]:
                     if isinstance(line, str):
-                        floors |= _payload_floors(line)
+                        floors |= _payload_floors(line, part)
+            if review:
+                for key, floor in field_floors.items():
+                    if key in event.data:
+                        floors.add(floor)
         return floors
 
     def _retains_literal_paint(self) -> bool:
@@ -1572,16 +1667,39 @@ class AimDocument:
         return self._get_history_index().next_batch
 
     @contextlib.contextmanager
-    def batch(self):
-        """Group the edits made inside the ``with`` into one batch id."""
+    def batch(self, *, auto_accept: bool | None = None):
+        """Group the edits made inside the ``with`` into one batch id.
+
+        The batch is also the unit of auto-accept (spec §5.6): when the
+        OUTERMOST batch exits normally, the proposals created inside it that
+        are in scope are accepted in the same batch, in creation order, all or
+        nothing (see :meth:`auto_accept`). Cards stay pending while the block
+        runs, so chained adds and :meth:`amend_proposal` keep working, and one
+        batch (one AI turn) becomes one undo. Nothing is accepted when the
+        block raises.
+
+        *auto_accept*: ``None`` honours the document's review policy, ``True``
+        requests acceptance of every card created inside (``auto:
+        "request"``), ``False`` keeps every card pending even under the
+        policy (a tool-level override for preview copies and fallback
+        replays; a host that persists an interrupted agent turn should use
+        it too). A nested ``batch()`` inherits the outermost setting.
+        """
         if self._batch is not None:
-            yield self._batch  # nested: reuse the open batch
+            yield self._batch  # nested: reuse the open batch (and its knob)
             return
         self._batch = self._next_batch()
+        self._batch_auto = auto_accept
+        self._batch_cards = []
+        self.last_auto_accept = None
         try:
             yield self._batch
+            if self._batch_cards:
+                self._auto_accept_at_close()
         finally:
             self._batch = None
+            self._batch_auto = None
+            self._batch_cards = []
 
     def _batch_id(self) -> str:
         return self._batch or self._next_batch()
@@ -2119,9 +2237,7 @@ class AimDocument:
         setup = page if isinstance(page, PageSetup) else page_setup_from_obj(page)
         settings = dict(self.doc_settings)
         settings["page"] = setup.to_obj()
-        return (
-            f'<script type="{REGISTRY.script_types["doc"]}">\n{canonical_json(settings)}\n</script>'
-        )
+        return self._settings_script(settings)
 
     def set_page_setup(
         self,
@@ -2166,13 +2282,18 @@ class AimDocument:
         explanation: str | None = None,
         depends_on: str | None = None,
         at: str | None = None,
+        accept: bool | None = None,
+        accept_by: Actor | None = None,
     ) -> Proposal:
-        """Propose a page setup (pending aim:doc modify, like a theme swap)."""
+        """Propose a page setup (pending aim:doc modify, like a theme swap).
+
+        ``accept``/``accept_by`` as for :meth:`propose_modify`."""
+        self._check_accept_args(accept, accept_by)
         markup = self._doc_settings_markup(page)
         pid = self._new_proposal_id()
         with self.batch():
             self._supersede_if_pending("aim:doc", pid, author, at)
-            return self._new_card(
+            proposal = self._new_card(
                 action="modify",
                 author=author,
                 target="aim:doc",
@@ -2183,6 +2304,8 @@ class AimDocument:
                 at=at,
                 pid=pid,
             )
+            self._register_card(proposal, accept, accept_by, at)
+        return self._returned(proposal)
 
     def _anchor_of(self, target: str) -> Anchor:
         """The position *target* currently occupies (works for chunks and
@@ -2255,74 +2378,185 @@ class AimDocument:
         )
         return h
 
-    def undo(self, *, author: Actor, at: str | None = None) -> Event:
-        """Append the inverse of the most recent not-yet-undone edit."""
-        target_ev = self._undo_candidate()
-        if target_ev is None:
-            raise InvalidOperation("nothing to undo")
-        inverse = self._inverse_data(target_ev)
-        inverse.update(
-            {
-                "seq": self.seq + 1,
-                "kind": "direct_edit",
-                "t": at or _now_iso(),
-                "origin": "undo",
-                "author": author.to_obj(),
-                "batch": self._batch_id(),
-            }
-        )
-        self._apply_data(inverse)
-        return self._append_event(inverse)
+    @overload
+    def undo(
+        self,
+        *,
+        author: Actor,
+        at: str | None = ...,
+        whole_batch: Literal[False] = ...,
+        batch: None = ...,
+    ) -> Event: ...
 
-    def redo(self, *, author: Actor, at: str | None = None) -> Event:
+    @overload
+    def undo(
+        self,
+        *,
+        author: Actor,
+        at: str | None = ...,
+        whole_batch: Literal[True],
+        batch: str | None = ...,
+    ) -> list[Event]: ...
+
+    def undo(
+        self,
+        *,
+        author: Actor,
+        at: str | None = None,
+        whole_batch: bool = False,
+        batch: str | None = None,
+    ) -> Event | list[Event]:
+        """Append the inverse of the most recent not-yet-undone edit.
+
+        ``aim:version`` upgrades are never inverted (spec §6.6): the gated
+        construct stays in history, so the inverse could never apply; the
+        walk steps over them to the edits below.
+
+        ``whole_batch=True`` undoes the top edit and every further undo
+        candidate sharing its ``batch`` (contiguous from the top of the
+        stack), newest first, one ``origin: "undo"`` event per target, all in
+        one new batch, atomically (dry run on a clone first). It returns the
+        list of events. ``batch=`` names the batch the caller means; when the
+        top of the stack belongs to another batch (newer edits came after)
+        it raises :class:`InvalidOperation`. See :meth:`revert_batch` for
+        batches that are no longer on top."""
+        if not whole_batch:
+            if batch is not None:
+                raise InvalidOperation("batch= needs whole_batch=True")
+            target_ev = self._undo_candidate()
+            if target_ev is None:
+                raise InvalidOperation("nothing to undo")
+            if self.proposals:
+                trial = self._clone()
+                trial._append_undo(target_ev, origin="undo", author=author, at=at)
+                self._guard_stranding(trial)
+            event = self._append_undo(target_ev, origin="undo", author=author, at=at)
+            self._after_settings_inverse([target_ev])
+            return event
+        targets = self._top_batch(self._undo_candidates(), batch, verb="undo")
+        trial = self._clone()
+        for ev in targets:
+            trial._append_undo(ev, origin="undo", author=author, at=at)
+        self._guard_stranding(trial)
+        events: list[Event] = []
+        with self.batch():
+            for ev in targets:
+                events.append(self._append_undo(ev, origin="undo", author=author, at=at))
+            self._after_settings_inverse(targets)
+        return events
+
+    @overload
+    def redo(
+        self,
+        *,
+        author: Actor,
+        at: str | None = ...,
+        whole_batch: Literal[False] = ...,
+        batch: None = ...,
+    ) -> Event: ...
+
+    @overload
+    def redo(
+        self,
+        *,
+        author: Actor,
+        at: str | None = ...,
+        whole_batch: Literal[True],
+        batch: str | None = ...,
+    ) -> list[Event]: ...
+
+    def redo(
+        self,
+        *,
+        author: Actor,
+        at: str | None = None,
+        whole_batch: bool = False,
+        batch: str | None = None,
+    ) -> Event | list[Event]:
         """Re-apply the most recent not-yet-redone undo.
 
         Walking back through the trailing undo/redo zone, each redo cancels
         the nearest earlier undo (stack semantics); the first uncancelled
         undo is the redo target. Any original edit ends the zone.
-        """
-        redos_pending = 0
-        candidate: Event | None = None
-        for ev in reversed(self._history_events()):
-            if not ev.state_changing:
-                continue
-            if ev.origin == "redo":
-                redos_pending += 1
-            elif ev.origin == "undo":
-                if redos_pending > 0:
-                    redos_pending -= 1
-                else:
-                    candidate = ev
-                    break
-            else:
-                break
-        if candidate is None:
-            raise InvalidOperation("nothing to redo")
-        redo_data = self._inverse_data(candidate)
-        redo_data.update(
+
+        ``whole_batch=True`` redoes every uncancelled undo of the newest undo
+        batch (``batch=`` must match it when given) in one new batch and
+        returns the list of events."""
+        if not whole_batch:
+            if batch is not None:
+                raise InvalidOperation("batch= needs whole_batch=True")
+            candidate = next(self._redo_candidates(), None)
+            if candidate is None:
+                raise InvalidOperation("nothing to redo")
+            if self.proposals:
+                trial = self._clone()
+                trial._append_undo(candidate, origin="redo", author=author, at=at)
+                self._guard_stranding(trial)
+            event = self._append_undo(candidate, origin="redo", author=author, at=at)
+            self._after_settings_inverse([candidate])
+            return event
+        targets = self._top_batch(self._redo_candidates(), batch, verb="redo")
+        trial = self._clone()
+        for ev in targets:
+            trial._append_undo(ev, origin="redo", author=author, at=at)
+        self._guard_stranding(trial)
+        events: list[Event] = []
+        with self.batch():
+            for ev in targets:
+                events.append(self._append_undo(ev, origin="redo", author=author, at=at))
+            self._after_settings_inverse(targets)
+        return events
+
+    def _append_undo(self, ev: Event, *, origin: str, author: Actor, at: str | None) -> Event:
+        data = self._inverse_data(ev)
+        data.update(
             {
                 "seq": self.seq + 1,
                 "kind": "direct_edit",
                 "t": at or _now_iso(),
-                "origin": "redo",
+                "origin": origin,
                 "author": author.to_obj(),
                 "batch": self._batch_id(),
             }
         )
-        self._apply_data(redo_data)
-        return self._append_event(redo_data)
+        self._apply_data(data)
+        return self._append_event(data)
 
-    def _undo_candidate(self) -> Event | None:
-        """The most recent edit that is not currently undone.
+    def _after_settings_inverse(self, events: Iterable[Event]) -> None:
+        """A live ``review`` change re-syncs pending ``aim:doc`` cards (§5.6)."""
+        if any(ev.target == "aim:doc" for ev in events):
+            self._sync_pending_doc_cards_review()
 
-        Walk the trailing undo/redo zone backwards. Each undo cancels one
-        earlier event (an original edit, or a redo's re-application); each
-        redo cancels one earlier undo — so `pending` may dip negative while
-        a redo waits for the undo it cancelled.
-        """
+    @staticmethod
+    def _top_batch(candidates: Iterable[Event], batch: str | None, *, verb: str) -> list[Event]:
+        """The leading run of *candidates* that shares the first one's batch."""
+        out: list[Event] = []
+        for ev in candidates:
+            if not out:
+                if batch is not None and ev.batch != batch:
+                    raise InvalidOperation(
+                        f"newer edits came after batch {batch!r}; {verb} those first "
+                        "(or use revert_batch)"
+                    )
+            elif ev.batch != out[0].batch:
+                break
+            out.append(ev)
+        if not out:
+            raise InvalidOperation(f"nothing to {verb}")
+        return out
+
+    def _undo_candidates(self) -> Iterator[Event]:
+        """Undo targets from the top of the stack down: the edit ``undo()``
+        would invert now, then the one after that, and so on.
+
+        Walk the history backwards. Each undo cancels one earlier event (an
+        original edit, or a redo's re-application); each redo cancels one
+        earlier undo, so ``pending`` may dip negative while a redo waits for
+        the undo it cancelled. ``aim:version`` upgrades are never candidates
+        (spec §6.6)."""
         pending_undos = 0
         for ev in reversed(self._history_events()):
-            if not ev.state_changing:
+            if not ev.state_changing or ev.target == VERSION_TARGET:
                 continue
             if ev.origin == "undo":
                 pending_undos += 1
@@ -2331,8 +2565,327 @@ class AimDocument:
             elif pending_undos > 0:
                 pending_undos -= 1  # this edit is already undone; skip it
             else:
-                return ev
-        return None
+                yield ev
+
+    def _undo_candidate(self) -> Event | None:
+        """The most recent edit that is not currently undone."""
+        return next(self._undo_candidates(), None)
+
+    def _redo_candidates(self) -> Iterator[Event]:
+        """Uncancelled undos in the trailing undo/redo zone, newest first."""
+        redos_pending = 0
+        for ev in reversed(self._history_events()):
+            if not ev.state_changing or ev.target == VERSION_TARGET:
+                continue
+            if ev.origin == "redo":
+                redos_pending += 1
+            elif ev.origin == "undo":
+                if redos_pending > 0:
+                    redos_pending -= 1
+                else:
+                    yield ev
+            else:
+                return
+
+    @staticmethod
+    def _undone_seqs(events: Sequence[Event]) -> set[int]:
+        """Seqs of the original edits in *events* (a history suffix) that the
+        undo stack currently holds undone."""
+        undone: set[int] = set()
+        pending_undos = 0
+        for ev in reversed(events):
+            if not ev.state_changing or ev.target == VERSION_TARGET:
+                continue
+            if ev.origin == "undo":
+                pending_undos += 1
+            elif ev.origin == "redo":
+                pending_undos -= 1
+            elif pending_undos > 0:
+                pending_undos -= 1
+                undone.add(ev.seq)
+        return undone
+
+    def _stranded_cards(self) -> set[str]:
+        """Pending cards that no longer apply to the current state: a target
+        that is gone (P008), or an anchor that is gone or no longer a valid
+        position in the card's container (P011/P016)."""
+        if not self.proposals:
+            return set()
+        from .lint import _Linter  # lint imports this module
+
+        linter = _Linter(self, None)
+        linter.proposals()
+        return {f.where for f in linter.findings if f.code in _STRANDING_CODES}
+
+    def _guard_stranding(self, trial: AimDocument) -> None:
+        """Refuse when *trial* (this document with an edit applied on a
+        clone) leaves pending cards dangling that apply here. Removing a
+        block takes every chunk and container nested in it; a modify can
+        drop nested items; a move can take an anchor out of the container a
+        card adds into. Whatever the edit, a card left pointing at nothing
+        could never be accepted (P008/P011/P016)."""
+        stranded = trial._stranded_cards() - self._stranded_cards()
+        if stranded:
+            raise InvalidOperation(
+                f"pending suggestions ({', '.join(sorted(stranded))}) depend on what "
+                "this would remove or move; resolve them first"
+            )
+
+    def _batch_events(self, batch: str) -> list[Event]:
+        """The state-changing events of *batch*, oldest first, without its
+        ``aim:version`` upgrade (never inverted, §6.6)."""
+        return [
+            ev
+            for ev in self._history_events()
+            if ev.batch == batch and ev.state_changing and ev.target != VERSION_TARGET
+        ]
+
+    def _batch_still_applies(self, events: Sequence[Event]) -> bool:
+        """Cheap check that every target still holds what *events* left there
+        (the newest event per target decides)."""
+        latest: dict[str, Event] = {}
+        for ev in events:
+            if ev.target:
+                latest[ev.target] = ev
+        for ev in latest.values():
+            if self._revert_conflict(ev) is not None:
+                return False
+        return True
+
+    def _revert_conflict(self, ev: Event) -> str | None:
+        """Why the inverse of *ev* cannot apply to the current state, or None."""
+        target = ev.target or ""
+        state = self._state
+        if ev.action == "modify":
+            current = state.serial(target)
+            want = ev.applied_payload
+            if target == "aim:doc" and current is not None and want is not None:
+                try:
+                    current = self._settings_script(
+                        {k: v for k, v in self._payload_review(current)[0].items() if k != "review"}
+                    )
+                    want = self._settings_script(
+                        {k: v for k, v in self._payload_review(want)[0].items() if k != "review"}
+                    )
+                except AimError:
+                    return f"the settings of {target!r} are malformed"
+            if current != want:
+                return f"{target!r} has changed since"
+            return None
+        if ev.action == "add":
+            if state.serial(target) != ev.applied_payload:
+                return f"{target!r} has changed since"
+            return None
+        if ev.action == "delete":
+            if state.exists(target):
+                return f"{target!r} is back in the document"
+            anchor = ev.get("anchor")
+            try:
+                state.resolve_insert_point(Anchor.from_obj(anchor))
+            except (AimError, KeyError, TypeError):
+                return f"the place {target!r} was deleted from is gone"
+            return None
+        if ev.action == "move":
+            to = ev.get("to")
+            frm = ev.get("from")
+            if not state.exists(target) or frm is None or to is None:
+                return f"{target!r} has changed since"
+            try:
+                here = self._anchor_of(target)
+            except AimError:
+                return f"{target!r} has changed since"
+            if here != Anchor.from_obj(to):
+                return f"{target!r} has moved since"
+            return None
+        return f"cannot revert a {ev.action!r} event"
+
+    def _revert_data(self, ev: Event) -> dict:
+        """The inverse of *ev* as an ordinary edit against the CURRENT state:
+        positions and ``before`` values are read live, and an ``aim:doc``
+        inverse keeps the live review policy (§5.6)."""
+        target = ev.target or ""
+        if ev.action == "modify":
+            data: dict = {"target": target, "action": "modify"}
+            current = self._state.serial(target)
+            if current is not None:
+                data["before"] = current
+            prior = ev.get("before")
+            live_review = self._live_review() if target == "aim:doc" else None
+            if prior is None and live_review is not None:
+                # the batch introduced the settings block; reverting it must
+                # not take the live review policy down with it
+                data["after"] = self._settings_script({"review": deepcopy(live_review)})
+            elif prior is None:
+                data["x_remove"] = True
+            elif target == "aim:doc":
+                data["after"] = self._keep_live_review(prior)
+            else:
+                data["after"] = prior
+            return data
+        if ev.action == "add":
+            return {
+                "target": target,
+                "action": "delete",
+                "before": self._state.serial(target),
+                "anchor": self._anchor_of(target).to_obj(),
+            }
+        if ev.action == "delete":
+            return {
+                "target": target,
+                "action": "add",
+                "after": ev.get("before"),
+                "anchor": deepcopy(ev.get("anchor")),
+            }
+        return {
+            "target": target,
+            "action": "move",
+            "from": self._anchor_of(target).to_obj(),
+            "to": deepcopy(ev.get("from")),
+        }
+
+    def revert_batch(self, batch: str, *, author: Actor, at: str | None = None) -> list[Event]:
+        """Revert every change of *batch* in one step (spec §6.6, informative).
+
+        When the batch is the top of the undo stack this is a true undo
+        (``undo(whole_batch=True, batch=batch)``): ``origin: "undo"`` events,
+        and :meth:`redo` brings it back, unless that undo would change the
+        live review policy. Otherwise the batch's inverse is
+        written as ordinary direct edits (``origin: "user"``) in one new
+        batch, newest change first, whose ``source`` names the reverted batch
+        (``[{"reverts": batch}]``); undoing that new batch brings the changes
+        back (see :meth:`unrevert_batch`). All or nothing after a dry run.
+
+        Refuses only on a genuine conflict: a target the batch touched that
+        has changed since (modify: different content; add: the chunk is not
+        what was added; delete: the id is back or its place is gone; move:
+        the chunk left the destination), or pending suggestions the revert
+        would leave pointing at nothing (a removed block or nested item, an
+        anchor moved out of their container). An ``aim:doc`` change is reverted
+        to its page setup and keeps the live review policy; ``aim:version``
+        upgrades stay."""
+        events = self._batch_events(batch)
+        if not events:
+            raise InvalidOperation(f"batch {batch!r} has no changes to revert")
+        undone = self._undone_seqs(self._history_events())
+        if all(ev.seq in undone for ev in events):
+            raise InvalidOperation(f"batch {batch!r} is already undone")
+        top = list(self._top_batch_or_empty())
+        if (
+            top
+            and top[0].batch == batch
+            and {e.seq for e in top} == {e.seq for e in events}
+            and not self._inverse_switches_review(top)
+        ):
+            return self.undo(author=author, at=at, whole_batch=True, batch=batch)
+        # not on top, or a true undo would flip the live review policy: write
+        # the inverse as ordinary edits, which keep it (§5.6)
+        live = [ev for ev in events if ev.seq not in undone]
+        reverted_auto = any(ev.kind == "resolution" and ev.get("auto") for ev in live)
+        explanation = (
+            f"Reverted auto-accepted changes from batch {batch}"
+            if reverted_auto
+            else f"Reverted the changes from batch {batch}"
+        )
+        trial = self._clone()
+        wrote = trial._write_revert(
+            live, author=author, at=at, explanation=explanation, batch=batch
+        )
+        self._guard_stranding(trial)
+        if not wrote:
+            # every change was a review-policy switch, which a revert keeps
+            # (§5.6): refuse rather than report a no-op as a revert, so an
+            # agent asked to "undo" it never tells the person it is off
+            raise InvalidOperation(
+                f"batch {batch!r} has no changes to revert: it only switched the "
+                "review policy, which a revert keeps; switch it with set_review_policy "
+                "(aim review / aim_review)"
+            )
+        with self.batch():
+            return self._write_revert(
+                live, author=author, at=at, explanation=explanation, batch=batch
+            )
+
+    def _inverse_switches_review(self, events: Iterable[Event]) -> bool:
+        """Whether inverting *events* (newest first, as undo/redo writes
+        them) would change the live review policy (§5.6)."""
+        doc_events = [ev for ev in events if ev.target == "aim:doc"]
+        if not doc_events:
+            return False
+        trial = self._clone()
+        for ev in doc_events:  # only the settings block carries ``review``
+            trial._apply_data(trial._inverse_data(ev))
+        return trial._live_review() != self._live_review()
+
+    def _top_batch_or_empty(self) -> list[Event]:
+        try:
+            return self._top_batch(self._undo_candidates(), None, verb="undo")
+        except InvalidOperation:
+            return []
+
+    def _write_revert(
+        self,
+        events: Sequence[Event],
+        *,
+        author: Actor,
+        at: str | None,
+        explanation: str,
+        batch: str,
+    ) -> list[Event]:
+        out: list[Event] = []
+        for ev in reversed(events):
+            problem = self._revert_conflict(ev)
+            if problem is not None:
+                raise InvalidOperation(
+                    f"cannot revert batch {batch!r}: {problem}; use undo to step back instead"
+                )
+            data = self._revert_data(ev)
+            data.update(
+                {
+                    "seq": self.seq + 1,
+                    "kind": "direct_edit",
+                    "t": at or _now_iso(),
+                    "origin": "user",
+                    "author": author.to_obj(),
+                    "batch": self._batch_id(),
+                    "explanation": explanation,
+                    "source": [{"reverts": batch}],
+                }
+            )
+            if data.get("action") == "modify" and data.get("before") == data.get("after"):
+                continue  # nothing left to change on this target
+            self._apply_data(data)
+            out.append(self._append_event(data))
+        self._after_settings_inverse(events)
+        return out
+
+    def unrevert_batch(self, batch: str, *, author: Actor, at: str | None = None) -> list[Event]:
+        """Bring back the changes a :meth:`revert_batch` call took away.
+
+        *batch* is the batch the revert wrote (its events' ``batch``). A true
+        undo is redone (``redo(whole_batch=True)``); a revert written as
+        ordinary edits is undone (``undo(whole_batch=True, batch=batch)``).
+        Either way only that batch, and only while it is on top. Like
+        :meth:`revert_batch` it keeps the live review policy: a redo that
+        would switch it refuses (a plain :meth:`redo` still can)."""
+        events = [ev for ev in self._history_events() if ev.batch == batch and ev.state_changing]
+        if not events:
+            raise InvalidOperation(f"batch {batch!r} has no changes")
+        if all(ev.origin == "undo" for ev in events):
+            targets = self._top_batch(self._redo_candidates(), batch, verb="redo")
+            if self._inverse_switches_review(targets):
+                # same rule as revert_batch: bringing changes back keeps the
+                # live review policy (§5.6); a plain redo() still can
+                raise InvalidOperation(
+                    f"batch {batch!r} would switch the review policy back; switch it "
+                    "with set_review_policy (aim review / aim_review)"
+                )
+            return self.redo(author=author, at=at, whole_batch=True, batch=batch)
+        if all(
+            any(isinstance(s, dict) and s.get("reverts") for s in (ev.get("source") or []))
+            for ev in events
+        ):
+            return self.undo(author=author, at=at, whole_batch=True, batch=batch)
+        raise InvalidOperation(f"batch {batch!r} is not a revert")
 
     def _inverse_data(self, ev: Event) -> dict:
         # *ev* comes from the cached history index; nested objects lifted
@@ -2496,6 +3049,8 @@ class AimDocument:
         at: str | None,
         pid: str | None = None,
     ) -> Proposal:
+        if target == "aim:doc":
+            self._guard_card_review(payload)
         # a gated payload sitting in the pending lane is already markup an
         # older validator rejects, so the proposal — not only its acceptance
         # — is what needs the version
@@ -2574,7 +3129,24 @@ class AimDocument:
         explanation: str | None = None,
         depends_on: str | None = None,
         at: str | None = None,
+        accept: bool | None = None,
+        accept_by: Actor | None = None,
     ) -> Proposal:
+        """Propose replacing *target*'s markup (a pending ``modify`` card).
+
+        Auto-accept (spec §5.6): with ``accept=None`` (the default) the card
+        honours the document's review policy: under ``review.agents="auto"``
+        an agent- or external-authored card is accepted when the outermost
+        batch closes (immediately, when this call owns the batch; the
+        returned view then carries ``resolution``). ``accept=True`` asks for
+        acceptance of this card regardless of policy or author (``auto:
+        "request"``, ``decided_by`` = *accept_by*, a human, else the policy's
+        ``by``, else ``Actor("human")``). ``accept=False`` keeps it pending
+        even under the policy (a tool-level override). A refused acceptance
+        leaves the card pending and reports through ``last_auto_accept``;
+        it never raises. The same keywords exist on every ``propose_*``."""
+        self._check_accept_args(accept, accept_by)
+
         def validate(projected: AimDocument) -> str:
             try:
                 projected.modify_chunk(target, markup, author=author, at=at)
@@ -2594,7 +3166,7 @@ class AimDocument:
         pid = self._new_proposal_id()
         with self.batch():  # the supersede + the new card are one intention
             self._supersede_if_pending(target, pid, author, at)
-            return self._new_card(
+            proposal = self._new_card(
                 action="modify",
                 author=author,
                 target=target,
@@ -2605,6 +3177,8 @@ class AimDocument:
                 at=at,
                 pid=pid,
             )
+            self._register_card(proposal, accept, accept_by, at)
+        return self._returned(proposal)
 
     def propose_theme(
         self,
@@ -2614,14 +3188,17 @@ class AimDocument:
         explanation: str | None = None,
         depends_on: str | None = None,
         at: str | None = None,
+        accept: bool | None = None,
+        accept_by: Actor | None = None,
     ) -> Proposal:
+        self._check_accept_args(accept, accept_by)
         self._check_theme_slots(slots)
         body = "; ".join(f"{k}:{v}" for k, v in sorted(slots.items()))
         markup = f"<style data-aim-theme>:root{{{body}}}</style>"
         pid = self._new_proposal_id()
         with self.batch():
             self._supersede_if_pending("aim:theme", pid, author, at)
-            return self._new_card(
+            proposal = self._new_card(
                 action="modify",
                 author=author,
                 target="aim:theme",
@@ -2632,6 +3209,8 @@ class AimDocument:
                 at=at,
                 pid=pid,
             )
+            self._register_card(proposal, accept, accept_by, at)
+        return self._returned(proposal)
 
     def propose_replace_text(
         self,
@@ -2642,6 +3221,8 @@ class AimDocument:
         author: Actor,
         explanation: str | None = None,
         at: str | None = None,
+        accept: bool | None = None,
+        accept_by: Actor | None = None,
     ) -> Proposal:
         """:meth:`propose_modify` whose payload is chunk *target*'s markup
         with the one occurrence of *old_text* replaced by *new_text*, inline
@@ -2655,6 +3236,7 @@ class AimDocument:
         its ``depends_on``, and its explanation when none is given). Any
         other pending modify/delete on *target* refuses: superseding someone
         else's change, or a pending delete, takes an explicit
+        :meth:`propose_modify`. ``accept``/``accept_by`` as for
         :meth:`propose_modify`."""
         from .textedit import TextReplaceError, replace_in_markup
 
@@ -2663,7 +3245,13 @@ class AimDocument:
         if not pending:
             markup = replace_in_markup(self.chunk(target).html, old_text, new_text)
             return self.propose_modify(
-                target, markup, author=author, explanation=explanation, at=at
+                target,
+                markup,
+                author=author,
+                explanation=explanation,
+                at=at,
+                accept=accept,
+                accept_by=accept_by,
             )
         own = pending[0]
         if len(pending) > 1 or own.action != "modify" or own.author != author:
@@ -2686,6 +3274,8 @@ class AimDocument:
             explanation=explanation if explanation is not None else own.explanation,
             depends_on=own.depends_on,
             at=at,
+            accept=accept,
+            accept_by=accept_by,
         )
 
     def propose_add(
@@ -2698,7 +3288,10 @@ class AimDocument:
         explanation: str | None = None,
         depends_on: str | None = None,
         at: str | None = None,
+        accept: bool | None = None,
+        accept_by: Actor | None = None,
     ) -> Proposal:
+        self._check_accept_args(accept, accept_by)
         concrete_after = after
         if isinstance(after, str) and ids.is_valid_proposal_id(after):
             pending = {p.id: p for p in self.proposals if p.action == "add"}
@@ -2730,16 +3323,19 @@ class AimDocument:
             f"new add into {container!r}", validate
         )
         anchor = self._card_position_anchor("add", projected_anchor)
-        return self._new_card(
-            action="add",
-            author=author,
-            target=None,
-            payload=payload,
-            anchor=anchor,
-            explanation=explanation,
-            depends_on=depends_on,
-            at=at,
-        )
+        with self.batch():
+            proposal = self._new_card(
+                action="add",
+                author=author,
+                target=None,
+                payload=payload,
+                anchor=anchor,
+                explanation=explanation,
+                depends_on=depends_on,
+                at=at,
+            )
+            self._register_card(proposal, accept, accept_by, at)
+        return self._returned(proposal)
 
     def _card_position_anchor(self, action: str, projected: Anchor) -> Anchor:
         """Record a position that remains valid without pending projection.
@@ -2791,7 +3387,10 @@ class AimDocument:
         explanation: str | None = None,
         depends_on: str | None = None,
         at: str | None = None,
+        accept: bool | None = None,
+        accept_by: Actor | None = None,
     ) -> Proposal:
+        self._check_accept_args(accept, accept_by)
         # reject reserved targets at propose time: the card would lint clean
         # but explode at accept (reserved heads have no body anchor)
         _no_delete_move(target, "delete proposal")
@@ -2804,7 +3403,7 @@ class AimDocument:
         pid = self._new_proposal_id()
         with self.batch():
             self._supersede_if_pending(target, pid, author, at)
-            return self._new_card(
+            proposal = self._new_card(
                 action="delete",
                 author=author,
                 target=target,
@@ -2815,6 +3414,8 @@ class AimDocument:
                 at=at,
                 pid=pid,
             )
+            self._register_card(proposal, accept, accept_by, at)
+        return self._returned(proposal)
 
     def propose_move(
         self,
@@ -2826,7 +3427,10 @@ class AimDocument:
         shell: str | None = None,
         explanation: str | None = None,
         at: str | None = None,
+        accept: bool | None = None,
+        accept_by: Actor | None = None,
     ) -> Proposal:
+        self._check_accept_args(accept, accept_by)
         _no_delete_move(target, "move proposal")
 
         def validate(projected: AimDocument) -> Anchor:
@@ -2862,7 +3466,7 @@ class AimDocument:
         pid = self._new_proposal_id()
         with self.batch():  # the supersede + the new card are one intention
             self._supersede_if_pending(target, pid, author, at, actions=("move",))
-            return self._new_card(
+            proposal = self._new_card(
                 action="move",
                 author=author,
                 target=target,
@@ -2873,6 +3477,8 @@ class AimDocument:
                 at=at,
                 pid=pid,
             )
+            self._register_card(proposal, accept, accept_by, at)
+        return self._returned(proposal)
 
     def _propose_lane(self, specs: Sequence[_CardSpec]) -> list[Proposal]:
         """Write many pending cards in one pass — the batch-propose primitive.
@@ -3047,6 +3653,7 @@ class AimDocument:
                     payload = self._validated_theme_markup(markup)
                 elif target == "aim:doc":
                     payload = self._validated_doc_markup(markup)
+                    self._guard_card_review(payload)
                 else:
                     # fail fast on a dangling proposal (target deleted out
                     # from under it) — mirroring propose_modify; otherwise
@@ -3094,6 +3701,512 @@ class AimDocument:
         if self._history_index is not None:
             self._get_history_index().replace_proposal(prop, amended)
         return amended
+
+    # -- review policy and auto-accept (spec §5.6) -------------------------------------------
+    @property
+    def review_policy(self) -> ReviewPolicy | None:
+        """The document's review policy from the ``aim:doc`` block (None when
+        off). Raises :class:`InvalidOperation` (D007) on a malformed policy and
+        :class:`ParseError` (D001) on a malformed settings block."""
+        return ReviewPolicy.from_settings(
+            self.doc_settings, lenient=not REGISTRY.implements(self.spec_version)
+        )
+
+    def _auto_policy(self) -> ReviewPolicy | None:
+        """The policy as auto-accept honours it: None when it is off,
+        malformed, or a value this build does not implement (fail closed)."""
+        try:
+            policy = self.review_policy
+        except AimError:
+            return None
+        return policy if policy is not None and policy.auto else None
+
+    @staticmethod
+    def _settings_script(settings: dict) -> str:
+        """The canonical whole-block ``aim:doc`` serialization of *settings*."""
+        return (
+            f'<script type="{REGISTRY.script_types["doc"]}">\n{canonical_json(settings)}\n</script>'
+        )
+
+    def _live_review(self) -> object:
+        """The live block's raw ``review`` value (None when absent)."""
+        try:
+            return self.doc_settings.get("review")
+        except AimError:
+            return None
+
+    def _payload_review(self, markup: str) -> tuple[dict, object]:
+        """(settings, review) of an ``aim:doc`` whole-block payload."""
+        settings = parse_doc_settings(doc_settings_element(markup).raw)
+        return settings, settings.get("review")
+
+    def _keep_live_review(self, markup: str) -> str:
+        """*markup* (an ``aim:doc`` payload) with the live ``review`` value.
+
+        A proposal never changes the review policy (spec §5.6): resolving an
+        ``aim:doc`` card applies its page setup and keeps the live policy, so a
+        card that would flip it records the honest ``applied`` payload.
+        Returned unchanged when the payload already agrees."""
+        settings, review = self._payload_review(markup)
+        live = self._live_review()
+        if review == live:
+            return markup
+        if live is None:
+            settings.pop("review", None)
+        else:
+            settings["review"] = deepcopy(live)
+        return self._settings_script(settings)
+
+    def _guard_card_review(self, markup: str | None) -> None:
+        """Refuse an ``aim:doc`` card whose ``review`` differs from the live
+        block: the review policy is changed only by a direct edit (§5.6)."""
+        if markup is None:
+            return
+        _, review = self._payload_review(markup)
+        if review != self._live_review():
+            raise InvalidOperation(
+                "a proposal cannot change the review policy; switch it with "
+                "set_review_policy (a recorded direct edit)"
+            )
+
+    def _sync_pending_doc_cards_review(self) -> None:
+        """Re-sync every pending ``aim:doc`` card's ``review`` with the live
+        block, as an unrecorded payload amendment (§5.4).
+
+        Called after every live ``review`` change. A 0.6 tool keeps the live
+        policy on accept anyway; this protects older tools, which would
+        otherwise flip the policy back by accepting a stale page-setup card
+        (whole-block payload)."""
+        live = self._live_review()
+        for prop in self.proposals:
+            if prop.target != "aim:doc" or prop.action != "modify" or not prop.payload_html:
+                continue
+            try:
+                settings, review = self._payload_review(prop.payload_html)
+            except AimError:
+                continue  # malformed card: D001's to report, not ours to repair
+            if review == live:
+                continue
+            if live is None:
+                settings.pop("review", None)
+            else:
+                settings["review"] = deepcopy(live)
+            _set_card_payload(self._card_el(prop.id), self._settings_script(settings))
+            self._get_history_index().replace_proposal(prop, self.proposal(prop.id))
+
+    def set_review_policy(
+        self,
+        agents: str | None,
+        *,
+        by: Actor | None = None,
+        author: Actor,
+        explanation: str | None = None,
+        at: str | None = None,
+    ) -> ReviewPolicy | None:
+        """Switch the document's review policy (spec §5.6).
+
+        ``agents="auto"`` turns auto-accept on: from then on proposals
+        authored by an agent or an external tool are accepted in the batch
+        that created them, with ``decided_by`` = *by* (a human actor, the
+        person whose standing consent this records; ``Actor("human")`` when
+        the name is unknown). ``agents=None`` switches it off (removes
+        ``review``). Proposals authored by humans always wait for review.
+
+        Recorded as an ordinary ``aim:doc`` modify direct edit authored by
+        *author* (whoever wrote the change: the person in an editor, or the
+        agent or tool acting on their instruction), so it is in history and
+        undoable. Turning it on in a pre-0.6 document records the version
+        upgrade in the same batch. Cards already pending are not swept;
+        pending ``aim:doc`` cards are re-synced to carry the new value.
+        Raises ``InvalidOperation("review policy unchanged")`` when the block
+        would not change.
+        """
+        if agents is not None:
+            if agents not in REGISTRY.review_agents:
+                if agents in REGISTRY.review_reserved_agents:
+                    raise InvalidOperation(
+                        f"review policy {agents!r} is reserved by the spec and not defined yet"
+                    )
+                raise InvalidOperation(
+                    f"unknown review policy {agents!r} (use 'auto', or None to switch it off)"
+                )
+            if by is None or by.type != "human":
+                raise InvalidOperation(
+                    "a review policy records a person's consent: by must be a human actor"
+                )
+        settings = dict(self.doc_settings)
+        if agents is None:
+            if "review" not in settings:
+                raise InvalidOperation("review policy unchanged")
+            del settings["review"]
+        else:
+            assert by is not None
+            current = settings.get("review")
+            review = dict(current) if isinstance(current, dict) else {}
+            review["agents"] = agents
+            review["by"] = by.to_obj()
+            settings["review"] = review
+        markup = self._settings_script(settings)
+        before = self._state.serial("aim:doc")
+        if markup == before:
+            raise InvalidOperation("review policy unchanged")
+        with self.batch():
+            if agents is not None:
+                self._ensure_version_floor(
+                    REGISTRY.review_since, author=author, at=at, label="a review policy"
+                )
+            self._state.set_doc_settings_markup(markup)
+            data = {
+                "seq": self.seq + 1,
+                "kind": "direct_edit",
+                "t": at or _now_iso(),
+                "target": "aim:doc",
+                "action": "modify",
+                "after": markup,
+                "author": author.to_obj(),
+                "batch": self._batch_id(),
+            }
+            if before is not None:
+                data["before"] = before
+            if explanation:
+                data["explanation"] = explanation
+            self._append_event(data)
+            self._sync_pending_doc_cards_review()
+        return self.review_policy
+
+    @staticmethod
+    def _check_accept_args(accept: bool | None, accept_by: Actor | None) -> None:
+        if accept_by is None:
+            return
+        if accept is not True:
+            raise InvalidOperation("accept_by names who asked for acceptance: it needs accept=True")
+        if accept_by.type != "human":
+            raise InvalidOperation("accept_by must be a human actor (the person who asked)")
+
+    def _register_card(
+        self, proposal: Proposal, accept: bool | None, accept_by: Actor | None, at: str | None
+    ) -> None:
+        """Note a card created inside the open batch for the close-time pass."""
+        if self._batch is not None:
+            self._batch_cards.append(_BatchCard(proposal.id, accept, accept_by, at))
+
+    def _returned(self, proposal: Proposal) -> Proposal:
+        """The view a ``propose_*`` call returns: with its resolution event
+        when the call owned the batch and the card was auto-accepted."""
+        if self._batch is not None:
+            return proposal  # the caller's batch is still open
+        outcome = self.last_auto_accept
+        if outcome is not None and proposal.id in outcome.accepted:
+            return _dc_replace(proposal, resolution=self.resolution_of(proposal.id))
+        return proposal
+
+    def _auto_accept_at_close(self) -> None:
+        """The outermost batch's close: accept the in-scope cards it created.
+
+        In scope: still pending, and either asked for (``accept=True`` or the
+        batch knob ``True``: ``auto: "request"``) or covered by the policy
+        (``accept`` left ``None``, batch knob not ``False``, policy ``auto``,
+        author an agent or external tool: ``auto: "policy"``)."""
+        pending = {p.id: p for p in self.proposals}
+        knob = self._batch_auto
+        policy: ReviewPolicy | None = None
+        policy_read = False
+        plan: list[tuple[str, str, Actor, str | None]] = []
+        for card in self._batch_cards:
+            prop = pending.get(card.pid)
+            if prop is None or card.accept is False:
+                continue  # resolved/superseded inside the batch, or opted out
+            if not policy_read:
+                policy, policy_read = self._auto_policy(), True
+            if card.accept is True or (card.accept is None and knob is True):
+                decider = card.accept_by or (policy.by if policy else Actor("human"))
+                plan.append((card.pid, REQUEST, decider, card.at))
+            elif (
+                card.accept is None
+                and knob is None
+                and policy is not None
+                and prop.author.type in ("agent", "external")
+            ):
+                plan.append((card.pid, POLICY, policy.by, card.at))
+        if plan:
+            assert self._batch is not None
+            self.last_auto_accept = self._run_auto_accept(plan, self._batch, own_batch=True)
+
+    def auto_accept(
+        self,
+        pids: Iterable[str],
+        *,
+        via: str = POLICY,
+        decided_by: Actor | None = None,
+        at: str | None = None,
+    ) -> AutoAcceptOutcome:
+        """Auto-accept cards that already exist (spec §5.6).
+
+        For hosts that enforce the policy on behalf of writers that do not
+        honour it themselves (an editor watching a file that an older tool
+        wrote). Same rule as the batch close: all or nothing after a dry run
+        on a clone, in creation order; on failure nothing changes and the
+        outcome lists the cards as deferred with the reason. Never raises
+        for a refused acceptance; raises for a bad call (unknown id, no
+        policy for ``via="policy"``, a non-human *decided_by*).
+
+        ``via="policy"`` needs the document's policy to be ``auto`` and
+        accepts only agent- and external-authored cards (human-authored ones
+        are deferred); ``decided_by`` defaults to ``review.by``.
+        ``via="request"`` accepts any card; ``decided_by`` defaults to
+        ``review.by`` when a policy exists, else ``Actor("human")``.
+        The events join the open batch if any, else the cards' own
+        ``data-batch`` when they all share one, else a new batch.
+        """
+        if via not in (POLICY, REQUEST):
+            raise InvalidOperation(f"auto_accept via must be 'policy' or 'request', got {via!r}")
+        if decided_by is not None and decided_by.type != "human":
+            raise InvalidOperation("an auto acceptance is decided by a human actor")
+        wanted = list(dict.fromkeys(pids))
+        pending = {p.id: p for p in self.proposals}
+        for pid in wanted:
+            if pid not in pending:
+                raise TargetNotFound(f"no pending proposal {pid!r}")
+        policy = self._auto_policy()
+        if via == POLICY and policy is None:
+            raise InvalidOperation("the document has no auto review policy to apply")
+        decider = decided_by or (policy.by if policy is not None else Actor("human"))
+        plan: list[tuple[str, str, Actor, str | None]] = []
+        refused: list[str] = []
+        for pid in wanted:
+            if via == POLICY and pending[pid].author.type not in ("agent", "external"):
+                refused.append(pid)
+            else:
+                plan.append((pid, via, decider, at))
+        batches = {pending[pid].batch for pid in wanted}
+        batch = self._batch or (
+            next(iter(batches)) if len(batches) == 1 and None not in batches else None
+        )
+        batch = batch or self._next_batch()
+        with self._using_batch(batch):
+            outcome = self._run_auto_accept(
+                plan,
+                batch,
+                own_batch=False,
+                refused=refused,
+                refused_reason="proposed by a person" if refused else None,
+            )
+        self.last_auto_accept = outcome
+        return outcome
+
+    @contextlib.contextmanager
+    def _using_batch(self, batch: str):
+        """Write under an explicit batch id without a batch close pass."""
+        if self._batch is not None:
+            yield self._batch
+            return
+        self._batch = batch
+        try:
+            yield batch
+        finally:
+            self._batch = None
+
+    def _replaced_human_ids(self, pids: set[str], *, own_batch: bool) -> set[str]:
+        """Cards among *pids* that replaced a human-authored card (§5.6),
+        directly or through a chain of supersessions: an agent revising its
+        own card that had replaced a person's suggestion still replaces that
+        suggestion (§5.4 supersession records ``superseded_by``).
+
+        One newest-first pass: a card's supersessions are written by its
+        creating call, so they precede every event that supersedes the card
+        itself. With *own_batch* the scan stops at the open batch's start
+        unless a chain leads further back (a card created in an earlier
+        batch was replaced in this one)."""
+        found: set[str] = set()
+        # card id -> the candidates whose supersession chain reaches it
+        roots: dict[str, set[str]] = {pid: {pid} for pid in pids}
+        reached_back = False
+        current = self._batch
+        for ev in reversed(self._history_events()):
+            if own_batch and ev.batch != current and not reached_back:
+                break
+            if ev.kind != "resolution" or ev.decision != "superseded":
+                continue
+            heirs = roots.get(ev.get("superseded_by") or "")
+            if not heirs:
+                continue
+            if (ev.get("proposed_by") or {}).get("type") == "human":
+                found |= heirs
+                continue
+            older = ev.get("proposal")
+            if older:
+                roots.setdefault(older, set()).update(heirs)
+                reached_back = True
+        return found
+
+    def _run_auto_accept(
+        self,
+        plan: list[tuple[str, str, Actor, str | None]],
+        batch: str,
+        *,
+        own_batch: bool,
+        refused: Sequence[str] = (),
+        refused_reason: str | None = None,
+    ) -> AutoAcceptOutcome:
+        """Accept *plan* (pid, via, decided_by, at) all or nothing.
+
+        Out of scope first: a card that replaced a person's pending
+        suggestion (§5.6), and an ``aim:doc`` card whose ``review`` differs
+        from the live block. The rest is accepted in creation order after a
+        clean dry run on a clone; any failure, or a dry run that leaves
+        another pending card dangling, leaves every card pending."""
+        deferred: list[str] = list(refused)
+        reason = refused_reason
+        replaced = self._replaced_human_ids({pid for pid, *_ in plan}, own_batch=own_batch)
+        scoped: list[tuple[str, str, Actor, str | None]] = []
+        for item in plan:
+            pid = item[0]
+            if pid in replaced:
+                deferred.append(pid)
+                reason = reason or f"{pid} replaces a suggestion from a person"
+                continue
+            prop = self.proposal(pid)
+            if prop.target == "aim:doc" and prop.payload_html:
+                try:
+                    self._guard_card_review(prop.payload_html)
+                except AimError:
+                    deferred.append(pid)
+                    reason = reason or f"{pid} would change the review policy"
+                    continue
+            scoped.append(item)
+        if scoped:
+            try:
+                order = {p.id: i for i, p in enumerate(resolution_order(self.proposals))}
+            except _ChainedAddCycle as exc:
+                order = {}
+                failure: str | None = str(exc)
+            else:
+                failure = None
+                scoped.sort(key=lambda item: order[item[0]])
+            if failure is None:
+                trial = self._clone()
+                try:
+                    with trial._using_batch(batch):
+                        events = trial._apply_auto(scoped)
+                    odd = next((e for e in events if "applied" in e.data), None)
+                    stranded = trial._stranded_cards() - self._stranded_cards()
+                    if odd is not None:
+                        failure = (
+                            f"{odd.get('proposal')} is not in canonical form, so accepting "
+                            "it would record a tweak no one reviewed"
+                        )
+                    elif stranded:
+                        # a delete supersedes only same-target modify/delete
+                        # cards: a move card on the target, or a card on an
+                        # item nested in it, would be left pointing at
+                        # nothing, with nobody having looked (§5.6)
+                        failure = (
+                            f"pending suggestions ({', '.join(sorted(stranded))}) "
+                            "depend on what it would remove or move"
+                        )
+                except Exception as exc:  # foreign cards may fail outside AimError
+                    failure = str(exc) or type(exc).__name__
+            if failure is not None:
+                deferred.extend(pid for pid, *_ in scoped)
+                reason = f"auto-accept refused, cards left pending: {failure}"
+                scoped = []
+            else:
+                self._apply_auto(scoped)
+        vias = {via for _, via, _, _ in plan}
+        decider = next(
+            (d for _, via, d, _ in plan if via == POLICY),
+            plan[0][2] if plan else None,
+        )
+        return AutoAcceptOutcome(
+            batch=batch,
+            via=vias.pop() if len(vias) == 1 else ("mixed" if vias else POLICY),
+            decided_by=decider,
+            accepted=tuple(pid for pid, *_ in scoped),
+            deferred=tuple(dict.fromkeys(deferred)),
+            reason=reason if deferred else None,
+        )
+
+    def _apply_auto(self, scoped: Sequence[tuple[str, str, Actor, str | None]]) -> list[Event]:
+        events: list[Event] = []
+        for pid, via, decided_by, at in scoped:
+            prop = self.proposal(pid)
+            payload = prop.payload_html if prop.action in ("modify", "add") else None
+            events.append(
+                self._resolve_retaining_paint(
+                    prop,
+                    decision="accepted",
+                    decided_by=decided_by,
+                    applied=payload,
+                    at=at,
+                    auto=via,
+                )
+            )
+        return events
+
+    def resolution_of(self, pid: str) -> Event | None:
+        """The resolution event of proposal *pid* (newest first), or None."""
+        for ev in reversed(self._history_events()):
+            if ev.kind == "resolution" and ev.get("proposal") == pid:
+                return Event(deepcopy(ev.data))
+        return None
+
+    def auto_accepted_batches(self, *, scan_limit: int = 400, max_batches: int = 5) -> list[dict]:
+        """Recent batches holding auto-accepted resolutions, newest first.
+
+        A display helper over the trailing *scan_limit* events (never the
+        whole log), at most *max_batches* entries. Each entry::
+
+            {"batch", "t" (the batch's newest event time), "via",
+             "decided_by", "proposed_by" (first card's, actor objects),
+             "targets": [{"target", "action"}], "changes",
+             "undone", "undoable", "revertable"}
+
+        ``undone``: the batch was undone or reverted (and that was not itself
+        undone). ``undoable``: it is the top of the undo stack, so
+        ``undo(whole_batch=True, batch=...)`` works. ``revertable``: every
+        target still holds what the batch left there, so
+        :meth:`revert_batch` works. ``t`` is for display age only; history is
+        ordered by ``seq`` (§6.3)."""
+        events = self._history_events()[-scan_limit:] if scan_limit > 0 else []
+        undone = self._undone_seqs(events)
+        reverted: set[str] = set()
+        for ev in events:
+            if ev.seq in undone:
+                continue
+            for src in ev.get("source") or []:
+                if isinstance(src, dict) and src.get("reverts"):
+                    reverted.add(src["reverts"])
+        top = next(self._undo_candidates(), None)
+        out: list[dict] = []
+        seen: set[str] = set()
+        for ev in reversed(events):
+            batch = ev.batch
+            if not batch or batch in seen or ev.kind != "resolution" or not ev.get("auto"):
+                continue
+            seen.add(batch)
+            members = [e for e in events if e.batch == batch]
+            changes = [e for e in members if e.state_changing and e.target != VERSION_TARGET]
+            autos = [e for e in members if e.kind == "resolution" and e.get("auto")]
+            vias = {e.get("auto") for e in autos}
+            is_undone = batch in reverted or all(e.seq in undone for e in changes)
+            times = [e.data["t"] for e in members if isinstance(e.data.get("t"), str)]
+            out.append(
+                {
+                    "batch": batch,
+                    "t": max(times, default=None),
+                    "via": vias.pop() if len(vias) == 1 else "mixed",
+                    "decided_by": deepcopy(autos[0].get("decided_by")),
+                    "proposed_by": deepcopy(autos[0].get("proposed_by")),
+                    "targets": [{"target": e.target, "action": e.action} for e in changes],
+                    "changes": len(changes),
+                    "undone": is_undone,
+                    "undoable": not is_undone and top is not None and top.batch == batch,
+                    "revertable": not is_undone and self._batch_still_applies(changes),
+                }
+            )
+            if len(out) >= max_batches:
+                break
+        return out
 
     # -- resolution ---------------------------------------------------------------------------
     def accept_all(
@@ -3187,6 +4300,11 @@ class AimDocument:
                     )
             else:
                 applied_payload = prop.payload_html
+            if prop.target == "aim:doc" and applied_payload is not None:
+                # the review policy changes only by a direct edit (§5.6): a
+                # stale or hostile settings card applies its page setup and
+                # keeps the live policy, recorded as the honest `applied`
+                applied_payload = self._keep_live_review(applied_payload)
         return self._resolve_retaining_paint(
             prop,
             decision="accepted",
@@ -3206,26 +4324,35 @@ class AimDocument:
         superseded_by: str | None = None,
         explanation: str | None = None,
         at: str | None = None,
+        auto: str | None = None,
     ) -> Event:
-        """Resolve a card after versioning every gated payload the event retains."""
-        gated_payload = _binding_payload(prop.payload_html, applied)
-        self._preflight_feature_upgrade(
-            gated_payload,
-            lambda trial: trial._resolve(
-                trial.proposal(prop.id),
-                decision=decision,
-                decided_by=decided_by,
-                applied=applied,
-                superseded_by=superseded_by,
-                explanation=explanation,
-                at=at,
-            ),
-        )
-        upgrade_batch = self._ensure_feature_version(
-            gated_payload,
-            author=decided_by,
-            at=at,
-        )
+        """Resolve a card after versioning every gated construct the event
+        retains: payload markup, and the ``auto`` marker itself (§5.6)."""
+        floors = [
+            f
+            for f in (
+                _floor_of(_binding_payload(prop.payload_html, applied)),
+                REGISTRY.auto_since if auto else None,
+            )
+            if f is not None
+        ]
+        floor = max(floors, key=lambda f: version_key(f) or ()) if floors else None
+        upgrade_batch: str | None = None
+        if floor is not None:
+            self._preflight_version_floor(
+                floor,
+                lambda trial: trial._resolve(
+                    trial.proposal(prop.id),
+                    decision=decision,
+                    decided_by=decided_by,
+                    applied=applied,
+                    superseded_by=superseded_by,
+                    explanation=explanation,
+                    at=at,
+                    auto=auto,
+                ),
+            )
+            upgrade_batch = self._ensure_version_floor(floor, author=decided_by, at=at)
         return self._resolve(
             prop,
             decision=decision,
@@ -3235,6 +4362,7 @@ class AimDocument:
             explanation=explanation,
             at=at,
             batch=upgrade_batch,
+            auto=auto,
         )
 
     def _payload_like(
@@ -3296,9 +4424,11 @@ class AimDocument:
         settings = parse_doc_settings(el.raw)
         if "page" in settings:
             page_setup_from_obj(settings["page"])
-        return (
-            f'<script type="{REGISTRY.script_types["doc"]}">\n{canonical_json(settings)}\n</script>'
-        )
+        if "review" in settings:
+            ReviewPolicy.from_obj(
+                settings["review"], lenient=not REGISTRY.implements(self.spec_version)
+            )
+        return self._settings_script(settings)
 
     def reject(
         self,
@@ -3327,7 +4457,12 @@ class AimDocument:
         explanation: str | None = None,
         at: str | None = None,
         batch: str | None = None,
+        auto: str | None = None,
     ) -> Event:
+        if auto is not None and (decision != "accepted" or decided_by.type != "human"):
+            raise InvalidOperation(
+                "an auto acceptance must be an accepted resolution decided by a human"
+            )
         card = self._card_el(prop.id)
         data: dict = {
             "seq": self.seq + 1,
@@ -3343,6 +4478,8 @@ class AimDocument:
         }
         if superseded_by:
             data["superseded_by"] = superseded_by
+        if auto is not None:
+            data["auto"] = auto
         if explanation:
             data["explanation"] = explanation
         elif prop.explanation:

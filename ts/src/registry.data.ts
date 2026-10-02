@@ -51,5 +51,13 @@ export const MARGIN_PATTERN = new RegExp("^\\p{Nd}+(\\.\\p{Nd}+)?mm$", "u");
 
 export const MARGIN_MAX_MM = 100;
 
+// The review policy (spec §5.6): registered and reserved `review.agents`
+// values, and the spec version that introduced the field.
+export const REVIEW_AGENTS: readonly string[] = ["auto"];
+
+export const REVIEW_RESERVED_AGENTS: readonly string[] = ["required"];
+
+export const REVIEW_SINCE = "0.6";
+
 // The canonical aim-note body (spec §2.5); `{version}` is interpolated.
 export const NOTE_TEMPLATE = "aim-note: This file is an AIM document (open format, v{version}) — valid HTML plus\nchunk identity, a pending-suggestions lane, and an edit history.\nAgent docs: https://aimformat.com/llms.txt\nThe reliable way to edit this file is the `aimformat` tooling, which manages\nids, suggestions, and history for you: `pip install aimformat` for the `aim`\nCLI (`aim --help`); `pip install 'aimformat[mcp]'` adds its MCP server\n(`aim mcp`). An Agent Skill exists: `npx skills add tndmhq/aimformat`.\nHand-editing as plain text is the fallback; if you do: keep every data-aim id\nstable (never renumber or reuse; give new content a fresh id), treat the\naim-proposals appendix and the history script as append-only tool lanes, and\nvalidate with `aim lint`. Humans review in AIM editors:\nhttps://aimformat.com/editors";

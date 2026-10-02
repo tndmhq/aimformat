@@ -151,6 +151,12 @@ class Event:
         return self.data.get("batch")
 
     @property
+    def auto(self) -> str | None:
+        """How an accepted resolution was decided without a review at the
+        time: ``"policy"`` / ``"request"`` (spec §6.2), else None."""
+        return self.data.get("auto")
+
+    @property
     def author(self) -> Actor | None:
         obj = self.data.get("author")
         return Actor.from_obj(obj) if obj else None
@@ -188,8 +194,24 @@ class Event:
             raise HistoryError(f"history line is not a JSON object: {line[:60]!r}")
         return cls(obj)
 
-    def validate(self) -> list[str]:
-        """Field-level problems with this event (empty when well-formed)."""
+    def unknown_fields(self) -> list[str]:
+        """Non-``x_*`` fields the registry does not define for this kind
+        (empty for an unknown kind — that is :meth:`validate`'s finding)."""
+        schema = REGISTRY.event_fields.get(self.data.get("kind") or "")
+        if schema is None:
+            return []
+        known = set(schema["required"]) | set(schema["optional"])
+        return [f for f in self.data if f not in known and not f.startswith("x_")]
+
+    def validate(self, *, newer_spec: bool = False) -> list[str]:
+        """Field-level problems with this event (empty when well-formed).
+
+        *newer_spec* is set when the document declares a spec version this
+        tool does not implement (the S002 condition). Unknown fields are then
+        not problems: a later spec may define them, and the preamble's
+        "parsers MUST ignore unknown JSON fields" governs. A missing required
+        field still is. Callers report :meth:`unknown_fields` as a warning.
+        """
         problems: list[str] = []
         kind = self.data.get("kind")
         schema = REGISTRY.event_fields.get(kind or "")
@@ -198,9 +220,8 @@ class Event:
         for field in schema["required"]:
             if field not in self.data:
                 problems.append(f"{kind} event missing required field {field!r}")
-        known = set(schema["required"]) | set(schema["optional"])
-        for field in self.data:
-            if field not in known and not field.startswith("x_"):
+        if not newer_spec:
+            for field in self.unknown_fields():
                 problems.append(
                     f"{kind} event has unknown field {field!r} (vendor extensions must use x_*)"
                 )
@@ -227,10 +248,32 @@ class Event:
                     or obj.get("type") not in REGISTRY.raw["events"]["actor_types"]
                 ):
                     problems.append(f"{role} is not a valid actor object")
+        problems += self._auto_problems(kind)
         problems += self._replay_field_problems(kind, act)
         if kind == "baseline" and "snapshot" in self.data:
             problems += snapshot_problems(self.data["snapshot"])
         return problems
+
+    def _auto_problems(self, kind: str | None) -> list[str]:
+        """The ``auto`` resolution marker (spec §6.2): a registered value, on
+        an ``accepted`` resolution only, decided by a human, never with an
+        accept-with-tweaks ``applied`` payload."""
+        if "auto" not in self.data or kind != "resolution":
+            return []
+        out: list[str] = []
+        value = self.data.get("auto")
+        if value not in REGISTRY.auto_values:
+            out.append(
+                f"auto must be one of {', '.join(sorted(REGISTRY.auto_values))}, got {value!r}"
+            )
+        if self.data.get("decision") != "accepted":
+            out.append("auto is only valid on an accepted resolution")
+        decider = self.data.get("decided_by")
+        if not isinstance(decider, dict) or decider.get("type") != "human":
+            out.append("an auto-accepted resolution must be decided_by a human actor")
+        if "applied" in self.data:
+            out.append("an auto-accepted resolution must not carry applied (no tweaks unreviewed)")
+        return out
 
     def _replay_field_problems(self, kind: str | None, act: str | None) -> list[str]:
         """Action-specific fields that forward replay / inverse verification

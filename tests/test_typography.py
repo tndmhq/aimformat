@@ -161,20 +161,30 @@ class TestVersionUpgrade:
         assert len(upgrades) == 1
         assert (upgrades[0].get("before"), upgrades[0].get("after")) == ("0.2", TYPO_SINCE)
 
-    def test_retained_typography_prevents_undoing_the_upgrade(self):
+    def test_undo_steps_over_the_typography_upgrade(self):
         older = _declared("0.3")
         older.modify_chunk(
             "t", '<h1 data-aim="t" style="font-size:26pt">Title</h1>', author=ME, at=ts(2)
         )
         older.undo(author=ME, at=ts(3))
         assert older.chunk("t").html == '<h1 data-aim="t">Title</h1>'
+        older.undo(author=ME, at=ts(4))  # the add, never the upgrade (spec §6.6)
+        assert older.spec_version == TYPO_SINCE
+        assert older.verify() == []
+
+    def test_a_direct_version_downgrade_is_still_refused(self):
+        """The guard against dropping below a retained floor is unchanged;
+        undo simply never asks for it any more."""
+        older = _declared("0.3")
+        older.modify_chunk(
+            "t", '<h1 data-aim="t" style="font-size:26pt">Title</h1>', author=ME, at=ts(2)
+        )
         with pytest.raises(
             aim.InvalidOperation,
             match="retained document state or history contains literal typography",
         ):
-            older.undo(author=ME, at=ts(4))
+            older._apply_data({"target": "aim:version", "action": "modify", "after": "0.3"})
         assert older.spec_version == TYPO_SINCE
-        assert older.verify() == []
 
     def test_the_gates_are_per_floor_not_one_lump(self):
         """A paint edit under 0.3 needs no upgrade at all — typography's

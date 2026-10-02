@@ -395,6 +395,15 @@
       }
     }
   },
+  "review": {
+    "since": "0.6",
+    "agents": [
+      "auto"
+    ],
+    "reserved_agents": [
+      "required"
+    ]
+  },
   "theme_slots": {
     "--aim-brand-1": {
       "type": "color",
@@ -743,6 +752,7 @@
           "from",
           "to",
           "superseded_by",
+          "auto",
           "explanation",
           "source"
         ]
@@ -772,6 +782,13 @@
           "source"
         ]
       }
+    },
+    "auto_values": [
+      "policy",
+      "request"
+    ],
+    "field_since": {
+      "auto": "0.6"
     },
     "since": {
       "baseline": "0.6"
@@ -958,6 +975,10 @@
       "error",
       "markup from a spec era newer than the declared version"
     ],
+    "S035": [
+      "error",
+      "review policy or auto-accepted resolution requires a supporting spec version"
+    ],
     "V001": [
       "error",
       "element not allowed in the asset registry"
@@ -1142,6 +1163,10 @@
       "warning",
       "history starts at seq 1 but does not explain the document's origin"
     ],
+    "H010": [
+      "warning",
+      "event field from a newer spec version (unchecked)"
+    ],
     "M001": [
       "warning",
       "summary cache is stale"
@@ -1185,6 +1210,10 @@
     "D006": [
       "error",
       "aim-page-break outside the top-level body flow"
+    ],
+    "D007": [
+      "error",
+      "review policy is malformed (unregistered agents value or non-human by)"
     ],
     "C001": [
       "error",

@@ -403,6 +403,38 @@ class Registry:
     def proposal_actions(self) -> dict[str, dict]:
         return self.raw["proposal_actions"]
 
+    @cached_property
+    def auto_values(self) -> frozenset[str]:
+        """Registered values of a resolution's ``auto`` marker (spec §6.2)."""
+        return frozenset(self.raw["events"]["auto_values"])
+
+    @property
+    def auto_since(self) -> str:
+        """The first spec version that defines the ``auto`` resolution marker."""
+        return self.raw["events"]["field_since"]["auto"]
+
+    @cached_property
+    def event_field_floors(self) -> dict[str, str]:
+        """Event fields introduced after 0.1, mapped to the spec version that
+        introduced them — the history counterpart of :attr:`attr_floors`."""
+        return dict(self.raw["events"].get("field_since", {}))
+
+    # -- review policy (aim:doc ``review``, spec §5.6) ---------------------------
+    @property
+    def review_since(self) -> str:
+        """The first spec version whose settings block defines ``review``."""
+        return self.raw["review"]["since"]
+
+    @cached_property
+    def review_agents(self) -> frozenset[str]:
+        """Registered ``review.agents`` values (implemented by this build)."""
+        return frozenset(self.raw["review"]["agents"])
+
+    @cached_property
+    def review_reserved_agents(self) -> frozenset[str]:
+        """``review.agents`` values the spec reserves but does not define yet."""
+        return frozenset(self.raw["review"].get("reserved_agents", []))
+
     # -- canonical form ----------------------------------------------------------
     @cached_property
     def attr_first(self) -> list[str]:

@@ -24,6 +24,9 @@ TOOLS = {
     "aim_lint",
     "aim_export",
     "aim_import_revision",
+    "aim_review",
+    "aim_undo",
+    "aim_redo",
 }
 
 
@@ -65,7 +68,7 @@ def _list_tools():
     return anyio.run(run)
 
 
-def test_lists_exactly_the_eight_tools():
+def test_lists_exactly_the_eleven_tools():
     tools = _list_tools()
     assert {t.name for t in tools.tools} == TOOLS
     for t in tools.tools:
@@ -364,8 +367,8 @@ def test_read_does_not_repeat_every_id_for_a_headingless_body(tmp_path):
 # --------------------------------------------------------------------------- 0.6 surface
 # READS-D9/D10: one compact text block per result; a lean tool list.
 
-# compact tools/list + instructions; measured 6585 (0.6.0, eight tools) + 10%
-SURFACE_BYTE_BUDGET = 7250
+# compact tools/list + instructions; measured 8693 (0.6.0, eleven tools) + 10%
+SURFACE_BYTE_BUDGET = 9570
 
 
 def test_tool_list_is_lean():
@@ -476,6 +479,8 @@ def test_read_full_keeps_its_keys(tmp_path):
         "toc_source",
         "chunks",
         "proposals",
+        "review",
+        "recent_auto_batches",
     }
     assert out == _payload(_call("aim_read", {"path": str(path), "mode": "full"}))
 
@@ -1041,3 +1046,246 @@ def test_replace_text_refusals_write_nothing(tmp_path):
     r = _call("aim_edit", {"path": str(path), "action": "modify", "target": "t1", "old_text": "x"})
     assert r.isError
     assert path.read_bytes() == before
+
+
+# -- review policy / auto-accept (spec §5.6) ----------------------------------
+
+
+def _error_text(result) -> str:
+    assert result.isError, result.content
+    return result.content[0].text
+
+
+def test_review_on_needs_the_users_words(tmp_path):
+    path = _make_doc(tmp_path)
+    msg = _error_text(_call("aim_review", {"path": str(path), "auto": True}))
+    assert "user_request" in msg
+    assert aim.load(path).review_policy is None
+
+
+def test_review_on_and_off(tmp_path):
+    path = _make_doc(tmp_path)
+    out = _payload(
+        _call(
+            "aim_review",
+            {
+                "path": str(path),
+                "auto": True,
+                "user_request": "auto-accept your changes",
+                "for_human": "Ada",
+            },
+        )
+    )
+    assert out["changed"] is True and out["lint_errors"] == 0
+    assert out["review"] == {"agents": "auto", "by": "human:Ada"}
+    assert "Auto-accept is on" in out["notice"]
+    ev = aim.load(path).history[-1]
+    # the agent tool wrote it; the person consented
+    assert ev.get("author") == {"type": "external", "id": "aim-mcp"}
+    assert ev.get("explanation") == "User asked: 'auto-accept your changes'"
+    again = _payload(
+        _call(
+            "aim_review",
+            {"path": str(path), "auto": True, "user_request": "again", "for_human": "Ada"},
+        )
+    )
+    assert again["changed"] is False
+    off = _payload(_call("aim_review", {"path": str(path), "auto": False}))
+    assert off["changed"] is True and off["review"] is None
+    assert _payload(_call("aim_read", {"path": str(path)}))["review"] is None
+
+
+def test_propose_under_the_policy_is_applied_and_undoable(tmp_path):
+    path = _make_doc(tmp_path)
+    doc = aim.load(path)
+    doc.set_review_policy("auto", by=aim.human("Ada"), author=aim.human("Ada"))
+    doc.save(path)
+    out = _payload(
+        _call(
+            "aim_propose",
+            {
+                "path": str(path),
+                "action": "modify",
+                "target": "p1",
+                "html": '<p data-aim="p1">Applied.</p>',
+                "author": "agent:test-model",
+            },
+        )
+    )
+    assert out["accepted"] is True and out["auto"] == "policy"
+    assert out["decided_by"] == "human:Ada"
+    assert "applied, not proposed" in out["notice"]
+    assert out["lint_errors"] == 0
+    read = _payload(_call("aim_read", {"path": str(path)}))
+    assert read["proposals"] == []
+    assert read["recent_auto_batches"][0]["batch"] == out["batch"]
+    assert read["recent_auto_batches"][0]["revertable"] is True
+
+    undone = _payload(_call("aim_undo", {"path": str(path), "batch": out["batch"]}))
+    assert undone["reverted"] == out["batch"] and undone["lint_errors"] == 0
+    assert aim.load(path).chunk("p1").text == "Original text."
+    redone = _payload(_call("aim_redo", {"path": str(path), "batch": undone["batch"]}))
+    assert redone["changes"] == 1
+    assert aim.load(path).chunk("p1").text == "Applied."
+
+
+def test_propose_accept_true_is_a_request(tmp_path):
+    path = _make_doc(tmp_path)
+    out = _payload(
+        _call(
+            "aim_propose",
+            {
+                "path": str(path),
+                "action": "delete",
+                "target": "p2",
+                "accept": True,
+                "accept_for": "Ada",
+                "author": "agent:test-model",
+            },
+        )
+    )
+    assert (out["accepted"], out["auto"], out["decided_by"]) == (True, "request", "human:Ada")
+    assert [c.id for c in aim.load(path).chunks] == ["p1"]
+
+
+def test_propose_without_policy_stays_pending(tmp_path):
+    path = _make_doc(tmp_path)
+    out = _payload(_call("aim_propose", {"path": str(path), "action": "delete", "target": "p2"}))
+    assert (out["accepted"], out["auto"], out["pending_reason"]) == (False, None, None)
+
+
+def test_accept_for_needs_accept(tmp_path):
+    path = _make_doc(tmp_path)
+    msg = _error_text(
+        _call(
+            "aim_propose",
+            {"path": str(path), "action": "delete", "target": "p2", "accept_for": "Ada"},
+        )
+    )
+    assert "accept_for needs accept=true" in msg
+
+
+def test_undo_requires_a_batch(tmp_path):
+    path = _make_doc(tmp_path)
+    assert _call("aim_undo", {"path": str(path)}).isError
+
+
+def test_host_switch_blocks_switching_on_and_self_acceptance(tmp_path, monkeypatch):
+    path = _make_doc(tmp_path)
+    monkeypatch.setenv("AIMFORMAT_MCP_REVIEW", "off")
+    msg = _error_text(
+        _call("aim_review", {"path": str(path), "auto": True, "user_request": "please"})
+    )
+    assert "disabled by the host" in msg
+    msg = _error_text(
+        _call(
+            "aim_propose",
+            {"path": str(path), "action": "delete", "target": "p2", "accept": True},
+        )
+    )
+    assert "disabled by the host" in msg
+    # off stays possible, and a policy already in the file is still honoured
+    doc = aim.load(path)
+    doc.set_review_policy("auto", by=aim.human("Ada"), author=aim.human("Ada"))
+    doc.save(path)
+    out = _payload(
+        _call(
+            "aim_propose",
+            {"path": str(path), "action": "delete", "target": "p2", "author": "agent:m"},
+        )
+    )
+    assert out["accepted"] is True
+    assert _payload(_call("aim_review", {"path": str(path), "auto": False}))["changed"]
+
+
+def test_replace_text_proposals_follow_the_review_policy(tmp_path):
+    # READS-D13 x §5.6: a replace_text card is an ordinary modify card, so
+    # the policy (or accept=true) applies to it like any other
+    path = _make_doc(tmp_path)
+    doc = aim.load(path)
+    doc.set_review_policy("auto", by=aim.human("Ada"), author=aim.human("Ada"))
+    doc.save(path)
+    args = {"path": str(path), "action": "replace_text", "target": "p1", "author": "agent:m"}
+    out = _payload(_call("aim_propose", {**args, "old_text": "Original", "new_text": "First"}))
+    assert out["accepted"] is True and out["auto"] == "policy"
+    assert aim.load(path).chunk("p1").text == "First text."
+
+
+def _settings_html(settings: dict) -> str:
+    return f'<script type="application/aim-doc+json">\n{json.dumps(settings)}\n</script>'
+
+
+def test_edit_cannot_change_the_review_policy(tmp_path, monkeypatch):
+    """aim_edit on aim:doc would otherwise switch auto-accept on with no
+    user_request and past AIMFORMAT_MCP_REVIEW=off; aim_review is the only
+    way (spec §5.6)."""
+    path = _make_doc(tmp_path)
+    monkeypatch.setenv("AIMFORMAT_MCP_REVIEW", "off")
+    before = path.read_text()
+    review = {"agents": "auto", "by": {"type": "human", "id": "Owner"}}
+    msg = _error_text(
+        _call(
+            "aim_edit",
+            {
+                "path": str(path),
+                "action": "modify",
+                "target": "aim:doc",
+                "html": _settings_html({"review": review}),
+                "author": "agent:m",
+            },
+        )
+    )
+    assert "cannot change the review policy" in msg
+    assert path.read_text() == before
+    # and it cannot drop a policy either; a page setup edit keeping it works
+    doc = aim.load(path)
+    doc.set_review_policy("auto", by=aim.human("Ada"), author=aim.human("Ada"))
+    doc.save(path)
+    page = {"size": "A5", "orientation": "portrait", "margins": {}}
+    args = {"path": str(path), "action": "modify", "target": "aim:doc", "author": "agent:m"}
+    msg = _error_text(_call("aim_edit", {**args, "html": _settings_html({"page": page})}))
+    assert "cannot change the review policy" in msg
+    live = aim.load(path).doc_settings["review"]
+    out = _payload(
+        _call("aim_edit", {**args, "html": _settings_html({"page": page, "review": live})})
+    )
+    assert out["lint_errors"] == 0
+    after = aim.load(path)
+    assert after.page_setup.size == "A5" and after.review_policy is not None
+
+
+def test_edit_cannot_change_the_review_policy_through_a_back_reference(tmp_path, monkeypatch):
+    """The guard reads the document, not how an op spells its target: a
+    ``$0`` back-reference to aim:doc must not switch auto-accept on."""
+    path = _make_doc(tmp_path)
+    doc = aim.load(path)
+    doc.set_page_setup({"size": "A4"}, author=aim.human("Ada"))
+    doc.save(path)
+    monkeypatch.setenv("AIMFORMAT_MCP_REVIEW", "off")
+    before = path.read_text()
+    page = {"size": "A5", "orientation": "portrait", "margins": {}}
+    review = {"agents": "auto", "by": {"type": "human", "id": "Owner"}}
+    ops = [
+        {"action": "modify", "target": "aim:doc", "html": _settings_html({"page": page})},
+        {
+            "action": "modify",
+            "target": "$0",
+            "html": _settings_html({"page": page, "review": review}),
+        },
+    ]
+    result = _call("aim_edit", {"path": str(path), "ops": ops, "author": "agent:m"})
+    assert "cannot change the review policy" in _error_text(result)
+    assert path.read_text() == before
+    assert aim.load(path).review_policy is None
+
+
+def test_undo_of_switching_auto_accept_off_keeps_it_off(tmp_path, monkeypatch):
+    path = _make_doc(tmp_path)
+    monkeypatch.setenv("AIMFORMAT_MCP_REVIEW", "off")
+    doc = aim.load(path)
+    doc.set_review_policy("auto", by=aim.human("Ada"), author=aim.human("Ada"))
+    doc.save(path)
+    _payload(_call("aim_review", {"path": str(path), "auto": False}))
+    batch = aim.load(path).history[-1].batch
+    assert _call("aim_undo", {"path": str(path), "batch": batch, "author": "agent:m"}).isError
+    assert aim.load(path).review_policy is None

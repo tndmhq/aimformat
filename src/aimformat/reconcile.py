@@ -108,7 +108,10 @@ class ReconcileReport:
 # expected state: forward replay of the full log
 
 
-def _check_log(events: list[Event]) -> None:
+def _check_log(events: list[Event], *, newer_spec: bool = False) -> None:
+    """*newer_spec*: the document declares a version this tool does not
+    implement — unknown event fields are then a later spec's, not damage
+    (missing required fields still are)."""
     if not events:
         return
     seqs = [e.data.get("seq") for e in events]
@@ -138,7 +141,7 @@ def _check_log(events: list[Event]) -> None:
         # full schema validation: a baseline the linter itself rejects
         # (H003) must never count as intact — "repairing" on top of it
         # plans a lint-clean-looking write over corrupt provenance
-        problems = ev.validate()
+        problems = ev.validate(newer_spec=newer_spec)
         if problems:
             raise HistoryError(
                 f"cannot reconcile: invalid event at seq {ev.data.get('seq')}: {problems[0]}"
@@ -543,8 +546,12 @@ def _ev_doc_settings(
     source: list[str] | None = None,
 ) -> None:
     before = S._state.serial("aim:doc")
+    # a settings block carrying ``review`` is a 0.6 construct (§5.6): record
+    # the version upgrade it needs, as the markup builders do
+    S._preflight_feature_upgrade(after, lambda trial: trial._state.set_doc_settings_markup(after))
+    upgrade_batch = S._ensure_feature_version(after, author=author, at=at)
     S._state.set_doc_settings_markup(after)
-    data = _base(S, author, at, source=source)
+    data = _base(S, author, at, batch=upgrade_batch, source=source)
     data.update({"target": "aim:doc", "action": "modify"})
     if before is not None:
         data["before"] = before
@@ -729,7 +736,7 @@ def reconcile_document(
     """
     actor = author if author is not None else external()
     events = doc.history
-    _check_log(events)
+    _check_log(events, newer_spec=not REGISTRY.implements(doc.spec_version))
     if (
         not events
         and REGISTRY.version_includes(doc.spec_version, REGISTRY.baseline_since)

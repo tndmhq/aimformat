@@ -57,6 +57,7 @@ from .note import render_note
 from .pagesetup import PageSetup, default_page_setup, page_css
 from .reconcile import ReconcileReport
 from .registry import REGISTRY
+from .review import AutoAcceptOutcome, ReviewPolicy
 from .revision_import import RevisionImportReport
 
 __version__ = "0.6.0"
@@ -76,6 +77,8 @@ __all__ = [
     "PageSetup",
     "ReconcileReport",
     "RevisionImportReport",
+    "ReviewPolicy",
+    "AutoAcceptOutcome",
     "SPEC_VERSION",
     "__version__",
     "load",

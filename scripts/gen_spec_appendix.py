@@ -124,9 +124,30 @@ def build() -> str:
             f"- `{kind}` events — required: {code(fields['required'])}"
             + (f"; optional: {code(fields['optional'])}" if fields["optional"] else "")
         )
+    for kind, since in raw["events"].get("since", {}).items():
+        a(f"- `{kind}` events are since spec {since}")
+    for field, since in raw["events"].get("field_since", {}).items():
+        values = raw["events"].get(f"{field}_values")
+        a(f"- `{field}` is since spec {since}" + (f"; values: {code(values)}" if values else ""))
     a("")
 
-    a("### A.6 Page setup")
+    a("### A.6 Document settings")
+    a("")
+    a("The `aim:doc` settings block (§3.6) holds `page` and, since spec")
+    a(f"{raw['review']['since']}, the review policy `review` (§5.6).")
+    a("")
+    review = raw["review"]
+    a(
+        f"- **`review.agents`**: {code(review['agents'])}"
+        + (
+            f"; reserved, not yet defined: {code(review['reserved_agents'])}"
+            if review.get("reserved_agents")
+            else ""
+        )
+    )
+    a("- **`review.by`**: an actor object with `type` `human` (`id` optional)")
+    a("")
+    a("**Page setup** (`page`):")
     a("")
     page = raw["page"]
     a("| size | portrait (mm) |")

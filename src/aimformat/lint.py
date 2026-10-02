@@ -27,12 +27,13 @@ from pathlib import Path
 from . import ids
 from .canonical import LINE_CONTAINERS, document_text
 from .css import generate_aim_css
-from .document import AimDocument, Anchor
+from .document import AimDocument, Anchor, FloorPart
 from .dom import Comment, Element, Text, parse_fragment
 from .errors import AimError, HistoryError, InvalidOperation, ParseError, TargetNotFound
 from .events import _ISO_RE
 from .pagesetup import page_setup_from_obj, parse_doc_settings
 from .registry import REGISTRY, version_key
+from .review import ReviewPolicy
 
 __all__ = ["Finding", "lint", "lint_text", "lint_path"]
 
@@ -179,20 +180,31 @@ class _Linter:
             # scan entirely, and in a 0.3 document reached it but matched
             # neither hardcoded check. Every floor that exists is tested, so
             # adding a gated construct cannot forget to add its gate.
-            floors = self._retained_feature_floors()
+            # The review policy and the auto marker (§5.6) have their own
+            # code, S035, even though they share the 0.6 era with other
+            # gated constructs (the baseline event): floors are scanned per
+            # part so each construct is named by its own rule.
+            review = self._retained_feature_floors("review")
+            other = self._retained_feature_floors("other")
             named = {
                 REGISTRY.paint_since: ("S032", "literal paint"),
                 REGISTRY.typography_since: ("S033", "literal typography"),
             }
-            for floor in sorted(floors, key=lambda f: version_key(f) or ()):
+            for floor in sorted(review | other, key=lambda f: version_key(f) or ()):
                 if REGISTRY.version_includes(version, floor):
                     continue  # the document is new enough for this construct
-                code, what = named.get(floor, ("S034", f"spec {floor} markup"))
-                self.add(
-                    code,
-                    ERROR,
-                    f"{what} requires spec {floor} or newer, but the document declares {version}",
-                )
+                found: list[tuple[str, str]] = []
+                if floor in review:
+                    found.append(("S035", "a review policy or auto-accepted resolution"))
+                if floor in other:
+                    found.append(named.get(floor, ("S034", f"spec {floor} markup")))
+                for code, what in found:
+                    self.add(
+                        code,
+                        ERROR,
+                        f"{what} requires spec {floor} or newer, "
+                        f"but the document declares {version}",
+                    )
         head = self.state.head
         if not head.find(lambda e: e.tag == "meta" and e.get("charset") == "utf-8"):
             self.add("S003", ERROR, '<head> must declare <meta charset="utf-8">')
@@ -330,7 +342,7 @@ class _Linter:
             if name.startswith("on"):
                 self.add("X002", ERROR, f"event-handler attribute {name!r} is forbidden", where)
 
-    def _retained_feature_floors(self) -> set[str]:
+    def _retained_feature_floors(self, part: FloorPart = "all") -> set[str]:
         """Gated-construct floors retained anywhere in the file (spec §3.3).
 
         The body serialization covers live constructs and pending templates.
@@ -338,7 +350,7 @@ class _Linter:
         history retains is inspected separately as well.
         """
         try:
-            return self.doc._retained_floors()
+            return self.doc._retained_floors(part)
         except (HistoryError, ParseError):
             # The dedicated history pass reports malformed JSONL as H002 and
             # malformed retained markup as H006. Neither can establish a
@@ -695,11 +707,19 @@ class _Linter:
             page = settings.get("page")
             if page is not None:
                 page_setup_from_obj(page)
+            if "review" in settings:
+                ReviewPolicy.from_obj(settings["review"], lenient=self._newer_spec())
         except InvalidOperation as exc:
             code = getattr(exc, "lint_code", "D001")
-            if code not in ("D001", "D003", "D004"):
+            if code not in ("D001", "D003", "D004", "D007"):
                 code = "D001"  # only the documented codes may be emitted
             self.add(code, ERROR, str(exc), where)
+
+    def _newer_spec(self) -> bool:
+        """The S002 condition: the document declares a version this tool does
+        not implement, so constructs a later spec added are unchecked."""
+        version = self.state.html.get("data-aim-version")
+        return version is not None and not REGISTRY.implements(version)
 
     # -- X: security (script blocks) -----------------------------------------------------
     def security(self) -> None:
@@ -1043,11 +1063,21 @@ class _Linter:
         except HistoryError as exc:
             self.add("H002", ERROR, str(exc))
             return
+        newer = self._newer_spec()
         for ev in events:
-            for problem in ev.validate():
+            for problem in ev.validate(newer_spec=newer):
                 self.add(
                     "H003", ERROR, f"seq {ev.data.get('seq')}: {problem}", str(ev.data.get("seq"))
                 )
+            if newer:
+                for field in ev.unknown_fields():
+                    self.add(
+                        "H010",
+                        WARNING,
+                        f"seq {ev.data.get('seq')}: field {field!r} comes from a newer spec "
+                        "version and is unchecked",
+                        str(ev.data.get("seq")),
+                    )
         if not events:
             return
         if any(not isinstance(e.data.get("seq"), int) for e in events):

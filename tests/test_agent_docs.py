@@ -23,7 +23,7 @@ SURFACES = [
 @pytest.mark.parametrize("rel", SURFACES)
 def test_no_stale_tool_count(rel: str) -> None:
     text = (ROOT / rel).read_text("utf-8").lower()
-    for stale in ("six", "seven"):
+    for stale in ("six", "seven", "eight", "nine"):
         assert f"{stale} tools" not in text and f"{stale} workflow tools" not in text
         assert f"{stale} typed tools" not in text
 

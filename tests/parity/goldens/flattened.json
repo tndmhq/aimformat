@@ -80,6 +80,7 @@
     "size": "A4"
   },
   "proposals": [],
+  "reviewPolicy": null,
   "specVersion": "0.6",
   "stylesheet": {
     "sha256": "sha256:de54c7dd7c879ba0b6fbeb1115b2264bab9f4914bb2e413348fe3987e791ee10",

@@ -78,6 +78,10 @@ const project = (doc: AimDocument): unknown => ({
     contentWidthMm: doc.pageSetup.contentWidthMm,
     contentHeightMm: doc.pageSetup.contentHeightMm,
   },
+  reviewPolicy:
+    doc.reviewPolicy === null
+      ? null
+      : { ...doc.reviewPolicy, by: { ...doc.reviewPolicy.by } },
   nodes: doc.nodes.map(nodeObj),
   chunks: doc.chunks.map(nodeObj),
   containers: doc.containers.map((c) => c.id),

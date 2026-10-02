@@ -1337,3 +1337,45 @@ def test_a_header_row_change_never_drops_a_cells_link():
     assert not report.proposals
     assert cid in [cf.unit for cf in report.conflicts]
     assert d.dumps() == before
+
+
+# =============================================================================
+# under an auto review policy (spec §5.6): an import is a review request
+
+
+@pytest.mark.parametrize("conflicts", ["report", "propose"])
+def test_an_import_under_the_auto_policy_stays_pending(legal, conflicts):
+    """The policy auto-accepts agent and external cards at batch close; a
+    colleague's revision imported as proposals is still for review, even
+    when it is attributed to an agent or the external fallback author."""
+    doc = _copy(legal)
+    ids = _body_ids(doc)
+    doc.set_review_policy("auto", by=human("Ada"), author=human("Ada"))
+    c = Colleague(docx_bytes(doc, roundtrip_marks=True))
+    c.replace(ids[2], " ", " really ")
+    c.delete(ids[8])
+    data = c.save()
+    doc.modify_chunk(
+        ids[2], doc.chunk(ids[2]).html.replace("</p>", " (Ada)</p>"), author=human("Ada")
+    )
+    before = {i: doc.chunk(i).html for i in (ids[2], ids[8])}
+    report = doc.import_revision(data, author=A, conflicts=conflicts)
+    assert report.proposals and sorted(p.id for p in doc.proposals) == sorted(report.proposals)
+    assert {i: doc.chunk(i).html for i in (ids[2], ids[8])} == before
+    assert not [e for e in doc.history if e.kind == "resolution"]
+    _healthy(doc)
+
+
+def test_a_card_resolved_after_export_under_the_auto_policy_round_trips(legal):
+    """Rebuilding the export-time lane must not auto-accept the replayed
+    agent cards: an untouched file is a null round trip, policy or not."""
+    doc = _copy(legal)
+    ids = _body_ids(doc)
+    card = _propose_one(doc, "modify", ids)  # pending before the policy
+    doc.set_review_policy("auto", by=human("Ada"), author=human("Ada"))
+    sent = docx_bytes(doc, pending="tracked", roundtrip_marks=True)
+    doc.accept(card.id, decided_by=human("Ada"))
+    snapshot = doc.dumps()
+    report = doc.import_revision(Colleague(sent).save())
+    assert not (report.proposals or report.conflicts or report.warnings), report.summary()
+    assert doc.dumps() == snapshot

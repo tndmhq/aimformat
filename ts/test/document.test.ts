@@ -364,3 +364,60 @@ describe("AimDocument", () => {
     expect(doc.assetIds).toEqual(["asset-0123456789ab"]);
   });
 });
+
+describe("reviewPolicy (spec §5.6)", () => {
+  const withReview = (review: string, version = "0.6"): AimDocument =>
+    AimDocument.parse(
+      wrap(
+        '<p data-aim="c1">x</p>',
+        `<script type="application/aim-doc+json">\n{"review":${review}}\n</script>\n`,
+      ).replace('data-aim-version="0.2"', `data-aim-version="${version}"`),
+    );
+
+  it("is null when the policy is off", () => {
+    expect(
+      AimDocument.parse(wrap('<p data-aim="c1">x</p>')).reviewPolicy,
+    ).toBeNull();
+  });
+
+  it("reads an auto policy and its consenting human", () => {
+    const policy = withReview(
+      '{"agents":"auto","by":{"id":"Ada","type":"human"}}',
+    ).reviewPolicy;
+    expect(policy).toEqual({
+      agents: "auto",
+      auto: true,
+      by: { type: "human", id: "Ada", model: null },
+    });
+    const unnamed = withReview(
+      '{"agents":"auto","by":{"type":"human"}}',
+    ).reviewPolicy!;
+    expect(unnamed.by).toEqual({ type: "human", id: null, model: null });
+  });
+
+  it("rejects a malformed policy with the D007 text", () => {
+    expect(
+      () =>
+        withReview('{"agents":"sometimes","by":{"type":"human"}}').reviewPolicy,
+    ).toThrow(/not a registered value/);
+    expect(
+      () =>
+        withReview('{"agents":"required","by":{"type":"human"}}').reviewPolicy,
+    ).toThrow(/reserved and not defined yet/);
+    expect(
+      () => withReview('{"agents":"auto","by":{"type":"agent"}}').reviewPolicy,
+    ).toThrow(AimParseError);
+    expect(() => withReview('"auto"').reviewPolicy).toThrow(
+      /must be a JSON object/,
+    );
+  });
+
+  it("reads, but never honours, an unknown value from a newer spec", () => {
+    const policy = withReview(
+      '{"agents":"required","by":{"type":"human"}}',
+      "9.0",
+    ).reviewPolicy!;
+    expect(policy.agents).toBe("required");
+    expect(policy.auto).toBe(false);
+  });
+});

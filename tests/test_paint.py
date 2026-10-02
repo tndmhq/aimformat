@@ -469,30 +469,30 @@ class TestVersionUpgrade:
         assert older.spec_version == "0.2"
         assert [e for e in older.history if e.target == "aim:version"] == []
 
-    def test_retained_paint_prevents_undoing_the_upgrade_to_02(self, older):
+    def test_undo_never_inverts_the_upgrade(self, older):
+        """The upgrade stays: retained paint means its inverse could never
+        apply, so undo steps over it to the edit below (spec §6.6) instead of
+        stopping the stack there."""
         older.modify_chunk(
             "t", '<h1 data-aim="t" style="color:#ff69b4">Title</h1>', author=ME, at=ts(2)
         )
         older.undo(author=ME, at=ts(3))
         assert older.chunk("t").html == '<h1 data-aim="t">Title</h1>'
-        with pytest.raises(
-            aim.InvalidOperation, match="retained document state or history contains literal paint"
-        ):
-            older.undo(author=ME, at=ts(4))
+        older.undo(author=ME, at=ts(4))  # the add below the upgrade, not the upgrade
+        assert [c.id for c in older.chunks] == []
         assert older.spec_version == PAINT_SINCE
         assert older.verify() == []
         assert [
             finding for finding in aim.lint_text(older.dumps()) if finding.level == "error"
         ] == []
 
-    def test_a_painted_pending_payload_prevents_undoing_the_upgrade(self, older):
+    def test_a_painted_pending_payload_keeps_the_upgrade(self, older):
         older.propose_modify(
             "t", '<h1 data-aim="t" style="color:#ff69b4">Title</h1>', author=BOT, at=ts(2)
         )
-
-        with pytest.raises(
-            aim.InvalidOperation, match="retained document state or history contains literal paint"
-        ):
+        # the upgrade is skipped; the add below it is what undo would invert,
+        # and a pending card still targets that block
+        with pytest.raises(aim.InvalidOperation, match="pending suggestions"):
             older.undo(author=ME, at=ts(3))
 
         assert older.spec_version == PAINT_SINCE

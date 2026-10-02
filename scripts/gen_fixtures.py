@@ -167,6 +167,36 @@ def _duplicate_move_doc() -> str:
     return doc.dumps()
 
 
+def _review_policy_doc() -> aim.AimDocument:
+    """Review policy on (spec §5.6) with an auto-accepted agent batch and a
+    per-call accepted change in the history."""
+    doc = base_doc()
+    doc.set_review_policy(
+        "auto", by=ME, author=ME, explanation="Apply AI edits as they arrive.", at=t(3)
+    )
+    with doc.batch():
+        doc.propose_modify("p1", '<p data-aim="p1">One sharper paragraph.</p>', author=BOT, at=t(4))
+        doc.propose_add('<p data-aim="p2">A new closing line.</p>', author=BOT, at=t(5))
+    doc.propose_delete("i1", author=BOT, accept=True, accept_by=ME, at=t(6))
+    doc.propose_delete("h1", author=ME, explanation="Needs a person to decide.", at=t(7))
+    return doc
+
+
+def _newer_field_doc() -> str:
+    """A document declaring a newer spec, with an event field this tool does
+    not know: a warning (H010, with S002), never an H003 error."""
+    from aimformat.canonical import canonical_json
+
+    doc = aim.new_document(title="Newer document")
+    doc.add_chunk('<p data-aim="p1">Text.</p>', author=BOT, at=t(0))
+    text = doc.dumps()
+    event = doc.history[-1]
+    patched = canonical_json({**event.data, "z_future": "from a later spec"})
+    return text.replace(event.to_json(), patched).replace(
+        f'data-aim-version="{aim.SPEC_VERSION}"', 'data-aim-version="9.0"'
+    )
+
+
 def main() -> None:
     OUT.mkdir(parents=True, exist_ok=True)
     for old in OUT.glob("*.aim"):
@@ -281,6 +311,8 @@ def main() -> None:
     paginated.add_chunk("<aim-page-break></aim-page-break>", author=ME, after="p1", at=t(4))
     files["ok_pagination.aim"] = paginated.dumps()
 
+    files["ok_review_policy.aim"] = _review_policy_doc().dumps()
+
     # -- nok: one rule per file ------------------------------------------
     # Derived from a HISTORY-LESS base wherever possible, so a surgical body
     # defect cannot co-fire history-chain errors (H006) — each nok file
@@ -300,6 +332,16 @@ def main() -> None:
         at=t(3),
     )
     pag_flat = _historyless(pag_doc)
+
+    policy_doc = base_doc()
+    policy_doc.set_review_policy("auto", by=ME, author=ME, at=t(3))
+    policy_flat = _historyless(policy_doc)
+
+    # no checkpoint, so re-declaring the version cannot co-fire H006
+    auto_doc = aim.new_document(title="Auto-accepted change")
+    auto_doc.add_chunk('<p data-aim="p1">Text.</p>', author=BOT, at=t(0))
+    auto_doc.propose_delete("p1", author=BOT, accept=True, accept_by=ME, at=t(1))
+    auto_text = auto_doc.dumps()
 
     nok = {
         "nok_S001_missing_version.aim": flat.replace(f' data-aim-version="{aim.SPEC_VERSION}"', ""),
@@ -404,6 +446,19 @@ def main() -> None:
         ),
         # nested in a section chunk, NOT a list container: a ul member
         # would co-fire S022 (illegal item carrier) and break exactness
+        "nok_S035_review_policy_under_prior_version.aim": policy_flat.replace(
+            f'data-aim-version="{aim.SPEC_VERSION}"', 'data-aim-version="0.5"'
+        ),
+        "nok_S035_auto_resolution_under_prior_version.aim": auto_text.replace(
+            f'data-aim-version="{aim.SPEC_VERSION}"', 'data-aim-version="0.5"'
+        ),
+        "nok_D007_unregistered_review_agents.aim": policy_flat.replace(
+            '"agents":"auto"', '"agents":"sometimes"'
+        ),
+        "nok_D007_review_by_not_human.aim": policy_flat.replace(
+            '"by":{"id":"ada","type":"human"}', '"by":{"model":"m","type":"agent"}'
+        ),
+        "nok_H010_newer_spec_event_field.aim": _newer_field_doc(),
         "nok_D006_page_break_nested.aim": flat.replace(
             '<p data-aim="p1">One paragraph &amp; some text.</p>',
             '<section data-aim="s1"><h2>Heading</h2>'

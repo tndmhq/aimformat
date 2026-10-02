@@ -15,6 +15,7 @@ export type {
   Container,
   PageSetup,
   Proposal,
+  ReviewPolicy,
   Stylesheet,
 } from "./document.ts";
 export { AimError, AimParseError } from "./errors.ts";
@@ -32,6 +33,7 @@ export {
 } from "./canonical.ts";
 export { sha256Hex, sha256Prefixed } from "./sha256.ts";
 export {
+  REVIEW_AGENTS,
   SPEC_VERSION,
   STYLE_PROP_ORDER,
   STYLE_PROP_PAINT,
