@@ -101,7 +101,9 @@ Decisions: `docs/log/2026-10-01_2121_decision_auto-accept-*.md` and
   sets the same for a whole batch. Acceptance runs when the outermost batch
   closes; the result is in `doc.last_auto_accept`, and a `propose_*` call
   that owned its batch returns `Proposal.resolution`. A refused acceptance
-  leaves the cards pending and never raises.
+  leaves the cards pending and never raises. That includes a batch whose
+  acceptance would leave another pending proposal pointing at nothing
+  (say a person's suggestion inside a block the agent deletes).
 - `doc.auto_accept(pids, via=, decided_by=)` applies the policy to cards
   that already exist (hosts watching writers that do not honour it).
 - `doc.resolution_of(pid)`, `doc.auto_accepted_batches()`.
@@ -110,9 +112,10 @@ Decisions: `docs/log/2026-10-01_2121_decision_auto-accept-*.md` and
   whose `source` names the reverted batch), `unrevert_batch(batch)`.
 - **Behaviour change:** undo and redo step over `aim:version` upgrades
   instead of trying to invert them, so a paint, typography or policy
-  upgrade no longer blocks undo of the edits below it. Undo (and redo)
-  also refuse to remove a block that pending proposals target or anchor on,
-  the same rule a direct delete follows.
+  upgrade no longer blocks undo of the edits below it. Undo, redo and
+  `revert_batch` also refuse a step that would leave a pending proposal
+  pointing at nothing (a removed block or nested item, or an anchor moved
+  out of the proposal's container).
 - `aim:doc` proposals keep the live review policy when accepted (the
   resolution records `applied` when the payload disagreed).
 
@@ -120,7 +123,8 @@ Decisions: `docs/log/2026-10-01_2121_decision_auto-accept-*.md` and
 
 - `aim propose ... --accept [--accept-for human:ID]`; `aim review FILE
   [--agents auto|off --request "..." --by human:ID]`; `aim undo|redo FILE
-  [--batch B | --one]` (default: the newest batch); `aim show` prints the
+  [--batch B | --one]` (default: the newest batch; it refuses a step that
+  would switch auto-accept on, which needs `aim review --request`); `aim show` prints the
   policy and marks auto-accepted resolutions.
 - MCP: `aim_propose(accept=, accept_for=)` reports `accepted`,
   `auto`, `decided_by`, `batch`; new `aim_review` (switching on needs

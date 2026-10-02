@@ -148,6 +148,74 @@ class TestNestedDependents:
         assert _errors(doc) == []
 
 
+_TWO_LISTS = (
+    '<ul data-aim-container="lst1"><li data-aim="l1">One</li><li data-aim="l2">Two</li></ul>',
+    '<ul data-aim-container="lst2"><li data-aim="m1">M</li></ul>',
+)
+
+
+@pytest.fixture
+def lists_doc(basic_doc) -> aim.AimDocument:
+    for i, html in enumerate(_TWO_LISTS):
+        basic_doc.add_chunk(html, author=ME, at=ts(2 + i))
+    basic_doc.set_review_policy("auto", by=ADA, author=ADA, at=ts(5))
+    return basic_doc
+
+
+class TestModifyAndMoveDependents:
+    """Not only a delete strands cards: a modify inverse can drop nested
+    items a person's card targets (P008), and a move inverse can take an
+    anchor out of the container a person's card adds into (P016)."""
+
+    def _turn(self, doc: aim.AimDocument, shape: str) -> str:
+        with doc.batch() as batch:
+            if shape == "modify":
+                doc.propose_modify(
+                    "lst1",
+                    _TWO_LISTS[0].replace("</ul>", '<li data-aim="l3">Three</li></ul>'),
+                    author=BOT,
+                    at=ts(6),
+                )
+            else:
+                doc.propose_move("l2", author=BOT, container="lst2", after="m1", at=ts(6))
+        assert doc.proposals == []
+        if shape == "modify":
+            doc.propose_modify("l3", '<li data-aim="l3">Mine.</li>', author=ME, at=ts(7))
+        else:
+            doc.propose_add(
+                '<li data-aim="m9">X</li>', author=ME, container="lst2", after="l2", at=ts(7)
+            )
+        return batch
+
+    @pytest.mark.parametrize("shape", ["modify", "move"])
+    @pytest.mark.parametrize("how", ["undo", "undo-one", "revert-on-top", "revert-buried"])
+    def test_a_dependent_card_blocks_the_inverse(self, lists_doc, shape, how):
+        doc = lists_doc
+        batch = self._turn(doc, shape)
+        if how == "revert-buried":
+            doc.modify_chunk("h1", '<h1 data-aim="h1">Later</h1>', author=ME, at=ts(8))
+        before = doc.dumps()
+        with pytest.raises(aim.InvalidOperation, match="pending suggestions"):
+            if how == "undo":
+                doc.undo(author=ADA, at=ts(9), whole_batch=True)
+            elif how == "undo-one":
+                doc.undo(author=ADA, at=ts(9))
+            else:
+                doc.revert_batch(batch, author=ADA, at=ts(9))
+        assert doc.dumps() == before
+        assert _errors(doc) == []
+
+    @pytest.mark.parametrize("shape", ["modify", "move"])
+    def test_without_dependents_the_inverse_applies(self, lists_doc, shape):
+        doc = lists_doc
+        batch = self._turn(doc, shape)
+        doc.reject(doc.proposals[0].id, decided_by=ME, at=ts(8))
+        doc.revert_batch(batch, author=ADA, at=ts(9))
+        assert doc.chunk("l2").container == "lst1"
+        assert "l3" not in _ids(doc)
+        assert _errors(doc) == []
+
+
 class TestRevertBatch:
     def test_on_top_it_is_a_true_undo(self, turned):
         doc, batch = turned

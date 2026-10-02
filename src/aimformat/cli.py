@@ -392,6 +392,7 @@ def _cmd_undo(args: argparse.Namespace, verb: str) -> int:
     doc = AimDocument.load(args.file)
     author = parse_actor(args.author)
     events: list = []
+    policy_before = _review_json(doc)
     if args.one:
         events = [doc.undo(author=author) if verb == "undo" else doc.redo(author=author)]
     elif args.batch:
@@ -406,6 +407,18 @@ def _cmd_undo(args: argparse.Namespace, verb: str) -> int:
             if verb == "undo"
             else doc.redo(author=author, whole_batch=True)
         )
+    policy_after = _review_json(doc)
+    if policy_after is not None and policy_after != policy_before:
+        # switching auto-accept on needs --request (`aim review`); a plain
+        # undo/redo stepping back onto a policy switch must not get around
+        # that. Nothing is written. --batch keeps the policy already (§5.6),
+        # and switching off stays allowed, as `aim review --agents off` is.
+        print(
+            f"aim: this {verb} would switch auto-accept on; switch it with "
+            "`aim review FILE --agents auto --request ...` (the person's request)",
+            file=sys.stderr,
+        )
+        return 1
     out = Path(args.output or args.file)
     doc.save(out)
     batch = events[0].batch if events else None

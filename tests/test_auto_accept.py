@@ -263,6 +263,32 @@ class TestBatchClose:
         assert auto_doc.resolution_of(human.id).decision == "superseded"
         assert [p.id for p in auto_doc.proposals] == [replacing.id]
 
+    @pytest.mark.parametrize("shape", ["move on the target", "card inside the container"])
+    def test_a_change_that_would_strand_a_persons_card_stays_pending(self, auto_doc, shape):
+        """A delete supersedes only same-target modify/delete cards; a
+        person's move card on the target, or a card on an item inside a
+        deleted container, would be left pointing at nothing (P008) with
+        nobody having reviewed the delete."""
+        auto_doc.add_chunk(
+            '<ul data-aim-container="lst"><li data-aim="d1">One</li></ul>', author=ME, at=ts(6)
+        )
+        if shape == "move on the target":
+            human = auto_doc.propose_move(
+                "intro", author=ME, container="body", after="lst", at=ts(7)
+            )
+            target = "intro"
+        else:
+            human = auto_doc.propose_modify(
+                "d1", '<li data-aim="d1">Human wording</li>', author=ME, at=ts(7)
+            )
+            target = "lst"
+        p = auto_doc.propose_delete(target, author=BOT, at=ts(8))
+        out = auto_doc.last_auto_accept
+        assert out.accepted == () and out.deferred == (p.id,)
+        assert human.id in out.reason
+        assert [q.id for q in auto_doc.proposals] == [human.id, p.id]
+        assert _errors(auto_doc) == []
+
     @pytest.mark.parametrize("shape", ["one batch", "two calls", "kept pending first"])
     def test_a_revision_of_a_card_that_replaced_a_person_stays_pending(self, auto_doc, shape):
         """The agent revising its own card, which had replaced a person's

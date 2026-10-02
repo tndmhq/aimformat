@@ -67,6 +67,8 @@ _BODY_SECTIONS = ("aim-proposals", "aim-assets", "script")
 _RESERVED_TARGETS = ("aim:theme", "aim:doc", "aim:version")
 VERSION_TARGET = "aim:version"
 _PAYLOAD_ID_RE = re.compile(r'data-aim(?:-container)?="([^"]+)"')
+# lint codes of a pending card that no longer applies to the state (§5.2)
+_STRANDING_CODES = frozenset({"P008", "P011", "P016"})
 _T = TypeVar("_T")
 
 
@@ -2424,6 +2426,10 @@ class AimDocument:
             target_ev = self._undo_candidate()
             if target_ev is None:
                 raise InvalidOperation("nothing to undo")
+            if self.proposals:
+                trial = self._clone()
+                trial._append_undo(target_ev, origin="undo", author=author, at=at)
+                self._guard_stranding(trial)
             event = self._append_undo(target_ev, origin="undo", author=author, at=at)
             self._after_settings_inverse([target_ev])
             return event
@@ -2431,6 +2437,7 @@ class AimDocument:
         trial = self._clone()
         for ev in targets:
             trial._append_undo(ev, origin="undo", author=author, at=at)
+        self._guard_stranding(trial)
         events: list[Event] = []
         with self.batch():
             for ev in targets:
@@ -2481,6 +2488,10 @@ class AimDocument:
             candidate = next(self._redo_candidates(), None)
             if candidate is None:
                 raise InvalidOperation("nothing to redo")
+            if self.proposals:
+                trial = self._clone()
+                trial._append_undo(candidate, origin="redo", author=author, at=at)
+                self._guard_stranding(trial)
             event = self._append_undo(candidate, origin="redo", author=author, at=at)
             self._after_settings_inverse([candidate])
             return event
@@ -2488,6 +2499,7 @@ class AimDocument:
         trial = self._clone()
         for ev in targets:
             trial._append_undo(ev, origin="redo", author=author, at=at)
+        self._guard_stranding(trial)
         events: list[Event] = []
         with self.batch():
             for ev in targets:
@@ -2497,7 +2509,6 @@ class AimDocument:
 
     def _append_undo(self, ev: Event, *, origin: str, author: Actor, at: str | None) -> Event:
         data = self._inverse_data(ev)
-        self._guard_removal_dependents(data)
         data.update(
             {
                 "seq": self.seq + 1,
@@ -2594,28 +2605,30 @@ class AimDocument:
                 undone.add(ev.seq)
         return undone
 
-    def _guard_removal_dependents(self, data: dict) -> None:
-        """Refuse an inverse that would pull a block out from under pending
-        cards: removing a block takes every chunk and container nested in it
-        too, so a card that targets or anchors on any of them would be left
-        dangling (P008/P011)."""
-        target = data.get("target")
-        if data.get("action") != "delete" or not target:
-            return
-        markup = self._state.serial(target) or data.get("before") or ""
-        removed = {target, *_PAYLOAD_ID_RE.findall(markup)}
-        dependents = [p.id for p in self.proposals if p.target in removed]
-        sec = self._state.section("aim-proposals")
-        for card in sec.elements() if sec is not None else ():
-            if card.get("data-action") in ("add", "move") and (
-                card.get("data-anchor-after") in removed
-                or card.get("data-anchor-container") in removed
-            ):
-                dependents.append(card.get("id") or "")
-        if dependents:
+    def _stranded_cards(self) -> set[str]:
+        """Pending cards that no longer apply to the current state: a target
+        that is gone (P008), or an anchor that is gone or no longer a valid
+        position in the card's container (P011/P016)."""
+        if not self.proposals:
+            return set()
+        from .lint import _Linter  # lint imports this module
+
+        linter = _Linter(self, None)
+        linter.proposals()
+        return {f.where for f in linter.findings if f.code in _STRANDING_CODES}
+
+    def _guard_stranding(self, trial: AimDocument) -> None:
+        """Refuse when *trial* (this document with an edit applied on a
+        clone) leaves pending cards dangling that apply here. Removing a
+        block takes every chunk and container nested in it; a modify can
+        drop nested items; a move can take an anchor out of the container a
+        card adds into. Whatever the edit, a card left pointing at nothing
+        could never be accepted (P008/P011/P016)."""
+        stranded = trial._stranded_cards() - self._stranded_cards()
+        if stranded:
             raise InvalidOperation(
-                f"pending suggestions ({', '.join(sorted(set(dependents)))}) depend on "
-                f"{target!r}; resolve them first"
+                f"pending suggestions ({', '.join(sorted(stranded))}) depend on what "
+                "this would remove or move; resolve them first"
             )
 
     def _batch_events(self, batch: str) -> list[Event]:
@@ -2745,8 +2758,9 @@ class AimDocument:
         Refuses only on a genuine conflict: a target the batch touched that
         has changed since (modify: different content; add: the chunk is not
         what was added; delete: the id is back or its place is gone; move:
-        the chunk left the destination), or pending suggestions that depend
-        on a block the revert would remove. An ``aim:doc`` change is reverted
+        the chunk left the destination), or pending suggestions the revert
+        would leave pointing at nothing (a removed block or nested item, an
+        anchor moved out of their container). An ``aim:doc`` change is reverted
         to its page setup and keeps the live review policy; ``aim:version``
         upgrades stay."""
         events = self._batch_events(batch)
@@ -2776,6 +2790,7 @@ class AimDocument:
         wrote = trial._write_revert(
             live, author=author, at=at, explanation=explanation, batch=batch
         )
+        self._guard_stranding(trial)
         if not wrote:
             # every change was a review-policy switch, which a revert keeps
             # (§5.6): refuse rather than report a no-op as a revert, so an
@@ -2824,7 +2839,6 @@ class AimDocument:
                     f"cannot revert batch {batch!r}: {problem}; use undo to step back instead"
                 )
             data = self._revert_data(ev)
-            self._guard_removal_dependents(data)
             data.update(
                 {
                     "seq": self.seq + 1,
@@ -4039,7 +4053,8 @@ class AimDocument:
         Out of scope first: a card that replaced a person's pending
         suggestion (§5.6), and an ``aim:doc`` card whose ``review`` differs
         from the live block. The rest is accepted in creation order after a
-        clean dry run on a clone; any failure leaves every card pending."""
+        clean dry run on a clone; any failure, or a dry run that leaves
+        another pending card dangling, leaves every card pending."""
         deferred: list[str] = list(refused)
         reason = refused_reason
         replaced = self._replaced_human_ids({pid for pid, *_ in plan}, own_batch=own_batch)
@@ -4074,10 +4089,20 @@ class AimDocument:
                     with trial._using_batch(batch):
                         events = trial._apply_auto(scoped)
                     odd = next((e for e in events if "applied" in e.data), None)
+                    stranded = trial._stranded_cards() - self._stranded_cards()
                     if odd is not None:
                         failure = (
                             f"{odd.get('proposal')} is not in canonical form, so accepting "
                             "it would record a tweak no one reviewed"
+                        )
+                    elif stranded:
+                        # a delete supersedes only same-target modify/delete
+                        # cards: a move card on the target, or a card on an
+                        # item nested in it, would be left pointing at
+                        # nothing, with nobody having looked (§5.6)
+                        failure = (
+                            f"pending suggestions ({', '.join(sorted(stranded))}) "
+                            "depend on what it would remove or move"
                         )
                 except Exception as exc:  # foreign cards may fail outside AimError
                     failure = str(exc) or type(exc).__name__

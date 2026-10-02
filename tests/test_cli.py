@@ -489,6 +489,25 @@ class TestReviewAndBatchUndo:
         assert main(["undo", str(plain), "--batch", batch]) == 0
         assert [c.id for c in aim.load(plain).chunks] == ["h1", "intro"]
 
+    @pytest.mark.parametrize("verb", ["undo", "redo"])
+    @pytest.mark.parametrize("step", [[], ["--one"]])
+    def test_undo_never_switches_auto_accept_on(self, plain, capsys, verb, step):
+        """Switching on needs --request; undoing a switch-off (or redoing a
+        switch-on) must not get around that. Off stays reachable."""
+        on = ["review", str(plain), "--agents", "auto", "--request", "x", "--by", "human:Ada"]
+        assert main([*on, "--author", "agent:m"]) == 0
+        if verb == "undo":
+            assert main(["review", str(plain), "--agents", "off", "--author", "agent:m"]) == 0
+        else:
+            assert main(["undo", str(plain), *step]) == 0  # undoing a switch-on is fine
+            assert aim.load(plain).review_policy is None
+        capsys.readouterr()
+        before = plain.read_bytes()
+        assert main([verb, str(plain), *step, "--author", "agent:m"]) == 1
+        assert "aim review" in capsys.readouterr().err
+        assert plain.read_bytes() == before
+        assert aim.load(plain).review_policy is None
+
     def test_accept_for_needs_accept(self, plain, capsys):
         argv = ["propose", "delete", str(plain), "intro", "--accept-for", "human:Ada"]
         assert main(argv) == 2
