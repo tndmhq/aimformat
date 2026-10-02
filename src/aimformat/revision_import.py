@@ -1368,6 +1368,9 @@ class _Planner:
         self.export_cards = set(manifest.cards) if manifest else set()
         self.x_hash = {u.id: u.x for u in manifest.units} if manifest else {}
         self.whole: set[str] = set()  # containers modified whole
+        # units whose change is a conflict and was not planned: a merge's
+        # delete or a split's addition coupled to one must not go out alone
+        self.refused: set[str] = set()
         # units added to the document since the export, by content: a
         # returned addition equal to one of them is already in (re-import
         # after accepting the first import's cards)
@@ -1542,6 +1545,7 @@ class _Planner:
         if reason is not None:
             self.conflict(uid, reason, ret.text)
             if self.conflict_mode != "propose" or payload is None or uid not in self.live:
+                self.refused.add(uid)
                 return
         assert payload is not None
         before = self.xs[uid].text
@@ -1583,7 +1587,14 @@ class _Planner:
                 if not self.changed(item):
                     replacement = c_items[item.uid].serial  # keeps its exact markup
                 else:
-                    payload, _reason = self.payload_for(item)
+                    payload, reason = self.payload_for(item)
+                    if reason is not None:
+                        # taking the returned item would write the markup
+                        # the item guard refuses (a link's target, lossy
+                        # structure): the container change is a conflict
+                        self.conflict(item.uid, reason, item.text)
+                        self.conflict(uid, f"item {item.uid}: {reason}", ret.text)
+                        return
                     replacement = payload
                 if replacement is None:
                     it.set("data-aim", item.uid)
@@ -1632,6 +1643,13 @@ class _Planner:
                 self.conflict(uid, reason)
                 continue
             survivor = merged_into.get(uid)
+            if survivor in self.refused:
+                # deleting it alone would lose its text: the survivor that
+                # was to carry it is a conflict and stays as it is
+                self.conflict(
+                    uid, f"merged into {survivor}, whose change is a conflict; not deleted"
+                )
+                continue
             depends = self.modify_op.get(survivor) if survivor else None
             what = (
                 f'merged into the previous paragraph: "{_quote(x.text)}"'
@@ -1763,7 +1781,7 @@ class _Planner:
         scope: str,
         prev: tuple[str, Any] | None,
         prev_ret: _Ret | None,
-    ) -> tuple[str, Any]:
+    ) -> tuple[str, Any] | None:
         el = _scrub(source)
         if el.tag in ("ul", "ol", "table") and ret.kind == "container":
             for it, _ in _direct_items(el):
@@ -1777,19 +1795,31 @@ class _Planner:
             twins.remove(twin)
             self.report.unchanged += 1
             return ("unit", twin)
-        new_id = self.fresh(el)
         text = _plain([source])
-        depends = None
-        what = f'added "{_quote(text)}"'
-        if (
-            len(ret.els) == 1
+        head = (
+            prev_ret.uid
+            if len(ret.els) == 1
             and prev_ret is not None
             and prev_ret.uid is not None
-            and prev_ret.uid in self.modify_op
+            and prev_ret.uid in self.xs
             and _plain(self.xs[prev_ret.uid].els).replace(" ", "")
             == (prev_ret.text + ret.text).replace(" ", "")
-        ):
-            depends = self.modify_op[prev_ret.uid]
+            else None
+        )
+        if head is not None and head in self.refused:
+            # the head keeps the whole text: adding the tail would repeat it
+            self.conflict(
+                head,
+                "split, but the change to its first part is a conflict; "
+                "the second part was not added",
+                ret.text,
+            )
+            return prev
+        new_id = self.fresh(el)
+        depends = None
+        what = f'added "{_quote(text)}"'
+        if head is not None and head in self.modify_op:
+            depends = self.modify_op[head]
             what = f'split of the previous paragraph: "{_quote(text)}"'
         self.ops.append(
             _Op(
@@ -1930,6 +1960,11 @@ def _emit_proposals(
                 # propose_add places a first row in the table's default
                 # section; a new first <thead>/<tfoot> row would land elsewhere
                 drop(i, op, InvalidOperation(f"a new first row of <{op.shell}> cannot be proposed"))
+                continue
+            if op.depends is not None and op.depends not in card_of:
+                # a merge's delete or a split's addition without its head
+                # would lose or repeat text
+                drop(i, op, InvalidOperation("the change it is part of was not proposed"))
                 continue
             depends = card_of.get(op.depends) if op.depends is not None else None
             superseded = [

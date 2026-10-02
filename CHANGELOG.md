@@ -165,9 +165,10 @@ change. Decisions: `docs/log/2026-10-01_2132_decision_docx-roundtrip-*.md`
   one batch of pending proposals by `human:docx:<name from the file>`
   (or `--as edits`: direct edits with `origin: "reconcile"` and a
   `docx-sha256:` source). Conversion noise is not reported, text edits keep
-  the original markup, splits and merges are linked with `data-depends-on`,
-  changes colliding with edits made since the export are reported as
-  conflicts, and re-importing the same file writes nothing new (unless the
+  the original markup, splits and merges are linked with `data-depends-on`
+  (when the first part of a split or merge is a conflict, so is the other
+  part: nothing is deleted or repeated), changes colliding with edits made
+  since the export are reported as conflicts, and re-importing the same file writes nothing new (unless the
   first import's proposals were rejected). Returns a
   `RevisionImportReport` (`--format json`).
 - `propose_delete(..., depends_on=)` — a delete card can name the card it is

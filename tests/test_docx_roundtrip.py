@@ -1183,3 +1183,157 @@ def test_a_formatting_change_never_drops_a_link_docx_cannot_carry():
     report = d.import_revision(c.save())
     assert not report.proposals
     assert [cf.unit for cf in report.conflicts] == [uid]
+
+
+# =============================================================================
+# a merge's delete and a split's addition never go out without their head
+
+
+def _owner_edits(d: aim.AimDocument, uid: str) -> None:
+    d.modify_chunk(uid, d.chunk(uid).html.replace("</p>", " (owner)</p>"), author=A)
+
+
+MERGE_A = "<p>Alpha <b>bold</b> text in clause one of the agreement.</p>"
+MERGE_B = "<p>Second paragraph <em>says</em> something else entirely here.</p>"
+PLAIN_A = "<p>Alpha plain text in clause one of the agreement.</p>"
+
+
+@pytest.mark.parametrize("changes", ["proposals", "edits"])
+@pytest.mark.parametrize("why", ["markup", "drift"])
+def test_a_merge_whose_survivor_is_a_conflict_deletes_nothing(changes, why):
+    d, (a, b) = _three(MERGE_A if why == "markup" else PLAIN_A, MERGE_B)
+    c = Colleague(docx_bytes(d, roundtrip_marks=True))
+    c.merge(a, b)
+    data = c.save()
+    if why == "drift":
+        _owner_edits(d, a)
+    report = d.import_revision(data, changes=changes)
+    assert a in [cf.unit for cf in report.conflicts]
+    assert b in [cf.unit for cf in report.conflicts]
+    assert report.deleted == [] and report.modified == []
+    assert not d.proposals
+    assert "Second paragraph says" in d.chunk(b).text  # nothing lost
+    _healthy(d)
+
+
+@pytest.mark.parametrize("changes", ["proposals", "edits"])
+@pytest.mark.parametrize("why", ["markup", "drift"])
+def test_a_split_whose_head_is_a_conflict_adds_nothing(changes, why):
+    html = (
+        "<p>See the terms for details. Payment is <b>due</b> within 30 days.</p>"
+        if why == "markup"
+        else "<p>See the terms for details. Payment is due within 30 days.</p>"
+    )
+    d, (a,) = _three(html)
+    c = Colleague(docx_bytes(d, roundtrip_marks=True))
+    c.split(a, "Payment is")
+    data = c.save()
+    if why == "drift":
+        _owner_edits(d, a)
+    report = d.import_revision(data, changes=changes)
+    assert [cf.unit for cf in report.conflicts] == [a, a]
+    assert report.added == [] and report.modified == []
+    assert not d.proposals
+    assert [ch.id for ch in d.chunks] == [a]
+    assert d.chunk(a).text.count("Payment is") == 1  # never duplicated
+    _healthy(d)
+
+
+def test_a_merge_delete_is_dropped_with_its_unproposable_modify(legal, monkeypatch):
+    """The emitter drops a dependent card whose head could not be proposed."""
+    doc = _copy(legal)
+    ids = _body_ids(doc)
+    c = Colleague(docx_bytes(doc, roundtrip_marks=True))
+    c.merge(ids[24], ids[25])
+    data = c.save()
+    real = aim.AimDocument.propose_modify
+
+    def refuse(self, uid, *args, **kwargs):
+        if uid == ids[24]:
+            raise InvalidOperation("refused for the test")
+        return real(self, uid, *args, **kwargs)
+
+    monkeypatch.setattr(aim.AimDocument, "propose_modify", refuse)
+    report = doc.import_revision(data)
+    assert not report.proposals and report.deleted == []
+    assert {cf.unit for cf in report.conflicts} == {ids[24], ids[25]}
+    assert ids[25] in [ch.id for ch in doc.chunks]
+
+
+# =============================================================================
+# a container whose skeleton changed keeps every item guard
+
+
+def _reexported(d: aim.AimDocument, change) -> Colleague:
+    """The file a colleague's container-level change (numbering, a header
+    row) produces: the same markers, the real export's manifest."""
+    changed = _copy(d)
+    change(changed)
+    c = Colleague(docx_bytes(changed, roundtrip_marks=True))
+    good = Colleague(docx_bytes(d, roundtrip_marks=True))
+    for n, blob in good.parts.items():
+        if n.startswith("customXml/"):
+            c.parts[n] = blob
+    return c
+
+
+def _bold_last_run(c: Colleague, uid: str) -> None:
+    run = c.paragraph(uid).findall(q("r"))[-1]
+    rpr = run.find(q("rPr"))
+    if rpr is None:
+        rpr = etree.Element(q("rPr"))
+        run.insert(0, rpr)
+    etree.SubElement(rpr, q("b"))
+
+
+def test_a_container_change_never_drops_an_items_link():
+    d = aim.new_document(title="List")
+    d.add_chunk(
+        '<ul data-aim-container=""><li data-aim="">See <a href="https://x.example">the terms'
+        '</a>; pay within 30 days.</li><li data-aim="">Two</li></ul>',
+        author=A,
+    )
+    cid = d.containers[0]
+    first = d.chunks[0].id
+
+    def number(doc):
+        doc._state.container_node(cid).tag = "ol"
+
+    c = _reexported(d, number)
+    _bold_last_run(c, first)
+    before = d.dumps()
+    report = d.import_revision(c.save())
+    assert not report.proposals
+    assert cid in [cf.unit for cf in report.conflicts]
+    assert d.dumps() == before
+
+
+def test_a_header_row_change_never_drops_a_cells_link():
+    d = aim.new_document(title="Table")
+    d.add_chunk(
+        '<table data-aim-container=""><tr data-aim=""><td>Name</td><td>Value</td></tr>'
+        '<tr data-aim=""><td>Terms</td><td>See <a href="https://x.example">the terms</a> now.'
+        "</td></tr></table>",
+        author=A,
+    )
+    cid = d.containers[0]
+    row = d.chunks[1].id
+    c = Colleague(docx_bytes(d, roundtrip_marks=True))
+    tr = next(c.body.iter(q("tr")))
+    trpr = tr.find(q("trPr"))
+    if trpr is None:
+        trpr = etree.Element(q("trPr"))
+        tr.insert(1 if tr.find(q("tblPrEx")) is not None else 0, trpr)
+    etree.SubElement(trpr, q("tblHeader"))  # "repeat as header row"
+    cell = list(c.paragraph(row).getparent().getparent().iter(q("p")))[-1]
+    run = cell.findall(q("r"))[-1]
+    rpr = run.find(q("rPr"))
+    if rpr is None:
+        rpr = etree.Element(q("rPr"))
+        run.insert(0, rpr)
+    etree.SubElement(rpr, q("b"))
+    before = d.dumps()
+    report = d.import_revision(c.save())
+    assert not report.proposals
+    assert cid in [cf.unit for cf in report.conflicts]
+    assert d.dumps() == before
