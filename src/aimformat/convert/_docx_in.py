@@ -55,12 +55,25 @@ from typing import Any, BinaryIO
 
 from ..canonical import escape_attr, escape_text
 from ..document import AimDocument, new_document
+from ..errors import ParseError
 from ..events import Actor, external
-from ..ingest import _containerize
+from ..ingest import _containerize, finish_import
 from ..pagesetup import _fmt_mm
 from ..registry import REGISTRY
 from ._docx_pages import _match_named_size
+from ._docx_revisions import (
+    SRC_ATTR,
+    Comment,
+    collect_revisions,
+    comment_anchors,
+    read_comments,
+    resolve_view,
+    revision_count,
+    stamp_sources,
+    unreachable_part_revisions,
+)
 from ._docx_seam import (
+    DocxPackage,
     NumberDraw,
     ParsedDocx,
     data_uri,
@@ -69,20 +82,21 @@ from ._docx_seam import (
     half_points_to_pt,
     highlight_hex,
     model_dump,
+    open_docx_package,
     paragraph_checkbox,
     paragraph_math_text,
     paragraph_run_baseline,
-    parse_docx,
     picture_relationships,
     resolve_color,
     shading_hex,
     symbol_char,
     table_look_val,
-    textbox_paragraphs,
+    textbox_paragraph_pairs,
     twips_to_mm,
 )
+from ._report import CommentNote, ImportReport, ImportResult, RevisionNote
 
-__all__ = ["convert_docx"]
+__all__ = ["convert_docx", "import_docx_source"]
 
 _HEADING_STYLE = re.compile(r"^[Hh]eading\s*([1-9])$")
 _ALIGN_CLASS = {
@@ -103,6 +117,16 @@ _Scheme = tuple[str, int]
 _IMG_TAG = re.compile(r"<img\b[^>]*>")
 _IMG_ONLY = re.compile(r"(?:<img\b[^>]*>)+")
 _NUM_LABEL = re.compile(r"^[0-9]+(?:\.[0-9]+)*\.?[\s\xa0]+")
+_SRC_IN = re.compile(r'data-aim-src="([^"]*)"')
+_W_TR = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}tr"
+
+
+def _src_of(el: Any) -> str | None:
+    """The source key(s) stamped on an OOXML element, if any."""
+    return el.get(SRC_ATTR) if el is not None else None
+
+
+_TRACKED_MODES = ("propose", "accept", "reject")
 
 
 def convert_docx(
@@ -112,13 +136,124 @@ def convert_docx(
     lang: str = "en",
     author: Actor | None = None,
     theme: dict[str, str] | None = None,
+    tracked: str = "propose",
+    max_revisions: int = 5000,
+    max_proposals: int = 500,
 ) -> AimDocument:
     """Convert a DOCX file (path, bytes, or stream) into an AimDocument."""
-    name = Path(source).stem if isinstance(source, (str, Path)) else "document"
-    parsed = parse_docx(str(source) if isinstance(source, Path) else source)
-    conv = _Converter(parsed)
-    blocks = conv.blocks()
+    return import_docx_source(
+        source,
+        title=title,
+        lang=lang,
+        author=author,
+        theme=theme,
+        tracked=tracked,
+        max_revisions=max_revisions,
+        max_proposals=max_proposals,
+    ).document
 
+
+def import_docx_source(
+    source: str | Path | bytes | BinaryIO,
+    *,
+    title: str | None = None,
+    lang: str = "en",
+    author: Actor | None = None,
+    theme: dict[str, str] | None = None,
+    tracked: str = "propose",
+    max_revisions: int = 5000,
+    max_proposals: int = 500,
+) -> ImportResult:
+    """Convert a DOCX into an AimDocument plus its :class:`ImportReport`.
+
+    ``tracked`` decides what Word revisions become: ``"propose"`` (default)
+    keeps the ORIGINAL text as the body and writes every tracked change as a
+    pending proposal attributed to its Word author, so accept-all equals
+    Word's Accept All and reject-all equals Word's Reject All; ``"accept"``
+    and ``"reject"`` import that resolved text with no proposals. A document
+    without revisions takes the same single-view path either way.
+    """
+    if tracked not in _TRACKED_MODES:
+        raise ValueError(f"tracked must be one of {', '.join(_TRACKED_MODES)}, not {tracked!r}")
+    if isinstance(source, (str, Path)):
+        name, base = Path(source).stem, Path(source).name
+    else:
+        name, base = "document", "document.docx"
+    digest = _source_digest(source)
+    package = open_docx_package(str(source) if isinstance(source, Path) else source)
+    report = ImportReport(source=base)
+    who = author or external("docx-import")
+    source_ref = [digest] if digest else None
+    comments = read_comments(package.archive)
+    revisions = revision_count(package.document_xml)
+    if not revisions and not comments:
+        parsed = package.parse(package.document_xml)
+        conv = _Converter(parsed)
+        blocks = conv.blocks()
+        doc = _imported_document(
+            parsed,
+            conv,
+            blocks,
+            title=title,
+            lang=lang,
+            theme=theme,
+            who=who,
+            name=name,
+            base=base,
+            source=source_ref,
+        )
+        return ImportResult(doc, report)
+    return _import_tracked(
+        package,
+        report,
+        comments,
+        revisions,
+        title=title,
+        lang=lang,
+        theme=theme,
+        who=who,
+        name=name,
+        base=base,
+        source=source_ref,
+        tracked=tracked,
+        max_revisions=max_revisions,
+        max_proposals=max_proposals,
+    )
+
+
+def _source_digest(source: object) -> str | None:
+    """``sha256:<hex>`` of the input bytes — provenance for the baseline's
+    ``source`` field, carrying no content. A stream is not read twice."""
+    import hashlib
+
+    if isinstance(source, (str, Path)):
+        try:
+            data = Path(source).read_bytes()
+        except OSError:
+            return None
+    elif isinstance(source, (bytes, bytearray)):
+        data = bytes(source)
+    else:
+        return None
+    return "sha256:" + hashlib.sha256(data).hexdigest()
+
+
+def _imported_document(
+    parsed: ParsedDocx,
+    conv: _Converter,
+    blocks: list[str],
+    *,
+    title: str | None,
+    lang: str,
+    theme: dict[str, str] | None,
+    who: Actor,
+    name: str,
+    base: str,
+    source: list[str] | None,
+) -> AimDocument:
+    """The body every DOCX import builds: theme, title, blocks, page setup —
+    recorded as one baseline (§6.9), with the TOC cache when there are
+    headings."""
     slots = _safe_theme_slots(parsed)
     if theme:
         slots.update(theme)  # the caller's slots win over the derived ones
@@ -127,23 +262,218 @@ def convert_docx(
         lang=lang,
         theme=slots or None,
     )
-    who = author or external("docx-import")
     with doc.batch():
         for markup in blocks:
-            doc.add_chunk(
-                _containerize(markup),
-                author=who,
-                explanation=f"Imported from {name!r}",
-            )
+            doc.add_chunk(_containerize(markup), author=who)
         page = conv.page_setup()
         if page is not None:
             try:
-                doc.set_page_setup(
-                    page, author=who, explanation="Page setup from the source document"
-                )
+                doc.set_page_setup(page, author=who)
             except Exception:  # degenerate sectPr: keep the content, skip the page
                 pass
-    return doc
+    return finish_import(doc, author=who, explanation=f"Imported from {base!r}", source=source)
+
+
+def _import_tracked(
+    package: DocxPackage,
+    report: ImportReport,
+    comments: list[Comment],
+    revision_total: int,
+    *,
+    title: str | None,
+    lang: str,
+    theme: dict[str, str] | None,
+    who: Actor,
+    name: str,
+    base: str,
+    source: list[str] | None,
+    tracked: str,
+    max_revisions: int,
+    max_proposals: int,
+) -> ImportResult:
+    """The two-view path: a document with Word revisions and/or comments."""
+    from ._docx_tracked import (
+        assign_ids,
+        normalize_date,
+        units_of,
+        write_lane,
+    )
+
+    if tracked == "propose" and revision_total > max_revisions:
+        raise ParseError(
+            f"the document carries {revision_total} tracked-change records, more than "
+            f"max_revisions={max_revisions}; import it with tracked='accept' or "
+            "tracked='reject', or raise max_revisions"
+        )
+    xml = package.document_xml
+    stamp_sources(xml)
+    facts = collect_revisions(xml)
+    unreachable = dict(facts.unreachable)
+    for part, count in unreachable_part_revisions(package.archive).items():
+        unreachable[part] = unreachable.get(part, 0) + count
+    has_revisions = bool(facts.revisions)
+    reject_root = resolve_view(xml, "reject") if has_revisions else xml
+    accept_root = resolve_view(xml, "accept") if has_revisions else xml
+    body_root = accept_root if tracked == "accept" else reject_root
+
+    parsed_o = package.parse(body_root)
+    conv_o = _Converter(parsed_o, track_src=True)
+    o_units = units_of(conv_o.blocks(), "O")
+    doc = _imported_document(
+        parsed_o,
+        conv_o,
+        [u.markup for u in o_units],
+        title=title,
+        lang=lang,
+        theme=theme,
+        who=who,
+        name=name,
+        base=base,
+        source=source,
+    )
+    assign_ids(o_units, doc)
+    report.tracked = tracked if has_revisions else None
+
+    cards_of_rev: dict[int, list[str]] = {}
+    f_units: list = []
+    f_card_ids: dict[str, str] = {}
+    noise = 0
+    if has_revisions and tracked == "propose":
+        parsed_f = package.parse(accept_root)
+        conv_f = _Converter(parsed_f, track_src=True)
+        f_units = units_of(conv_f.blocks(), "F")
+        page_o, page_f = conv_o.page_setup(), conv_f.page_setup()
+        page_revs = [r for r in facts.revisions if r.where == "section"]
+        page_markup = None
+        if page_f is not None and page_f != page_o and page_revs:
+            page_markup = doc._doc_settings_markup(page_f)
+        lane = write_lane(
+            doc,
+            o_units,
+            f_units,
+            facts,
+            page_markup=page_markup,
+            page_revs=page_revs,
+            importer=external("docx-import"),
+            max_proposals=max_proposals,
+        )
+        doc = lane.document
+        noise = lane.plan.noise
+        for index, revs in enumerate(lane.plan.spec_revs):
+            card = lane.card_ids[index]
+            if card is None:
+                continue
+            report.proposals.append(card)
+            for rev in revs:
+                cards_of_rev.setdefault(rev.index, []).append(card)
+        for key, index in lane.plan.f_cards.items():
+            card = lane.card_ids[index]
+            if card is not None:
+                f_card_ids[key] = card
+        if lane.coarse:
+            report.warnings.append(
+                "tracked changes inside lists or tables were proposed as whole-container "
+                "replacements (finer alignment did not validate)"
+            )
+
+    for rev in facts.revisions:
+        cards = tuple(dict.fromkeys(cards_of_rev.get(rev.index, ())))
+        reason = None
+        if tracked == "accept":
+            reason = "accepted on import"
+        elif tracked == "reject":
+            reason = "rejected on import"
+        elif not cards:
+            reason = (
+                "formatting the format cannot express"
+                if rev.where in ("props", "section", "cell") or rev.kind.endswith("Change")
+                else "no visible difference after conversion"
+            )
+        report.revisions.append(
+            RevisionNote(
+                kind=rev.kind,
+                author=rev.author,
+                date=normalize_date(rev.date) or rev.date,
+                excerpt=rev.text,
+                cards=cards,
+                reason=reason,
+            )
+        )
+
+    if comments:
+        _report_comments(report, comments, reject_root, accept_root, o_units, f_units, f_card_ids)
+
+    uncarried = sum(1 for note in report.revisions if not note.cards)
+    if tracked == "propose" and uncarried:
+        report.warnings.append(
+            f"{uncarried} tracked change(s) produced no proposal (formatting the format "
+            "cannot express, or no visible difference after conversion)"
+        )
+    if noise:
+        report.warnings.append(
+            f"{noise} block(s) converted differently in the two views without a tracked "
+            "change of their own (for example list numbering); the original was kept"
+        )
+    for part, count in sorted(unreachable.items()):
+        report.warnings.append(f"{count} tracked change(s) in {part} were not imported")
+    if report.comments:
+        report.warnings.append(
+            f"{len(report.comments)} Word comment(s) were not carried (the format has no "
+            "comment construct); the import report lists them"
+        )
+    return ImportResult(doc, report)
+
+
+def _report_comments(
+    report: ImportReport,
+    comments: list[Comment],
+    reject_root: Any,
+    accept_root: Any,
+    o_units: list,
+    f_units: list,
+    f_card_ids: dict[str, str],
+) -> None:
+    """Comments become report entries: anchor text from whichever view holds
+    the range (the original first), the chunk from the body or — for text
+    only the accept view has — the pending card that carries it."""
+    in_o = comment_anchors(reject_root)
+    in_f = comment_anchors(accept_root) if accept_root is not reject_root else in_o
+    o_ids = _ids_by_member(o_units)
+    for comment in comments:
+        o_anchor, f_anchor = in_o.get(comment.id), in_f.get(comment.id)
+        chunk_id = None
+        anchor_text = ""
+        if o_anchor is not None and (o_anchor[1] or f_anchor is None or not f_anchor[1]):
+            key, anchor_text = o_anchor
+            chunk_id = o_ids.get(key or "")
+        elif f_anchor is not None:
+            key, anchor_text = f_anchor
+            chunk_id = f_card_ids.get(key or "") or o_ids.get(key or "")
+        report.comments.append(
+            CommentNote(
+                id=comment.id,
+                author=comment.author,
+                date=comment.date,
+                text=comment.text,
+                anchor_text=anchor_text,
+                chunk_id=chunk_id,
+                resolved=comment.resolved,
+                parent_id=comment.parent_id,
+            )
+        )
+
+
+def _ids_by_member(units: list) -> dict[str, str]:
+    out: dict[str, str] = {}
+    for unit in units:
+        for item in unit.items:
+            for key in item.members:
+                if item.id:
+                    out.setdefault(key, item.id)
+        for key in unit.members:
+            if unit.id:
+                out.setdefault(key, unit.id)
+    return out
 
 
 def _derived_theme_slots(parsed: ParsedDocx) -> dict[str, str]:
@@ -235,10 +565,20 @@ def _safe_theme_slots(parsed: ParsedDocx) -> dict[str, str]:
 
 
 class _Converter:
-    """One parsed DOCX → an ordered list of .aim block markups."""
+    """One parsed DOCX → an ordered list of .aim block markups.
 
-    def __init__(self, parsed: ParsedDocx):
+    ``track_src`` is the tracked-change importer's provenance mode: every
+    emitted block, list item and table row carries its source key (stamped
+    on the OOXML by :mod:`._docx_revisions`) as a private ``data-aim-src``
+    attribute, so two conversions of the same file can be aligned by
+    identity. The importer strips the attribute before anything is written;
+    the markup is otherwise identical to an untracked conversion.
+    """
+
+    def __init__(self, parsed: ParsedDocx, *, track_src: bool = False):
         self.p = parsed
+        self.track_src = track_src
+        self._src: str | None = None  # source key(s) of the paragraph being walked
         self.title_text: str | None = None
         self._blocks: list[str] = []
         # consecutive list paragraphs buffer:
@@ -460,14 +800,39 @@ class _Converter:
 
     # -- paragraphs --------------------------------------------------------
 
-    def _paragraph(self, para: Any, elem: Any = None) -> None:
+    def _src_attr(self, suffix: str = "", src: str | None = None) -> str:
+        """The provenance attribute for the block being emitted ('' unless
+        tracking). *suffix* derives a key for a block the paragraph
+        generates beside itself (a page break, a figure)."""
+        value = src if src is not None else self._src
+        if not self.track_src or not value:
+            return ""
+        if suffix:
+            value = value.split()[0] + suffix
+        return f' data-aim-src="{escape_attr(value)}"'
+
+    def _page_break(self, suffix: str) -> str:
+        if not self.track_src:
+            return _PAGE_BREAK
+        return f"<aim-page-break{self._src_attr(suffix)}></aim-page-break>"
+
+    def _paragraph(self, para: Any, elem: Any = None, src_elem: Any = None) -> None:
+        source = elem if elem is not None else src_elem
+        saved_src = self._src
+        self._src = _src_of(source) if self.track_src else None
+        try:
+            self._paragraph_body(para, elem)
+        finally:
+            self._src = saved_src
+
+    def _paragraph_body(self, para: Any, elem: Any = None) -> None:
         direct = model_dump(para.p_pr)
         style_id = direct.pop("p_style", None)
         effective = self.p.resolver.resolve_with_direct(style_id, direct)
 
         if effective.get("page_break_before"):
             self._flush_items()
-            self._blocks.append(_PAGE_BREAK)
+            self._blocks.append(self._page_break("#before"))
 
         self._emitted_images = set()
         inline, trailing_break = self._inline_markup(para, style_id)
@@ -557,7 +922,7 @@ class _Converter:
                         int(num_pr["num_id"]),
                         int(num_pr.get("ilvl") or 0),
                         inline,
-                        self._class_attr(effective),
+                        self._class_attr(effective) + self._src_attr(),
                         (draw.value if draw is not None and draw.value else 1),
                     )
                 )
@@ -569,7 +934,8 @@ class _Converter:
                 self._flush_items()
                 attr = self._class_attr(effective)
                 self._blocks.extend(
-                    f"<figure{attr}>{img}</figure>" for img in _IMG_TAG.findall(inline)
+                    f"<figure{attr}{self._src_attr(f'#fig{i}')}>{img}</figure>"
+                    for i, img in enumerate(_IMG_TAG.findall(inline))
                 )
             else:
                 self._flush_items()
@@ -585,7 +951,7 @@ class _Converter:
             self._blocks.append(self._block("p", "", effective, clause, prefix_attr))
         if trailing_break:
             self._flush_items()
-            self._blocks.append(_PAGE_BREAK)
+            self._blocks.append(self._page_break("#after"))
 
         # Pictures dpc's typed model cannot see — grouped DrawingML artwork
         # (a row of logos) and legacy VML — follow their anchor as figures.
@@ -612,14 +978,16 @@ class _Converter:
                 # sit next to each other the way the group draws them —
                 # a figure each would stack them down the page instead
                 self._flush_items()
-                self._blocks.append(f"<figure>{''.join(recovered)}</figure>")
+                self._blocks.append(
+                    f"<figure{self._src_attr('#pic')}>{''.join(recovered)}</figure>"
+                )
 
         # textbox content (w:txbxContent) has no place in reading order, so it
         # follows its anchor paragraph as ordinary paragraphs; None element →
         # a textbox paragraph itself, which is not re-scanned (one level deep)
         if elem is not None:
-            for tb_para in textbox_paragraphs(elem):
-                self._paragraph(tb_para, None)
+            for tb_para, tb_elem in textbox_paragraph_pairs(elem):
+                self._paragraph(tb_para, None, tb_elem)
 
     def _with_supplements(self, inline: str, elem: Any) -> str:
         """Fold a paragraph's XML-only content into its inline markup: a
@@ -723,7 +1091,7 @@ class _Converter:
         if tag == "h1" and self.title_text is None:
             # a clause label is not part of the title ("1. Definitions")
             self.title_text = _NUM_LABEL.sub("", _plain_text(inline)).strip() or None
-        return f"<{tag}{attr}{attrs}>{inline}</{tag}>"
+        return f"<{tag}{attr}{attrs}{self._src_attr()}>{inline}</{tag}>"
 
     @staticmethod
     def _class_attr(effective: dict, extra: Sequence[str] = ()) -> str:
@@ -940,13 +1308,22 @@ class _Converter:
             if ilvl > level:
                 opening = items[i][4]
                 entered = items[i][0]
+                first_attr = items[i][3]
                 nested, i = self._nest(items, i, ilvl)
                 open_tag, close_tag = self._open_list(entered, ilvl, opening)
                 nested_markup = f"{open_tag}{nested}{close_tag}"
                 if parts:
                     parts[-1] = parts[-1][: -len("</li>")] + nested_markup + "</li>"
                 else:
-                    parts.append(f"<li>{nested_markup}</li>")
+                    # a synthesised wrapper item: keyed after the item it
+                    # hangs the deeper list from, so alignment can name it
+                    src = _SRC_IN.search(first_attr)
+                    wrap = (
+                        f' data-aim-src="{src.group(1).split()[0]}#wrap"'
+                        if src and self.track_src
+                        else ""
+                    )
+                    parts.append(f"<li{wrap}>{nested_markup}</li>")
                 continue
             parts.append(f"<li{attr}>{markup}</li>")
             i += 1
@@ -961,6 +1338,15 @@ class _Converter:
         rows = getattr(table, "tr", []) or []
         if not rows:
             return None
+        # source keys ride the rows (and the table) in provenance mode; dpc
+        # parses exactly the direct w:tr children, so the pairing is exact
+        row_srcs: list[str] = [""] * len(rows)
+        table_src = ""
+        if self.track_src and elem is not None:
+            row_elems = [c for c in elem if getattr(c, "tag", None) == _W_TR]
+            if len(row_elems) == len(rows):
+                row_srcs = [self._src_attr(src=_src_of(r)) for r in row_elems]
+            table_src = self._src_attr(src=_src_of(elem))
         # Word tables usually carry their whole look in a table STYLE, not on
         # the cells: a shaded header row, banded body rows, white header text
         tbl_pr = model_dump(getattr(table, "tbl_pr", None))
@@ -1019,9 +1405,9 @@ class _Converter:
                 )
                 out.append(f"<{tag}{attrs}>{self._cell_markup(cell)}</{tag}>")
                 col += colspan
-            row_html = "<tr>" + "".join(out) + "</tr>"
+            row_html = f"<tr{row_srcs[ri]}>" + "".join(out) + "</tr>"
             (head if header_row else body).append(row_html)
-        html = "<table>"
+        html = f"<table{table_src}>"
         if head:
             html += "<thead>" + "".join(head) + "</thead>"
         if body:

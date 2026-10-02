@@ -358,11 +358,18 @@ class TestVerifierHardening:
         findings = aim.lint_text(self.hostile(basic_doc, mutate))
         assert any(f.level == "error" for f in findings)
 
-    def test_meta_missing_summary_is_M004(self, basic_doc):
+    def test_meta_with_neither_summary_nor_toc_is_M004(self, basic_doc):
+        text = basic_doc.dumps().replace(
+            "<title>", '<script type="application/aim-meta+json">\n{}\n</script>\n<title>'
+        )
+        assert "M004" in {f.code for f in aim.lint_text(text)}
+
+    def test_toc_only_meta_is_valid_since_0_6(self, basic_doc):
+        # §8.1 (IMPORT-D13): summary is optional; a TOC alone is a cache
         text = basic_doc.dumps().replace(
             "<title>", '<script type="application/aim-meta+json">\n{"toc":[]}\n</script>\n<title>'
         )
-        assert "M004" in {f.code for f in aim.lint_text(text)}
+        assert "M004" not in {f.code for f in aim.lint_text(text)}
 
     def test_asset_registry_not_exempt_from_security(self, basic_doc):
         text = basic_doc.dumps().replace(

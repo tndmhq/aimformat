@@ -1,9 +1,11 @@
-# The `.aim` document format — specification v0.5
+# The `.aim` document format — specification v0.6
 
-**Status: v0.5 (draft; v0.4 plus dynamic numbering — outline-numbered blocks
-and list formats whose numbers are computed at render time rather than
-written into the text, §3.8; v0.4 added literal per-element typography,
-v0.3 literal per-element paint).** This is the
+**Status: v0.6 (draft; v0.5 plus the `baseline` history event — a document
+whose content did not arrive by editing records its origin once, as a
+snapshot, instead of one `add` per construct, §6.9 — and a TOC cache that may
+stand without a summary and carries its own staleness marker, §8.1; v0.5
+added dynamic numbering, §3.8, v0.4 literal per-element typography, v0.3
+literal per-element paint).** This is the
 normative specification
 for `.aim`, an AI-native document format in which AI proposals and human
 accept/reject decisions are first-class file primitives. The reference
@@ -15,11 +17,11 @@ Maintained by the aimformat project. Licensed MIT, like everything in this
 repository. Contributions: see [`CONTRIBUTING.md`](CONTRIBUTING.md).
 
 **Versioning.** A document declares the spec version it targets in
-`<html data-aim-version="0.5">`. The spec follows SemVer with the 0.x
+`<html data-aim-version="0.6">`. The spec follows SemVer with the 0.x
 caveat: **every 0.x minor may break**; parsers MUST ignore unknown JSON
 fields (with `x_*` reserved for vendor extensions) and MUST treat unknown
 event kinds or elements as errors within the same minor version. The
-embedded stylesheet is versioned with the spec (`data-aim-css="0.5"`).
+embedded stylesheet is versioned with the spec (`data-aim-css="0.6"`).
 
 The key words MUST, MUST NOT, SHOULD, SHOULD NOT, and MAY are to be
 interpreted as described in RFC 2119. Sections marked *informative* define
@@ -103,17 +105,17 @@ see §4.4 for id rules):
 
 ```html
 <!doctype html>
-<html data-aim-version="0.5" lang="en">
+<html data-aim-version="0.6" lang="en">
 <head>
 <meta charset="utf-8">
 <title>Q3 Proposal — Acme GmbH</title>
 <script type="application/aim-meta+json">
-{"summary":{"as_of_seq":58,"doc_hash":"sha256:9f2c…","model":"model-id","text":"Three-year services proposal…"},"toc":[…]}
+{"summary":{"as_of_seq":58,"doc_hash":"sha256:9f2c…","model":"model-id","text":"Three-year services proposal…"},"toc":[…],"toc_doc_hash":"sha256:9f2c…"}
 </script>
 <script type="application/aim-doc+json">
 {"page":{"margins":{"bottom":"15mm","left":"15mm","right":"15mm","top":"15mm"},"orientation":"portrait","size":"A4"}}
 </script>
-<style data-aim-css="0.5">/* machine-managed stylesheet, §3.4 */</style>
+<style data-aim-css="0.6">/* machine-managed stylesheet, §3.4 */</style>
 <style data-aim-theme>:root{--aim-brand-1:#1a73e8}</style>
 </head>
 <body>
@@ -210,7 +212,7 @@ The canonical note for this spec version:
 
 ```html
 <!--
-aim-note: This file is an AIM document (open format, v0.5) — valid HTML plus
+aim-note: This file is an AIM document (open format, v0.6) — valid HTML plus
 chunk identity, a pending-suggestions lane, and an edit history.
 Agent docs: https://aimformat.com/llms.txt
 The reliable way to edit this file is the `aimformat` tooling, which manages
@@ -363,7 +365,7 @@ remains valid; renderers and exporters read each slide's own declared size.
 One static stylesheet per spec minor version — an element base layer,
 every registered utility, theme-slot defaults, and the `aim-*` chrome
 (slide canvas framing/scaling, proposal cards). It is embedded by default
-(`<style data-aim-css="0.5">`) so documents are self-contained, offline,
+(`<style data-aim-css="0.6">`) so documents are self-contained, offline,
 and archival; it is **machine-managed and derived**: tools regenerate it
 freely, and it is excluded from content hashing. Documents SHOULD embed it;
 a document without it still conforms but degrades at the raw tier.
@@ -471,6 +473,14 @@ resolving a paint-bearing proposal under an older declaration. The resolution
 and upgrade share a batch. If an in-place proposal amendment first introduces
 paint, its card moves into the upgrade event's batch even though the amendment
 itself remains unrecorded (§5.4).
+
+One recording raises the declaration without a version event: a `baseline`
+(§6.9). A baseline replaces the retained log, so no earlier state survives to
+record the old version against; recording one sets the declaration to at
+least the version that defines baselines, inside the snapshot itself. A
+baseline retained under an older declaration is markup from a newer spec era
+(S034). Operations the user did not ask for — flattening, adopting a file
+declared at an older version — never raise a declaration as a side effect.
 
 `aim:version` is a reserved singleton like `aim:theme` and `aim:doc`: it can
 be modified but never deleted or moved. It is **not** a proposal target —
@@ -760,6 +770,7 @@ find-in-page, or the accessibility tree.
 | `direct_edit` | `seq, kind, t, target, action, author, batch` | `before, after, anchor, from, to, origin, explanation, source` | yes |
 | `resolution` | `seq, kind, t, proposal, target, action, decision, proposed_by, proposed_at, decided_by, batch` | `before, proposed, applied, anchor, from, to, superseded_by, explanation, source` | only if `decision:"accepted"` |
 | `checkpoint` | `seq, kind, t, label, doc_hash` | | no |
+| `baseline` (since v0.6) | `seq, kind, t, label, doc_hash, snapshot` | `author, explanation, source` | no — it is the origin (§6.9) |
 
 `action` ∈ `add | modify | delete | move`; `decision` ∈ `accepted |
 rejected | superseded`; `origin` ∈ `user | undo | redo | reconcile`.
@@ -781,7 +792,8 @@ version upgrade in the same batch (§3.7).
 ### 6.3 Ordering, actors, batches
 
 Ordering is defined by `seq` alone — strictly contiguous within the
-retained log (a documented gap at the start after pruning). `t` (ISO-8601
+retained log (a documented gap at the start after pruning; a log that
+begins with a `baseline` starts at that baseline's seq). `t` (ISO-8601
 UTC) is informational; wall clocks skew and MUST NOT be used for ordering.
 Actors are `{type: human|agent|external, id?, model?}` — `id` free-form,
 `model` an exact model identifier, `external` for tool-synthesized events.
@@ -833,18 +845,27 @@ only records origins.
 ### 6.7 Time travel and verification
 
 State at seq *N* = current body and theme, then apply inverses of
-state-changing events from latest down to *N+1*. Verifiers MUST check
+state-changing events from latest down to *N+1*. State at seq *N* is
+defined for *N* ≥ the baseline's seq when the log begins with one (§6.9);
+nothing before a baseline is recorded. Verifiers MUST check
 **payload byte-equality along the chain** (each event's recorded result
 must equal the reconstructed serialization of its target — this is what
 detects out-of-band edits) and MUST verify `doc_hash` at every checkpoint
 crossed. Checkpoints are zero-copy: named, pinned `(seq, label, doc_hash)`
-anchors.
+anchors. Verifiers MUST compare the reconstruction at a baseline with its
+snapshot, line for line, and with its `doc_hash`. Of the `<html>` open tag
+only the declared version is recorded state (§3.7): the reconstruction takes
+the tag's other attributes (`lang`, `dir`) from the snapshot, because no
+event records a change to them.
 
 ### 6.8 Lifecycle operations
 
-Defined operations (SDK/CLI verbs): **flatten** (drop history → clean
-file), **prune** (truncate events before a seq/checkpoint — limits how far
-back travel goes, trivially safe), resolve-all-pending on export
+Defined operations (SDK/CLI verbs): **flatten** (collapse the history to one
+checkpoint at the next seq → clean file; a document without history stays
+without it), **prune** (truncate events before a seq, checkpoint or baseline
+label — limits how far back travel goes, trivially safe), **baseline**
+(replace the retained log with one `baseline` event for the current state,
+§6.9), resolve-all-pending on export
 (accept-all / reject-all, caller's choice), **gc** (§9.3), and
 **reconcile** (detect out-of-band edits by comparing the body against the
 last consistent state, then synthesize `direct_edit` events with
@@ -852,11 +873,79 @@ last consistent state, then synthesize `direct_edit` events with
 the tool, and whatever it declares becomes truth going forward — also the
 adoption path for hand-edited files). The reference toolkit implements
 reconcile as `AimDocument.reconcile()` / `aim reconcile`; it requires the
-full retained log (reconciling a pruned history is an error there — the
-baseline below the prune floor is unrecoverable). It also refuses an
+full retained log, or a log that begins with a baseline (reconciling a pruned
+history is an error there — the state below the prune floor is
+unrecoverable; `baseline` accepts such a file as it is). Adopting a file with
+no history records one baseline when the file declares a version that
+defines baselines, and one `add` per construct below it or when a construct
+could not be a snapshot entry (H008, §6.9). It also refuses an
 out-of-band first-paint edit that hand-bumped the declared version when the
 old marker cannot be recovered; the file must be restored to that marker so
 reconcile can record the upgrade (§3.7).
+
+### 6.9 Baselines (since v0.6)
+
+A `baseline` event declares the origin of the retained log: the document
+state at its `seq` is where the log begins, and no earlier state is recorded
+in the file. When present it MUST be the first retained event, and a log
+carries at most one (H007). Its `seq` continues the document's numbering: 1
+for a document created from imported content, the next seq when an existing
+log is collapsed — seq never goes backwards.
+
+`snapshot` writes the origin state out as
+`{html, doc?, theme?, body: [construct serializations in order]}`: exactly
+the lines §11.3 hashes, as a structured object (the body is a list because a
+construct line may itself contain newlines). `doc_hash` MUST equal the hash
+recomputed from the snapshot, and every snapshot entry MUST be exactly one
+construct that conforms as a pending payload does — elements, attributes,
+URLs, handlers and styles (H008). Keeping the hash beside the snapshot lets
+a reader compare hashes without parsing markup, and makes the event check
+itself. A writer MUST NOT record a baseline whose snapshot would fail H008:
+a baseline is never undone, so the error could never be fixed. A body with
+such a construct is fixed first, or (importers, adoption) recorded with one
+`add` per construct, which leaves the error in the body where an edit can
+remove it.
+
+A baseline is not state-changing and is never undone. Time travel to the
+baseline's seq, verification and reconciliation work from the file alone:
+reconciliation's expected state is the snapshot plus forward replay of the
+later events, so an out-of-band edit to content no later event touched is
+still adopted with its true `before`. Theme and settings captured in the
+snapshot are tracked origin state like the body.
+
+Recording a baseline raises the declared version to at least 0.6 inside the
+snapshot; no `aim:version` event is recorded, because no earlier state is
+retained to record it against (§3.7). Writers that create a document from
+content that did not arrive by editing (importers) SHOULD record a baseline
+rather than one `add` event per construct. A document that needs only a
+hash-anchored origin uses a checkpoint as its first retained event (§6.8,
+prune and flatten).
+
+A log that starts at seq 1 without a baseline claims to explain the document
+from nothing: replaying it backwards MUST reach an empty body and no settings
+block (a theme block nothing recorded is tolerated). A verifier warns when it
+does not (H009) — the shape a flattened-then-edited file had before v0.6.
+
+Example — a document created from imported content, one history line:
+
+```aim
+<!doctype html>
+<html data-aim-version="0.6" lang="en">
+<head>
+<meta charset="utf-8">
+<title>Imported</title>
+<style data-aim-css="0.6">
+</style>
+</head>
+<body>
+<h1 data-aim="ttl">Imported</h1>
+<p data-aim="p1">Content that arrived by import, not by editing.</p>
+<script type="application/aim-history+jsonl">
+{"author":{"id":"docx-import","type":"external"},"doc_hash":"sha256:58451938b319ec47bb054a627e0994779aa443712bc60a9cddbe836962387b92","explanation":"Imported from 'notes.docx'","kind":"baseline","label":"import","seq":1,"snapshot":{"body":["<h1 data-aim=\"ttl\">Imported<\/h1>","<p data-aim=\"p1\">Content that arrived by import, not by editing.<\/p>"],"html":"<html data-aim-version=\"0.6\" lang=\"en\">"},"t":"2026-10-01T12:00:00Z"}
+</script>
+</body>
+</html>
+```
 
 ---
 
@@ -864,7 +953,7 @@ reconcile can record the upgrade (§3.7).
 
 | Versioned (in history, hashed) | Derived caches (unversioned, excluded from `doc_hash`) |
 |---|---|
-| chunk content + order | `aim-meta` (summary, TOC) — carries `as_of_seq`/`doc_hash` staleness markers |
+| chunk content + order | `aim-meta` (summary, TOC) — carries `as_of_seq`/`doc_hash`/`toc_doc_hash` staleness markers |
 | containers (slides, list/table shells) + geometry | embeddings (per-chunk `text_hash` + `model`) |
 | theme block (`aim:theme`) | `aim.css` (pinned by `data-aim-css`, regenerable) |
 | `aim:doc` settings (page setup, §3.6) | packed asset registry (content-addressed, immutable) |
@@ -881,11 +970,18 @@ not regenerable.
 ### 8.1 Metadata cache
 
 `<script type="application/aim-meta+json">` in the head holds one JSON
-object: `summary {text, model, as_of_seq, doc_hash}` and optional
-`toc [{title, level, chunks: [ids]}]` — `chunks` MAY list chunk *and*
-container ids, so an entry can span a list or a slide. The TOC is derived
-from heading chunks (deterministic, regenerable). This is the first thing
-an agent reads; staleness is checkable against the current `doc_hash`.
+object with optional `summary {text, model, as_of_seq, doc_hash}`, optional
+`toc [{title, level, chunks: [ids]}]` and, when `toc` is present, optional
+`toc_doc_hash`: the `doc_hash` the TOC was derived from. A block with neither
+`summary` nor `toc` is an error (M004; before v0.6 `summary` was required).
+`chunks` MAY list chunk *and* container ids, so an entry can span a list or a
+slide. The TOC is derived from heading chunks and slides (deterministic,
+regenerable), so a writer MAY refresh a present TOC whenever it saves, like
+the embedded stylesheet; a TOC whose `toc_doc_hash` differs from the current
+`doc_hash` is stale (M005, a warning). This is the first thing an agent
+reads; staleness is checkable against the current `doc_hash`, and a reader
+that finds the TOC stale or absent derives the outline from the headings
+instead of trusting it.
 
 ### 8.2 Embeddings
 
@@ -1055,7 +1151,7 @@ embed the generated one):
 <head>
 <meta charset="utf-8">
 <title>Minimal</title>
-<style data-aim-css="0.5">
+<style data-aim-css="0.6">
 </style>
 </head>
 <body>
@@ -1078,7 +1174,7 @@ resolution and a checkpoint in the log:
 <head>
 <meta charset="utf-8">
 <title>Pending lane</title>
-<style data-aim-css="0.5">
+<style data-aim-css="0.6">
 </style>
 </head>
 <body>
@@ -1104,7 +1200,7 @@ chunks:
 <head>
 <meta charset="utf-8">
 <title>One slide</title>
-<style data-aim-css="0.5">
+<style data-aim-css="0.6">
 </style>
 </head>
 <body>
@@ -1213,6 +1309,7 @@ Literal paint (`color` `background-color` `border-color`) is since spec 0.3 (S03
 - `direct_edit` events — required: `seq` `kind` `t` `target` `action` `author` `batch`; optional: `before` `after` `anchor` `from` `to` `origin` `explanation` `source`
 - `resolution` events — required: `seq` `kind` `t` `proposal` `target` `action` `decision` `proposed_by` `proposed_at` `decided_by` `batch`; optional: `before` `proposed` `applied` `anchor` `from` `to` `superseded_by` `explanation` `source`
 - `checkpoint` events — required: `seq` `kind` `t` `label` `doc_hash`
+- `baseline` events — required: `seq` `kind` `t` `label` `doc_hash` `snapshot`; optional: `author` `explanation` `source`
 
 ### A.6 Page setup
 
@@ -1310,10 +1407,14 @@ Literal paint (`color` `background-color` `border-color`) is since spec 0.3 (S03
 | H004 | warning | history starts above seq 1 (pruned) |
 | H005 | error | history line is not canonical JSON |
 | H006 | error | history chain verification failed |
+| H007 | error | baseline event is not the first retained event, or occurs twice |
+| H008 | error | baseline snapshot does not hash to its doc_hash or holds a non-conforming construct |
+| H009 | warning | history starts at seq 1 but does not explain the document's origin |
 | M001 | warning | summary cache is stale |
 | M002 | warning | embedding is stale or orphaned |
 | M003 | error | cache block is not valid JSON of the required shape |
-| M004 | error | aim-meta block present but missing its summary |
+| M004 | error | aim-meta block has neither a summary nor a toc |
+| M005 | warning | toc cache is stale (toc_doc_hash mismatch) |
 | D001 | error | aim-doc settings block is not valid JSON of the required shape |
 | D002 | error | more than one aim-doc script in the head |
 | D003 | error | unknown page size or orientation |

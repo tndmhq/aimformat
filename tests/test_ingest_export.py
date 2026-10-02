@@ -124,11 +124,16 @@ class TestIngest:
     def test_code_becomes_pre(self, ingested):
         assert any(c.tag == "pre" for c in ingested.chunks)
 
-    def test_ingestion_is_recorded_history(self, ingested):
-        events = ingested.history
-        assert events and all(e.action == "add" for e in events)
-        assert all(e.author.type == "external" for e in events)
-        assert len({e.batch for e in events}) == 1  # one ingestion batch
+    def test_ingestion_is_one_baseline(self, ingested):
+        # IMPORT-D10: the imported state is the history's origin, written out
+        # once — not an add per construct (which doubled the file)
+        (event,) = ingested.history
+        assert event.kind == "baseline" and event.seq == 1
+        assert event.get("label") == "import"
+        assert event.author is not None and event.author.type == "external"
+        assert event.get("snapshot") == ingested._state.snapshot()
+        with pytest.raises(aim.InvalidOperation, match="nothing to undo"):
+            ingested.undo(author=aim.human("ada"))
 
     def test_ingested_doc_lints_clean_and_verifies(self, ingested):
         assert ingested.verify() == []

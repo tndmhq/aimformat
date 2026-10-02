@@ -2,7 +2,9 @@
 
 Import: :func:`from_text` (stdlib), :func:`from_markdown` (extra
 ``markdown``), :func:`from_docx` (extra ``docx`` — a native OOXML importer
-that preserves styling, :mod:`._docx_in`), :func:`from_pdf` (extra
+that preserves styling and turns Word tracked changes into pending
+proposals, :mod:`._docx_in`; :func:`import_docx` also returns an
+:class:`ImportReport`), :func:`from_pdf` (extra
 ``ingest`` — a docling wrapper over :func:`aimformat.from_docling`), and
 the extension dispatcher :func:`from_path`.
 
@@ -18,22 +20,30 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
+from typing import BinaryIO
 
 from ..canonical import escape_text
 from ..document import AimDocument, new_document
 from ..events import Actor, external
 from ..export_docx import to_docx
-from ..ingest import from_docling
+from ..ingest import finish_import, from_docling
 from ._docx_pages import apply_docx_pagination
 from ._html_out import to_html
 from ._markdown_in import from_markdown
 from ._markdown_out import to_markdown
 from ._pdf_out import to_pdf
+from ._report import AimImportWarning, CommentNote, ImportReport, ImportResult, RevisionNote
 
 __all__ = [
     "from_text",
     "from_markdown",
     "from_docx",
+    "import_docx",
+    "ImportResult",
+    "ImportReport",
+    "RevisionNote",
+    "CommentNote",
+    "AimImportWarning",
     "from_pdf",
     "from_path",
     "to_markdown",
@@ -65,12 +75,8 @@ def from_text(
     with doc.batch():
         for para in paragraphs:
             lines = [escape_text(line.strip()) for line in para.splitlines() if line.strip()]
-            doc.add_chunk(
-                "<p>" + "<br>".join(lines) + "</p>",
-                author=who,
-                explanation="Imported from plain text",
-            )
-    return doc
+            doc.add_chunk("<p>" + "<br>".join(lines) + "</p>", author=who)
+    return finish_import(doc, author=who, explanation="Imported from plain text")
 
 
 def _docling_document(path: str | Path):
@@ -83,13 +89,63 @@ def _docling_document(path: str | Path):
     return DocumentConverter().convert(str(path)).document
 
 
-def from_docx(
-    path: str | Path,
+def import_docx(
+    source: str | Path | bytes | BinaryIO,
     *,
     title: str | None = None,
     lang: str = "en",
     author: Actor | None = None,
     theme: dict[str, str] | None = None,
+    tracked: str = "propose",
+    max_revisions: int = 5000,
+    max_proposals: int = 500,
+) -> ImportResult:
+    """DOCX → .aim plus an :class:`ImportReport` of what was and was not
+    carried (extra ``docx``).
+
+    Word tracked changes become pending proposals on the ORIGINAL text by
+    default (``tracked="propose"``), attributed to their Word authors: the
+    document's accept-all then equals Word's *Accept All* and its reject-all
+    equals Word's *Reject All* — except baked numbering labels, which keep
+    the original numbering, and formatting the format cannot express; the
+    report lists both. ``tracked="accept"`` / ``"reject"`` import that
+    resolved text instead, with no proposals. In ``"propose"`` mode a
+    document is refused when it carries more than ``max_revisions`` revision
+    records, or when its changes would become more than ``max_proposals``
+    pending cards: writing and validating the lane takes time that grows
+    with the square of its card count.
+
+    Word comments are reported, never stored: the format has no comment
+    construct, and the text they were anchored on stays intact."""
+    try:
+        from ._docx_in import import_docx_source
+    except ImportError as exc:  # pragma: no cover - exercised without extra
+        raise ImportError(
+            "DOCX import requires docx-parser-converter (extra 'docx'): "
+            "pip install 'aimformat[docx]'"
+        ) from exc
+    return import_docx_source(
+        source,
+        title=title,
+        lang=lang,
+        author=author or external("docx-import"),
+        theme=theme,
+        tracked=tracked,
+        max_revisions=max_revisions,
+        max_proposals=max_proposals,
+    )
+
+
+def from_docx(
+    path: str | Path | bytes | BinaryIO,
+    *,
+    title: str | None = None,
+    lang: str = "en",
+    author: Actor | None = None,
+    theme: dict[str, str] | None = None,
+    tracked: str = "propose",
+    max_revisions: int = 5000,
+    max_proposals: int = 500,
 ) -> AimDocument:
     """DOCX → .aim natively (extra ``docx``), styling preserved.
 
@@ -100,21 +156,23 @@ def from_docx(
     explicit pagination intent lands inline — see :mod:`._docx_in`.
 
     An explicit ``title`` wins; otherwise the Title-styled paragraph, the
-    first ``h1``, and the file stem are the fallbacks in that order."""
-    try:
-        from ._docx_in import convert_docx
-    except ImportError as exc:  # pragma: no cover - exercised without extra
-        raise ImportError(
-            "DOCX import requires docx-parser-converter (extra 'docx'): "
-            "pip install 'aimformat[docx]'"
-        ) from exc
-    return convert_docx(
+    first ``h1``, and the file stem are the fallbacks in that order.
+
+    Tracked changes and comments: see :func:`import_docx`, which this wraps.
+    Whatever the import does not carry is announced as an
+    :class:`AimImportWarning`."""
+    result = import_docx(
         path,
         title=title,
         lang=lang,
-        author=author or external("docx-import"),
+        author=author,
         theme=theme,
+        tracked=tracked,
+        max_revisions=max_revisions,
+        max_proposals=max_proposals,
     )
+    result.report.emit_warnings(stacklevel=3)
+    return result.document
 
 
 def from_pdf(
@@ -153,9 +211,14 @@ def from_path(
     lang: str = "en",
     author: Actor | None = None,
     theme: dict[str, str] | None = None,
+    tracked: str = "propose",
+    max_revisions: int = 5000,
+    max_proposals: int = 500,
 ) -> AimDocument:
     """Convert *path* to an :class:`AimDocument`, dispatching on extension
-    (.md/.markdown, .txt, .docx, .pdf; .aim/.html load as-is)."""
+    (.md/.markdown, .txt, .docx, .pdf; .aim/.html load as-is). ``tracked``,
+    ``max_revisions`` and ``max_proposals`` apply to DOCX input (see
+    :func:`import_docx`)."""
     p = Path(path)
     kind = _DISPATCH.get(p.suffix.lower())
     if kind is None:
@@ -173,5 +236,14 @@ def from_path(
             p.read_text("utf-8-sig"), title=title or p.stem, lang=lang, author=author, theme=theme
         )
     if kind == "docx":
-        return from_docx(p, title=title, lang=lang, author=author, theme=theme)
+        return from_docx(
+            p,
+            title=title,
+            lang=lang,
+            author=author,
+            theme=theme,
+            tracked=tracked,
+            max_revisions=max_revisions,
+            max_proposals=max_proposals,
+        )
     return from_pdf(p, title=title, lang=lang, author=author, theme=theme)

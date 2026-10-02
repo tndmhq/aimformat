@@ -1,5 +1,5 @@
 {
-  "spec_version": "0.5",
+  "spec_version": "0.6",
   "ids": {
     "chunk_pattern": "^[a-z0-9][a-z0-9_-]{0,63}$",
     "proposal_pattern": "^p-[a-z0-9][a-z0-9_-]{0,63}$",
@@ -674,7 +674,8 @@
     "kinds": [
       "direct_edit",
       "resolution",
-      "checkpoint"
+      "checkpoint",
+      "baseline"
     ],
     "actions": [
       "add",
@@ -755,7 +756,25 @@
           "doc_hash"
         ],
         "optional": []
+      },
+      "baseline": {
+        "required": [
+          "seq",
+          "kind",
+          "t",
+          "label",
+          "doc_hash",
+          "snapshot"
+        ],
+        "optional": [
+          "author",
+          "explanation",
+          "source"
+        ]
       }
+    },
+    "since": {
+      "baseline": "0.6"
     }
   },
   "proposal_actions": {
@@ -1111,6 +1130,18 @@
       "error",
       "history chain verification failed"
     ],
+    "H007": [
+      "error",
+      "baseline event is not the first retained event, or occurs twice"
+    ],
+    "H008": [
+      "error",
+      "baseline snapshot does not hash to its doc_hash or holds a non-conforming construct"
+    ],
+    "H009": [
+      "warning",
+      "history starts at seq 1 but does not explain the document's origin"
+    ],
     "M001": [
       "warning",
       "summary cache is stale"
@@ -1125,7 +1156,11 @@
     ],
     "M004": [
       "error",
-      "aim-meta block present but missing its summary"
+      "aim-meta block has neither a summary nor a toc"
+    ],
+    "M005": [
+      "warning",
+      "toc cache is stale (toc_doc_hash mismatch)"
     ],
     "D001": [
       "error",

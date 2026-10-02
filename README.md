@@ -48,7 +48,7 @@ bare document.
 └────────────────────────────────────────────────────────────────────────┘
 ```
 
-The spec is a v0.5 draft; breaking changes are possible until 1.0. What
+The spec is a v0.6 draft; breaking changes are possible until 1.0. What
 each revision added: [status and roadmap](#status-and-roadmap).
 
 ## Install
@@ -120,7 +120,20 @@ alignment, and the document's own theme survive into the `.aim`:
 import aimformat as aim
 
 doc = aim.from_docx("contract.docx")         # styling carried, not just structure
-doc.save("contract.aim")                     # ingestion itself is history
+doc.save("contract.aim")                     # history begins with one baseline
+```
+
+Word tracked changes arrive as pending proposals on the original text,
+attributed to the Word author who made them, so `accept_all()` gives Word's
+Accept All and `reject_all()` gives Word's Reject All. Pass
+`tracked="accept"` or `tracked="reject"` to import resolved text instead.
+`import_docx` also returns a report of what the import did not carry, such
+as Word comments, which the format has no construct for:
+
+```python
+result = aim.import_docx("redline.docx")
+result.document.proposals                    # one card per changed paragraph or row
+result.report.comments                       # reported, never stored
 ```
 
 For everything else — PDF, PPTX, images, HTML — ingest whatever
@@ -153,11 +166,11 @@ aim.to_docx(doc, "out.docx", pending="reject-all")
 | read | `doc.chunks`, `doc.chunk(id)`, `doc.containers`, `doc.proposals`, `doc.history`, `doc.meta`, `doc.theme`, `doc.doc_hash`, `doc.seq` |
 | direct edits | `add_chunk`, `modify_chunk`, `delete_chunk`, `move_chunk`, `set_theme`, `doc.batch()` |
 | pending lane | `propose_modify/add/delete/move/theme`, `amend_proposal` (replace a pending payload/explanation in place, unrecorded), `accept` (with optional `applied=` tweaks), `reject`; supersede and chain rebinding are automatic |
-| history | `verify`, `state_at(seq)`, `checkpoint`, `undo`, `redo`, `flatten`, `prune`, `reconcile` (repair out-of-band edits / adopt hand-written files) |
+| history | `verify`, `state_at(seq)`, `checkpoint`, `undo`, `redo`, `flatten` (collapse to one checkpoint), `prune`, `baseline` (make the current state the origin), `reconcile` (repair out-of-band edits / adopt hand-written files) |
 | compare versions | `diff_documents` (unit-level: added/deleted/modified/moved), `classify_divergence` (did the log grow, was it rewritten, does it explain the body) |
-| caches | `set_summary`, `generate_toc`, `set_embedding`, `stale_embeddings` |
+| caches | `set_summary`, `generate_toc` (kept fresh on save), `outline`, `set_embedding`, `stale_embeddings` |
 | assets | `pack_assets` (data-URIs into the content-addressed registry), `gc_assets` |
-| convert | `from_path`, `from_text`, `from_markdown`, `from_docx`, `from_pdf`, `from_docling`; `to_markdown`, `to_html`, `to_pdf`, `to_docx` |
+| convert | `from_path`, `from_text`, `from_markdown`, `from_docx` / `import_docx` (with an `ImportReport`), `from_pdf`, `from_docling`; `to_markdown`, `to_html`, `to_pdf`, `to_docx` |
 | verifier | `lint`, `lint_text`, `lint_path`, each returning `Finding(code, level, message, where)` |
 | agent note | `doc.note`, `doc.set_note()`, `doc.remove_note()`, `doc.has_canonical_note()` (spec §2.5) |
 
@@ -241,7 +254,12 @@ Design pillars (details and rationale in the spec):
 The spec and the reference tooling are published; breaking changes stay
 possible until 1.0.
 
-- **v0.5** (the current draft) added numbering that survives an edit: a
+- **v0.6** (the current draft) records where a document's history begins:
+  an imported document carries its origin once, as a `baseline` snapshot,
+  instead of one `add` event per block, so a fresh text-heavy import is about
+  a fifth smaller and `undo` no longer deletes imported content. The TOC cache can
+  stand without a summary and records the hash it was built from.
+- **v0.5** added numbering that survives an edit: a
   block states its level (`num-1` … `num-9`) and the stylesheet draws the
   number, so inserting a clause renumbers everything below it instead of
   leaving stale text that still reads as authoritative.

@@ -4,7 +4,7 @@
     "ttl",
     "intro",
     "scope",
-    "rib2l98n",
+    "mgm8cu6l",
     "hd",
     "dl",
     "pr"
@@ -48,8 +48,8 @@
     },
     {
       "container": "body",
-      "html": "<aim-page-break data-aim=\"rib2l98n\"></aim-page-break>",
-      "id": "rib2l98n",
+      "html": "<aim-page-break data-aim=\"mgm8cu6l\"></aim-page-break>",
+      "id": "mgm8cu6l",
       "isRun": false,
       "kind": "chunk",
       "tag": "aim-page-break",
@@ -136,7 +136,7 @@
     "dl",
     "pr"
   ],
-  "docHash": "sha256:91f58d8b93db17ae26ec48d62810863e90f532661122e76da9433499ce24d48d",
+  "docHash": "sha256:7dacc169d788df7fbafaf43ee368f207dd1a1ec5f2c3fa1d42ad613382e3503c",
   "docSettings": {
     "page": {
       "margins": {
@@ -153,13 +153,13 @@
   "hasCanonicalNote": true,
   "history": {
     "lines": 11,
-    "sha256": "sha256:04d895013641a2c34e72d571dc089a823d7bdea344cb333a0ce2302fe79bd638"
+    "sha256": "sha256:cec32f3e89ab65076382bbc8f9b50a68564be85c35ef7b59e3539df5d8559e55"
   },
   "lang": "en",
   "meta": {
     "summary": {
       "as_of_seq": 11,
-      "doc_hash": "sha256:91f58d8b93db17ae26ec48d62810863e90f532661122e76da9433499ce24d48d",
+      "doc_hash": "sha256:7dacc169d788df7fbafaf43ee368f207dd1a1ec5f2c3fa1d42ad613382e3503c",
       "model": "claude-opus-4-8",
       "text": "Three-year services proposal for Acme GmbH: €358k over two phases (pending: rollout line item), projected €2.1M savings. One pending pricing row and a theme swap await review."
     },
@@ -169,7 +169,7 @@
           "ttl",
           "intro",
           "scope",
-          "rib2l98n"
+          "mgm8cu6l"
         ],
         "level": 1,
         "title": "Q3 Services Proposal — Acme GmbH"
@@ -183,7 +183,8 @@
         "level": 2,
         "title": "Deliverables"
       }
-    ]
+    ],
+    "toc_doc_hash": "sha256:7dacc169d788df7fbafaf43ee368f207dd1a1ec5f2c3fa1d42ad613382e3503c"
   },
   "nodes": [
     {
@@ -224,8 +225,8 @@
     },
     {
       "container": "body",
-      "html": "<aim-page-break data-aim=\"rib2l98n\"></aim-page-break>",
-      "id": "rib2l98n",
+      "html": "<aim-page-break data-aim=\"mgm8cu6l\"></aim-page-break>",
+      "id": "mgm8cu6l",
       "isRun": false,
       "kind": "chunk",
       "tag": "aim-page-break",
@@ -330,7 +331,7 @@
       "tag": "table"
     }
   ],
-  "note": "\naim-note: This file is an AIM document (open format, v0.5) — valid HTML plus\nchunk identity, a pending-suggestions lane, and an edit history.\nAgent docs: https://aimformat.com/llms.txt\nThe reliable way to edit this file is the `aimformat` tooling, which manages\nids, suggestions, and history for you: `pip install aimformat` for the `aim`\nCLI (`aim --help`); `pip install 'aimformat[mcp]'` adds its MCP server\n(`aim mcp`). An Agent Skill exists: `npx skills add tndmhq/aimformat`.\nHand-editing as plain text is the fallback; if you do: keep every data-aim id\nstable (never renumber or reuse; give new content a fresh id), treat the\naim-proposals appendix and the history script as append-only tool lanes, and\nvalidate with `aim lint`. Humans review in AIM editors:\nhttps://aimformat.com/editors\n",
+  "note": "\naim-note: This file is an AIM document (open format, v0.6) — valid HTML plus\nchunk identity, a pending-suggestions lane, and an edit history.\nAgent docs: https://aimformat.com/llms.txt\nThe reliable way to edit this file is the `aimformat` tooling, which manages\nids, suggestions, and history for you: `pip install aimformat` for the `aim`\nCLI (`aim --help`); `pip install 'aimformat[mcp]'` adds its MCP server\n(`aim mcp`). An Agent Skill exists: `npx skills add tndmhq/aimformat`.\nHand-editing as plain text is the fallback; if you do: keep every data-aim id\nstable (never renumber or reuse; give new content a fresh id), treat the\naim-proposals appendix and the history script as append-only tool lanes, and\nvalidate with `aim lint`. Humans review in AIM editors:\nhttps://aimformat.com/editors\n",
   "pageSetup": {
     "contentHeightMm": 257.0,
     "contentWidthMm": 174.0,
@@ -360,7 +361,7 @@
       "batch": "b6",
       "dependsOn": null,
       "explanation": "Client asked for rollout as its own line.",
-      "id": "p-kg0mplpp",
+      "id": "p-o47rcqcq",
       "payloadHtml": "<tr data-aim=\"r3\"><td>Rollout &amp; training</td><td>8</td><td>€95,000</td></tr>",
       "target": null
     },
@@ -378,15 +379,15 @@
       "batch": "b7",
       "dependsOn": null,
       "explanation": "Client brand refresh: teal primary.",
-      "id": "p-508acnok",
+      "id": "p-d40h99g2",
       "payloadHtml": "<style data-aim-theme>:root{--aim-brand-1:#0f766e}</style>",
       "target": "aim:theme"
     }
   ],
-  "specVersion": "0.5",
+  "specVersion": "0.6",
   "stylesheet": {
     "sha256": "sha256:de54c7dd7c879ba0b6fbeb1115b2264bab9f4914bb2e413348fe3987e791ee10",
-    "version": "0.5"
+    "version": "0.6"
   },
   "theme": {
     "--aim-brand-1": "#1a73e8"

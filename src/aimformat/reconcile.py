@@ -87,6 +87,13 @@ class ReconcileReport:
     def summary(self) -> str:
         if not self.changed:
             return "no out-of-band changes detected"
+        if any(e.kind == "baseline" for e in self.events):
+            out = "adopted the file as the origin of its history (one baseline event)"
+            if self.assigned_ids:
+                out += f"; {len(self.assigned_ids)} id(s) assigned"
+            if self.rejected_proposals:
+                out += f"; {len(self.rejected_proposals)} pending proposal(s) rejected"
+            return out
         counts = Counter(e.action or e.kind for e in self.events if e.kind == "direct_edit")
         bits = ", ".join(f"{n} {a}" for a, n in sorted(counts.items()))
         out = f"reconciled {sum(counts.values())} out-of-band change(s): {bits}"
@@ -111,11 +118,17 @@ def _check_log(events: list[Event]) -> None:
         raise HistoryError("cannot reconcile: history seq is not strictly ascending")
     if any(b != a + 1 for a, b in zip(seqs, seqs[1:], strict=False)):
         raise HistoryError("cannot reconcile: history has internal seq gaps")
-    if seqs[0] != 1:
+    baselines = [ev for ev in events if ev.kind == "baseline"]
+    if baselines and (len(baselines) > 1 or events[0].kind != "baseline"):
+        raise HistoryError(
+            "cannot reconcile: a baseline must be the first retained event and occur once"
+        )
+    if seqs[0] != 1 and events[0].kind != "baseline":
         raise HistoryError(
             f"cannot reconcile a pruned history (log starts at seq "
-            f"{seqs[0]}): the baseline below the prune floor is "
-            "unrecoverable — reconcile before pruning"
+            f"{seqs[0]}): the state below the prune floor is "
+            "unrecoverable — reconcile before pruning, or accept the file as it "
+            "is with baseline()"
         )
     for ev in events:
         if ev.kind not in REGISTRY.event_fields:
@@ -186,8 +199,27 @@ def _clone(doc: AimDocument) -> AimDocument:
     return clone
 
 
-def _strip_body_state(S: AimDocument) -> None:
+def _strip_body_state(S: AimDocument, events: list[Event] | None = None) -> None:
+    """Reset S to the log's origin: the baseline snapshot when the log
+    begins with one (§6.9), else the empty document."""
     state = S._state
+    if events and events[0].kind == "baseline":
+        actual_attrs = list(state.html.attrs)
+        state.load_snapshot(events[0].get("snapshot"))
+        # Of the <html> attributes only the declared version is recorded
+        # state (aim:version events, §3.7); nothing records `lang` or `dir`.
+        # The empty-origin path below keeps them as the file has them, so
+        # this one must too: taking them from the snapshot would make a
+        # hand-edited `lang` an expected-vs-actual difference no event can
+        # express, and reconcile would fail to converge. verify() compares
+        # the snapshot's <html> line on the declared version only (§6.7).
+        declared = state.html.get("data-aim-version")
+        state.html.attrs = actual_attrs
+        if declared is None:
+            state.html.remove_attr("data-aim-version")
+        else:
+            state.set_spec_version(declared)
+        return
     for el in state.constructs():
         state.body.children.remove(el)
     state.set_theme_markup(None)
@@ -196,8 +228,11 @@ def _strip_body_state(S: AimDocument) -> None:
 
 def _align_theme_baseline(S: AimDocument, events: list[Event], work: AimDocument) -> None:
     """A theme or settings block no event ever touched (constructor-set /
-    imported) has no recoverable baseline: expected := actual, so it is
-    left untracked."""
+    imported) has no recoverable origin: expected := actual, so it is
+    left untracked. Under a baseline both are origin state, tracked by the
+    snapshot — a hand edit to them is adopted like any other."""
+    if events and events[0].kind == "baseline":
+        return
     if not any(e.state_changing and e.target == "aim:theme" for e in events):
         S._state.set_theme_markup(work._state.serial("aim:theme"))
     if not any(e.state_changing and e.target == "aim:doc" for e in events):
@@ -638,10 +673,18 @@ def reconcile_document(
     actor = author if author is not None else external()
     events = doc.history
     _check_log(events)
+    if (
+        not events
+        and REGISTRY.version_includes(doc.spec_version, REGISTRY.baseline_since)
+        # a construct a snapshot cannot hold (H008) is adopted by an add:
+        # its lint error stays in the body, where an edit can fix it
+        and not doc._unsnapshottable()
+    ):
+        return _adopt_as_baseline(doc, actor, at, dry_run)
 
     S = _clone(doc)  # becomes E, then is driven to A
-    _strip_body_state(S)
-    _replay(S, events)
+    _strip_body_state(S, events)
+    _replay(S, [ev for ev in events if ev.kind != "baseline"])
     expected_alive = S._state.all_ids()
     expected_floors: set[str] = set()
     for unit in _units(S._state).values():
@@ -683,9 +726,47 @@ def reconcile_document(
         )
 
     if report.changed and not dry_run:
-        burned = set(S._get_history_index().burned_ids)
-        doc._fragment = S._fragment
-        doc._state = S._state
-        doc._batch = None
-        doc._rebuild_history_index(burned_seed=burned)
+        _adopt(doc, S)
+    return report
+
+
+def _adopt(doc: AimDocument, S: AimDocument) -> None:
+    burned = set(S._get_history_index().burned_ids)
+    doc._fragment = S._fragment
+    doc._state = S._state
+    doc._batch = None
+    doc._rebuild_history_index(burned_seed=burned)
+
+
+def _adopt_as_baseline(
+    doc: AimDocument, actor: Actor, at: str | None, dry_run: bool
+) -> ReconcileReport:
+    """A history-less file declared at a version that defines baselines is
+    adopted as ONE baseline event (§6.9), not an ``add`` per construct — the
+    same compact origin an import records. Below that version the per-
+    construct path stays: adoption must never raise the declaration as a
+    side effect (§3.7)."""
+    work = _clone(doc)
+    report = ReconcileReport()
+    report.assigned_ids = _fixup_ids(work, set())
+    state = work._state
+    if not state.constructs() and state.theme_el() is None and state.script("doc") is None:
+        # nothing to record as an origin — but pending cards aimed at a body
+        # that is not there are still rejected, as on the per-construct path
+        _reject_dangling(work, actor, at, report)
+        report.events = work.history
+        if report.changed and not dry_run:
+            _adopt(doc, work)
+        return report
+    work.baseline(
+        "adopt",
+        author=actor,
+        explanation="Adopted a file written without history",
+        at=at,
+    )
+    _reject_dangling(work, actor, at, report)
+    report.events = work.history
+    report.residual = work.verify()
+    if not dry_run:
+        _adopt(doc, work)
     return report

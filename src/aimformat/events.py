@@ -88,6 +88,27 @@ def parse_actor(spec: str) -> Actor:
     raise AimError(f"invalid actor {spec!r} (use human:ID, agent:MODEL, or external:ID)")
 
 
+def snapshot_problems(snap: object) -> list[str]:
+    """Shape problems with a baseline ``snapshot`` field (empty when well
+    formed): an object with ``html`` and ``body`` (a list of strings) and
+    optional string ``doc`` / ``theme``."""
+    if not isinstance(snap, dict):
+        return ["baseline snapshot is not an object"]
+    out: list[str] = []
+    if not isinstance(snap.get("html"), str):
+        out.append("baseline snapshot has no 'html' string")
+    body = snap.get("body")
+    if not isinstance(body, list) or not all(isinstance(line, str) for line in body):
+        out.append("baseline snapshot 'body' is not a list of strings")
+    for key in ("doc", "theme"):
+        if key in snap and not isinstance(snap[key], str):
+            out.append(f"baseline snapshot {key!r} is not a string")
+    for key in snap:
+        if key not in ("html", "body", "doc", "theme") and not str(key).startswith("x_"):
+            out.append(f"baseline snapshot has unknown field {key!r}")
+    return out
+
+
 class Event:
     """One history event. Attribute access over the canonical dict."""
 
@@ -207,6 +228,8 @@ class Event:
                 ):
                     problems.append(f"{role} is not a valid actor object")
         problems += self._replay_field_problems(kind, act)
+        if kind == "baseline" and "snapshot" in self.data:
+            problems += snapshot_problems(self.data["snapshot"])
         return problems
 
     def _replay_field_problems(self, kind: str | None, act: str | None) -> list[str]:
