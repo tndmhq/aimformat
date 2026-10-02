@@ -388,6 +388,20 @@ class TestReplaceTextCommand:
         pid = capsys.readouterr().out.splitlines()[0]
         assert "stuff" in aim.load(contract).proposal(pid).payload_html
 
+    def test_a_second_proposal_composes_and_reports_the_supersede(self, contract, capsys):
+        f = str(contract)
+        base = ["propose", "replace-text", f, "a1", "--author", "agent:m"]
+        assert main(base + ["--old", "things", "--new", "stuff"]) == 0
+        first = capsys.readouterr().out.splitlines()[0]
+        assert main(base + ["--old", "Terms", "--new", "Words", "--format", "json"]) == 0
+        out = json.loads(capsys.readouterr().out)
+        assert out["superseded"] == [first]
+        payload = aim.load(contract).proposal(out["proposal"]).payload_html or ""
+        assert "Words mean stuff" in payload  # the first fix survives
+        assert main(base + ["--old", "stuff", "--new", "items"]) == 0
+        lines = capsys.readouterr().out.splitlines()
+        assert lines[1] == f"superseded {out['proposal']}"
+
     def test_refusal_exits_one_and_writes_nothing(self, contract, capsys):
         before = contract.read_bytes()
         argv = ["edit", "replace-text", str(contract), "a2", "--old", "zebra", "--new", "x"]

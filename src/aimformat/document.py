@@ -2642,13 +2642,50 @@ class AimDocument:
         explanation: str | None = None,
         at: str | None = None,
     ) -> Proposal:
-        """:meth:`propose_modify` whose payload is chunk *target*'s live
-        markup with the one occurrence of *old_text* replaced by *new_text*,
-        inline markup kept (see :meth:`replace_text`)."""
-        from .textedit import replace_in_markup
+        """:meth:`propose_modify` whose payload is chunk *target*'s markup
+        with the one occurrence of *old_text* replaced by *new_text*, inline
+        markup kept (see :meth:`replace_text`).
 
-        markup = replace_in_markup(self.chunk(target).html, old_text, new_text)
-        return self.propose_modify(target, markup, author=author, explanation=explanation, at=at)
+        A new modify card supersedes the pending modify/delete on its target
+        (§5.4), so a payload built from the live markup would silently drop
+        that card's change. When *author*'s own modify card is pending on
+        *target*, the replacement applies to that card's payload instead
+        (successive word fixes compose; the new card supersedes it and keeps
+        its ``depends_on``, and its explanation when none is given). Any
+        other pending modify/delete on *target* refuses: superseding someone
+        else's change, or a pending delete, takes an explicit
+        :meth:`propose_modify`."""
+        from .textedit import TextReplaceError, replace_in_markup
+
+        self._require_current_target(target)
+        pending = self._superseded_by_new(target)
+        if not pending:
+            markup = replace_in_markup(self.chunk(target).html, old_text, new_text)
+            return self.propose_modify(
+                target, markup, author=author, explanation=explanation, at=at
+            )
+        own = pending[0]
+        if len(pending) > 1 or own.action != "modify" or own.author != author:
+            names = ", ".join(f"{p.id} ({p.action} by {p.author.type})" for p in pending)
+            raise InvalidOperation(
+                f"replace_text on {target!r} would supersede pending {names}: resolve it "
+                "first, or propose a full modify to replace it deliberately"
+            )
+        try:
+            markup = replace_in_markup(own.payload_html or "", old_text, new_text)
+        except TextReplaceError as exc:
+            raise TextReplaceError(
+                f"{exc} (matched against your pending proposal {own.id} on {target!r}, "
+                "which this change composes with)"
+            ) from None
+        return self.propose_modify(
+            target,
+            markup,
+            author=author,
+            explanation=explanation if explanation is not None else own.explanation,
+            depends_on=own.depends_on,
+            at=at,
+        )
 
     def propose_add(
         self,

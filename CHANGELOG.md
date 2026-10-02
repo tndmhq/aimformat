@@ -102,7 +102,10 @@ READS-D1…D13 (2026-10-01/02, `agent-read-*`, `agent-*`, `cli-*`, `mcp-*`,
   run, otherwise the call is refused (a pure deletion may cross runs).
   Text inserted at a cell, list-item or line boundary stays on the side
   `old_text` was quoted from.
-  Recorded as an ordinary `modify`. On the benchmark corpus a one-word edit
+  Recorded as an ordinary `modify`. A proposal composes with the
+  caller's own pending modify of the chunk (so successive word fixes add
+  up) and refuses to replace anyone else's pending modify or delete; the
+  single-proposal CLI output now lists superseded cards. On the benchmark corpus a one-word edit
   call is 2.0 to 6.0 times smaller (median per document), 3.45 times over
   613 chunks (READS-D13).
 - **CLI parity** — `aim show --mode toc|skeleton|text|chunks|full` (with

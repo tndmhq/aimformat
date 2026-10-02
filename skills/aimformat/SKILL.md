@@ -121,6 +121,9 @@ aim export FILE.aim -o OUT.docx    # or .md/.html/.pdf; --pending tracked|accept
 To change a few words, use `replace-text` (op `replace_text` with
 `old_text`/`new_text`): `old_text` must occur once in the chunk's plain text,
 and the id and inline markup are kept — no need to resend the chunk's HTML.
+A proposed `replace_text` builds on your own pending modify of that chunk
+(quote its text), and is refused while someone else's modify or delete is
+pending there.
 
 A batch is a JSON array of ops `{"action", "target", "html", "old_text",
 "new_text", "container", "after", "theme_slots", "explanation"}`; a later op refers back to an earlier

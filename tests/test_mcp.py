@@ -1009,6 +1009,21 @@ def test_propose_replace_text_and_batch_ops(tmp_path):
     assert aim.load(path).chunk("t1").text.startswith("A party may terminate")
 
 
+def test_successive_replace_text_proposals_compose(tmp_path):
+    # one word fix per call: each new card supersedes the last (§5.4), so
+    # each must carry the earlier fixes or they are silently lost
+    path = _rich_para(tmp_path)
+    base = {"path": str(path), "action": "replace_text", "target": "t1", "author": "agent:m"}
+    first = _payload(_call("aim_propose", {**base, "old_text": "Either", "new_text": "Each"}))
+    second = _payload(_call("aim_propose", {**base, "old_text": "notice", "new_text": "warning"}))
+    assert second["superseded"] == [first["proposal"]]
+    pending = [p for p in aim.load(path).proposals if p.target == "t1"]
+    assert [p.id for p in pending] == [second["proposal"]]
+    assert pending[0].payload_html == (
+        '<p data-aim="t1">Each party may terminate on <strong>written</strong> warning.</p>'
+    )
+
+
 def test_replace_text_refusals_write_nothing(tmp_path):
     path = _rich_para(tmp_path)
     before = path.read_bytes()

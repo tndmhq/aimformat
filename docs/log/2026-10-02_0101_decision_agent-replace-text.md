@@ -171,3 +171,25 @@ Also from that round: `aim_resolve(applied=)` restores `[elided: …]`
 stubs like `aim_edit`/`aim_propose` (§8.3 says a tool that elides restores
 on write), and the text view sanitizes proposal authors and splits `<pre>`
 on every line break, so neither can forge a view line.
+
+## Amendment 2026-10-02 (substitute review round 2, PR #42)
+
+**A proposed `replace_text` composes with the caller's own pending modify.**
+Under §5.4 a new modify card supersedes the pending modify or delete on its
+target. Built from the live markup, a second word-fix proposal on one chunk
+therefore dropped the first card's change (`Q3`->`Q4`, then `Acme`->`Beta`
+on one heading left only the second), and it silently discarded a
+collaborator's pending rewrite too. `propose_replace_text` now:
+
+- with no pending modify/delete on the target: unchanged (live markup);
+- with exactly one pending modify by the same author: applies the
+  replacement to that card's payload, so the new card carries both
+  changes; it supersedes the old card, keeps its `depends_on`, and keeps
+  its explanation when none is given. `old_text` is matched against the
+  pending card's text, and a miss says so;
+- otherwise (another author's modify, any pending delete): refuses. Taking
+  over someone else's change stays an explicit full `modify`.
+
+The single-proposal CLI output (`aim propose …` without `batch`) now lists
+superseded cards (`superseded p-…` lines; `"superseded"` in JSON), as the
+batch output and MCP already did.

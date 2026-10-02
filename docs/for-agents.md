@@ -302,6 +302,12 @@ the change:
   before it. At a cell, list-item or line boundary it goes to the side you
   quoted: text added before the first word of `old_text` starts the next
   cell, text added after its last word ends the previous one.
+- A proposal replaces any pending modify or delete on its chunk. So when
+  your own modify of that chunk is already pending, `replace_text` applies
+  to that card's text and the new card carries both changes: successive
+  word fixes add up. Quote the text as your pending card has it. If the
+  pending modify or delete is someone else's, the call is refused: resolve
+  it first, or send a full `modify` if you mean to replace it.
 - `aim_resolve` — accept or reject pending proposals.
 - `aim_lint` — run the conformance verifier.
 - `aim_export` — convert to docx/md/html/pdf.

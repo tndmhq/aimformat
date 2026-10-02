@@ -222,7 +222,7 @@ def _cmd_write(args: argparse.Namespace, kind: Kind) -> int:
         return 1
     out = Path(args.output or args.file)
     doc.save(out)
-    if single and kind == "propose":  # the pre-0.6 single-proposal output, unchanged
+    if single and kind == "propose":  # the pre-0.6 single-proposal output, plus supersedes
         p = doc.proposal(res.results[0]["id"])
         if args.format == "json":
             print(
@@ -233,6 +233,7 @@ def _cmd_write(args: argparse.Namespace, kind: Kind) -> int:
                         "target": p.target,
                         "author": _actor_str(p.author),
                         "explanation": p.explanation,
+                        "superseded": res.superseded,
                         "file": str(out),
                     },
                     indent=2,
@@ -240,6 +241,8 @@ def _cmd_write(args: argparse.Namespace, kind: Kind) -> int:
             )
         else:
             print(p.id)
+            for pid in res.superseded:  # §5.4: the cards this one replaced
+                print(f"superseded {pid}")
             print(f"wrote {out}")
         return 0
     errors = [f for f in lint_path(out) if f.level == "error"]

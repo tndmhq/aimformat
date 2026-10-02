@@ -162,6 +162,45 @@ class TestSdk:
         doc.accept(card.id, decided_by=aim.human("ada"))
         assert "<strong>huge</strong>" in doc.chunk("p1").html
 
+    def test_successive_proposals_on_one_chunk_compose_instead_of_dropping(self):
+        # §5.4: a new modify card supersedes the pending one on its target.
+        # Built from the live markup, the second word fix would silently drop
+        # the first; it is built from the caller's own pending card instead
+        doc = _doc()
+        first = doc.propose_replace_text("p1", "big", "huge", author=BOT, explanation="Tone.")
+        second = doc.propose_replace_text("p1", "world", "planet", author=BOT)
+        assert [p.id for p in doc.proposals if p.target == "p1"] == [second.id]
+        payload = second.payload_html or ""
+        assert "<strong>huge</strong>" in payload and "planet" in payload
+        assert second.explanation == "Tone."  # carried over when none is given
+        superseded = [e for e in doc.history if e.get("proposal") == first.id]
+        assert superseded and superseded[-1].get("decision") == "superseded"
+        doc.accept(second.id, decided_by=aim.human("ada"))
+        assert "Hello <strong>huge</strong> planet" in doc.chunk("p1").html
+        assert not doc.verify()
+
+    def test_composing_matches_the_pending_text_and_says_so(self):
+        doc = _doc()
+        first = doc.propose_replace_text("p1", "big", "huge", author=BOT)
+        before = doc.dumps()
+        with pytest.raises(TextReplaceError, match=first.id):
+            doc.propose_replace_text("p1", "big", "large", author=BOT)  # now reads "huge"
+        assert doc.dumps() == before
+
+    def test_another_authors_pending_card_is_not_superseded(self):
+        doc = _doc()
+        theirs = doc.propose_modify(
+            "p1", '<p data-aim="p1">Rewritten by hand.</p>', author=aim.human("ada")
+        )
+        before = doc.dumps()
+        with pytest.raises(AimError, match=theirs.id):
+            doc.propose_replace_text("p1", "world", "planet", author=BOT)
+        assert doc.dumps() == before
+        deleting = _doc()
+        gone = deleting.propose_delete("p1", author=BOT)
+        with pytest.raises(AimError, match=gone.id):
+            deleting.propose_replace_text("p1", "world", "planet", author=BOT)
+
     def test_refusals_leave_the_document_unchanged(self):
         doc = _doc()
         before = doc.dumps()
