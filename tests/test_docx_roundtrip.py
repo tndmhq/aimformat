@@ -983,3 +983,203 @@ def test_edit_time_honours_the_file_offset():
     assert _clamped_time("2026-01-02T03:00:00+02:00", "2026-01-01T00:00:00Z") == (
         "2026-01-02T01:00:00Z"
     )
+
+
+# =============================================================================
+# substitute review round 1
+
+
+def _tracked_delete_mark(p, rid: int) -> None:
+    """Word's Track Changes deleting a paragraph's mark (joins it with the next)."""
+    ppr = p.find(q("pPr"))
+    if ppr is None:
+        ppr = etree.Element(q("pPr"))
+        p.insert(0, ppr)
+    rpr = ppr.find(q("rPr"))
+    if rpr is None:
+        rpr = etree.SubElement(ppr, q("rPr"))
+    mark = etree.SubElement(rpr, q("del"))
+    mark.set(q("id"), str(rid))
+    mark.set(q("author"), "Rosa Lind")
+    mark.set(q("date"), "2026-10-02T09:00:00Z")
+
+
+def _tracked_delete_runs(p, rid: int) -> None:
+    for r in list(p.findall(q("r"))):
+        for t in r.findall(q("t")):
+            t.tag = q("delText")
+        wrap = etree.Element(q("del"))
+        wrap.set(q("id"), str(rid))
+        wrap.set(q("author"), "Rosa Lind")
+        wrap.set(q("date"), "2026-10-02T09:00:00Z")
+        r.addprevious(wrap)
+        wrap.append(r)
+
+
+def _three(*html: str) -> tuple[aim.AimDocument, list[str]]:
+    d = aim.new_document(title="Three")
+    with d.batch():
+        for h in html:
+            d.add_chunk(h, author=A)
+    return d, [c.id for c in d.chunks]
+
+
+@pytest.mark.parametrize("accepted_since", [False, True])
+def test_deleting_a_pending_addition_the_export_showed_applied(accepted_since):
+    d, ids = _three(
+        "<p>Clause one about payment within thirty days of invoice.</p>",
+        "<p>Clause two about governing law and jurisdiction of courts.</p>",
+    )
+    card = d.propose_add(
+        "<p>Inserted clause about confidentiality obligations.</p>", after=ids[0], author=A
+    )
+    added = d._payload_root_id(card.payload_html or "")
+    c = Colleague(docx_bytes(d, pending="accept-all", roundtrip_marks=True))
+    c.delete(added)
+    if accepted_since:
+        d.accept(card.id, decided_by=human("owner"))
+    report = d.import_revision(c.save())
+    if accepted_since:  # live under its payload id now: a delete of it
+        assert report.deleted == [added] and not report.conflicts, report.summary()
+    else:  # not silently dropped
+        assert not report.proposals
+        assert [cf.unit for cf in report.conflicts] == [added]
+        assert card.id in report.conflicts[0].reason
+    _healthy(d)
+
+
+def test_an_addition_matching_one_made_since_elsewhere_is_still_proposed():
+    d, ids = _three(*(f"<p>Clause {i} says enough about matter number {i}.</p>" for i in range(4)))
+    data = docx_bytes(d, roundtrip_marks=True)
+    d.add_chunk("<p>Signature: ____</p>", author=human("owner"))  # at the end
+    c = Colleague(data)
+    sig = c.insert_after(ids[0], "Signature: ____")
+    sig.addnext(c._blank_copy(sig, "Extra clause added by the colleague."))
+    report = d.import_revision(c.save())
+    assert len(report.added) == 2, report.summary()
+    cards = [d.proposal(pid) for pid in report.proposals]
+    assert "Signature" in (cards[0].payload_html or "") and cards[0].anchor_after == ids[0]
+    assert cards[1].anchor_after == cards[0].id  # after the colleague's own line
+    _healthy(d)
+
+
+def test_a_tracked_deletion_across_paragraphs_joins_them_all():
+    d, ids = _three(
+        "<p>First paragraph that is long enough to matter here.</p>",
+        "<p>Middle paragraph that the colleague removes entirely.</p>",
+        "<p>Last paragraph that joins the first one after the deletion.</p>",
+    )
+    c = Colleague(docx_bytes(d, roundtrip_marks=True))
+    _tracked_delete_runs(c.paragraph(ids[1]), 900)
+    _tracked_delete_mark(c.paragraph(ids[0]), 901)
+    _tracked_delete_mark(c.paragraph(ids[1]), 902)
+    report = d.import_revision(c.save())
+    assert report.modified == [ids[0]] and sorted(report.deleted) == sorted(ids[1:])
+    joined = d.proposal(report.proposals[0]).payload_html or ""
+    assert "matter here.Last paragraph" in joined and "Middle" not in joined
+    _healthy(d)
+
+
+def test_a_tracked_deletion_of_a_whole_heading_leaves_the_next_paragraph_as_it_was():
+    d, ids = _three(
+        "<p>Intro paragraph that is long enough to matter here.</p>",
+        "<h2>Obsolete section heading</h2>",
+        "<p>Body paragraph under the heading, which stays.</p>",
+    )
+    c = Colleague(docx_bytes(d, roundtrip_marks=True))
+    _tracked_delete_runs(c.paragraph(ids[1]), 900)
+    _tracked_delete_mark(c.paragraph(ids[1]), 901)
+    report = d.import_revision(c.save())
+    assert report.deleted == [ids[1]] and not report.modified, report.summary()
+    _healthy(d)
+
+
+def test_continuation_markers_regroup_in_linear_time():
+    import time
+
+    from aimformat.revision_import import _structure
+
+    n = 20_000  # quadratic took ~20 s here; linear well under one
+    blocks = (
+        ['<p data-aim-mark="_aim_a">x</p>']
+        + [f"<p>u{i}</p>" for i in range(n)]
+        + ['<ul data-aim-container=""><li data-aim="">i</li></ul>']
+        + [f'<p data-aim-mark="_aim2_a">m{i}</p>' for i in range(n)]
+    )
+    started = time.perf_counter()
+    rets = _structure(blocks, {}, {})
+    assert time.perf_counter() - started < 5
+    assert len(rets) == 2 * n + 2  # nothing joined across the list
+
+
+def test_continuation_markers_still_rejoin_a_flattened_unit():
+    from aimformat.revision_import import _structure
+
+    rets = _structure(
+        [
+            '<p data-aim-mark="_aim_a">one</p>',
+            "<p>two</p>",
+            '<p data-aim-mark="_aim3_a">three</p>',
+            '<p data-aim-mark="_aim_b">next</p>',
+        ],
+        {},
+        {},
+    )
+    assert [r.text for r in rets] == ["onetwothree", "next"]
+
+
+@pytest.mark.parametrize(
+    ("html", "old", "new", "want"),
+    [
+        (  # the export writes a link as "text (URL)"
+            '<p>See <a href="https://x.example">the terms</a>; pay '
+            '<mark style="background-color:#fde68a">within 30 days</mark>.</p>',
+            "30",
+            "45",
+            '<p>See <a href="https://x.example">the terms</a>; pay '
+            '<mark style="background-color:#fde68a">within 45 days</mark>.</p>',
+        ),
+        (  # typing at a line's end stays on that line
+            "<p>Acme Ltd<br>12 High Street</p>",
+            "Acme Ltd",
+            "Acme Ltd (Registered)",
+            "<p>Acme Ltd (Registered)<br>12 High Street</p>",
+        ),
+        (  # a word replaced just before a break is not split across it
+            "<p>Line one of the clause<br>line two of the clause here.</p>",
+            "clause",
+            "section",
+            "<p>Line one of the section<br>line two of the clause here.</p>",
+        ),
+    ],
+)
+def test_text_edits_next_to_markup_docx_reshapes_rebase_exactly(html, old, new, want):
+    d = aim.new_document(title="Marks")
+    uid = d.add_chunk(html, author=A).id
+    c = Colleague(docx_bytes(d, roundtrip_marks=True))
+    c.replace(uid, old, new)
+    report = d.import_revision(c.save())
+    assert report.rebased == 1 and not report.conflicts, report.summary()
+    payload = d.proposal(report.proposals[0]).payload_html or ""
+    assert _strip(payload) == want
+
+
+def _strip(markup: str) -> str:
+    return re.sub(r' data-aim="[^"]*"', "", markup)
+
+
+def test_a_formatting_change_never_drops_a_link_docx_cannot_carry():
+    d = aim.new_document(title="Link")
+    uid = d.add_chunk(
+        '<p>See <a href="https://x.example">the terms</a>; pay within 30 days.</p>', author=A
+    ).id
+    c = Colleague(docx_bytes(d, roundtrip_marks=True))
+    run = c.paragraph(uid).findall(q("r"))[-1]
+    rpr = run.find(q("rPr"))
+    if rpr is None:
+        rpr = etree.Element(q("rPr"))
+        run.insert(0, rpr)
+    etree.SubElement(rpr, q("b"))  # the colleague bolds the last run
+    report = d.import_revision(c.save())
+    assert not report.proposals
+    assert [cf.unit for cf in report.conflicts] == [uid]

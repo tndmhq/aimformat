@@ -344,25 +344,28 @@ def _regroup(seq: list[_Ret]) -> list[_Ret]:
     together with any unmarked blocks between them."""
     out: list[_Ret] = []
     open_at: dict[str, int] = {}
+    # per kind: the last index in *out* that is marked or of another kind —
+    # a group may only absorb a clean run after it (O(1) per block; a
+    # crafted file of continuation markers must not cost a rescan each)
+    last_bad: dict[str, int] = {"chunk": -1, "item": -1, "container": -1}
     for ret in seq:
         later = [uid for k, uid in ret.marks if k >= 2]
         if ret.kind != "container" and later and not ret.firsts:
             gi = open_at.get(later[0])
-            if (
-                gi is not None
-                and out[gi].kind == ret.kind
-                and all(
-                    not out[j].marks and out[j].kind == ret.kind for j in range(gi + 1, len(out))
-                )
-            ):
+            if gi is not None and out[gi].kind == ret.kind and last_bad[ret.kind] <= gi:
                 group = out[gi]
                 for extra in out[gi + 1 :]:
                     group.els += extra.els
                 group.els += ret.els
                 group.marks += ret.marks
                 del out[gi + 1 :]
+                for kind in last_bad:  # out[gi] is marked: it bounds every run
+                    last_bad[kind] = gi
                 continue
         out.append(ret)
+        for kind in last_bad:
+            if ret.marks or ret.kind != kind:
+                last_bad[kind] = len(out) - 1
         for uid in ret.firsts:
             open_at[uid] = len(out) - 1
     for ret in out:
@@ -441,6 +444,21 @@ def _norm(els: list[Element]) -> str:
     return "\n".join(parts)
 
 
+def _carried(b_els: list[Element], n_els: list[Element]) -> bool:
+    """B survives the export → import unchanged, up to its root class tokens
+    (restored separately) and noise: nothing is lost by replacing it."""
+
+    def unclassed(els: list[Element]) -> list[Element]:
+        out = []
+        for el in els:
+            clone = _scrub(el)
+            clone.remove_attr("class")
+            out.append(clone)
+        return out
+
+    return len(b_els) == len(n_els) and _norm(unclassed(b_els)) == _norm(unclassed(n_els))
+
+
 def _struct(els: list[Element]) -> list[str]:
     return [e.tag for el in els for e in el.iter() if e.tag not in _INLINE_FMT]
 
@@ -467,20 +485,30 @@ def _blank(el: Element) -> str:
     return serialize(clone)
 
 
+def _merged_texts(els: list[Element]) -> list[str]:
+    out: list[str] = []
+    for el in els:
+        clone = _scrub(el)
+        _merge_inline(clone)
+        out += [t.data for t in _text_nodes(clone)]
+    return out
+
+
 def _rebase(
     b_els: list[Element], n_els: list[Element], r_els: list[Element]
 ) -> list[Element] | None:
     """Replay the colleague's text-only change (N → R) onto the base markup B.
 
-    Preconditions: N and R have the same inline skeleton (only text changed)
-    and B renders exactly N's text. ``None`` when they fail."""
+    Preconditions: N and R have the same inline skeleton (only text changed),
+    and every changed span of N's text is text B renders too — B may render
+    text the export added or reshaped (a link's URL, a line break) only where
+    the colleague did not edit. ``None`` when they fail."""
     if not b_els or len(n_els) != len(r_els):
         return None
-    pn = "".join(e.text() for e in n_els)
-    pr = "".join(e.text() for e in r_els)
-    if "".join(e.text() for e in b_els) != pn:
-        return None
     if [_blank(e) for e in n_els] != [_blank(e) for e in r_els]:
+        return None
+    n_texts, r_texts = _merged_texts(n_els), _merged_texts(r_els)
+    if len(n_texts) != len(r_texts):
         return None
     copies: list[Element] = []
     for e in b_els:
@@ -490,30 +518,61 @@ def _rebase(
     nodes = [t for c in copies for t in _text_nodes(c)]
     if not nodes:
         return None
+    pn = "".join(n_texts)
+    pb = "".join(t.data for t in nodes)
+    shared = (
+        [(0, 0, len(pn))]
+        if pb == pn
+        else [
+            blk
+            for blk in difflib.SequenceMatcher(None, pn, pb, autojunk=False).get_matching_blocks()
+            if blk.size
+        ]
+    )
 
-    def spans() -> list[tuple[Text, int, int]]:
-        out, off = [], 0
+    def to_b(i1: int, i2: int) -> tuple[int, int] | None:
+        for a, b, size in shared:
+            if a <= i1 and i2 <= a + size:
+                return b + i1 - a, b + i2 - a
+        return None
+
+    # diff node by node (N and R share their skeleton), so each change stays
+    # on its own side of every element boundary; an insertion at the end of
+    # a text run belongs to that run (typing at a line's end, before <br>)
+    edits: list[tuple[int, int, str, bool]] = []  # (b1, b2, new, leans back)
+    base = 0
+    for nt, rt in zip(n_texts, r_texts, strict=True):
+        if nt != rt:
+            for tag, i1, i2, j1, j2 in difflib.SequenceMatcher(
+                None, nt, rt, autojunk=False
+            ).get_opcodes():
+                if tag == "equal":
+                    continue
+                span = to_b(base + i1, base + i2)
+                if span is None:
+                    return None  # the edit touches text B does not render
+                edits.append((span[0], span[1], rt[j1:j2], i1 == len(nt) and i1 > 0))
+        base += len(nt)
+
+    for b1, b2, new, back in reversed(edits):
+        sp, off = [], 0
         for t in nodes:
-            out.append((t, off, off + len(t.data)))
+            sp.append((t, off, off + len(t.data)))
             off += len(t.data)
-        return out
-
-    ops = difflib.SequenceMatcher(None, pn, pr, autojunk=False).get_opcodes()
-    for tag, i1, i2, j1, j2 in reversed(ops):
-        if tag == "equal":
-            continue
-        new = pr[j1:j2]
-        sp = spans()
-        host = next((s for s in sp if s[1] <= i1 < s[2]), None) or next(
-            (s for s in reversed(sp) if s[1] < i1 <= s[2]), sp[0]
-        )
+        inside = next((s for s in sp if s[1] < b1 < s[2]), None)
+        before = next((s for s in reversed(sp) if s[1] < b1 <= s[2]), None)
+        after = next((s for s in sp if s[1] <= b1 < s[2]), None)
+        if b1 < b2:
+            host = after or before or sp[0]
+        else:
+            host = inside or ((before or after) if back else (after or before)) or sp[0]
         t, a, z = host
-        if i2 > z:  # the replaced range spans later nodes: trim them first
+        if b2 > z:  # the replaced range spans later nodes: trim them first
             for t2, a2, z2 in sp:
-                if a2 >= z and a2 < i2:
-                    t2.data = t2.data[min(i2, z2) - a2 :]
-            i2 = z
-        t.data = t.data[: i1 - a] + new + t.data[i2 - a :]
+                if a2 >= z and a2 < b2:
+                    t2.data = t2.data[min(b2, z2) - a2 :]
+            b2 = z
+        t.data = t.data[: b1 - a] + new + t.data[b2 - a :]
     return copies
 
 
@@ -635,6 +694,8 @@ class _Aligner:
         hits: dict[int, list[str]] = {}
         back: dict[str, list[int]] = {}
         for i, r in enumerate(rest):
+            if self.exhausted:
+                break  # the budget bounds the loop, not only the scoring
             for u in free:
                 if (
                     self.content_compatible(r, xs[u])
@@ -672,6 +733,8 @@ class _Aligner:
             return
         pairs = []
         for k, r in enumerate(rets):
+            if self.exhausted:
+                break
             for j, u in enumerate(cands):
                 if self.content_compatible(r, xs[u]):
                     score = self.ratio(r.text, xs[u].text, _FUZZY_MIN)
@@ -872,6 +935,7 @@ def _accept_foreign_revisions(data: bytes, ours: set[tuple[str, str]]) -> tuple[
 
     authors: set[str] = set()
     touched = False
+    joins: list[Any] = []  # paragraphs whose mark the colleague deleted
     for el in list(root.iter(*(_w(t) for t in (*_REVISION_TAGS, *_CHANGE_TAGS)))):
         if not foreign(el) or el.getparent() is None:
             continue
@@ -884,15 +948,11 @@ def _accept_foreign_revisions(data: bytes, ours: set[tuple[str, str]]) -> tuple[
             parent.remove(el)  # accepting a formatting change keeps the current props
         elif ptag == "rPr" and name in ("ins", "del"):
             # a paragraph mark revision: inserted marks just stay; a deleted
-            # mark joins this paragraph with the next one
+            # mark joins this paragraph with the next one (below)
             parent.remove(el)
             para = next(parent.iterancestors(_w("p")), None)
-            nxt = para.getnext() if para is not None else None
-            if name == "del" and para is not None and nxt is not None and nxt.tag == _w("p"):
-                for child in list(nxt):
-                    if child.tag != _w("pPr"):
-                        para.append(child)
-                nxt.getparent().remove(nxt)
+            if name == "del" and para is not None:
+                joins.append(para)
         elif ptag == "trPr":
             parent.remove(el)
             if name == "del":
@@ -906,6 +966,22 @@ def _accept_foreign_revisions(data: bytes, ours: set[tuple[str, str]]) -> tuple[
             for offset, child in enumerate(list(el)):
                 parent.insert(index + offset, child)
             parent.remove(el)
+    # last first, so a run of deleted marks collapses into one paragraph; the
+    # paragraph's properties live in its mark, so the surviving (next) mark's
+    # pPr wins — deleting a whole heading leaves the body text a body paragraph
+    for para in reversed(joins):
+        nxt = para.getnext()
+        if para.getparent() is None or nxt is None or nxt.tag != _w("p"):
+            continue
+        own = para.find(_w("pPr"))
+        if own is not None:
+            para.remove(own)
+        for child in list(nxt):
+            if child.tag == _w("pPr"):
+                para.insert(0, child)
+            else:
+                para.append(child)
+        nxt.getparent().remove(nxt)
     for el in list(root.iter(*(_w(t) for t in _RANGE_TAGS))):
         if el.getparent() is not None and foreign(el):
             el.getparent().remove(el)
@@ -1010,12 +1086,23 @@ def _restore_resolved_cards(x_doc: AimDocument, doc: AimDocument, wanted: set[st
                 x_doc.propose_delete(target, author=actor, at=at)
             elif action == "add":
                 anchor = Anchor.from_obj(ev.get("anchor") or {})
-                payload = re.sub(
-                    r'( data-aim(?:-container)?=)"[^"]*"', r'\1""', ev.get("proposed") or ""
-                )
-                x_doc.propose_add(
-                    payload, author=actor, container=anchor.container, after=anchor.after, at=at
-                )
+                proposed = ev.get("proposed") or ""
+                try:  # keep the payload's ids: an accepted add is live under them
+                    x_doc.propose_add(
+                        proposed,
+                        author=actor,
+                        container=anchor.container,
+                        after=anchor.after,
+                        at=at,
+                    )
+                except AimError:
+                    x_doc.propose_add(
+                        re.sub(r'( data-aim(?:-container)?=)"[^"]*"', r'\1""', proposed),
+                        author=actor,
+                        container=anchor.container,
+                        after=anchor.after,
+                        at=at,
+                    )
             elif action == "move":
                 to = Anchor.from_obj(ev.get("to") or {})
                 x_doc.propose_move(
@@ -1272,6 +1359,12 @@ class _Planner:
         self.modify_op: dict[str, int] = {}
         self.taken = doc._taken_ids()
         self.pending = {p.target: p for p in doc.proposals if p.target}
+        self.pending_adds = {
+            uid: p.id
+            for p in doc.proposals
+            if p.action == "add"
+            for uid in re.findall(r' data-aim(?:-container)?="([^"]+)"', p.payload_html or "")
+        }
         self.export_cards = set(manifest.cards) if manifest else set()
         self.x_hash = {u.id: u.x for u in manifest.units} if manifest else {}
         self.whole: set[str] = set()  # containers modified whole
@@ -1352,6 +1445,14 @@ class _Planner:
             )
         if ret.kind == "container":
             return None, None  # handled by the container logic
+        if not _carried(x.els, n.els):
+            # taking the returned markup would drop what the export could
+            # not show the colleague (a link's target, a highlight colour)
+            return (
+                None,
+                "change not representable through DOCX "
+                "(the unit has markup DOCX does not carry; only text edits apply)",
+            )
         out = []
         for i, el in enumerate(ret.els):
             clone = _scrub(el)
@@ -1508,6 +1609,13 @@ class _Planner:
             if x.kind == "item" and (x.scope not in seen or x.scope in self.whole):
                 continue  # covered by the container's own delete / whole modify
             if uid not in self.live:
+                adder = self.pending_adds.get(uid)
+                if adder is not None:  # the export showed a pending addition applied
+                    self.conflict(
+                        uid,
+                        "the colleague deleted a pending addition; "
+                        f"reject proposal {adder} instead",
+                    )
                 continue  # already gone
             reason = None
             if x.slide is not None:
@@ -1661,10 +1769,14 @@ class _Planner:
             for it, _ in _direct_items(el):
                 it.set("data-aim", "")
             el.set("data-aim-container", "")
-        twins = self.since.get((scope, _strip_ids(serialize(el))))
-        if twins:
+        # already in only where the returned file puts it: the same content
+        # added elsewhere since the export is someone else's paragraph
+        twins = self.since.get((scope, _strip_ids(serialize(el)))) or []
+        twin = next((t for t in twins if self._already_at(t, scope, prev)), None)
+        if twin is not None:
+            twins.remove(twin)
             self.report.unchanged += 1
-            return ("unit", twins.pop(0))
+            return ("unit", twin)
         new_id = self.fresh(el)
         text = _plain([source])
         depends = None
