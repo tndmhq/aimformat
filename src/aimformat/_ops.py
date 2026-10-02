@@ -190,6 +190,16 @@ class _Stubs:
         return STUB.sub(swap, html)
 
 
+def restore_stubs(doc: AimDocument, html: str) -> str:
+    """*html* with every ``[elided: …]`` stub swapped back for the data URI
+    it stands for in *doc* (a payload copied from an eliding read). Raises
+    :class:`OpError` when a stub matches nothing, before anything is written."""
+    try:
+        return _Stubs(doc).restore(html)
+    except _Fail as exc:
+        raise OpError(f"aim: {exc}") from None
+
+
 def _require(op: dict[str, Any], *, themed: str) -> None:
     action = op["action"]
     if action in _TARGETED and not op.get("target"):

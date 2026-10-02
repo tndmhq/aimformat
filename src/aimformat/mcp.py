@@ -28,7 +28,7 @@ from pydantic import ConfigDict, with_config
 from typing_extensions import Required, TypedDict
 
 from . import views
-from ._ops import OpError, apply_ops, ops_from_args
+from ._ops import OpError, apply_ops, ops_from_args, restore_stubs
 from .document import AimDocument
 from .errors import AimError
 from .events import parse_actor
@@ -339,6 +339,13 @@ def create_server() -> FastMCP:
             raise ValueError("aim: applied= needs decision='accept' and exactly one proposal id")
         doc = _load(path)
         who = _actor(author)
+        if applied:
+            # applied= is a write path like aim_edit: a payload copied from a
+            # read carries its [elided: …] stubs, which restore here too
+            try:
+                applied = restore_stubs(doc, applied)
+            except OpError as exc:
+                raise ValueError(str(exc)) from None
         try:
             for pid in proposal_ids:
                 if decision == "accept":

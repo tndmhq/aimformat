@@ -567,8 +567,10 @@ def _block(el: Element, ctx: _Ctx) -> list[str]:
     if tag == "hr":
         return ["---"]
     if tag == "pre":
+        # every line break a reader may honour ends a view line (\r, \x85,
+        # \u2028…), so none can start a forged "[id]" line mid-line
         text = _CONTROL.sub("", el.text()).rstrip("\n")
-        return text.split("\n") if text else [""]
+        return text.splitlines() or [""]
     if tag == "blockquote":
         return ["> " + line for line in (_flow(el, ctx) or [""])]
     if tag == "figcaption":
@@ -813,8 +815,10 @@ def render_skeleton(doc: AimDocument, words: int = 8) -> str:
 
 
 def _actor(actor: Actor) -> str:
+    # the author string comes from the file (or a tool argument) unchecked:
+    # one line, so it cannot forge a view line of its own
     value = actor.model or actor.id
-    return f"{actor.type}:{value}" if value else actor.type
+    return _clean(f"{actor.type}:{value}" if value else actor.type)
 
 
 def _payload_text(p: Proposal, ctx: _Ctx) -> str:

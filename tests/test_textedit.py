@@ -90,6 +90,50 @@ class TestReplaceInMarkup:
         with pytest.raises(TextReplaceError):
             replace_in_markup(run, "first itemsecond", "x")
 
+    # -- substitute review round 1: block and line boundaries inside a chunk ---------
+    def test_an_insertion_at_the_start_of_a_cell_stays_in_that_cell(self):
+        row = '<tr data-aim="r2"><td>Implementation</td><td>16</td></tr>'
+        out = replace_in_markup(row, "16", "about 16")
+        assert out == '<tr data-aim="r2"><td>Implementation</td><td>about 16</td></tr>'
+        # appending to the end of a cell still lands in that cell
+        out = replace_in_markup(row, "Implementation", "Implementation phase")
+        assert "<td>Implementation phase</td><td>16</td>" in out
+
+    def test_an_insertion_at_the_start_of_a_list_item_stays_in_that_item(self):
+        flat = '<ul data-aim="l"><li>Discovery workshop</li><li>Rollout</li></ul>'
+        out = replace_in_markup(flat, "Rollout", "Final Rollout")
+        assert "<li>Discovery workshop</li><li>Final Rollout</li>" in out
+        # with the source's newlines between items (a text run in the <ul>)
+        spaced = '<ul data-aim="l">\n<li>Discovery workshop</li>\n<li>Rollout</li>\n</ul>'
+        out = replace_in_markup(spaced, "Rollout", "Final Rollout")
+        assert "\n<li>Final Rollout</li>\n" in out
+        out = replace_in_markup(spaced, "workshop", "workshop day")
+        assert "<li>Discovery workshop day</li>\n" in out
+
+    def test_an_insertion_at_the_start_of_a_line_stays_on_that_line(self):
+        markup = '<p data-aim="x">Line one<br>Line two</p>'
+        out = replace_in_markup(markup, "Line two", "New Line two")
+        assert out == '<p data-aim="x">Line one<br>New Line two</p>'
+
+    def test_an_insertion_between_two_cells_with_context_on_both_sides_is_refused(self):
+        row = '<tr data-aim="r2"><td>Price</td><td>100</td></tr>'
+        with pytest.raises(TextReplaceError, match="ends and the next begins"):
+            replace_in_markup(row, "Price100", "Price: 100")
+
+    # -- substitute review round 1: which characters a deletion removes ---------------
+    def test_a_deletion_removes_the_quoted_label_not_a_shifted_span(self):
+        markup = '<p data-aim="x"><strong>Note:</strong> Notice period is 30 days.</p>'
+        out = replace_in_markup(markup, "Note: Notice", "Notice")
+        assert out == '<p data-aim="x">Notice period is 30 days.</p>'
+        out = replace_in_markup('<p data-aim="x"><b>bar</b> baz</p>', "bar baz", "baz")
+        assert out == '<p data-aim="x">baz</p>'
+
+    def test_a_deletion_that_reads_two_ways_across_markup_is_refused(self):
+        # "ab" -> "a" deletes either the bold b or the plain one; neither
+        # reading sits on a word edge, so the caller must say which
+        with pytest.raises(TextReplaceError, match="more than one place"):
+            replace_in_markup('<p data-aim="x">xa<b>b</b>by</p>', "abb", "ab")
+
 
 # -- the SDK -----------------------------------------------------------------------------
 def _doc() -> aim.AimDocument:
@@ -126,3 +170,10 @@ class TestSdk:
         with pytest.raises(TargetNotFound):
             doc.replace_text("ghost", "a", "b", author=BOT)
         assert doc.dumps() == before
+
+
+def test_a_long_deletion_inside_one_run_is_not_capped_by_its_readings():
+    # 300 equal readings, all inside one text run: no placement question
+    markup = '<p data-aim="x">' + "-" * 600 + "</p>"
+    out = replace_in_markup(markup, "-" * 600, "-" * 300)
+    assert out == '<p data-aim="x">' + "-" * 300 + "</p>"

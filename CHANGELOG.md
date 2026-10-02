@@ -100,6 +100,8 @@ READS-D1…D13 (2026-10-01/02, `agent-read-*`, `agent-*`, `cli-*`, `mcp-*`,
   (`doc.replace_text`, `doc.propose_replace_text`). The id, attributes and
   inline markup are kept; only the changed span must sit inside one text
   run, otherwise the call is refused (a pure deletion may cross runs).
+  Text inserted at a cell, list-item or line boundary stays on the side
+  `old_text` was quoted from.
   Recorded as an ordinary `modify`. On the benchmark corpus a one-word edit
   call is 2.0 to 6.0 times smaller (median per document), 3.45 times over
   613 chunks (READS-D13).

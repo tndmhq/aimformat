@@ -147,3 +147,27 @@ direct edit and proposal, refusals leave the document unchanged),
 `tests/test_mcp.py` (single op keeps markup and id, proposal and `ops`
 batch, refusals write nothing), `tests/test_cli.py` (`aim edit|propose
 replace-text`, refusal exits 1 and writes nothing).
+
+## Amendment 2026-10-02 (substitute review round 1, PR #42)
+
+Two placement rules were wrong and are replaced; the rest stands.
+
+- **Insertion at a block or line boundary.** "Joins the run before it" is
+  kept for boundaries of inline formatting only. Inside one chunk, a
+  boundary between two cells, two list items, or around a `<br>` (any
+  element outside the inline-formatting set, including void elements) adds
+  no character to the matched text, so the old rule wrote `about ` into the
+  previous cell for `16` -> `about 16`. There the insertion goes to the
+  side `old_text` was quoted from: at the start of the match it starts the
+  next run, at its end it ends the previous one, and between quoted words
+  on both sides it is refused.
+- **Which characters a pure deletion removes.** The greedy prefix/suffix
+  trim picks one reading of a deletion; `Note: Notice` -> `Notice` read as
+  deleting `e: Not` left `<strong>Not</strong>ice`. Every reading is now
+  computed; when they disagree on markup, the single reading on word edges
+  wins (`Note: ` here), otherwise the call is refused.
+
+Also from that round: `aim_resolve(applied=)` restores `[elided: …]`
+stubs like `aim_edit`/`aim_propose` (§8.3 says a tool that elides restores
+on write), and the text view sanitizes proposal authors and splits `<pre>`
+on every line break, so neither can forge a view line.

@@ -295,8 +295,13 @@ the change:
   quoted context may cross `<strong>` or `<a>`. A change that itself
   crosses inline markup (for example rewording half a bold phrase and the
   plain text after it) is refused: use `modify` with the chunk's HTML, where
-  you decide the formatting. A pure deletion may cross runs.
-- Text inserted exactly at a markup boundary joins the run before it.
+  you decide the formatting. A pure deletion may cross runs; when the
+  deleted characters could be read at two places that remove different
+  formatting, the reading on word edges wins, or the call is refused.
+- Text inserted exactly at an inline-formatting boundary joins the run
+  before it. At a cell, list-item or line boundary it goes to the side you
+  quoted: text added before the first word of `old_text` starts the next
+  cell, text added after its last word ends the previous one.
 - `aim_resolve` — accept or reject pending proposals.
 - `aim_lint` — run the conformance verifier.
 - `aim_export` — convert to docx/md/html/pdf.

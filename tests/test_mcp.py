@@ -793,6 +793,50 @@ def test_stub_from_history_restores_deleted_content(tmp_path):
     assert uri in live and "elided" not in live
 
 
+def test_accept_with_tweaks_restores_stubs_from_a_read(tmp_path):
+    """Substitute review round 1: aim_resolve(applied=) is a write path too,
+    so a payload copied from a read (stubs and all) restores like aim_edit's."""
+    path, uri = _image_doc(tmp_path)
+    doc = aim.load(path)
+    card = doc.propose_replace_text("fig", "cap", "caption", author=BOT)
+    doc.save(path)
+    got = _text(_call("aim_read", {"path": str(path), "mode": "chunks", "ids": [card.id]}))
+    stubbed = next(line for line in got.splitlines() if line.startswith("<figure"))
+    assert uri not in stubbed and "[elided: " in stubbed
+    tweaked = stubbed.replace(">caption<", ">final caption<")
+    out = _payload(
+        _call(
+            "aim_resolve",
+            {
+                "path": str(path),
+                "decision": "accept",
+                "proposal_ids": [card.id],
+                "applied": tweaked,
+            },
+        )
+    )
+    assert out["ok"]
+    live = aim.load(path).chunk("fig").html
+    assert uri in live and "final caption" in live and "elided" not in live
+    # an unknown stub is refused before anything is written
+    doc = aim.load(path)
+    card = doc.propose_replace_text("fig", "final", "last", author=BOT)
+    doc.save(path)
+    before = path.read_bytes()
+    r = _call(
+        "aim_resolve",
+        {
+            "path": str(path),
+            "decision": "accept",
+            "proposal_ids": [card.id],
+            "applied": '<figure data-aim="fig"><img alt="x" '
+            'src="[elided: 1KB, sha256:0000000000000000]"></figure>',
+        },
+    )
+    assert r.isError and "matches nothing in this document" in r.content[0].text
+    assert path.read_bytes() == before
+
+
 def test_edit_batch_fills_a_container_it_created(tmp_path):
     path = _make_doc(tmp_path)
     out = _payload(
