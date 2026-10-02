@@ -1064,7 +1064,8 @@ def _restore_resolved_cards(x_doc: AimDocument, doc: AimDocument, wanted: set[st
     otherwise an untouched file re-proposes a decided card as the
     colleague's. Rebuilt from the resolution events' ``proposed*`` fields;
     returns how many could not be (pruned history, an anchor that no longer
-    replays)."""
+    replays). Replayed with ``accept=False``: the cards were pending at
+    export, so a review policy must not accept them on the way back."""
     from .document import Anchor
 
     missing = wanted - {p.id for p in x_doc.proposals}
@@ -1081,9 +1082,11 @@ def _restore_resolved_cards(x_doc: AimDocument, doc: AimDocument, wanted: set[st
             at = ev.get("proposed_at")
             action, target = ev.action, ev.target or ""
             if action == "modify":
-                x_doc.propose_modify(target, ev.get("proposed") or "", author=actor, at=at)
+                x_doc.propose_modify(
+                    target, ev.get("proposed") or "", author=actor, at=at, accept=False
+                )
             elif action == "delete":
-                x_doc.propose_delete(target, author=actor, at=at)
+                x_doc.propose_delete(target, author=actor, at=at, accept=False)
             elif action == "add":
                 anchor = Anchor.from_obj(ev.get("anchor") or {})
                 proposed = ev.get("proposed") or ""
@@ -1094,6 +1097,7 @@ def _restore_resolved_cards(x_doc: AimDocument, doc: AimDocument, wanted: set[st
                         container=anchor.container,
                         after=anchor.after,
                         at=at,
+                        accept=False,
                     )
                 except AimError:
                     x_doc.propose_add(
@@ -1102,6 +1106,7 @@ def _restore_resolved_cards(x_doc: AimDocument, doc: AimDocument, wanted: set[st
                         container=anchor.container,
                         after=anchor.after,
                         at=at,
+                        accept=False,
                     )
             elif action == "move":
                 to = Anchor.from_obj(ev.get("to") or {})
@@ -1112,6 +1117,7 @@ def _restore_resolved_cards(x_doc: AimDocument, doc: AimDocument, wanted: set[st
                     after=to.after,
                     shell=to.shell if to.after is None else None,
                     at=at,
+                    accept=False,
                 )
             else:
                 lost += 1
@@ -1936,7 +1942,9 @@ def _emit_proposals(
         + [i for i, op in enumerate(ops) if op.kind == "delete"][::-1]
         + [i for i, op in enumerate(ops) if op.kind in ("add", "move")]
     )
-    with work.batch():
+    # an import is a review request: its cards stay pending even when the
+    # document's review policy would auto-accept their author (spec §5.6)
+    with work.batch(auto_accept=False):
         for i in order:
             op = ops[i]
             after = anchor(op)

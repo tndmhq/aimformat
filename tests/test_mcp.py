@@ -1254,6 +1254,31 @@ def test_edit_cannot_change_the_review_policy(tmp_path, monkeypatch):
     assert after.page_setup.size == "A5" and after.review_policy is not None
 
 
+def test_edit_cannot_change_the_review_policy_through_a_back_reference(tmp_path, monkeypatch):
+    """The guard reads the document, not how an op spells its target: a
+    ``$0`` back-reference to aim:doc must not switch auto-accept on."""
+    path = _make_doc(tmp_path)
+    doc = aim.load(path)
+    doc.set_page_setup({"size": "A4"}, author=aim.human("Ada"))
+    doc.save(path)
+    monkeypatch.setenv("AIMFORMAT_MCP_REVIEW", "off")
+    before = path.read_text()
+    page = {"size": "A5", "orientation": "portrait", "margins": {}}
+    review = {"agents": "auto", "by": {"type": "human", "id": "Owner"}}
+    ops = [
+        {"action": "modify", "target": "aim:doc", "html": _settings_html({"page": page})},
+        {
+            "action": "modify",
+            "target": "$0",
+            "html": _settings_html({"page": page, "review": review}),
+        },
+    ]
+    result = _call("aim_edit", {"path": str(path), "ops": ops, "author": "agent:m"})
+    assert "cannot change the review policy" in _error_text(result)
+    assert path.read_text() == before
+    assert aim.load(path).review_policy is None
+
+
 def test_undo_of_switching_auto_accept_off_keeps_it_off(tmp_path, monkeypatch):
     path = _make_doc(tmp_path)
     monkeypatch.setenv("AIMFORMAT_MCP_REVIEW", "off")

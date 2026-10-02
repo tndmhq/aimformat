@@ -201,15 +201,21 @@ def _refuse_review_edit(doc: AimDocument, html: str) -> None:
         wanted = parse_doc_settings(doc_settings_element(html).raw).get("review")
     except AimError:
         return  # malformed payload: modify_chunk reports it
+    if wanted != _review_value(doc):
+        raise ValueError(_REVIEW_EDIT_REFUSAL)
+
+
+_REVIEW_EDIT_REFUSAL = (
+    "aim: aim_edit cannot change the review policy; keep the document's "
+    '"review" value as it is, and use aim_review only when the user asks'
+)
+
+
+def _review_value(doc: AimDocument) -> object:
     try:
-        live = doc.doc_settings.get("review")
+        return doc.doc_settings.get("review")
     except AimError:
-        live = None
-    if wanted != live:
-        raise ValueError(
-            "aim: aim_edit cannot change the review policy; keep the document's "
-            '"review" value as it is, and use aim_review only when the user asks'
-        )
+        return None
 
 
 def _save_and_lint(doc: AimDocument, path: str) -> dict[str, Any]:
@@ -229,6 +235,7 @@ def _write(
     accept_by: Actor | None = None,
 ) -> str:
     doc = _load(path)
+    review_before = _review_value(doc)
     if kind == "edit":
         for op in ops:
             if op.get("action") == "modify" and op.get("target") == "aim:doc" and op.get("html"):
@@ -246,6 +253,10 @@ def _write(
         )
     except OpError as exc:
         raise ValueError(str(exc)) from None
+    if kind == "edit" and _review_value(doc) != review_before:
+        # however an op spelled its target ($N back-references included):
+        # the applied batch changed the policy, so nothing is saved
+        raise ValueError(_REVIEW_EDIT_REFUSAL)
     out = _save_and_lint(doc, path)
     if single:
         first = res.results[0]
