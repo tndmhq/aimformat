@@ -98,6 +98,7 @@ def import_docx(
     theme: dict[str, str] | None = None,
     tracked: str = "propose",
     max_revisions: int = 5000,
+    max_proposals: int = 500,
 ) -> ImportResult:
     """DOCX → .aim plus an :class:`ImportReport` of what was and was not
     carried (extra ``docx``).
@@ -108,8 +109,11 @@ def import_docx(
     equals Word's *Reject All* — except baked numbering labels, which keep
     the original numbering, and formatting the format cannot express; the
     report lists both. ``tracked="accept"`` / ``"reject"`` import that
-    resolved text instead, with no proposals. A document carrying more than
-    ``max_revisions`` revision records is refused in ``"propose"`` mode.
+    resolved text instead, with no proposals. In ``"propose"`` mode a
+    document is refused when it carries more than ``max_revisions`` revision
+    records, or when its changes would become more than ``max_proposals``
+    pending cards: writing and validating the lane takes time that grows
+    with the square of its card count.
 
     Word comments are reported, never stored: the format has no comment
     construct, and the text they were anchored on stays intact."""
@@ -128,6 +132,7 @@ def import_docx(
         theme=theme,
         tracked=tracked,
         max_revisions=max_revisions,
+        max_proposals=max_proposals,
     )
 
 
@@ -140,6 +145,7 @@ def from_docx(
     theme: dict[str, str] | None = None,
     tracked: str = "propose",
     max_revisions: int = 5000,
+    max_proposals: int = 500,
 ) -> AimDocument:
     """DOCX → .aim natively (extra ``docx``), styling preserved.
 
@@ -163,6 +169,7 @@ def from_docx(
         theme=theme,
         tracked=tracked,
         max_revisions=max_revisions,
+        max_proposals=max_proposals,
     )
     result.report.emit_warnings(stacklevel=3)
     return result.document
@@ -206,10 +213,12 @@ def from_path(
     theme: dict[str, str] | None = None,
     tracked: str = "propose",
     max_revisions: int = 5000,
+    max_proposals: int = 500,
 ) -> AimDocument:
     """Convert *path* to an :class:`AimDocument`, dispatching on extension
-    (.md/.markdown, .txt, .docx, .pdf; .aim/.html load as-is). ``tracked``
-    and ``max_revisions`` apply to DOCX input (see :func:`import_docx`)."""
+    (.md/.markdown, .txt, .docx, .pdf; .aim/.html load as-is). ``tracked``,
+    ``max_revisions`` and ``max_proposals`` apply to DOCX input (see
+    :func:`import_docx`)."""
     p = Path(path)
     kind = _DISPATCH.get(p.suffix.lower())
     if kind is None:
@@ -235,5 +244,6 @@ def from_path(
             theme=theme,
             tracked=tracked,
             max_revisions=max_revisions,
+            max_proposals=max_proposals,
         )
     return from_pdf(p, title=title, lang=lang, author=author, theme=theme)

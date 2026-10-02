@@ -17,7 +17,9 @@ newer version (S002) with an unknown event kind (H003).
   later events, so a hand edit to imported content no later event touched is
   still adopted with its true `before`. Theme and settings in the snapshot
   are tracked origin state. Recording a baseline raises the declared version
-  to at least 0.6, with no version event (§3.7).
+  to at least 0.6, with no version event (§3.7). The `<html>` line is
+  compared on the declared version only: no event records `lang` or `dir`,
+  so editing them by hand is not a snapshot mismatch.
 - **Importers record one baseline instead of one `add` per block**
   (`from_docx`, `from_markdown`, `from_text`, `from_docling`/`from_pdf`). On
   the five DOCX fixtures a fresh import is 15–21% smaller in o200k tokens for
@@ -81,7 +83,12 @@ Decisions IMPORT-D1 to IMPORT-D8 in `docs/log/` (2026-10-01).
 - New `tracked="propose"|"accept"|"reject"` keyword on `from_docx`,
   `from_path` and the new `import_docx`, and `aim import --tracked`. The
   resolved modes import the accepted or the rejected text with no proposals.
-  `max_revisions` (default 5,000) refuses a larger lane in `"propose"` mode.
+  In `"propose"` mode, `max_revisions` (default 5,000) refuses a document
+  with more revision records, and `max_proposals` (default 500) refuses one
+  whose changes would become more pending cards. Writing and checking the
+  lane takes time that grows with the square of its card count, and one
+  revision can produce many cards (a deleted paragraph that joins two lists
+  carries every item of the second list).
 - **`import_docx()` returns an `ImportResult(document, report)`.** The
   `ImportReport` lists every revision with the cards that carry it (or why
   none does), every Word comment (author, date, text, anchored text, the

@@ -156,10 +156,10 @@ class Doc:
             )
         return f"<w:p>{'<w:pPr>' + ppr + '</w:pPr>' if ppr else ''}{content}</w:p>"
 
-    def moved(self, kind: str, text: str, name: str, by=ALICE, *, edit: str = "") -> str:
+    def moved(self, kind: str, text: str, name: str, by=ALICE, *, edit: str = "", **kw) -> str:
         """A whole paragraph moved (text and mark), named range included."""
         body = f"<w:{kind} {_who(by, self.ids)}>{run(text)}</w:{kind}>" + edit
-        return self.p(body, mark=(kind, by), move=(kind, name))
+        return self.p(body, mark=(kind, by), move=(kind, name), **kw)
 
     def inserted_p(self, text: str, by=BOB, **kw) -> str:
         return self.p(self.ins(text, by), mark=("ins", by), **kw)
@@ -857,6 +857,149 @@ def shapes() -> list[Shape]:
             ["One.", "Two.", "Three.", "Five."],
             None,
             note="every list a deletion joins moves, in source order",
+        )
+    )
+
+    # The reviewer replaced a list's first item with an intro paragraph. The
+    # list now starts later in the source than it did, and the inserted
+    # paragraph sits between the two starts: it must land BEFORE the list.
+    d = Doc()
+    d.numbering = NUMBERING
+    d.body = [
+        d.p(d.t("Intro.")),
+        d.deleted_p("Old first item", ALICE, num=(7, 0)),
+        d.inserted_p("The following apply:", ALICE),
+        d.p(d.t("Second item"), num=(7, 0)),
+        d.p(d.t("Third item"), num=(7, 0)),
+    ]
+    out.append(
+        Shape(
+            "list_first_item_replaced_by_paragraph",
+            d.build(),
+            ["Intro.", "Old first item", "Second item", "Third item"],
+            ["Intro.", "The following apply:", "Second item", "Third item"],
+            [("add", _label(ALICE)), ("delete", _label(ALICE))],
+            note="a list whose first item is gone in Accept All starts at its new first item",
+        )
+    )
+
+    # The same gap filled by a move destination instead of an insertion.
+    d = Doc()
+    d.numbering = NUMBERING
+    d.body = [
+        d.moved("moveFrom", "Moved clause.", "m5", BOB),
+        d.p(d.t("Intro.")),
+        d.deleted_p("Old first item", ALICE, num=(7, 0)),
+        d.moved("moveTo", "Moved clause.", "m5", BOB),
+        d.p(d.t("Second item"), num=(7, 0)),
+        d.p(d.t("Third item"), num=(7, 0)),
+    ]
+    out.append(
+        Shape(
+            "move_into_a_list_items_place",
+            d.build(),
+            ["Moved clause.", "Intro.", "Old first item", "Second item", "Third item"],
+            ["Intro.", "Moved clause.", "Second item", "Third item"],
+            [("move", _label(BOB)), ("delete", _label(ALICE))],
+        )
+    )
+
+    # A clause moved from one list into another, then items inserted after
+    # it. The moved item is not in the destination list until the move is
+    # accepted, so nothing can anchor on it there.
+    d = Doc()
+    d.numbering = NUMBERING
+    d.body = [
+        d.p(d.t("Obligations of the buyer:")),
+        d.p(d.t("Pay on time"), num=(7, 0)),
+        d.moved("moveFrom", "Keep records", "m6", BOB, num=(7, 0)),
+        d.moved("moveFrom", "Allow audits", "m7", BOB, num=(7, 0)),
+        d.p(d.t("Obligations of the seller:")),
+        d.p(d.t("Deliver goods"), num=(7, 0)),
+        d.moved("moveTo", "Keep records", "m6", BOB, num=(7, 0)),
+        d.inserted_p("Provide invoices", ALICE, num=(7, 0)),
+        d.moved("moveTo", "Allow audits", "m7", BOB, num=(7, 0)),
+        d.inserted_p("Insure the goods", ALICE, num=(7, 0)),
+        d.p(d.t("Signatures.")),
+    ]
+    out.append(
+        Shape(
+            "move_between_lists_then_insert",
+            d.build(),
+            [
+                "Obligations of the buyer:",
+                "Pay on time",
+                "Keep records",
+                "Allow audits",
+                "Obligations of the seller:",
+                "Deliver goods",
+                "Signatures.",
+            ],
+            [
+                "Obligations of the buyer:",
+                "Pay on time",
+                "Obligations of the seller:",
+                "Deliver goods",
+                "Keep records",
+                "Provide invoices",
+                "Allow audits",
+                "Insure the goods",
+                "Signatures.",
+            ],
+            [
+                ("move", _label(BOB)),
+                ("add", _label(ALICE)),
+                ("move", _label(BOB)),
+                ("add", _label(ALICE)),
+            ],
+            note="adds after a cross-list move anchor where the move does",
+        )
+    )
+
+    # A deletion joins two lists and an insertion splits the joined list
+    # again further down. The second list keeps its identity (it still
+    # holds Charlie), but Bravo now ends the FIRST list, before the note.
+    d = Doc()
+    d.numbering = NUMBERING
+    d.body = [
+        d.p(d.t("Alpha."), num=(7, 0)),
+        d.deleted_p("Part two", BOB),
+        d.p(d.t("Bravo."), num=(7, 0)),
+        d.inserted_p("Note.", BOB),
+        d.p(d.t("Charlie."), num=(7, 0)),
+    ]
+    out.append(
+        Shape(
+            "list_join_then_split",
+            d.build(),
+            ["Alpha.", "Part two", "Bravo.", "Charlie."],
+            ["Alpha.", "Bravo.", "Note.", "Charlie."],
+            [("add", _label(BOB)), ("modify", _label(BOB)), ("delete", _label(BOB))],
+            note="an item a join carries across leaves a list that is matched elsewhere",
+        )
+    )
+
+    # The mirror image: an insertion splits a list and a deletion joins the
+    # lower part to the next list, which then holds Bravo and Charlie.
+    d = Doc()
+    d.numbering = NUMBERING
+    d.body = [
+        d.p(d.t("Alpha."), num=(7, 0)),
+        d.inserted_p("Note.", ALICE),
+        d.p(d.t("Bravo."), num=(7, 0)),
+        d.p(d.t("Charlie."), num=(7, 0)),
+        d.deleted_p("Part two", BOB),
+        d.p(d.t("Delta."), num=(7, 0)),
+    ]
+    out.append(
+        Shape(
+            "list_split_then_join",
+            d.build(),
+            ["Alpha.", "Bravo.", "Charlie.", "Part two", "Delta."],
+            ["Alpha.", "Note.", "Bravo.", "Charlie.", "Delta."],
+            [("delete", EXT), ("delete", EXT), ("add", _label(ALICE))]
+            + [("delete", _label(BOB)), ("add", EXT), ("add", EXT)],
+            note="a split-off part a join attaches to the next list moves there",
         )
     )
     return out

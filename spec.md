@@ -853,7 +853,10 @@ must equal the reconstructed serialization of its target — this is what
 detects out-of-band edits) and MUST verify `doc_hash` at every checkpoint
 crossed. Checkpoints are zero-copy: named, pinned `(seq, label, doc_hash)`
 anchors. Verifiers MUST compare the reconstruction at a baseline with its
-snapshot, line for line, and with its `doc_hash`.
+snapshot, line for line, and with its `doc_hash`. Of the `<html>` open tag
+only the declared version is recorded state (§3.7): the reconstruction takes
+the tag's other attributes (`lang`, `dir`) from the snapshot, because no
+event records a change to them.
 
 ### 6.8 Lifecycle operations
 

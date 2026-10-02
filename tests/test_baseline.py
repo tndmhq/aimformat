@@ -226,21 +226,31 @@ class TestReconcileFromABaseline:
         assert [e.target for e in report.events] == ["aim:theme"]
         assert edited.verify() == []
 
-    def test_a_hand_edited_lang_does_not_break_reconcile(self, imported):
-        # No event records `lang`; the expected state must keep the file's
-        # own <html> attributes (as the empty-origin path does) instead of
-        # the snapshot's, or reconcile cannot converge ("bug in aimformat").
-        text = imported.dumps().replace('lang="en"', 'lang="de"', 1)
+    @pytest.mark.parametrize(
+        ("edit", "kept"),
+        [(('lang="en"', 'lang="de"'), 'lang="de"'), (("<html ", '<html dir="rtl" '), 'dir="rtl"')],
+    )
+    def test_a_hand_edited_lang_or_dir_is_not_a_snapshot_mismatch(self, imported, edit, kept):
+        # Nothing records `lang` or `dir`, and reconcile keeps the file's own,
+        # so the baseline compares the <html> line on its declared version
+        # only. Compared whole, a translator's lang="de" was a permanent H006
+        # that no event could explain and only baseline() could clear.
+        text = imported.dumps().replace(*edit, 1)
         doc = aim.loads(text)
+        assert doc.verify() == [] and _errors(doc) == []
         report = doc.reconcile(at=ts(1))
-        assert report.events == []
-        assert any("snapshot" in problem for problem in report.residual)
-        # ...and a real edit next to it is still adopted, the lang kept
+        assert report.events == [] and report.residual == []
+        # ...and a real edit next to it is still adopted, the attribute kept
         text = text.replace(">Clause one.</p>", ">Clause one, amended.</p>")
         doc = aim.loads(text)
         report = doc.reconcile(at=ts(2))
         assert [e.action for e in report.events] == ["modify"]
-        assert 'lang="de"' in doc.dumps()
+        assert kept in doc.dumps()
+        assert doc.verify() == [] and _errors(doc) == []
+
+    def test_a_hand_edited_version_is_still_a_snapshot_mismatch(self, imported):
+        text = imported.dumps().replace('data-aim-version="0.6"', 'data-aim-version="0.7"', 1)
+        assert any("snapshot" in problem for problem in aim.loads(text).verify())
 
 
 class TestAdoption:

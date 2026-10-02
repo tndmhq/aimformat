@@ -535,6 +535,25 @@ def snapshot_hash(snap: dict) -> str:
     )
 
 
+def _recorded_html_line(snapshot_html: str, state: DocState) -> str:
+    """The reconstruction's ``<html>`` line as a baseline compares it (§6.7):
+    of the open tag only the declared version is recorded state (§3.7).
+    Nothing records ``lang`` or ``dir`` and reconcile keeps the file's own,
+    so those are taken from the snapshot; compared as the file has them, an
+    out-of-band ``lang`` edit would be a mismatch no event can explain."""
+    shell = next(
+        (n for n in parse_fragment(snapshot_html + "</html>") if isinstance(n, Element)), None
+    )
+    if shell is None or shell.tag != "html":
+        return state.html_open_line()
+    declared = state.html.get("data-aim-version")
+    if declared is None:
+        shell.remove_attr("data-aim-version")
+    else:
+        shell.set("data-aim-version", declared)
+    return f"<html{canonical.canonical_attrs(shell, in_svg=False)}>"
+
+
 def _snapshot_lines(snap: dict) -> list[str]:
     lines = [snap["html"]]
     if snap.get("doc"):
@@ -4124,7 +4143,9 @@ class AimDocument:
                 f"baseline seq {ev.seq} ({ev.get('label')!r}): the snapshot does not hash "
                 f"to the recorded doc_hash {recorded}"
             )
-        want, got = _snapshot_lines(snap), state.snapshot_lines()
+        reconstructed = state.snapshot()
+        reconstructed["html"] = _recorded_html_line(snap["html"], state)
+        want, got = _snapshot_lines(snap), _snapshot_lines(reconstructed)
         if want != got:
             index = next(
                 (i for i, (a, b) in enumerate(zip(want, got, strict=False)) if a != b),
@@ -4140,10 +4161,10 @@ class AimDocument:
                 f"baseline seq {ev.seq} ({ev.get('label')!r}): the document does not match "
                 f"its snapshot at {where} (external edit?)"
             )
-        elif check_snapshot and state.doc_hash() != recorded:
+        elif check_snapshot and snapshot_hash(reconstructed) != recorded:
             out.append(
                 f"baseline seq {ev.seq} ({ev.get('label')!r}): doc_hash mismatch — recorded "
-                f"{recorded}, reconstructed {state.doc_hash()}"
+                f"{recorded}, reconstructed {snapshot_hash(reconstructed)}"
             )
         return out
 

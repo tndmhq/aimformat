@@ -138,6 +138,7 @@ def convert_docx(
     theme: dict[str, str] | None = None,
     tracked: str = "propose",
     max_revisions: int = 5000,
+    max_proposals: int = 500,
 ) -> AimDocument:
     """Convert a DOCX file (path, bytes, or stream) into an AimDocument."""
     return import_docx_source(
@@ -148,6 +149,7 @@ def convert_docx(
         theme=theme,
         tracked=tracked,
         max_revisions=max_revisions,
+        max_proposals=max_proposals,
     ).document
 
 
@@ -160,6 +162,7 @@ def import_docx_source(
     theme: dict[str, str] | None = None,
     tracked: str = "propose",
     max_revisions: int = 5000,
+    max_proposals: int = 500,
 ) -> ImportResult:
     """Convert a DOCX into an AimDocument plus its :class:`ImportReport`.
 
@@ -214,6 +217,7 @@ def import_docx_source(
         source=source_ref,
         tracked=tracked,
         max_revisions=max_revisions,
+        max_proposals=max_proposals,
     )
 
 
@@ -285,6 +289,7 @@ def _import_tracked(
     source: list[str] | None,
     tracked: str,
     max_revisions: int,
+    max_proposals: int,
 ) -> ImportResult:
     """The two-view path: a document with Word revisions and/or comments."""
     from ._docx_tracked import (
@@ -350,6 +355,7 @@ def _import_tracked(
             page_markup=page_markup,
             page_revs=page_revs,
             importer=external("docx-import"),
+            max_proposals=max_proposals,
         )
         doc = lane.document
         noise = lane.plan.noise

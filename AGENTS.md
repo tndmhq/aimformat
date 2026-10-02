@@ -30,6 +30,8 @@ technical content only (see Governance below).
 ## Layout
 
 - [`README.md`](README.md) — what `.aim` is; quickstart; API tour.
+- [`TODO.md`](TODO.md) — known, reproduced and deliberately deferred work;
+  read it before working in an area it covers.
 - [`spec.md`](spec.md) — the normative spec; every ` ```aim ` snippet is
   linted in CI; Appendix A is generated from the registry (never hand-edit).
 - [`src/aimformat/`](src/aimformat/) — SDK, verifier, CLI, css generator,

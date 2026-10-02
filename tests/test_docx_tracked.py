@@ -34,7 +34,8 @@ from hypothesis import strategies as st  # noqa: E402
 import tracked_docx_kit as kit  # noqa: E402
 from aimformat.convert import AimImportWarning, import_docx  # noqa: E402
 from aimformat.convert._docx_revisions import AUTHOR_CAP, clean, resolve_view  # noqa: E402
-from aimformat.errors import AimError, ParseError  # noqa: E402
+from aimformat.document import AimDocument  # noqa: E402
+from aimformat.errors import AimError, InvalidOperation, ParseError  # noqa: E402
 from aimformat.events import human  # noqa: E402
 
 DECIDER = human("reviewer")
@@ -244,6 +245,38 @@ class TestGuards:
         # the resolved modes never build a lane, so the ceiling does not apply
         assert import_docx(data, max_revisions=10, tracked="accept").document.chunks
 
+    def test_too_many_proposals_is_refused_before_the_lane_is_written(self):
+        # One deleted paragraph joins two lists: two revision records, and one
+        # card per item of the second list. The revision ceiling cannot bound
+        # that; writing and validating 1,500 cards took over a minute.
+        d = kit.Doc()
+        d.numbering = kit.NUMBERING
+        d.body = [d.p(d.t(f"a{i}"), num=(7, 0)) for i in range(3)]
+        d.body.append(d.deleted_p("Part two", kit.BOB))
+        d.body += [d.p(d.t(f"b{i}"), num=(7, 0)) for i in range(1500)]
+        start = time.monotonic()
+        with pytest.raises(ParseError, match="max_proposals=500.*tracked='accept'"):
+            import_docx(d.build())
+        assert time.monotonic() - start < 10
+
+    def test_the_proposal_budget_is_the_callers(self):
+        d = kit.Doc()
+        d.body = [d.inserted_p(f"New {i}.", kit.BOB) for i in range(3)]
+        with pytest.raises(ParseError, match="would become 3 proposals"):
+            import_docx(d.build(), max_proposals=2)
+        assert len(import_docx(d.build(), max_proposals=3).document.proposals) == 3
+
+    def test_a_lane_at_the_proposal_budget_imports_in_bounded_time(self):
+        d = kit.Doc()
+        d.body = [
+            d.p(d.t(f"Clause {i} "), d.ins("added", kit.ALICE), d.dele(" gone", kit.BOB))
+            for i in range(500)
+        ]
+        start = time.monotonic()
+        result = import_docx(d.build())
+        assert time.monotonic() - start < 40
+        assert len(result.document.proposals) == 500
+
     @pytest.mark.parametrize("closed", [True, False], ids=["survivor", "end_of_body"])
     def test_a_run_of_joined_paragraphs_resolves_in_linear_time(self, closed):
         # Joining pairwise re-moved the accumulated content at every gone
@@ -315,6 +348,44 @@ class TestGuards:
         result = import_docx(d.build())
         assert time.monotonic() - start < 15
         assert len(result.document.proposals) == 300
+
+
+class TestWholeContainerFallback:
+    def test_a_changed_list_becomes_one_modify_keeping_its_item_ids(self, monkeypatch):
+        # The fallback runs when the fine alignment fails; force that. Its
+        # container modify used to carry placeholder ids, which every changed
+        # list or table refused ("payload id '' does not match target").
+        real = AimDocument._propose_lane
+        calls: list[int] = []
+
+        def fine_fails(self, specs):
+            calls.append(len(specs))
+            if len(calls) == 1:
+                raise InvalidOperation("forced fine-alignment failure")
+            return real(self, specs)
+
+        monkeypatch.setattr(AimDocument, "_propose_lane", fine_fails)
+        d = kit.Doc()
+        d.numbering = kit.NUMBERING
+        d.body = [
+            d.p(d.t("Intro.")),
+            d.p(d.t("One"), d.ins(" more", kit.ALICE), num=(7, 0)),
+            d.p(d.t("Two"), num=(7, 0)),
+            d.inserted_p("Three", kit.BOB, num=(7, 0)),
+        ]
+        result = import_docx(d.build())
+        doc = result.document
+        assert len(calls) == 2
+        assert any("whole-container" in w for w in result.report.warnings)
+        assert [p.action for p in doc.proposals] == ["modify"]
+        before = {c.text: c.id for c in doc.chunks}
+        accepted = _resolved(doc, "accept")
+        assert _texts(accepted) == ["Intro.", "One more", "Two", "Three"]
+        after = {c.text: c.id for c in accepted.chunks}
+        assert after["One more"] == before["One"] and after["Two"] == before["Two"]
+        assert _texts(_resolved(doc, "reject")) == _texts(doc)
+        assert [f for f in aim.lint(doc) if f.level == "error"] == []
+        assert doc.verify() == []
 
 
 class TestRoundTrip:

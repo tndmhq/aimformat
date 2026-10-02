@@ -259,6 +259,14 @@ class _Entry:
 
     @property
     def order(self) -> tuple[float, float]:
+        if self.kind == "match" and self.o is not None and self.f is not None:
+            # A matched container starts at its first item on each side, and
+            # the two differ when Accept All drops or adds leading items. The
+            # later start lies inside BOTH spans (they share an item), so no
+            # unit of either view sorts between it and the container: an
+            # inserted paragraph that replaced the first item lands before
+            # the list, as in Word. Matched chunks share one key.
+            return max(self.o.order, self.f.order)
         unit = self.f if self.kind == "f" else self.o
         assert unit is not None
         return unit.order
@@ -491,6 +499,30 @@ class _Planner:
             cause = [r for other in between if other.action in _CAUSES for r in other.revs]
             if cause:
                 entry.action, entry.noise, entry.revs = "delete", False, _unique(cause)
+        # A matched list can lose items to ANOTHER matched list: a join that a
+        # later revision splits again leaves the second list matched (it keeps
+        # its tail) while its head ends the first one, and a split whose lower
+        # part a join attaches to the next list matches that list instead of
+        # the original. Each such item leaves its O list and arrives in the F
+        # list holding it, citing what lies between the two lists.
+        carried_down: set[str] = set()
+        position = {id(entry): k for k, entry in enumerate(top.entries)}
+        for i, entry in enumerate(top.entries):
+            if entry.kind != "match" or entry.sub is None:
+                continue
+            for member in entry.sub.entries:
+                if member.kind != "o" or member.action != "keep" or member.o is None:
+                    continue
+                home = absorbed_by.get(member.o.key)
+                if home is None or home is entry:
+                    continue
+                j = position[id(home)]
+                between = top.entries[min(i, j) + 1 : max(i, j)]
+                cause = [r for other in between if other.action in _CAUSES for r in other.revs]
+                if cause:
+                    member.action, member.noise, member.revs = "delete", False, _unique(cause)
+                    if j > i:
+                        carried_down.add(member.o.key)
         deleted: dict[str, list[Revision]] = {}
         for seq in _walk(top):
             for entry in seq.entries:
@@ -506,7 +538,8 @@ class _Planner:
                 keys = {entry.f.key} | {i.key for i in entry.f.items}
                 cause = [rev for key in sorted(keys & deleted.keys()) for rev in deleted[key]]
                 if cause:
-                    entry.action, entry.noise, entry.joined = "add", False, True
+                    entry.action, entry.noise = "add", False
+                    entry.joined = not keys <= carried_down
                     entry.revs = _unique(cause)
 
     def _pair_moves(self, top: _Seq) -> None:
@@ -577,9 +610,8 @@ class _Planner:
                     self._emit_seq(entry.sub, items)
                     expected.append(("C", o.shell_sig(), tuple(items)))
                 elif act == "modify":
-                    target = o.id
-                    markup = f.markup if not f.is_container else _containerize(f.markup)
-                    self._card("modify", entry, noun=f, target=target, markup=markup)
+                    markup = _coarse_markup(o, f) if f.is_container else f.markup
+                    self._card("modify", entry, noun=f, target=o.id, markup=markup)
                     expected.append(_sig(f, seq))
                 else:
                     expected.append(_sig(o, seq))
@@ -611,16 +643,15 @@ class _Planner:
                 partner = entry.partner
                 assert partner is not None and partner.o is not None
                 moved = partner.o
-                self._card(
-                    "move", entry, noun=moved, target=moved.id, after=prev, container=seq.container
-                )
-                if moved.markup != f.markup:
-                    self._card("modify", entry, noun=f, target=moved.id, markup=f.markup)
-                    expected.append(_sig(f, seq))
-                else:
-                    expected.append(_sig(moved, seq))
-                self._note_f(f, entry)
-                prev = ("id", moved.id or "")
+                expected.append(_sig(f if moved.markup != f.markup else moved, seq))
+                self._move_cards(entry, seq, prev)
+                if partner.seq.container == seq.container:
+                    prev = ("id", moved.id or "")
+                # A move from ANOTHER container: the moved chunk is not here
+                # until the move is accepted, so nothing may anchor on it (a
+                # recorded anchor names a current chunk or a pending add).
+                # What follows keeps the move's own anchor, and same-anchor
+                # position cards land in creation order (spec §5.4): after it.
                 continue
             # add
             markup = _containerize(f.markup) if f.is_container else f.markup
@@ -630,6 +661,16 @@ class _Planner:
             expected.append(_sig(f, seq))
             self._note_f(f, entry)
             prev = ("card", index)
+
+    def _move_cards(self, entry: _Entry, seq: _Seq, after: tuple[str, str | int] | None) -> None:
+        """A move card (plus a modify when the moved text was edited too)."""
+        partner = entry.partner
+        assert partner is not None and partner.o is not None and entry.f is not None
+        moved, f = partner.o, entry.f
+        self._card("move", entry, noun=moved, target=moved.id, after=after, container=seq.container)
+        if moved.markup != f.markup:
+            self._card("modify", entry, noun=f, target=moved.id, markup=f.markup)
+        self._note_f(f, entry)
 
     def _note_f(self, f: Unit, entry: _Entry) -> None:
         if entry.cards:
@@ -673,6 +714,19 @@ class _Planner:
         index = len(self.specs) - 1
         entry.cards.append(index)
         return index
+
+
+def _coarse_markup(o: Unit, f: Unit) -> str:
+    """The F container as a whole-container modify of its O twin: the O
+    container's id on the root, and every item that exists on both sides
+    keeps its O id (new items get fresh ones when the card is written)."""
+    root = next(x for x in parse_fragment(f.markup) if isinstance(x, Element))
+    root.set("data-aim-container", o.id or "")
+    o_ids = {item.key: item.id for item in o.items if item.id}
+    for (el, _shell), item in zip(_direct_items(root), f.items, strict=True):
+        if item.key in o_ids:
+            el.set("data-aim", o_ids[item.key] or "")
+    return serialize(root)
 
 
 def _sig(unit: Unit, seq: _Seq) -> tuple:
@@ -858,12 +912,26 @@ def write_lane(
     page_markup: str | None,
     page_revs: list[Revision],
     importer: Actor,
+    max_proposals: int,
 ) -> LaneResult:
     """Plan, write and validate the pending lane on a clone of *doc*; degrade
-    to whole-container alignment once; refuse rather than drop content."""
+    to whole-container alignment once; refuse rather than drop content.
+
+    Writing and validating cost time quadratic in the card count (every
+    resolution re-reads the lane), so a plan above *max_proposals* cards is
+    refused before any card is written. Cards are not bounded by revisions:
+    one deleted paragraph that joins two lists carries every item of the
+    second list across."""
     failure: str | None = None
     for fine in (True, False):
         plan = plan_lane(o_units, f_units, facts, fine=fine, importer=importer)
+        cards = len(plan.specs) + (page_markup is not None)
+        if cards > max_proposals:
+            raise ParseError(
+                f"the tracked changes in this document would become {cards} proposals, "
+                f"more than max_proposals={max_proposals}; import it with "
+                "tracked='accept' or tracked='reject', or raise max_proposals"
+            )
         if page_markup is not None:
             actor, at, key = _attribution(page_revs, importer)
             who = ", ".join(dict.fromkeys(r.author or "unknown author" for r in page_revs))

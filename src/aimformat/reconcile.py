@@ -211,8 +211,8 @@ def _strip_body_state(S: AimDocument, events: list[Event] | None = None) -> None
         # The empty-origin path below keeps them as the file has them, so
         # this one must too: taking them from the snapshot would make a
         # hand-edited `lang` an expected-vs-actual difference no event can
-        # express, and reconcile would fail to converge. The mismatch stays
-        # visible where it belongs — verify() against the snapshot.
+        # express, and reconcile would fail to converge. verify() compares
+        # the snapshot's <html> line on the declared version only (§6.7).
         declared = state.html.get("data-aim-version")
         state.html.attrs = actual_attrs
         if declared is None:
