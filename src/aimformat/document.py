@@ -4334,6 +4334,12 @@ class AimDocument:
                 "cannot record a baseline: the body has units without a usable id "
                 "(missing, duplicated or invalid); reconcile() assigns them"
             )
+        problems = self._unsnapshottable()
+        if problems:
+            raise InvalidOperation(
+                f"cannot record a baseline: {problems[0]} — a baseline is never "
+                "undone, so the error could never be fixed; correct the body first"
+            )
         index = self._get_history_index()
         seq = self.seq + 1
         if not REGISTRY.version_includes(self.spec_version, REGISTRY.baseline_since):
@@ -4358,6 +4364,18 @@ class AimDocument:
         index.replace_events([Event(deepcopy(data))], hist.raw)
         self.gc_assets()  # §9.3: the dropped events may have kept blobs alive
         return Event(deepcopy(data))
+
+    def _unsnapshottable(self) -> list[str]:
+        """Why the current body cannot become a baseline snapshot (H008):
+        each non-conforming construct, numbered as the snapshot would hold
+        it. Empty when a baseline may be recorded."""
+        from .lint import snapshot_entry_problems  # lazy: lint imports this module
+
+        return [
+            f"construct {i + 1}: {problem}"
+            for i, line in enumerate(self._state.snapshot()["body"])
+            for problem in snapshot_entry_problems(self, line)
+        ]
 
     def prune(self, *, before: int | str) -> int:
         """Truncate history before a seq or checkpoint label; returns dropped count.

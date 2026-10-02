@@ -544,9 +544,12 @@ def finish_import(
     untitled entry listing every id, which costs tokens and outlines nothing.
     """
     # the per-construct events that built the body are scaffolding, not
-    # edits: dropped, so the baseline is the document's seq 1
-    doc._drop_history(drop_embeddings=False)
-    doc.baseline("import", author=author, explanation=explanation, source=source)
+    # edits: dropped, so the baseline is the document's seq 1 — unless a
+    # construct cannot be held by a snapshot (H008): then the adds stay, and
+    # the lint error stays in the body, where an edit can fix it
+    if not doc._unsnapshottable():
+        doc._drop_history(drop_embeddings=False)
+        doc.baseline("import", author=author, explanation=explanation, source=source)
     if doc._has_outline():
         doc.generate_toc()
     return doc

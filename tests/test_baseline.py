@@ -162,6 +162,24 @@ class TestBaselineOperation:
         assert doc.history[0].get("snapshot")["html"].count(aim.REGISTRY.baseline_since) == 1
         assert _errors(doc) == []
 
+    def test_refuses_to_freeze_a_non_conforming_construct(self):
+        doc = aim.new_document(title="t")
+        doc.add_chunk("<p>Fine.</p>", author=ADA, at=ts(0))
+        doc.add_chunk('<p class="bogus">Not fine.</p>', author=ADA, at=ts(1))
+        before = doc.dumps()
+        with pytest.raises(aim.InvalidOperation, match="V005"):
+            doc.baseline("as-is", author=ADA, at=ts(2))
+        assert doc.dumps() == before  # nothing changed, not even the version
+
+    def test_an_import_with_a_non_conforming_construct_keeps_its_adds(self):
+        from aimformat.ingest import finish_import
+
+        doc = aim.new_document(title="t")
+        doc.add_chunk('<p class="bogus">x</p>', author=ADA, at=ts(0))
+        finish_import(doc, author=ADA, explanation="test")
+        assert [e.action for e in doc.history] == ["add"]
+        assert [f.code for f in _errors(doc)] == ["V005"]
+
     def test_classify_divergence_reads_a_rebaseline_as_rewritten(self, imported):
         before = aim.loads(imported.dumps())
         imported.add_chunk("<p>After.</p>", author=ADA)
@@ -246,6 +264,18 @@ class TestAdoption:
         report = doc.reconcile(at=ts(0))
         assert [e.action for e in report.events] == ["add", "add"]
         assert doc.spec_version == "0.5"
+
+    def test_a_lint_error_in_the_body_is_not_frozen_into_the_origin(self):
+        # A baseline is never undone: adopting <p class="bogus"> as one froze
+        # H008 into the log for good, so fixing the body never cleared it.
+        text = self.HAND.format(v="0.6").replace("<p>", '<p class="bogus">')
+        doc = aim.loads(text)
+        report = doc.reconcile(at=ts(0))
+        assert [e.action for e in report.events] == ["add", "add"]
+        assert [f.code for f in _errors(doc)] == ["V005"]
+        target = doc.chunks[1].id
+        doc.modify_chunk(target, f'<p data-aim="{target}">Fixed.</p>', author=ADA, at=ts(1))
+        assert doc.verify() == [] and _errors(doc) == []
 
     @pytest.mark.parametrize("version", ["0.5", "0.6"])
     def test_an_empty_file_still_rejects_its_dangling_cards(self, version):

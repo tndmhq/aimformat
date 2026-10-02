@@ -244,6 +244,35 @@ class TestGuards:
         # the resolved modes never build a lane, so the ceiling does not apply
         assert import_docx(data, max_revisions=10, tracked="accept").document.chunks
 
+    @pytest.mark.parametrize("closed", [True, False], ids=["survivor", "end_of_body"])
+    def test_a_run_of_joined_paragraphs_resolves_in_linear_time(self, closed):
+        # Joining pairwise re-moved the accumulated content at every gone
+        # mark: 2,000 tracked joins took ~8 s, 4,000 over a minute.
+        d = kit.Doc()
+        n = 2000
+        d.body += [d.p(d.t(f"w{i} "), mark=("del", kit.ALICE)) for i in range(n)]
+        if closed:
+            d.body.append(d.p(d.t("end")))
+        start = time.monotonic()
+        texts = _view_texts(d.build(), "accept")
+        assert time.monotonic() - start < 3
+        want = "".join(f"w{i} " for i in range(n)) + ("end" if closed else "")
+        assert texts == [want.strip()]
+
+    def test_many_open_comment_ranges_import_in_linear_time(self):
+        # Every text node re-summed every open range's excerpt buffer: 800
+        # unterminated ranges over 800 one-letter runs (a 40 KB file) took
+        # ~5 s, 1,600 minutes.
+        d = kit.Doc()
+        n = 800
+        starts = "".join(f'<w:commentRangeStart w:id="{i}"/>' for i in range(n))
+        d.body.append(d.p(starts + "".join(d.t("x") for _ in range(n))))
+        d.body.append(d.p(d.comment("c1", d.t("anchored"), "a note")))
+        start = time.monotonic()
+        result = import_docx(d.build())
+        assert time.monotonic() - start < 3
+        assert result.document.chunks
+
     def test_a_megabyte_revision_imports_in_linear_time(self):
         data = kit.hostile_paragraph(1_000_000)
         start = time.monotonic()
@@ -336,6 +365,67 @@ class TestRoundTrip:
         aim.to_docx(import_docx(shape.docx).document, back, pending="tracked")
         for view in ("accept", "reject"):
             assert _view_texts(back.read_bytes(), view) == _view_texts(shape.docx, view)
+
+    def test_a_paragraph_inserted_after_a_move_destination_stays_there(self, tmp_path):
+        # The import anchors the insertion on the moved chunk; the export used
+        # to write it at the move SOURCE, so Word's Accept All put "New para"
+        # where the moved text had been.
+        d = kit.Doc()
+        d.body += [
+            d.p(d.t("Alpha")),
+            d.moved("moveFrom", "Moved text", "m1"),
+            d.p(d.t("Beta")),
+            d.moved("moveTo", "Moved text", "m1"),
+            d.inserted_p("New para"),
+            d.p(d.t("Gamma")),
+        ]
+        doc = import_docx(d.build()).document
+        want = ["Alpha", "Beta", "Moved text", "New para", "Gamma"]
+        assert _texts(_resolved(doc, "accept")) == want
+        back = tmp_path / "moved.docx"
+        aim.to_docx(doc, back, pending="tracked")
+        assert _view_texts(back.read_bytes(), "accept") == want
+        assert _view_texts(back.read_bytes(), "reject") == _texts(doc)
+
+    @pytest.mark.parametrize("forward", [True, False], ids=["later", "earlier"])
+    @pytest.mark.parametrize(
+        "order",
+        [
+            ("move", "add", "chained"),
+            ("add", "move", "chained"),
+            ("add", "chained", "move"),
+            ("move", "other_move", "add"),
+            ("other_move", "move", "add"),
+        ],
+    )
+    def test_adds_anchored_on_a_moved_chunk_follow_creation_order(self, order, forward, tmp_path):
+        # Accepting in creation order, an add made before the move lands at
+        # the chunk's old place and one made after it at the new place; the
+        # tracked export must give Word's Accept All the same outcome.
+        ada = aim.human("ada")
+        doc = aim.new_document(title="Moves")
+        with doc.batch():
+            ids = [
+                doc.add_chunk(f"<p>{t}</p>", author=ada).id
+                for t in ("Alpha", "Moved", "Beta", "Gamma", "Delta")
+            ]
+        target, dest = (ids[1], ids[3]) if forward else (ids[3], ids[0])
+        other = ids[0] if forward else ids[2]
+        added = None
+        for step in order:
+            if step == "move":
+                doc.propose_move(target, container="body", after=dest, author=ada)
+            elif step == "other_move":
+                doc.propose_move(other, container="body", after=target, author=ada)
+            elif step == "add":
+                added = doc.propose_add("<p>New</p>", after=target, author=ada)
+            else:
+                doc.propose_add("<p>Chained</p>", after=added.id, author=ada)
+        want = _texts(_resolved(doc, "accept"))
+        back = tmp_path / "moves.docx"
+        aim.to_docx(doc, back, pending="tracked")
+        assert _view_texts(back.read_bytes(), "accept") == want
+        assert _view_texts(back.read_bytes(), "reject") == _texts(doc)
 
     def test_an_inserted_list_item_round_trips_as_one_card(self, tmp_path):
         # The exported insertion must keep its list's numPr: without it Word

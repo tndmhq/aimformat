@@ -998,6 +998,19 @@ class _Exporter:
                 self.pending_move[p.target] = p
                 self._move_names[p.target] = f"aim-move-{len(self._move_names) + 1}"
                 self.adds_by_anchor.setdefault(("body", p.anchor_after), []).append(p)
+        # Cards anchored after a moving chunk split by creation order: one
+        # made before the move lands at the chunk's old place, one made after
+        # it follows the chunk to its new place (accept order is card order).
+        self._after_move: dict[str, list[Proposal]] = {}
+        for target, move in self.pending_move.items():
+            here = self.adds_by_anchor.pop(("body", target), [])
+            cut = self._card_order.get(move.id, 0)
+            early = [q for q in here if self._card_order.get(q.id, 0) < cut]
+            late = [q for q in here if self._card_order.get(q.id, 0) > cut]
+            if early:
+                self.adds_by_anchor[("body", target)] = early
+            if late:
+                self._after_move[target] = late
 
     # -- top level -----------------------------------------------------------
     def run(self) -> None:
@@ -1076,6 +1089,7 @@ class _Exporter:
             prop = pool.pop(0)
             if prop.action == "move":
                 self._emit_move_destination(prop)
+                pool += self._after_move.pop(prop.target or "", [])
                 continue
             self._emit_add_paragraphs(prop)
             pool += self._pop_adds(container, prop.id)

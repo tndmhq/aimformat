@@ -111,6 +111,27 @@ class Finding:
         return f"{self.level.upper()} {self.code}{loc}: {self.message}"
 
 
+def snapshot_entry_problems(doc: AimDocument, line: str) -> list[str]:
+    """Why one baseline snapshot entry does not conform (H008): it is not
+    exactly one construct, or the construct fails a check a pending payload
+    passes. Shared by the verifier and by ``AimDocument.baseline()``, which
+    refuses to record what this rejects — a baseline is never undone, so a
+    frozen error could never be fixed."""
+    nodes = parse_fragment(line)
+    elements = [n for n in nodes if isinstance(n, Element)]
+    stray = [n for n in nodes if not isinstance(n, Element) and str(getattr(n, "data", "")).strip()]
+    if len(elements) != 1 or stray:
+        return ["snapshot entry is not exactly one construct"]
+    probe = _Linter(doc, None)
+    for el in elements[0].iter():
+        probe.check_element(el, context="payload")
+    return [
+        f"snapshot entry fails {finding.code}: {finding.message}"
+        for finding in probe.findings
+        if finding.level == ERROR
+    ]
+
+
 class _Linter:
     def __init__(self, doc: AimDocument, source_text: str | None):
         self.doc = doc
@@ -1114,26 +1135,8 @@ class _Linter:
                 self.add("H008", ERROR, "baseline snapshot 'doc' is not the settings block", where)
         for i, line in enumerate(snap["body"]):
             label = f"{where}, snapshot construct {i + 1}"
-            nodes = [n for n in parse_fragment(line) if isinstance(n, Element)]
-            stray = [
-                n
-                for n in parse_fragment(line)
-                if not isinstance(n, Element) and str(getattr(n, "data", "")).strip()
-            ]
-            if len(nodes) != 1 or stray:
-                self.add("H008", ERROR, "snapshot entry is not exactly one construct", label)
-                continue
-            probe = _Linter(self.doc, None)
-            for el in nodes[0].iter():
-                probe.check_element(el, context="payload", where=label)
-            for finding in probe.findings:
-                if finding.level == ERROR:
-                    self.add(
-                        "H008",
-                        ERROR,
-                        f"snapshot entry fails {finding.code}: {finding.message}",
-                        label,
-                    )
+            for problem in snapshot_entry_problems(self.doc, line):
+                self.add("H008", ERROR, problem, label)
 
     def check_origin(self) -> None:
         """H009 (warning): a log that starts at seq 1 claims to explain the

@@ -673,7 +673,13 @@ def reconcile_document(
     actor = author if author is not None else external()
     events = doc.history
     _check_log(events)
-    if not events and REGISTRY.version_includes(doc.spec_version, REGISTRY.baseline_since):
+    if (
+        not events
+        and REGISTRY.version_includes(doc.spec_version, REGISTRY.baseline_since)
+        # a construct a snapshot cannot hold (H008) is adopted by an add:
+        # its lint error stays in the body, where an edit can fix it
+        and not doc._unsnapshottable()
+    ):
         return _adopt_as_baseline(doc, actor, at, dry_run)
 
     S = _clone(doc)  # becomes E, then is driven to A

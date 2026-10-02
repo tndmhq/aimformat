@@ -40,6 +40,7 @@ before anything else sees them.
 
 from __future__ import annotations
 
+import bisect
 import copy
 import re
 import zipfile
@@ -427,29 +428,49 @@ def resolve_view(doc_elem: Any, view: str) -> Any:
         props = tc.find(_TCPR)
         if props is not None and props.find(cell_gone) is not None:
             _detach(tc)
-    # 4. paragraph marks: a gone mark joins its paragraph into the next one
+    # 4. paragraph marks: a gone mark joins its paragraph into the next one.
+    # A run of consecutive gone marks collapses into the paragraph that ends
+    # it in ONE splice: joining pair by pair re-moved the accumulated content
+    # at every mark, cubic in the length of the run.
+    seen: set[Any] = set()
     for p in list(root.iter(_P)):
-        if p.getparent() is None or _mark_survives(p, gone):
+        if p in seen or p.getparent() is None or _mark_survives(p, gone):
             continue
-        nxt = p.getnext()
-        while nxt is not None and (not isinstance(nxt.tag, str) or nxt.tag in _INVISIBLE_BETWEEN):
-            nxt = nxt.getnext()
-        if nxt is None or nxt.tag != _P:
-            continue  # nothing to join (end of container, or a table follows)
-        content = [c for c in p if c.tag != _PPR]
-        nppr = nxt.find(_PPR)
-        at = 1 if nppr is not None else 0
-        for child in content:
-            nxt.insert(at, child)
-            at += 1
-        joined = p.get(SRC_ATTR)
-        # an empty paragraph (its runs gone with the revision) joins nothing:
-        # recording it would make the neighbour cite revisions that never
-        # touched its text
-        if joined and any(_has_content(c) for c in content):
-            own = nxt.get(SRC_ATTR) or ""
-            nxt.set(SRC_ATTR, f"{own} {joined}".strip())
-        _detach(p)
+        chain = [p]
+        nxt = _next_block(p)
+        while nxt is not None and nxt.tag == _P and not _mark_survives(nxt, gone):
+            chain.append(nxt)
+            nxt = _next_block(nxt)
+        # nothing to join the last one into (end of container, or a table
+        # follows): it stays, and the rest of the run joins it
+        target = nxt if nxt is not None and nxt.tag == _P else chain.pop()
+        seen.update(chain)
+        seen.add(target)
+        if not chain:
+            continue
+        gathered: list[Any] = []
+        # source keys, newest holder last: each join puts the absorbed
+        # paragraph's keys after the absorbing paragraph's own. An empty
+        # prefix (its runs gone with the revision) joins nothing: recording
+        # it would make the neighbour cite revisions that never touched its
+        # text.
+        keys = (chain[0].get(SRC_ATTR) or "").split()[::-1]
+        has = False
+        recorded = False
+        for i, member in enumerate(chain):
+            content = [c for c in member if c.tag != _PPR]
+            gathered += content
+            has = has or any(_has_content(c) for c in content)
+            holder = chain[i + 1] if i + 1 < len(chain) else target
+            own = (holder.get(SRC_ATTR) or "").split()[::-1]
+            recorded = bool(keys) and has
+            keys = keys + own if recorded else own
+        if recorded:
+            target.set(SRC_ATTR, " ".join(keys[::-1]))
+        at = 1 if target.find(_PPR) is not None else 0
+        target[at:at] = gathered
+        for member in chain:
+            _detach(member)
     # 5. scrub the remaining markers: the view is revision-free
     for el in [
         e
@@ -458,6 +479,14 @@ def resolve_view(doc_elem: Any, view: str) -> Any:
     ]:
         _detach(el)
     return root
+
+
+def _next_block(p: Any) -> Any:
+    """The sibling after *p*, past markers invisible between paragraphs."""
+    nxt = p.getnext()
+    while nxt is not None and (not isinstance(nxt.tag, str) or nxt.tag in _INVISIBLE_BETWEEN):
+        nxt = nxt.getnext()
+    return nxt
 
 
 def _has_content(el: Any) -> bool:
@@ -570,29 +599,40 @@ def comment_anchors(view_root: Any) -> dict[str, tuple[str | None, str]]:
     the paragraph of its reference mark, with no text."""
     start_tag, end_tag = _q("commentRangeStart"), _q("commentRangeEnd")
     ref_tag = _q("commentReference")
-    open_: dict[str, list[str]] = {}
+    # One shared text stream with running offsets; a range records where in
+    # it it starts. Each range's excerpt is cut once, when it closes — the
+    # file decides how many ranges are open at once, so per-text-node work
+    # over every open range would be quadratic.
+    texts: list[str] = []
+    ends = [0]  # ends[i]: characters in texts[:i]
+    open_: dict[str, int] = {}  # comment id → index of its first text node
     keys: dict[str, str | None] = {}
     done: dict[str, tuple[str | None, str]] = {}
+
+    def excerpt(first: int) -> str:
+        # whole text nodes while the excerpt is at most twice the cap long
+        stop = bisect.bisect_right(ends, ends[first] + EXCERPT_CAP * 2, lo=first)
+        return clean("".join(texts[first:stop]), EXCERPT_CAP)
+
     for el in view_root.iter():
         tag = el.tag
         if tag == start_tag:
             cid = el.get(_q("id")) or ""
-            open_[cid] = []
+            open_[cid] = len(texts)
             keys[cid] = _paragraph_key(el)
         elif tag == end_tag:
             cid = el.get(_q("id")) or ""
             if cid in open_:
-                done[cid] = (keys.get(cid), clean("".join(open_.pop(cid)), EXCERPT_CAP))
+                done[cid] = (keys.get(cid), excerpt(open_.pop(cid)))
         elif tag == ref_tag:
             cid = el.get(_q("id")) or ""
             if cid not in done and cid not in open_:
                 done[cid] = (_paragraph_key(el), "")
-        elif tag == _T and el.text and open_:
-            for buf in open_.values():
-                if sum(len(s) for s in buf) <= EXCERPT_CAP * 2:
-                    buf.append(el.text)
-    for cid, buf in open_.items():  # an unterminated range runs to the end
-        done.setdefault(cid, (keys.get(cid), clean("".join(buf), EXCERPT_CAP)))
+        elif tag == _T and el.text:
+            texts.append(el.text)
+            ends.append(ends[-1] + len(el.text))
+    for cid, first in open_.items():  # an unterminated range runs to the end
+        done.setdefault(cid, (keys.get(cid), excerpt(first)))
     return done
 
 

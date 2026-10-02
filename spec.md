@@ -874,7 +874,8 @@ full retained log, or a log that begins with a baseline (reconciling a pruned
 history is an error there — the state below the prune floor is
 unrecoverable; `baseline` accepts such a file as it is). Adopting a file with
 no history records one baseline when the file declares a version that
-defines baselines, and one `add` per construct below it. It also refuses an
+defines baselines, and one `add` per construct below it or when a construct
+could not be a snapshot entry (H008, §6.9). It also refuses an
 out-of-band first-paint edit that hand-bumped the declared version when the
 old marker cannot be recovered; the file must be restored to that marker so
 reconcile can record the upgrade (§3.7).
@@ -896,7 +897,11 @@ recomputed from the snapshot, and every snapshot entry MUST be exactly one
 construct that conforms as a pending payload does — elements, attributes,
 URLs, handlers and styles (H008). Keeping the hash beside the snapshot lets
 a reader compare hashes without parsing markup, and makes the event check
-itself.
+itself. A writer MUST NOT record a baseline whose snapshot would fail H008:
+a baseline is never undone, so the error could never be fixed. A body with
+such a construct is fixed first, or (importers, adoption) recorded with one
+`add` per construct, which leaves the error in the body where an edit can
+remove it.
 
 A baseline is not state-changing and is never undone. Time travel to the
 baseline's seq, verification and reconciliation work from the file alone:
