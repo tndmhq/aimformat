@@ -20,7 +20,7 @@ from collections.abc import Callable, Iterable, Sequence
 from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, TypeVar
+from typing import TYPE_CHECKING, BinaryIO, Literal, TypeVar
 
 from . import canonical, ids
 from .canonical import canonical_json, serialize, serialize_run
@@ -40,6 +40,7 @@ from .registry import REGISTRY, version_key
 
 if TYPE_CHECKING:  # pragma: no cover - import cycle guard, typing only
     from .reconcile import ReconcileReport
+    from .revision_import import RevisionImportReport
 
 __all__ = ["AimDocument", "Chunk", "Proposal", "Anchor", "LAST", "load", "loads", "new_document"]
 
@@ -2788,6 +2789,7 @@ class AimDocument:
         *,
         author: Actor,
         explanation: str | None = None,
+        depends_on: str | None = None,
         at: str | None = None,
     ) -> Proposal:
         # reject reserved targets at propose time: the card would lint clean
@@ -2809,7 +2811,7 @@ class AimDocument:
                 payload=None,
                 anchor=None,
                 explanation=explanation,
-                depends_on=None,
+                depends_on=depends_on,
                 at=at,
                 pid=pid,
             )
@@ -4574,6 +4576,58 @@ class AimDocument:
         from .reconcile import reconcile_document
 
         return reconcile_document(self, author=author, at=at, dry_run=dry_run)
+
+    def import_revision(
+        self,
+        source: str | Path | bytes | BinaryIO,
+        *,
+        author: Actor | None = None,
+        changes: Literal["proposals", "edits"] = "proposals",
+        conflicts: Literal["report", "propose"] = "report",
+        base_seq: int | None = None,
+        at: str | None = None,
+        dry_run: bool = False,
+    ) -> RevisionImportReport:
+        """Import a DOCX that came back from a colleague as a revision of
+        THIS document (needs the ``docx`` extra).
+
+        Export with ``to_docx(doc, path, roundtrip_marks=True)``; the hidden
+        bookmarks and manifest it writes let the returned file's paragraphs be
+        matched to this document's chunk ids (by marker, then by content), so
+        only what the colleague changed is written — as one batch of pending
+        proposals by the colleague (``changes="proposals"``, default) or as
+        ``direct_edit`` events with ``origin: "reconcile"``
+        (``changes="edits"``). Conversion noise (formatting DOCX could not
+        carry) is never reported as a change, and text edits are replayed onto
+        this document's own markup.
+
+        *author* defaults to ``human("docx:<lastModifiedBy>")`` — an
+        unverified name read from the file — or ``external("docx-import")``.
+        Colleague changes to units that also changed here since the export, or
+        that carry a pending proposal the colleague did not see as applied,
+        are reported in ``report.conflicts`` and not written
+        (``conflicts="propose"`` proposes them anyway, flagged; proposals
+        mode only). Re-importing the same file writes nothing new while its
+        proposals are pending or after they were accepted (a change that was
+        rejected is proposed again); edits mode refuses a repeat.
+
+        Refuses (``InvalidOperation``) when the history does not verify or the
+        file is clearly not a revision of this document. With
+        ``dry_run=True`` nothing is mutated. Returns a
+        :class:`~aimformat.revision_import.RevisionImportReport`.
+        """
+        from .revision_import import import_revision
+
+        return import_revision(
+            self,
+            source,
+            author=author,
+            changes=changes,
+            conflicts=conflicts,
+            base_seq=base_seq,
+            at=at,
+            dry_run=dry_run,
+        )
 
     # -- caches: summary / toc / embeddings ------------------------------------------------------
     def set_summary(self, text: str, *, model: str) -> None:

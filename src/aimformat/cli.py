@@ -21,6 +21,7 @@
     aim diff OLD NEW        unit-level diff between two versions of a document
     aim css                 print the generated aim.css for this spec version
     aim import IN -o F.aim  convert md/txt/docx/pdf to .aim
+    aim import X.docx --onto F.aim  a returned DOCX as a revision of F.aim
     aim export F.aim -o OUT convert .aim to docx/md/html/pdf (by extension)
     aim mcp                 run the MCP server (pip install 'aimformat[mcp]')
 
@@ -658,6 +659,11 @@ def _cmd_css(args: argparse.Namespace) -> int:
 
 
 def _cmd_import(args: argparse.Namespace) -> int:
+    if args.onto:
+        return _cmd_import_onto(args)
+    if not args.output:
+        print("aim: import needs -o OUT (or --onto BASE.aim for a returned DOCX)", file=sys.stderr)
+        return 2
     from .convert import from_path, import_docx
 
     out = Path(args.output)
@@ -682,6 +688,61 @@ def _cmd_import(args: argparse.Namespace) -> int:
         return 2
     doc.save(out)
     print(f"wrote {out} ({len(doc.chunks)} chunks)")
+    return 0
+
+
+def _cmd_import_onto(args: argparse.Namespace) -> int:
+    from .events import parse_actor
+
+    if Path(args.input).suffix.lower() != ".docx":
+        print("aim: --onto imports a returned .docx (other formats: not yet)", file=sys.stderr)
+        return 2
+    if args.changes == "edits" and args.conflicts == "propose":
+        print("aim: --conflicts propose needs --as proposals", file=sys.stderr)
+        return 2
+    if (
+        args.output
+        and Path(args.output).exists()
+        and not args.force
+        and Path(args.output).resolve() != Path(args.onto).resolve()
+    ):
+        print(f"aim: {args.output} exists (use --force to overwrite)", file=sys.stderr)
+        return 2
+    doc = AimDocument.load(args.onto)
+    report = doc.import_revision(
+        args.input,
+        author=parse_actor(args.author) if args.author else None,
+        changes=args.changes,
+        conflicts=args.conflicts,
+        base_seq=args.base_seq,
+        dry_run=args.dry_run,
+    )
+    out = Path(args.output or args.onto)
+    wrote = report.changed and not args.dry_run
+    if wrote or (args.output and not args.dry_run):
+        doc.save(out)
+    if args.format == "json":
+        obj = report.to_obj()
+        obj["wrote"] = str(out) if wrote or (args.output and not args.dry_run) else None
+        print(json.dumps(obj, indent=2, ensure_ascii=False))
+        return 0
+    print(report.summary())
+    for label, ids in (
+        ("modified", report.modified),
+        ("added", report.added),
+        ("deleted", report.deleted),
+        ("moved", report.moved),
+    ):
+        if ids:
+            print(f"  {label}: {' '.join(ids)}")
+    if report.proposals:
+        print(f"  proposals: {' '.join(report.proposals)}")
+    for c in report.conflicts:
+        print(f"  conflict {c.unit}: {c.reason}")
+    for w in report.warnings:
+        print(f"aim: warning: {w}", file=sys.stderr)
+    if wrote or (args.output and not args.dry_run):
+        print(f"wrote {out}")
     return 0
 
 
@@ -740,11 +801,14 @@ def _cmd_export(args: argparse.Namespace) -> int:
             file=sys.stderr,
         )
         return 2
+    if args.roundtrip_marks and suffix != ".docx":
+        print("aim: --roundtrip-marks applies to .docx exports only", file=sys.stderr)
+        return 2
     doc = AimDocument.load(args.input)
     if suffix == ".docx":
         from .export_docx import to_docx
 
-        to_docx(doc, out, pending=pending)
+        to_docx(doc, out, pending=pending, roundtrip_marks=args.roundtrip_marks)
     elif suffix == ".md":
         from .convert import to_markdown
 
@@ -1056,9 +1120,13 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--stats", action="store_true")
     p.set_defaults(func=_cmd_css)
 
-    p = sub.add_parser("import", help="convert md/txt/docx/pdf to .aim (by extension)")
+    p = sub.add_parser(
+        "import",
+        help="convert md/txt/docx/pdf to .aim (by extension); with --onto, import a "
+        "returned .docx as a revision of an existing document",
+    )
     p.add_argument("input")
-    p.add_argument("-o", "--output", required=True)
+    p.add_argument("-o", "--output", help="output .aim (with --onto: default BASE, in place)")
     p.add_argument("--title", help="document title (default: derived from content or filename)")
     p.add_argument("--lang", default="en")
     p.add_argument("--force", action="store_true", help="overwrite an existing file")
@@ -1069,6 +1137,36 @@ def build_parser() -> argparse.ArgumentParser:
         help="Word tracked changes (.docx): pending proposals on the original text "
         "(default), or import the accepted / rejected text",
     )
+    p.add_argument(
+        "--onto",
+        metavar="BASE.aim",
+        help="the document the .docx was exported from (export it with --roundtrip-marks); "
+        "only the colleague's changes are written, on the same chunk ids",
+    )
+    p.add_argument(
+        "--as",
+        dest="changes",
+        choices=["proposals", "edits"],
+        default="proposals",
+        help="with --onto: pending proposals by the colleague (default) or direct edits",
+    )
+    p.add_argument(
+        "--author", help="with --onto: who made the changes (default: human:docx:<last editor>)"
+    )
+    p.add_argument(
+        "--conflicts",
+        choices=["report", "propose"],
+        default="report",
+        help="with --onto: changes that collide with edits made since export are "
+        "reported (default) or proposed anyway, flagged",
+    )
+    p.add_argument(
+        "--base-seq",
+        type=int,
+        help="with --onto, for a file without a round-trip manifest: the seq it was exported at",
+    )
+    p.add_argument("--dry-run", action="store_true", help="with --onto: report, write nothing")
+    p.add_argument("--format", choices=["text", "json"], default="text")
     p.set_defaults(func=_cmd_import)
 
     p = sub.add_parser(
@@ -1080,6 +1178,12 @@ def build_parser() -> argparse.ArgumentParser:
         "--pending",
         help="pending-lane fate; per-format default: docx=tracked, md=drop, html/pdf=keep "
         "(.aim.html carries the lane as-is)",
+    )
+    p.add_argument(
+        "--roundtrip-marks",
+        action="store_true",
+        help="docx: write hidden chunk-id bookmarks + a text-free manifest so the edited "
+        "file can come back with `aim import X.docx --onto F.aim`",
     )
     p.add_argument("--force", action="store_true", help="overwrite an existing file")
     p.set_defaults(func=_cmd_export)

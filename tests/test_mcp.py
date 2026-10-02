@@ -23,6 +23,7 @@ TOOLS = {
     "aim_resolve",
     "aim_lint",
     "aim_export",
+    "aim_import_revision",
 }
 
 
@@ -64,7 +65,7 @@ def _list_tools():
     return anyio.run(run)
 
 
-def test_lists_exactly_the_seven_tools():
+def test_lists_exactly_the_eight_tools():
     tools = _list_tools()
     assert {t.name for t in tools.tools} == TOOLS
     for t in tools.tools:
@@ -363,7 +364,8 @@ def test_read_does_not_repeat_every_id_for_a_headingless_body(tmp_path):
 # --------------------------------------------------------------------------- 0.6 surface
 # READS-D9/D10: one compact text block per result; a lean tool list.
 
-SURFACE_BYTE_BUDGET = 6470  # compact tools/list + instructions; measured 5881 (0.6.0) + 10%
+# compact tools/list + instructions; measured 6585 (0.6.0, eight tools) + 10%
+SURFACE_BYTE_BUDGET = 7250
 
 
 def test_tool_list_is_lean():

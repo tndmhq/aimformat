@@ -57,6 +57,7 @@ from .note import render_note
 from .pagesetup import PageSetup, default_page_setup, page_css
 from .reconcile import ReconcileReport
 from .registry import REGISTRY
+from .revision_import import RevisionImportReport
 
 __version__ = "0.6.0"
 SPEC_VERSION = REGISTRY.spec_version
@@ -74,6 +75,7 @@ __all__ = [
     "LAST",
     "PageSetup",
     "ReconcileReport",
+    "RevisionImportReport",
     "SPEC_VERSION",
     "__version__",
     "load",

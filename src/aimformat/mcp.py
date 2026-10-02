@@ -1,4 +1,4 @@
-"""The aimformat MCP server — the SDK's workflows as seven typed tools.
+"""The aimformat MCP server — the SDK's workflows as eight typed tools.
 
 Local stdio only: tools operate on ``.aim`` files by absolute path and touch
 nothing else. Set ``AIMFORMAT_MCP_ROOT`` to confine every path argument
@@ -7,7 +7,8 @@ the local trusted-client default. Run via ``aim mcp`` (the CLI lazy-imports
 this module) after ``pip install 'aimformat[mcp]'``. Tool surface mirrors
 ``docs/for-agents.md``: read (whole, outline, skeleton, lossy text, exact
 chunks), search, edit or propose (one op or an atomic batch), resolve, lint,
-export — few workflow-shaped tools, not a 1:1 SDK mapping.
+export, import a returned revision — few workflow-shaped tools, not a 1:1
+SDK mapping.
 
 Wire shape: every result is ONE compact text block (JSON for structured
 results, plain text for the reading views) — no ``structuredContent`` and no
@@ -375,16 +376,60 @@ def create_server() -> FastMCP:
         )
 
     @tool
-    def aim_export(path: str, out_path: str, pending: str | None = None) -> str:
-        """Convert by out_path extension: .docx (pending: tracked | accept-all | reject-all),
-        .md (drop | criticmarkup), .html and .pdf (keep | accept-all | reject-all). .aim.html
-        writes the document itself under the browser alias. docx and pdf need extras."""
-        return _compact(_export(path, out_path, pending))
+    def aim_export(
+        path: str, out_path: str, pending: str | None = None, roundtrip_marks: bool = False
+    ) -> str:
+        """Convert by out_path extension: .docx (pending: tracked | accept-all | reject-all;
+        roundtrip_marks if it will come back), .md (drop | criticmarkup), .html and .pdf (keep |
+        accept-all | reject-all). .aim.html writes the document itself under the browser alias.
+        docx and pdf need extras."""
+        return _compact(_export(path, out_path, pending, roundtrip_marks))
+
+    @tool
+    def aim_import_revision(
+        path: str,
+        docx_path: str,
+        changes: Literal["proposals", "edits"] = "proposals",
+        conflicts: Literal["report", "propose"] = "report",
+        author: str | None = None,
+        dry_run: bool = False,
+    ) -> str:
+        """Import a .docx returned by a colleague onto the .aim it was exported from: their
+        changes land on the same ids, as proposals or edits. Returns changed ids, new proposal
+        ids and conflicts; read only those."""
+        doc = _load(path)
+        source = _guard(docx_path)
+        if not source.is_file():
+            raise ValueError(f"aim: not a file: {docx_path}")
+        try:
+            report = doc.import_revision(
+                source,
+                author=parse_actor(author) if author else None,
+                changes=changes,
+                conflicts=conflicts,
+                dry_run=dry_run,
+            )
+        except AimError as exc:
+            raise ValueError(f"aim: {exc}") from exc
+        except ImportError as exc:
+            return _compact(
+                {"ok": False, "error": f"aim: needs pip install 'aimformat[docx]' ({exc})"}
+            )
+        result: dict[str, Any] = report.to_obj()
+        result.pop("events", None)  # the ids below say what changed; aim_read has the rest
+        result["events"] = len(report.events)
+        if report.changed and not dry_run:
+            result.update(_save_and_lint(doc, path))
+        else:
+            result["ok"] = True
+        return _compact(result)
 
     return server
 
 
-def _export(path: str, out_path: str, pending: str | None) -> dict[str, Any]:
+def _export(
+    path: str, out_path: str, pending: str | None, roundtrip_marks: bool = False
+) -> dict[str, Any]:
     from .cli import _EXPORT_PENDING, _is_alias
 
     doc = _load(path)
@@ -405,6 +450,8 @@ def _export(path: str, out_path: str, pending: str | None) -> dict[str, Any]:
             f"(supported: "
             f"{', '.join(sorted(_EXPORT_PENDING))})"
         )
+    if roundtrip_marks and suffix != ".docx":
+        raise ValueError("aim: roundtrip_marks applies to .docx exports only")
     default, allowed = _EXPORT_PENDING[suffix]
     fate = pending or default
     if fate not in allowed:
@@ -415,7 +462,7 @@ def _export(path: str, out_path: str, pending: str | None) -> dict[str, Any]:
         if suffix == ".docx":
             from .export_docx import to_docx
 
-            to_docx(doc, out, pending=fate)
+            to_docx(doc, out, pending=fate, roundtrip_marks=roundtrip_marks)
         elif suffix == ".md":
             from .convert import to_markdown
 
