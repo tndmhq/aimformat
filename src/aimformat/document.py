@@ -1314,35 +1314,78 @@ class AimDocument:
     # -- chunk views -------------------------------------------------------------
     @property
     def chunks(self) -> list[Chunk]:
-        out: list[Chunk] = []
-        seen: set[str] = set()
+        """Every chunk in document order — one tree walk.
 
-        def emit(cid: str) -> None:
-            if cid in seen:
-                return
-            seen.add(cid)
-            parent, members = self._state.find_chunk(cid)
+        Semantics are those of :meth:`DocState.find_chunk` +
+        :meth:`DocState.container_of_chunk` per id (pinned by
+        ``tests/test_chunk_lookup.py``): an id's members are its hits under
+        the parent of its first hit (template subtrees skipped), and its
+        container is the nearest ``data-aim-container`` at or above that
+        parent — ``body`` for top-level constructs."""
+        state = self._state
+        order: list[str] = []
+        seen: set[str] = set()
+        # id -> [(parent, element, container-at-parent)] in pre-order
+        hits: dict[str, list[tuple[Element, Element, str]]] = {}
+        top_ids: set[str] = set()
+
+        def walk(parent: Element, container: str, in_template: bool) -> None:
+            inner = parent.container_id or container
+            for child in parent.elements():
+                skipped = in_template or child.tag == "template"
+                cid = child.chunk_id
+                if cid:
+                    if cid not in seen:
+                        seen.add(cid)
+                        order.append(cid)
+                    if not skipped:
+                        hits.setdefault(cid, []).append((parent, child, inner))
+                walk(child, inner, skipped)
+
+        for top in state.constructs():
+            for marker in (top.chunk_id, top.container_id):
+                if marker:
+                    top_ids.add(marker)
+            if top.chunk_id:
+                if top.chunk_id not in seen:
+                    seen.add(top.chunk_id)
+                    order.append(top.chunk_id)
+                hits.setdefault(top.chunk_id, []).append((state.body, top, "body"))
+            walk(top, "body", False)
+
+        out: list[Chunk] = []
+        for cid in order:
+            found = hits.get(cid, [])
+            members = [el for p, el, _ in found if p is found[0][0]] if found else []
+            if cid in top_ids:
+                container = "body"
+            elif not found:
+                raise TargetNotFound(f"chunk {cid!r} not found")
+            else:
+                container = found[0][2]
             out.append(
                 Chunk(
                     id=cid,
-                    container=self._state.container_of_chunk(cid),
+                    container=container,
                     tags=tuple(m.tag for m in members),
                     html=serialize_run(members),
                     text="".join(m.text() for m in members),
                 )
             )
-
-        for top in self._state.constructs():
-            for el in top.iter():
-                if el.chunk_id:
-                    emit(el.chunk_id)
         return out
 
     def chunk(self, cid: str) -> Chunk:
-        for c in self.chunks:
-            if c.id == cid:
-                return c
-        raise TargetNotFound(f"no chunk {cid!r}")
+        """One chunk view by id — a direct lookup, not a scan of ``chunks``."""
+        _parent, members = self._state.find_chunk(cid)
+        if not members:
+            raise TargetNotFound(f"no chunk {cid!r}")
+        return Chunk(
+            id=cid,
+            container=self._state.container_of_chunk(cid),
+            tags=tuple(m.tag for m in members),
+            html=serialize_run(members),
+            text="".join(m.text() for m in members),
+        )
 
     @property
     def containers(self) -> list[str]:
@@ -1917,6 +1960,26 @@ class AimDocument:
             return Chunk(
                 id=cid, container=parent_container, tags=(root.tag,), html=payload, text=root.text()
             )
+
+    def replace_text(
+        self,
+        cid: str,
+        old_text: str,
+        new_text: str,
+        *,
+        author: Actor,
+        explanation: str | None = None,
+        at: str | None = None,
+    ) -> Chunk:
+        """Direct edit: replace the one occurrence of *old_text* in chunk
+        *cid*'s text with *new_text*, keeping the id and the inline markup
+        around it — a recorded ``modify`` like :meth:`modify_chunk`.
+        Matching and refusal rules: :mod:`aimformat.textedit` (decision
+        READS-D13)."""
+        from .textedit import replace_in_markup
+
+        markup = replace_in_markup(self.chunk(cid).html, old_text, new_text)
+        return self.modify_chunk(cid, markup, author=author, explanation=explanation, at=at)
 
     def delete_chunk(
         self,
@@ -2568,6 +2631,61 @@ class AimDocument:
                 at=at,
                 pid=pid,
             )
+
+    def propose_replace_text(
+        self,
+        target: str,
+        old_text: str,
+        new_text: str,
+        *,
+        author: Actor,
+        explanation: str | None = None,
+        at: str | None = None,
+    ) -> Proposal:
+        """:meth:`propose_modify` whose payload is chunk *target*'s markup
+        with the one occurrence of *old_text* replaced by *new_text*, inline
+        markup kept (see :meth:`replace_text`).
+
+        A new modify card supersedes the pending modify/delete on its target
+        (§5.4), so a payload built from the live markup would silently drop
+        that card's change. When *author*'s own modify card is pending on
+        *target*, the replacement applies to that card's payload instead
+        (successive word fixes compose; the new card supersedes it and keeps
+        its ``depends_on``, and its explanation when none is given). Any
+        other pending modify/delete on *target* refuses: superseding someone
+        else's change, or a pending delete, takes an explicit
+        :meth:`propose_modify`."""
+        from .textedit import TextReplaceError, replace_in_markup
+
+        self._require_current_target(target)
+        pending = self._superseded_by_new(target)
+        if not pending:
+            markup = replace_in_markup(self.chunk(target).html, old_text, new_text)
+            return self.propose_modify(
+                target, markup, author=author, explanation=explanation, at=at
+            )
+        own = pending[0]
+        if len(pending) > 1 or own.action != "modify" or own.author != author:
+            names = ", ".join(f"{p.id} ({p.action} by {p.author.type})" for p in pending)
+            raise InvalidOperation(
+                f"replace_text on {target!r} would supersede pending {names}: resolve it "
+                "first, or propose a full modify to replace it deliberately"
+            )
+        try:
+            markup = replace_in_markup(own.payload_html or "", old_text, new_text)
+        except TextReplaceError as exc:
+            raise TextReplaceError(
+                f"{exc} (matched against your pending proposal {own.id} on {target!r}, "
+                "which this change composes with)"
+            ) from None
+        return self.propose_modify(
+            target,
+            markup,
+            author=author,
+            explanation=explanation if explanation is not None else own.explanation,
+            depends_on=own.depends_on,
+            at=at,
+        )
 
     def propose_add(
         self,

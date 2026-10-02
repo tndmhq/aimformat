@@ -1,0 +1,13 @@
+Vintage recital — programme | spec 0.6 | seq 3 | 8 chunks | 0 pending
+(text view: lossy, for reading only. Classes, styles and attributes are omitted. Fetch exact HTML with mode=chunks before you edit a chunk.)
+[pg1] <slide>
+  [photo] [image: Stage lights]
+  [cover] ## Vintage recital
+  [when] Saturday 12 September — 19:30
+  [rule]
+[pg2] <slide>
+  [ph] ## Programme
+  [prog] <list>
+    [i1] Overture — the quiet room
+    [i2] Duet — margins and marginalia
+    [i3] Finale — everything accepted

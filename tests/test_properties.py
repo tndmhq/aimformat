@@ -239,3 +239,15 @@ def test_linter_is_total_on_parseable_text(text: str) -> None:
     except aim.AimError:
         return
     assert isinstance(findings, list)
+
+
+@given(doc=documents())
+@_DOC_SETTINGS
+def test_chunk_views_match_the_reference_walk(doc: aim.AimDocument) -> None:
+    """P1: the one-walk ``chunks``/``chunk()`` equal the per-id reference."""
+    from test_chunk_lookup import reference_chunks
+
+    expected = reference_chunks(doc)
+    assert doc.chunks == expected
+    for c in expected:
+        assert doc.chunk(c.id) == c

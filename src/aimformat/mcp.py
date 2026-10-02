@@ -1,46 +1,141 @@
-"""The aimformat MCP server — the SDK's workflows as six typed tools.
+"""The aimformat MCP server — the SDK's workflows as seven typed tools.
 
 Local stdio only: tools operate on ``.aim`` files by absolute path and touch
 nothing else. Set ``AIMFORMAT_MCP_ROOT`` to confine every path argument
 (including export destinations) to one directory tree; unset means unscoped —
 the local trusted-client default. Run via ``aim mcp`` (the CLI lazy-imports
 this module) after ``pip install 'aimformat[mcp]'``. Tool surface mirrors
-``docs/for-agents.md``: read projected, edit or propose, resolve, lint,
+``docs/for-agents.md``: read (whole, outline, skeleton, lossy text, exact
+chunks), search, edit or propose (one op or an atomic batch), resolve, lint,
 export — few workflow-shaped tools, not a 1:1 SDK mapping.
+
+Wire shape: every result is ONE compact text block (JSON for structured
+results, plain text for the reading views) — no ``structuredContent`` and no
+``outputSchema``, so a client never receives the payload twice. The tool
+list is trimmed for the same reason (see :class:`_LeanFastMCP`).
 """
 
 from __future__ import annotations
 
+import inspect
+import json
 import os
-import re
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from mcp.server.fastmcp import FastMCP
+from pydantic import ConfigDict, with_config
+from typing_extensions import Required, TypedDict
 
-from .document import LAST, AimDocument
+from . import views
+from ._ops import OpError, apply_ops, ops_from_args, restore_stubs
+from .document import AimDocument
 from .errors import AimError
 from .events import parse_actor
 from .lint import lint_path
 
 _INSTRUCTIONS = """\
-aimformat: read and edit .aim documents (the open HTML-based format with
-stable chunk ids, an in-file suggestions lane, and append-only history).
-Workflow: aim_read first — it returns the summary (with a staleness flag),
-TOC, chunks with their data-aim ids, and pending proposals. To change a
-document, prefer aim_propose (a pending suggestion a human accepts or
-rejects later) for reviewable or unsolicited changes; use aim_edit only for
-changes the user explicitly commanded. Resolve pending proposals with
-aim_resolve. After writes the tools save and re-lint automatically; a
-nonzero lint_errors means fix before moving on. Keep every data-aim id
-stable; new content needs a fresh unique id (the tools mint them for you).
-Set author to "agent:<your-model-id>" so edits are attributed. Docs:
-https://aimformat.com/llms.txt — human review happens in AIM editors
-(https://aimformat.com/editors)."""
+aimformat: read and edit .aim documents (HTML with stable chunk ids, a \
+pending-suggestions lane, and append-only history).
+Read: aim_read mode=toc or text to orient (text is a lossy view), aim_search \
+to locate, then mode=chunks for the exact HTML of anything you will change.
+Write: aim_propose for reviewable or unsolicited changes (a human accepts or \
+rejects them); aim_edit only for changes the user explicitly commanded. Batch \
+related changes in one call with ops. To change words inside a chunk, use \
+action replace_text (old_text, new_text) instead of resending its HTML. Keep \
+data-aim ids stable; the tools mint ids for new content. Keep [elided: …] \
+stubs as they are; they restore on write.
+Set author to "agent:<your-model-id>". Writes save and re-lint; lint_errors > 0 \
+means fix before moving on. If a write times out, check seq before retrying.
+Paths are absolute host paths (local trusted stdio; AIMFORMAT_MCP_ROOT confines \
+them). Guide: https://aimformat.com/llms.txt"""
 
-# any long data: URI — the payload alphabet varies (base64 commas, percent
-# escapes), so match every non-delimiter run rather than a fixed alphabet
-_DATA_URI = re.compile(r"data:[^\"'\s]{64,}")
+ReadMode = Literal["full", "toc", "skeleton", "text", "chunks"]
+EditAction = Literal["add", "modify", "replace_text", "delete", "move", "set_theme"]
+ProposeAction = Literal["add", "modify", "replace_text", "delete", "move", "theme"]
+
+
+# no docstrings on these: pydantic would ship them as schema descriptions.
+# extra="forbid": a misspelt field ("anchor" for "after") must fail, not be
+# dropped silently and land the op somewhere else
+@with_config(ConfigDict(extra="forbid"))
+class EditOp(TypedDict, total=False):
+    action: Required[EditAction]
+    target: str
+    html: str
+    old_text: str
+    new_text: str
+    container: str
+    after: str
+    theme_slots: dict[str, str]
+    explanation: str
+
+
+@with_config(ConfigDict(extra="forbid"))
+class ProposeOp(TypedDict, total=False):
+    action: Required[ProposeAction]
+    target: str
+    html: str
+    old_text: str
+    new_text: str
+    container: str
+    after: str
+    theme_slots: dict[str, str]
+    explanation: str
+
+
+def _compact(obj: Any) -> str:
+    return json.dumps(obj, separators=(",", ":"), ensure_ascii=False)
+
+
+def _lean_schema(node: Any, defs: dict[str, Any], *, in_properties: bool = False) -> Any:
+    """Drop generated titles, collapse ``anyOf: [T, null]`` (+ ``default:
+    null``) to ``T``, and inline ``$ref`` targets so clients that do not
+    resolve references still see the whole shape. Validation is unaffected:
+    FastMCP validates calls against its own pydantic model."""
+    if isinstance(node, list):
+        return [_lean_schema(x, defs) for x in node]
+    if not isinstance(node, dict):
+        return node
+    if in_properties:  # keys are property names, not schema keywords
+        return {k: _lean_schema(v, defs) for k, v in node.items()}
+    if "$ref" in node:
+        name = node["$ref"].rsplit("/", 1)[-1]
+        merged = {**defs.get(name, {}), **{k: v for k, v in node.items() if k != "$ref"}}
+        return _lean_schema(merged, defs)
+    out: dict[str, Any] = {}
+    for k, v in node.items():
+        if k in ("title", "$defs"):
+            continue
+        out[k] = _lean_schema(v, defs, in_properties=k == "properties")
+    any_of = out.get("anyOf")
+    if isinstance(any_of, list) and len(any_of) == 2 and {"type": "null"} in any_of:
+        other = next(x for x in any_of if x != {"type": "null"})
+        del out["anyOf"]
+        out = {**other, **out}
+        if "default" in out and out["default"] is None:
+            del out["default"]
+    return out
+
+
+def _one_line(text: str | None) -> str | None:
+    if text is None:
+        return None
+    return " ".join(line.strip() for line in inspect.cleandoc(text).splitlines() if line.strip())
+
+
+class _LeanFastMCP(FastMCP):
+    """FastMCP with a trimmed ``tools/list``: lean input schemas (see
+    :func:`_lean_schema`), descriptions on one line, no output schemas."""
+
+    async def list_tools(self):
+        tools = await super().list_tools()
+        for tool in tools:
+            schema = tool.inputSchema
+            tool.inputSchema = _lean_schema(schema, schema.get("$defs", {}))
+            tool.description = _one_line(tool.description)
+            tool.outputSchema = None
+        return tools
 
 
 def _guard(path: str) -> Path:
@@ -66,282 +161,191 @@ def _actor(spec: str | None):
     return parse_actor(spec or "external:aim-mcp")
 
 
-def _actor_str(actor) -> str:
-    value = actor.model or actor.id
-    return f"{actor.type}:{value}" if value else actor.type
-
-
-def _elide(html: str) -> str:
-    return _DATA_URI.sub("[data-uri elided]", html)
-
-
-def _elide_value(value: Any) -> Any:
-    """Elide data URIs anywhere in an event field — a baseline snapshot is a
-    nested object whose body lines carry the same blobs a payload would."""
-    if isinstance(value, str):
-        return _elide(value)
-    if isinstance(value, list):
-        return [_elide_value(v) for v in value]
-    if isinstance(value, dict):
-        return {k: _elide_value(v) for k, v in value.items()}
-    return value
-
-
-def _anchor(after: str | None):
-    if after is None or after == "":
-        return LAST
-    return None if after == "first" else after
-
-
-def _require(
-    action: str,
-    target: str | None,
-    html: str | None,
-    theme_slots: dict | None,
-    *,
-    targeted: tuple[str, ...],
-    payload: tuple[str, ...],
-    themed: tuple[str, ...],
-) -> None:
-    """Reject underspecified calls before any mutation — an omitted target
-    must never fall through to id resolution (where None can match the
-    first construct) or reach the disk as a broken card."""
-    if action in targeted and not target:
-        raise ValueError(f"aim: {action} requires target (a chunk or container id)")
-    if action in payload and html is None:
-        raise ValueError(f"aim: {action} requires html (the payload markup)")
-    if action in themed and not theme_slots:
-        raise ValueError(f"aim: {action} requires theme_slots")
-
-
 def _save_and_lint(doc: AimDocument, path: str) -> dict[str, Any]:
     doc.save(path)
     errors = [f for f in lint_path(path) if f.level == "error"]
     return {"ok": not errors, "seq": doc.seq, "doc_hash": doc.doc_hash, "lint_errors": len(errors)}
 
 
+def _write(
+    path: str,
+    kind: Literal["edit", "propose"],
+    author: str | None,
+    explanation: str | None,
+    ops: list[dict[str, Any]],
+    single: bool,
+) -> str:
+    doc = _load(path)
+    try:
+        res = apply_ops(
+            doc, ops, kind=kind, author=_actor(author), explanation=explanation, single=single
+        )
+    except OpError as exc:
+        raise ValueError(str(exc)) from None
+    out = _save_and_lint(doc, path)
+    if single:
+        first = res.results[0]
+        if kind == "edit":
+            out["id"] = first["id"]
+        else:
+            out["proposal"] = first["id"]
+    else:
+        out["batch"] = res.batch
+        out["results"] = res.results
+    if kind == "propose":
+        out["superseded"] = res.superseded
+    return _compact(out)
+
+
 def create_server() -> FastMCP:
-    server = FastMCP("aimformat", instructions=_INSTRUCTIONS)
+    server = _LeanFastMCP("aimformat", instructions=_INSTRUCTIONS)
+    tool = server.tool(structured_output=False)
 
-    @server.tool()
-    def aim_read(path: str, include_history: bool = False) -> dict[str, Any]:
-        """Read an .aim document as a projected, token-cheap view: title,
-        summary (with staleness flag), table of contents, every chunk with
-        its stable data-aim id, and the pending proposals awaiting a
-        decision. The table of contents is never stale: the stored cache
-        when it matches the document, else derived from the headings
-        (toc_source says which; both are null when the document has no
-        heading or slide to outline). Long data: URIs are elided; the stylesheet
-        is never included. Start here before editing. Operates on any
-        absolute path on the host; intended for local, trusted stdio use
-        only."""
+    @tool
+    def aim_read(
+        path: str,
+        mode: ReadMode = "full",
+        ids: list[str] | None = None,
+        words: int | None = None,
+        include_history: bool = False,
+    ) -> str:
+        """Read a document. mode: full (JSON: every chunk's HTML + pending lane), toc
+        (outline with id ranges), skeleton (every id with tag, classes and first `words`
+        words, default 8), text (every chunk as plain text with its id; lossy, never an edit
+        payload), chunks (exact HTML for `ids`: chunk, container or proposal ids, or a range
+        'a..b')."""
+        if include_history and mode != "full":
+            raise ValueError("aim: include_history works with mode=full only")
+        if ids and mode != "chunks":
+            raise ValueError("aim: ids works with mode=chunks only")
+        if words is not None and mode != "skeleton":
+            raise ValueError("aim: words works with mode=skeleton only")
         doc = _load(path)
-        summary = None
-        meta = doc.meta
-        if meta and isinstance(meta.get("summary"), dict):
-            summary = {
-                "text": meta["summary"].get("text"),
-                "stale": meta["summary"].get("doc_hash") != doc.doc_hash,
-            }
-        # A stale or missing cache is never served: derive the outline live
-        # (O(n)) — but only when the body HAS one. Without a heading or a
-        # slide the outline is one untitled entry repeating every chunk id
-        # the "chunks" list already carries: tokens for nothing.
-        toc: Any = None
-        toc_source: str | None = None
-        if doc.toc_is_fresh():
-            toc, toc_source = (meta or {}).get("toc"), "cache"
-        elif doc._has_outline():
-            toc, toc_source = doc.outline(), "derived"
-        out: dict[str, Any] = {
-            "title": doc.title,
-            "lang": doc.lang,
-            "spec_version": doc.spec_version,
-            "seq": doc.seq,
-            "doc_hash": doc.doc_hash,
-            "summary": summary,
-            "toc": toc,
-            "toc_source": toc_source,
-            "chunks": [
-                {"id": c.id, "container": c.container, "html": _elide(c.html)} for c in doc.chunks
-            ],
-            "proposals": [
-                {
-                    "id": p.id,
-                    "action": p.action,
-                    "target": p.target,
-                    "author": _actor_str(p.author),
-                    "explanation": p.explanation,
-                    "payload_html": _elide(p.payload_html) if p.payload_html else None,
-                    "batch": p.batch,
-                }
-                for p in doc.proposals
-            ],
-        }
-        if include_history:
-            # elide like every other projection: raw add/modify payloads
-            # would dump full base64 data URIs into model context — the
-            # exact token blowup _elide exists to prevent
-            out["history"] = [
-                {k: _elide_value(v) for k, v in ev.data.items()} for ev in doc.history
-            ]
-        return out
+        try:
+            if mode == "full":
+                return _compact(views.full_projection(doc, include_history=include_history))
+            if mode == "toc":
+                return views.render_toc(doc)
+            if mode == "skeleton":
+                return views.render_skeleton(doc, 8 if words is None else words)
+            if mode == "text":
+                return views.render_text(doc)
+            if mode == "chunks":
+                return views.render_chunks(doc, ids or [])
+        except ValueError as exc:
+            raise ValueError(f"aim: {exc}") from None
+        raise ValueError(f"aim: unknown mode {mode!r} (use full | toc | skeleton | text | chunks)")
 
-    @server.tool()
+    @tool
+    def aim_search(path: str, query: str, k: int = 8) -> str:
+        """Rank chunks by lexical relevance to query (quote a phrase to require it). Returns
+        id, section and a snippet per hit; fetch exact HTML with aim_read mode=chunks."""
+        doc = _load(path)
+        try:
+            return views.render_search(doc, query, k)
+        except ValueError as exc:
+            raise ValueError(f"aim: {exc}") from None
+
+    @tool
     def aim_edit(
         path: str,
-        action: str,
+        action: EditAction | None = None,
         target: str | None = None,
         html: str | None = None,
-        container: str = "body",
+        old_text: str | None = None,
+        new_text: str | None = None,
+        container: str | None = None,
         after: str | None = None,
         theme_slots: dict[str, str] | None = None,
         explanation: str | None = None,
+        ops: list[EditOp] | None = None,
         author: str | None = None,
-    ) -> dict[str, Any]:
-        """Apply a direct edit (recorded in history) and save. Only for
-        changes the user explicitly commanded — otherwise use aim_propose.
-        action: add | modify | delete | move | set_theme. add/modify take
-        html; add/move take container and after ('first' = first position,
-        omitted = end); set_theme takes theme_slots. Set author to
-        'agent:<model-id>' for attribution. Operates on any absolute path
-        on the host; intended for local, trusted stdio use only."""
-        _require(
-            action,
-            target,
-            html,
-            theme_slots,
-            targeted=("modify", "delete", "move"),
-            payload=("add", "modify"),
-            themed=("set_theme",),
-        )
-        doc = _load(path)
-        who = _actor(author)
+    ) -> str:
+        """Apply direct edits recorded in history (only for changes the user commanded). One
+        op via the arguments, or up to 100 via ops (same fields; all-or-nothing, one batch).
+        add and modify take html; replace_text takes old_text (once in the chunk's text) and
+        new_text, keeping the markup; add and move take container (default body) and after
+        (an id, 'first', '$N' = the id ops[N] created or targeted, omitted = end); set_theme
+        takes theme_slots."""
         try:
-            if action == "add":
-                assert html is not None  # _require
-                doc.add_chunk(
-                    html,
-                    author=who,
-                    container=container,
-                    after=_anchor(after),
-                    explanation=explanation,
-                )
-            elif action == "modify":
-                assert target is not None and html is not None  # _require
-                doc.modify_chunk(target, html, author=who, explanation=explanation)
-            elif action == "delete":
-                assert target is not None  # _require
-                doc.delete_chunk(target, author=who, explanation=explanation)
-            elif action == "move":
-                assert target is not None  # _require
-                doc.move_chunk(
-                    target,
-                    author=who,
-                    container=container,
-                    after=_anchor(after),
-                    explanation=explanation,
-                )
-            elif action == "set_theme":
-                doc.set_theme(theme_slots or {}, author=who, explanation=explanation)
-            else:
-                raise ValueError(
-                    f"aim: unknown edit action {action!r} (use "
-                    "add | modify | delete | move | set_theme)"
-                )
-        except AimError as exc:
-            raise ValueError(f"aim: {exc}") from exc
-        return _save_and_lint(doc, path)
+            batch, single = ops_from_args(
+                action=action,
+                target=target,
+                html=html,
+                old_text=old_text,
+                new_text=new_text,
+                container=container,
+                after=after,
+                theme_slots=theme_slots,
+                explanation=None,
+                ops=[dict(o) for o in ops] if ops is not None else None,
+                kind="edit",
+            )
+        except OpError as exc:
+            raise ValueError(str(exc)) from None
+        return _write(path, "edit", author, explanation, batch, single)
 
-    @server.tool()
+    @tool
     def aim_propose(
         path: str,
-        action: str,
+        action: ProposeAction | None = None,
         target: str | None = None,
         html: str | None = None,
-        container: str = "body",
+        old_text: str | None = None,
+        new_text: str | None = None,
+        container: str | None = None,
         after: str | None = None,
         theme_slots: dict[str, str] | None = None,
         explanation: str | None = None,
+        ops: list[ProposeOp] | None = None,
         author: str | None = None,
-    ) -> dict[str, Any]:
-        """Append a suggestion card to the pending lane instead of editing —
-        the right tool for reviewable or unsolicited changes; a human
-        accepts or rejects it later (in an AIM editor, or via aim_resolve).
-        action: modify | add | delete | move | theme. Write an explanation
-        that stands alone: raw-tier readers see it without the payload.
-        Operates on any absolute path on the host; intended for local,
-        trusted stdio use only."""
-        _require(
-            action,
-            target,
-            html,
-            theme_slots,
-            targeted=("modify", "delete", "move"),
-            payload=("add", "modify"),
-            themed=("theme",),
-        )
-        doc = _load(path)
-        who = _actor(author)
+    ) -> str:
+        """Add suggestion cards to the pending lane for a human to accept or reject. Same
+        arguments as aim_edit, up to 25 ops (theme instead of set_theme; '$N' of a proposed
+        add works only as after of a later add in the same container). Write explanations
+        that stand alone."""
         try:
-            if action == "modify":
-                assert target is not None and html is not None  # _require
-                p = doc.propose_modify(target, html, author=who, explanation=explanation)
-            elif action == "add":
-                assert html is not None  # _require
-                p = doc.propose_add(
-                    html,
-                    author=who,
-                    container=container,
-                    after=_anchor(after),
-                    explanation=explanation,
-                )
-            elif action == "delete":
-                assert target is not None  # _require
-                p = doc.propose_delete(target, author=who, explanation=explanation)
-            elif action == "move":
-                assert target is not None  # _require
-                p = doc.propose_move(
-                    target,
-                    author=who,
-                    container=container,
-                    after=_anchor(after),
-                    explanation=explanation,
-                )
-            elif action == "theme":
-                p = doc.propose_theme(theme_slots or {}, author=who, explanation=explanation)
-            else:
-                raise ValueError(
-                    f"aim: unknown proposal action {action!r} "
-                    "(use modify | add | delete | move | theme)"
-                )
-        except AimError as exc:
-            raise ValueError(f"aim: {exc}") from exc
-        result = _save_and_lint(doc, path)
-        result["proposal"] = p.id
-        return result
+            batch, single = ops_from_args(
+                action=action,
+                target=target,
+                html=html,
+                old_text=old_text,
+                new_text=new_text,
+                container=container,
+                after=after,
+                theme_slots=theme_slots,
+                explanation=None,
+                ops=[dict(o) for o in ops] if ops is not None else None,
+                kind="propose",
+            )
+        except OpError as exc:
+            raise ValueError(str(exc)) from None
+        return _write(path, "propose", author, explanation, batch, single)
 
-    @server.tool()
+    @tool
     def aim_resolve(
         path: str,
-        decision: str,
+        decision: Literal["accept", "reject"],
         proposal_ids: list[str],
         applied: str | None = None,
         explanation: str | None = None,
         author: str | None = None,
-    ) -> dict[str, Any]:
-        """Accept or reject pending proposals by id and save. decision:
-        accept | reject. applied (accept only, single id) records
-        accept-with-tweaks: the payload as actually applied. Resolution is
-        all-or-nothing: on any bad id nothing is saved. Operates on any
-        absolute path on the host; intended for local, trusted stdio use
-        only."""
+    ) -> str:
+        """Accept or reject pending proposals (all-or-nothing). applied (accept, one id)
+        records accept-with-tweaks: the payload as actually applied."""
         if decision not in ("accept", "reject"):
             raise ValueError(f"aim: unknown decision {decision!r} (use accept | reject)")
         if applied and (decision != "accept" or len(proposal_ids) != 1):
             raise ValueError("aim: applied= needs decision='accept' and exactly one proposal id")
         doc = _load(path)
         who = _actor(author)
+        if applied:
+            # applied= is a write path like aim_edit: a payload copied from a
+            # read carries its [elided: …] stubs, which restore here too
+            try:
+                applied = restore_stubs(doc, applied)
+            except OpError as exc:
+                raise ValueError(str(exc)) from None
         try:
             for pid in proposal_ids:
                 if decision == "accept":
@@ -353,89 +357,86 @@ def create_server() -> FastMCP:
         result = _save_and_lint(doc, path)
         result["resolved"] = list(proposal_ids)
         result["decision"] = decision
-        return result
+        return _compact(result)
 
-    @server.tool()
-    def aim_lint(path: str) -> dict[str, Any]:
-        """Run the conformance verifier: structure, vocabulary, security,
-        pending lane, history chain, caches, canonical form. Returns every
-        finding; level 'error' means non-conforming. Works on broken files
-        too — that is what it is for. Operates on any absolute path on the
-        host; intended for local, trusted stdio use only."""
+    @tool
+    def aim_lint(path: str) -> str:
+        """Run the conformance verifier; level 'error' means non-conforming. Works on broken
+        files."""
         if not _guard(path).is_file():
             raise ValueError(f"aim: not a file: {path}")
         findings = lint_path(path)
-        return {
-            "errors": sum(f.level == "error" for f in findings),
-            "warnings": sum(f.level == "warning" for f in findings),
-            "findings": [f.__dict__ for f in findings],
-        }
-
-    @server.tool()
-    def aim_export(path: str, out_path: str, pending: str | None = None) -> dict[str, Any]:
-        """Convert an .aim document to another format, chosen by out_path
-        extension: .docx (pending: tracked | accept-all | reject-all),
-        .md (drop | criticmarkup), .html (keep | accept-all | reject-all),
-        .pdf (keep | accept-all | reject-all). A .aim.html target is not a
-        conversion — it writes the document itself under the compatibility
-        alias, so it opens in a browser with history and pending lane
-        intact. Heavier formats need extras: pip install 'aimformat[docx]'
-        (or [convert], [pdf]). Reads from and writes to any absolute path
-        on the host; intended for local, trusted stdio use only."""
-        from .cli import _EXPORT_PENDING, _is_alias
-
-        doc = _load(path)
-        _guard(out_path)
-        out = Path(out_path)
-        if _is_alias(out):
-            if pending not in (None, "keep"):
-                raise ValueError(
-                    f"aim: pending={pending!r} not valid for .aim.html "
-                    "(the alias carries the file as-is)"
-                )
-            doc.save(out)
-            return {"ok": True, "wrote": str(out), "pending": "keep"}
-        suffix = out.suffix.lower()
-        if suffix not in _EXPORT_PENDING:
-            raise ValueError(
-                f"aim: unsupported export format {suffix!r} "
-                f"(supported: "
-                f"{', '.join(sorted(_EXPORT_PENDING))})"
-            )
-        default, allowed = _EXPORT_PENDING[suffix]
-        fate = pending or default
-        if fate not in allowed:
-            raise ValueError(
-                f"aim: pending={fate!r} not valid for {suffix} (allowed: {', '.join(allowed)})"
-            )
-        try:
-            if suffix == ".docx":
-                from .export_docx import to_docx
-
-                to_docx(doc, out, pending=fate)
-            elif suffix == ".md":
-                from .convert import to_markdown
-
-                out.write_text(to_markdown(doc, pending=fate), "utf-8")
-            elif suffix == ".html":
-                from .convert import to_html
-
-                out.write_text(to_html(doc, pending=fate), "utf-8")
-            else:
-                from .convert import to_pdf
-
-                to_pdf(doc, out, pending=fate)
-        except ImportError as exc:
-            extra = {".docx": "docx", ".pdf": "pdf"}.get(suffix, "convert")
-            return {
-                "ok": False,
-                "error": f"aim: {suffix} export needs an optional "
-                f"extra ({exc}); pip install "
-                f"'aimformat[{extra}]'",
+        return _compact(
+            {
+                "errors": sum(f.level == "error" for f in findings),
+                "warnings": sum(f.level == "warning" for f in findings),
+                "findings": [f.__dict__ for f in findings],
             }
-        return {"ok": True, "wrote": str(out), "pending": fate}
+        )
+
+    @tool
+    def aim_export(path: str, out_path: str, pending: str | None = None) -> str:
+        """Convert by out_path extension: .docx (pending: tracked | accept-all | reject-all),
+        .md (drop | criticmarkup), .html and .pdf (keep | accept-all | reject-all). .aim.html
+        writes the document itself under the browser alias. docx and pdf need extras."""
+        return _compact(_export(path, out_path, pending))
 
     return server
+
+
+def _export(path: str, out_path: str, pending: str | None) -> dict[str, Any]:
+    from .cli import _EXPORT_PENDING, _is_alias
+
+    doc = _load(path)
+    _guard(out_path)
+    out = Path(out_path)
+    if _is_alias(out):
+        if pending not in (None, "keep"):
+            raise ValueError(
+                f"aim: pending={pending!r} not valid for .aim.html "
+                "(the alias carries the file as-is)"
+            )
+        doc.save(out)
+        return {"ok": True, "wrote": str(out), "pending": "keep"}
+    suffix = out.suffix.lower()
+    if suffix not in _EXPORT_PENDING:
+        raise ValueError(
+            f"aim: unsupported export format {suffix!r} "
+            f"(supported: "
+            f"{', '.join(sorted(_EXPORT_PENDING))})"
+        )
+    default, allowed = _EXPORT_PENDING[suffix]
+    fate = pending or default
+    if fate not in allowed:
+        raise ValueError(
+            f"aim: pending={fate!r} not valid for {suffix} (allowed: {', '.join(allowed)})"
+        )
+    try:
+        if suffix == ".docx":
+            from .export_docx import to_docx
+
+            to_docx(doc, out, pending=fate)
+        elif suffix == ".md":
+            from .convert import to_markdown
+
+            out.write_text(to_markdown(doc, pending=fate), "utf-8")
+        elif suffix == ".html":
+            from .convert import to_html
+
+            out.write_text(to_html(doc, pending=fate), "utf-8")
+        else:
+            from .convert import to_pdf
+
+            to_pdf(doc, out, pending=fate)
+    except ImportError as exc:
+        extra = {".docx": "docx", ".pdf": "pdf"}.get(suffix, "convert")
+        return {
+            "ok": False,
+            "error": f"aim: {suffix} export needs an optional "
+            f"extra ({exc}); pip install "
+            f"'aimformat[{extra}]'",
+        }
+    return {"ok": True, "wrote": str(out), "pending": fate}
 
 
 def _warn_if_unscoped() -> bool:
