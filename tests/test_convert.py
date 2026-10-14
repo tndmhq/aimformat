@@ -1,6 +1,8 @@
 """Converter tests: text/markdown import, md/html export, CLI, dispatch."""
 
 import re
+import sys
+import types
 
 import pytest
 
@@ -439,8 +441,6 @@ class TestHtmlPaint:
     def test_the_print_copy_keeps_mixed_geometry_and_paint(self):
         """PDF is Chromium, so the only thing to assert is that the canonical
         declaration reaches it intact after the @page CSS is spliced in."""
-        from aimformat.convert._pdf_out import _print_html
-
         doc = aim.new_document(title="Painted deck")
         doc.add_chunk(
             '<aim-slide data-aim-container="s1" style="width:960px; height:540px">'
@@ -448,7 +448,7 @@ class TestHtmlPaint:
             "Pink slide title</h2></aim-slide>",
             author=aim.agent("test-model"),
         )
-        html = _print_html(doc, "keep", None)
+        html = aim.to_print_html(doc, pending="keep")
         assert 'style="left:48px; top:32px; width:450px; color:#ff69b4"' in html
         assert "@page pg-s1" in html  # …and the slide is still its own page
 
@@ -572,9 +572,7 @@ def _mixed_deck() -> aim.AimDocument:
 @pytest.mark.filterwarnings("ignore")
 class TestPdfSlidePages:
     def test_print_css_names_a_page_per_slide(self):
-        from aimformat.convert._pdf_out import _print_html
-
-        html = _print_html(_mixed_deck(), "keep", None)
+        html = aim.to_print_html(_mixed_deck(), pending="keep")
         # canvas-pt: the A5 canvas becomes a real 420×595pt page …
         assert "@page pg-pg1{size:420pt 595pt;margin:0}" in html
         # … an unsized canvas gets the 16:9 convention default …
@@ -589,13 +587,9 @@ class TestPdfSlidePages:
         assert "@page{size:210mm 297mm" in html
 
     def test_no_slides_no_named_pages(self):
-        from aimformat.convert._pdf_out import _print_html
-
-        assert "@page pg-" not in _print_html(aim.from_text("plain"), "keep", None)
+        assert "@page pg-" not in aim.to_print_html(aim.from_text("plain"), pending="keep")
 
     def test_resolution_updates_named_pages(self):
-        from aimformat.convert._pdf_out import _print_html
-
         doc = _mixed_deck()
         doc.propose_add(
             '<aim-slide data-aim-container="pg3" style="width:595px; height:842px">'
@@ -605,10 +599,91 @@ class TestPdfSlidePages:
             after="pg2",
             author=aim.agent("m"),
         )
-        accepted = _print_html(doc, "accept-all", None)
+        accepted = aim.to_print_html(doc, pending="accept-all")
         assert "@page pg-pg3{size:595pt 842pt;margin:0}" in accepted
-        rejected = _print_html(doc, "reject-all", None)
+        rejected = aim.to_print_html(doc, pending="reject-all")
         assert "pg-pg3" not in rejected
+
+    def test_to_print_html_is_public_api(self):
+        import aimformat.convert
+
+        assert "to_print_html" in aim.__all__
+        assert "to_print_html" in aimformat.convert.__all__
+        assert aimformat.convert.to_print_html is aim.to_print_html
+
+    def test_to_print_html_options_are_keyword_only(self):
+        with pytest.raises(TypeError):
+            aim.to_print_html(_mixed_deck(), "keep")  # type: ignore[misc]
+
+    def test_to_print_html_needs_no_extra(self, monkeypatch):
+        # None in sys.modules makes any import of the package raise
+        # ImportError: the print HTML must not touch Playwright
+        monkeypatch.setitem(sys.modules, "playwright", None)
+        monkeypatch.setitem(sys.modules, "playwright.sync_api", None)
+        html = aim.to_print_html(_mixed_deck())
+        assert "@page" in html
+
+    def test_to_pdf_prints_exactly_to_print_html(self, monkeypatch, tmp_path):
+        """to_pdf hands Chromium to_print_html's output byte for byte, with
+        the print flags the to_print_html contract tells other printers to
+        use. A fake Playwright records the call, so this runs without it."""
+        recorded: dict[str, object] = {}
+
+        class _Page:
+            def set_content(self, html, **kwargs):
+                recorded["html"] = html
+
+            def pdf(self, **kwargs):
+                recorded["pdf"] = kwargs
+
+        class _Browser:
+            def new_page(self):
+                return _Page()
+
+            def close(self):
+                recorded["closed"] = True
+
+        class _Chromium:
+            def launch(self):
+                return _Browser()
+
+        class _Playwright:
+            chromium = _Chromium()
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+        pkg = types.ModuleType("playwright")
+        sync_api = types.ModuleType("playwright.sync_api")
+        sync_api.sync_playwright = _Playwright  # type: ignore[attr-defined]
+        pkg.sync_api = sync_api  # type: ignore[attr-defined]
+        monkeypatch.setitem(sys.modules, "playwright", pkg)
+        monkeypatch.setitem(sys.modules, "playwright.sync_api", sync_api)
+
+        doc = _mixed_deck()
+        doc.propose_add(
+            '<aim-slide data-aim-container="pg3" style="width:595px; height:842px">'
+            '<p data-aim="t3" style="left:10px; top:10px; width:300px">Pending</p>'
+            "</aim-slide>",
+            container="body",
+            after="pg2",
+            author=aim.agent("m"),
+        )
+        out = tmp_path / "deck.pdf"
+        assert aim.to_pdf(doc, out, pending="accept-all", extra_css="X{}") == out
+        # accept-all resolves on a throwaway copy, so doc is unchanged here
+        expected = aim.to_print_html(doc, pending="accept-all", extra_css="X{}")
+        assert recorded["html"] == expected
+        assert "@page pg-pg3" in expected  # the pending slide resolved in
+        pdf_kwargs = recorded["pdf"]
+        assert isinstance(pdf_kwargs, dict)
+        assert pdf_kwargs["print_background"] is True
+        assert pdf_kwargs["prefer_css_page_size"] is True
+        assert pdf_kwargs["path"] == str(out)
+        assert recorded["closed"] is True
 
     def test_pdf_pages_have_canvas_sizes(self, tmp_path):
         pytest.importorskip("playwright")

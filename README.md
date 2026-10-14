@@ -157,7 +157,7 @@ aim.to_docx(doc, "out.docx", pending="reject-all")
 | compare versions | `diff_documents` (unit-level: added/deleted/modified/moved), `classify_divergence` (did the log grow, was it rewritten, does it explain the body) |
 | caches | `set_summary`, `generate_toc`, `set_embedding`, `stale_embeddings` |
 | assets | `pack_assets` (data-URIs into the content-addressed registry), `gc_assets` |
-| convert | `from_path`, `from_text`, `from_markdown`, `from_docx`, `from_pdf`, `from_docling`; `to_markdown`, `to_html`, `to_pdf`, `to_docx` |
+| convert | `from_path`, `from_text`, `from_markdown`, `from_docx`, `from_pdf`, `from_docling`; `to_markdown`, `to_html`, `to_pdf`, `to_print_html` (the HTML `to_pdf` prints, for your own Chromium), `to_docx` |
 | verifier | `lint`, `lint_text`, `lint_path`, each returning `Finding(code, level, message, where)` |
 | agent note | `doc.note`, `doc.set_note()`, `doc.remove_note()`, `doc.has_canonical_note()` (spec §2.5) |
 

@@ -37,6 +37,7 @@ from .convert import (
     to_html,
     to_markdown,
     to_pdf,
+    to_print_html,
 )
 from .css import css_stats, generate_aim_css
 from .diff import Divergence, DocumentDiff, classify_divergence, diff_documents
@@ -92,6 +93,7 @@ __all__ = [
     "to_markdown",
     "to_html",
     "to_pdf",
+    "to_print_html",
     "page_css",
     "default_page_setup",
     "generate_aim_css",

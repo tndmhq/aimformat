@@ -3,6 +3,21 @@
 All notable changes to the spec and the reference toolkit. The package
 version tracks the spec version it implements (0.x minors may break).
 
+## Unreleased
+
+### Added
+
+- **`aimformat.to_print_html(doc, *, pending="keep", extra_css=None)`** — the
+  exact HTML `to_pdf` prints (the `@page` rule, one named page per slide,
+  then `extra_css`, all spliced before the document's theme), for callers
+  that print with a Chromium of their own, for example an Electron app's
+  `webContents.printToPDF`. `to_pdf` now prints through it, so the two
+  cannot drift. Print with background graphics on and the CSS page size
+  preferred to match `to_pdf` page for page. Needs no optional extra. The
+  output is not a conforming `.aim` file, and its exact bytes are not
+  stable across versions
+  (`docs/log/2026-10-01_2105_decision_public-print-html.md`).
+
 ## 0.5.2 — 2026-09-29
 
 The SDK surface a live consumer needs when a `.aim` file changes under it
