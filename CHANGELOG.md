@@ -3,7 +3,10 @@
 All notable changes to the spec and the reference toolkit. The package
 version tracks the spec version it implements (0.x minors may break).
 
-## Unreleased
+## 0.5.3 — 2026-10-14
+
+One SDK addition for embedders that print with their own Chromium. No spec,
+event, or format changes.
 
 ### Added
 
