@@ -230,6 +230,11 @@ python3 -m pytest                        # 680+ tests, a few seconds
 cd ts && npm test                        # TS reader + parity suite
 ```
 
+To add one parity fixture, don't run `gen_parity_fixtures.py` as a whole: its
+proposal ids are random, so a full run rewrites every committed fixture. Import
+the module (`importlib`) and call only the new builder, then refresh the
+goldens.
+
 ## Dependency pins (search-then-pin convention)
 
 Runtime: none. Extras/dev: `python-docx==1.2.0`, `docling-core==2.86.0`
