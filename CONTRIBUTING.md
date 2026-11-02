@@ -17,6 +17,9 @@ path to a good PR is the same:
 3. Open a PR that conforms to the conventions: focused commits, clear
    messages, pinned dependency versions.
 
+Automated review runs on approved maintainers' PRs (the allowlist lives in
+`.github/workflows/claude-review.yml`); other PRs get maintainer review.
+
 ## Development setup
 
 ```sh
