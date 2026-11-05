@@ -92,7 +92,18 @@
     "sha256": "sha256:9da721ed5c59349e4ac61f34b205ca716979b652952f62e0b2151cd4738fd725"
   },
   "lang": "en",
-  "meta": null,
+  "meta": {
+    "toc": [
+      {
+        "chunk_count": 6,
+        "id": "ttl",
+        "level": 1,
+        "title": "Καφές & crème brûlée — 🎉",
+        "word_count": 30
+      }
+    ],
+    "toc_doc_hash": "sha256:2b763a609d339dc7655835fa99f8af25d0e546c32f6eef1cd631fc7943327fcf"
+  },
   "nodes": [
     {
       "container": "body",

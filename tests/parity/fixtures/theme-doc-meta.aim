@@ -18,7 +18,7 @@ https://aimformat.com/editors
 -->
 <title>Head state — theme, settings, caches</title>
 <script type="application/aim-meta+json">
-{"summary":{"as_of_seq":4,"doc_hash":"sha256:1846b7f86499c95c426059353edb0c0ba81b0b5e5dbd16b4426f94b433a9aff2","model":"model-x","text":"A one-paragraph document about head state."},"toc":[{"chunks":["ttl","body1"],"level":1,"title":"Head state"}],"toc_doc_hash":"sha256:1846b7f86499c95c426059353edb0c0ba81b0b5e5dbd16b4426f94b433a9aff2"}
+{"summary":{"as_of_seq":4,"doc_hash":"sha256:1846b7f86499c95c426059353edb0c0ba81b0b5e5dbd16b4426f94b433a9aff2","model":"model-x","text":"A one-paragraph document about head state."},"toc":[{"chunk_count":2,"id":"ttl","level":1,"title":"Head state","word_count":8}],"toc_doc_hash":"sha256:1846b7f86499c95c426059353edb0c0ba81b0b5e5dbd16b4426f94b433a9aff2"}
 </script>
 <script type="application/aim-doc+json">
 {"page":{"margins":{"bottom":"25.4mm","left":"19mm","right":"19mm","top":"25.4mm"},"orientation":"portrait","size":"Letter"}}

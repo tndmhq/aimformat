@@ -93,7 +93,25 @@
     "sha256": "sha256:654e17702c21f735c27fb12364ca440b8cef25531a1d46b7263443a44a1071c1"
   },
   "lang": "en",
-  "meta": null,
+  "meta": {
+    "toc": [
+      {
+        "chunk_count": 4,
+        "id": "ttl",
+        "level": 1,
+        "title": "Pink title",
+        "word_count": 9
+      },
+      {
+        "chunk_count": 2,
+        "id": "s1",
+        "level": 1,
+        "title": "Slide title",
+        "word_count": 3
+      }
+    ],
+    "toc_doc_hash": "sha256:47e75c468d0dfd3332083473ac3cea251d7e05a5c8e0cf976af43dd742712557"
+  },
   "nodes": [
     {
       "container": "body",
@@ -210,7 +228,7 @@
       "batch": "b2",
       "dependsOn": null,
       "explanation": "Green tint instead.",
-      "id": "p-uca23qub",
+      "id": "p-8fl87eb9",
       "payloadHtml": "<p data-aim=\"tint\" style=\"background-color:#f0fdf4\">Tinted paragraph.</p>",
       "target": "tint"
     }

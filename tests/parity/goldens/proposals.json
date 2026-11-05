@@ -93,7 +93,18 @@
     "sha256": "sha256:af966e90a3168595a130fcf89d9c875655d80a5c76480b18eaff81c301e08737"
   },
   "lang": "en",
-  "meta": null,
+  "meta": {
+    "toc": [
+      {
+        "chunk_count": 6,
+        "id": "c1",
+        "level": 1,
+        "title": "Title",
+        "word_count": 6
+      }
+    ],
+    "toc_doc_hash": "sha256:f9669b12c9284f736996eabcdbbf7254024e0c4a3fd20750648ae91cd5ccc00e"
+  },
   "nodes": [
     {
       "container": "body",
@@ -209,7 +220,7 @@
       "batch": "b2",
       "dependsOn": null,
       "explanation": "Lead with the point.",
-      "id": "p-c886c0sf",
+      "id": "p-k7e9na2t",
       "payloadHtml": "<p data-aim=\"c2\">Second, sharpened.</p>",
       "target": "c2"
     },
@@ -227,7 +238,7 @@
       "batch": "b3",
       "dependsOn": null,
       "explanation": "Redundant with c2.",
-      "id": "p-gb7r1cpj",
+      "id": "p-m82n28vn",
       "payloadHtml": null,
       "target": "c3"
     },
@@ -245,7 +256,7 @@
       "batch": "b4",
       "dependsOn": null,
       "explanation": null,
-      "id": "p-tjadrg4c",
+      "id": "p-bhtdtj2k",
       "payloadHtml": null,
       "target": "c4"
     },
@@ -263,13 +274,13 @@
       "batch": "b5",
       "dependsOn": null,
       "explanation": "Bridge paragraph.",
-      "id": "p-rdcjhco0",
+      "id": "p-smjp8mif",
       "payloadHtml": "<p data-aim=\"add1\">Inserted after the title.</p>",
       "target": null
     },
     {
       "action": "add",
-      "anchorAfter": "p-rdcjhco0",
+      "anchorAfter": "p-smjp8mif",
       "anchorContainer": "body",
       "anchorShell": null,
       "at": "2026-07-17T10:00:14Z",
@@ -281,7 +292,7 @@
       "batch": "b6",
       "dependsOn": null,
       "explanation": null,
-      "id": "p-96qf957e",
+      "id": "p-2djppibm",
       "payloadHtml": "<p data-aim=\"add2\">Chained onto the pending add.</p>",
       "target": null
     },
@@ -299,7 +310,7 @@
       "batch": "b7",
       "dependsOn": null,
       "explanation": "Row at the top of the body section.",
-      "id": "p-mh25o8db",
+      "id": "p-f8435f95",
       "payloadHtml": "<tr data-aim=\"add3\"><td>three</td></tr>",
       "target": null
     },
@@ -315,9 +326,9 @@
         "type": "agent"
       },
       "batch": "b8",
-      "dependsOn": "p-c886c0sf",
+      "dependsOn": "p-k7e9na2t",
       "explanation": "Teal primary.",
-      "id": "p-c0k94imj",
+      "id": "p-fq1s9kld",
       "payloadHtml": "<style data-aim-theme>:root{--aim-brand-1:#0f766e}</style>",
       "target": "aim:theme"
     },
@@ -335,7 +346,7 @@
       "batch": "b9",
       "dependsOn": null,
       "explanation": "Booklet trim.",
-      "id": "p-ni8u1o3v",
+      "id": "p-3dt8lqgu",
       "payloadHtml": "<script type=\"application/aim-doc+json\">\n{\"page\":{\"margins\":{\"bottom\":\"10mm\",\"left\":\"12mm\",\"right\":\"12mm\",\"top\":\"10mm\"},\"orientation\":\"landscape\",\"size\":\"A5\"}}\n</script>",
       "target": "aim:doc"
     }

@@ -37,7 +37,18 @@
   "hasCanonicalNote": true,
   "history": null,
   "lang": "en",
-  "meta": null,
+  "meta": {
+    "toc": [
+      {
+        "chunk_count": 2,
+        "id": "ttl",
+        "level": 1,
+        "title": "Flattened",
+        "word_count": 5
+      }
+    ],
+    "toc_doc_hash": "sha256:f0a0cea35c814f9d0487159196e26a1941ad6abaacd48cc90da19639aa43d417"
+  },
   "nodes": [
     {
       "container": "body",

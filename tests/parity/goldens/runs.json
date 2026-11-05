@@ -132,7 +132,18 @@
     "sha256": "sha256:78daad0820e9ec99f4d0ccde837488358b27d62543640e8397557862b2fcd2cf"
   },
   "lang": "en",
-  "meta": null,
+  "meta": {
+    "toc": [
+      {
+        "chunk_count": 9,
+        "id": "hd",
+        "level": 2,
+        "title": "Items",
+        "word_count": 31
+      }
+    ],
+    "toc_doc_hash": "sha256:2988f32fb12e4f743f254673dd2258be5d13baa354c9a6469ecb15a61c21d8e4"
+  },
   "nodes": [
     {
       "container": "body",

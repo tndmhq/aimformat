@@ -63,12 +63,11 @@
     },
     "toc": [
       {
-        "chunks": [
-          "ttl",
-          "body1"
-        ],
+        "chunk_count": 2,
+        "id": "ttl",
         "level": 1,
-        "title": "Head state"
+        "title": "Head state",
+        "word_count": 8
       }
     ],
     "toc_doc_hash": "sha256:1846b7f86499c95c426059353edb0c0ba81b0b5e5dbd16b4426f94b433a9aff2"

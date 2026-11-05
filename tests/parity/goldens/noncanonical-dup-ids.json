@@ -43,7 +43,18 @@
   "hasCanonicalNote": true,
   "history": null,
   "lang": "en",
-  "meta": null,
+  "meta": {
+    "toc": [
+      {
+        "chunk_count": 5,
+        "id": "hd",
+        "level": 2,
+        "title": "Duplicated ids",
+        "word_count": 16
+      }
+    ],
+    "toc_doc_hash": "sha256:45233d5d5b1af688454b029d0e2291eabd0582debe5aa84d13ed8c22357a3f5e"
+  },
   "nodes": [
     {
       "container": "body",

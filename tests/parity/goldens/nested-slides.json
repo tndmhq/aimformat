@@ -118,7 +118,25 @@
     "sha256": "sha256:cbe556b1a3a984299bc2b8851e1fc44faae70b329730b4ac8f251b558cdcfea2"
   },
   "lang": "en",
-  "meta": null,
+  "meta": {
+    "toc": [
+      {
+        "chunk_count": 4,
+        "id": "s1",
+        "level": 1,
+        "title": "Agenda",
+        "word_count": 3
+      },
+      {
+        "chunk_count": 4,
+        "id": "s2",
+        "level": 1,
+        "title": "Numbers",
+        "word_count": 6
+      }
+    ],
+    "toc_doc_hash": "sha256:259fabe2626bcc89238797e6d903ca5da7df12df7d672a2bc16b35e66bd230ba"
+  },
   "nodes": [
     {
       "attrs": {

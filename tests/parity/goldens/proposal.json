@@ -4,7 +4,7 @@
     "ttl",
     "intro",
     "scope",
-    "mgm8cu6l",
+    "28q14g90",
     "hd",
     "dl",
     "pr"
@@ -48,8 +48,8 @@
     },
     {
       "container": "body",
-      "html": "<aim-page-break data-aim=\"mgm8cu6l\"></aim-page-break>",
-      "id": "mgm8cu6l",
+      "html": "<aim-page-break data-aim=\"28q14g90\"></aim-page-break>",
+      "id": "28q14g90",
       "isRun": false,
       "kind": "chunk",
       "tag": "aim-page-break",
@@ -136,7 +136,7 @@
     "dl",
     "pr"
   ],
-  "docHash": "sha256:7dacc169d788df7fbafaf43ee368f207dd1a1ec5f2c3fa1d42ad613382e3503c",
+  "docHash": "sha256:7441118cd54a91af0160d68020049c08d408209db02c7b63131cdacd32969e08",
   "docSettings": {
     "page": {
       "margins": {
@@ -153,38 +153,33 @@
   "hasCanonicalNote": true,
   "history": {
     "lines": 11,
-    "sha256": "sha256:cec32f3e89ab65076382bbc8f9b50a68564be85c35ef7b59e3539df5d8559e55"
+    "sha256": "sha256:ce17477acc8a7b1c2942eccbbebe88132b007ec07d72e2ddf53925f6e490a219"
   },
   "lang": "en",
   "meta": {
     "summary": {
       "as_of_seq": 11,
-      "doc_hash": "sha256:7dacc169d788df7fbafaf43ee368f207dd1a1ec5f2c3fa1d42ad613382e3503c",
+      "doc_hash": "sha256:7441118cd54a91af0160d68020049c08d408209db02c7b63131cdacd32969e08",
       "model": "claude-opus-4-8",
       "text": "Three-year services proposal for Acme GmbH: €358k over two phases (pending: rollout line item), projected €2.1M savings. One pending pricing row and a theme swap await review."
     },
     "toc": [
       {
-        "chunks": [
-          "ttl",
-          "intro",
-          "scope",
-          "mgm8cu6l"
-        ],
+        "chunk_count": 10,
+        "id": "ttl",
         "level": 1,
-        "title": "Q3 Services Proposal — Acme GmbH"
+        "title": "Q3 Services Proposal — Acme GmbH",
+        "word_count": 53
       },
       {
-        "chunks": [
-          "hd",
-          "dl",
-          "pr"
-        ],
+        "chunk_count": 6,
+        "id": "hd",
         "level": 2,
-        "title": "Deliverables"
+        "title": "Deliverables",
+        "word_count": 20
       }
     ],
-    "toc_doc_hash": "sha256:7dacc169d788df7fbafaf43ee368f207dd1a1ec5f2c3fa1d42ad613382e3503c"
+    "toc_doc_hash": "sha256:7441118cd54a91af0160d68020049c08d408209db02c7b63131cdacd32969e08"
   },
   "nodes": [
     {
@@ -225,8 +220,8 @@
     },
     {
       "container": "body",
-      "html": "<aim-page-break data-aim=\"mgm8cu6l\"></aim-page-break>",
-      "id": "mgm8cu6l",
+      "html": "<aim-page-break data-aim=\"28q14g90\"></aim-page-break>",
+      "id": "28q14g90",
       "isRun": false,
       "kind": "chunk",
       "tag": "aim-page-break",
@@ -361,7 +356,7 @@
       "batch": "b6",
       "dependsOn": null,
       "explanation": "Client asked for rollout as its own line.",
-      "id": "p-o47rcqcq",
+      "id": "p-cu3489qj",
       "payloadHtml": "<tr data-aim=\"r3\"><td>Rollout &amp; training</td><td>8</td><td>€95,000</td></tr>",
       "target": null
     },
@@ -379,7 +374,7 @@
       "batch": "b7",
       "dependsOn": null,
       "explanation": "Client brand refresh: teal primary.",
-      "id": "p-d40h99g2",
+      "id": "p-60c7cqst",
       "payloadHtml": "<style data-aim-theme>:root{--aim-brand-1:#0f766e}</style>",
       "target": "aim:theme"
     }

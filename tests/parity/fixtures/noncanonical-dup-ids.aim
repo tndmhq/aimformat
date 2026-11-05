@@ -17,6 +17,9 @@ validate with `aim lint`. Humans review in AIM editors:
 https://aimformat.com/editors
 -->
 <title>Non-canonical — duplicate chunk ids</title>
+<script type="application/aim-meta+json">
+{"toc":[{"chunk_count":5,"id":"hd","level":2,"title":"Duplicated ids","word_count":16}],"toc_doc_hash":"sha256:45233d5d5b1af688454b029d0e2291eabd0582debe5aa84d13ed8c22357a3f5e"}
+</script>
 <style data-aim-css="0.6">
 :root{--aim-brand-1:#1d4ed8;--aim-brand-2:#0f766e;--aim-brand-3:#b45309;--aim-brand-4:#6d28d9;--aim-font-heading:system-ui, -apple-system, 'Segoe UI', sans-serif;--aim-font-body:system-ui, -apple-system, 'Segoe UI', sans-serif;--aim-font-mono:ui-monospace, 'SF Mono', Menlo, Consolas, monospace}
 body{counter-reset:aim-c1 aim-c2 aim-c3 aim-c4 aim-c5 aim-c6 aim-c7 aim-c8 aim-c9}

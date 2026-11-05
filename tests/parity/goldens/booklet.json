@@ -116,7 +116,25 @@
     "sha256": "sha256:8ea808d51dcdf302f7f1f2b479890e07730c4a151a03e77a7cb66a74ede33a22"
   },
   "lang": "en",
-  "meta": null,
+  "meta": {
+    "toc": [
+      {
+        "chunk_count": 4,
+        "id": "pg1",
+        "level": 1,
+        "title": "Vintage recital",
+        "word_count": 7
+      },
+      {
+        "chunk_count": 4,
+        "id": "pg2",
+        "level": 1,
+        "title": "Programme",
+        "word_count": 15
+      }
+    ],
+    "toc_doc_hash": "sha256:8a101b0c298b7c7a6da2e90f3729e30f3ecce6e3334eed3621526e0a0f0cced5"
+  },
   "nodes": [
     {
       "attrs": {

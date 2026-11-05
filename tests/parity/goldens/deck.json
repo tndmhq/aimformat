@@ -79,7 +79,25 @@
     "sha256": "sha256:1a5c72ed7489bf1dc53b26bb9ba322f427660b3911b7842896014c6444f9d14f"
   },
   "lang": "en",
-  "meta": null,
+  "meta": {
+    "toc": [
+      {
+        "chunk_count": 3,
+        "id": "s1",
+        "level": 1,
+        "title": "Documents that review themselves",
+        "word_count": 9
+      },
+      {
+        "chunk_count": 2,
+        "id": "s2",
+        "level": 1,
+        "title": "Next steps",
+        "word_count": 11
+      }
+    ],
+    "toc_doc_hash": "sha256:e1aff9167653648891200f3b65a7138cc96943d7fabb7827ad131994609751af"
+  },
   "nodes": [
     {
       "attrs": {
@@ -196,7 +214,7 @@
       "batch": "b3",
       "dependsOn": null,
       "explanation": "Name the date.",
-      "id": "p-apth0vo6",
+      "id": "p-3srhcbp4",
       "payloadHtml": "<p data-aim=\"b2\" class=\"text-3xl\" style=\"left:60px; top:150px; width:700px\">Extend the pilot to the briefs team for Q4; decision review on 15 August.</p>",
       "target": "b2"
     }

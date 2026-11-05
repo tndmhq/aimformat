@@ -17,6 +17,9 @@ validate with `aim lint`. Humans review in AIM editors:
 https://aimformat.com/editors
 -->
 <title>Vintage recital — programme</title>
+<script type="application/aim-meta+json">
+{"toc":[{"chunk_count":4,"id":"pg1","level":1,"title":"Vintage recital","word_count":7},{"chunk_count":4,"id":"pg2","level":1,"title":"Programme","word_count":15}],"toc_doc_hash":"sha256:8a101b0c298b7c7a6da2e90f3729e30f3ecce6e3334eed3621526e0a0f0cced5"}
+</script>
 <style data-aim-css="0.6">
 :root{--aim-brand-1:#1d4ed8;--aim-brand-2:#0f766e;--aim-brand-3:#b45309;--aim-brand-4:#6d28d9;--aim-font-heading:system-ui, -apple-system, 'Segoe UI', sans-serif;--aim-font-body:system-ui, -apple-system, 'Segoe UI', sans-serif;--aim-font-mono:ui-monospace, 'SF Mono', Menlo, Consolas, monospace}
 body{counter-reset:aim-c1 aim-c2 aim-c3 aim-c4 aim-c5 aim-c6 aim-c7 aim-c8 aim-c9}
