@@ -17,8 +17,9 @@ where missing — ids are tooling's job, spec §4.4).
 Scope and honesty:
 
 - **The log must be intact and complete.** Reconcile repairs bodies, not
-  histories: unparseable lines, seq gaps, unknown kinds, or events that do
-  not replay raise :class:`HistoryError`. A *pruned* history also raises —
+  histories: unparseable lines, seq gaps, unknown kinds, a baseline snapshot
+  that does not hash to its ``doc_hash``, or events that do not replay raise
+  :class:`HistoryError`. A *pruned* history also raises —
   the baseline below the prune floor is unrecoverable, so a repair guarantee
   would be a false promise.
 - **Untracked state stays untracked.** A theme block that no event ever
@@ -53,6 +54,7 @@ from .document import (
     _now_iso,
     _payload_floors,
     resolution_order,
+    snapshot_hash,
 )
 from .dom import Element, parse_fragment, parse_html
 from .errors import AimError, HistoryError
@@ -143,6 +145,16 @@ def _check_log(events: list[Event]) -> None:
             raise HistoryError(
                 f"cannot reconcile: invalid event at seq {ev.data.get('seq')}: {problems[0]}"
             )
+    # the snapshot is the expected origin: one changed without its doc_hash
+    # (H008) would have its damage adopted as an out-of-band edit of the body
+    origin, recorded = events[0], events[0].get("doc_hash")
+    if origin.kind == "baseline" and snapshot_hash(origin.get("snapshot")) != recorded:
+        raise HistoryError(
+            f"cannot reconcile: baseline seq {origin.data.get('seq')} "
+            f"({origin.get('label')!r}): the snapshot does not hash to the recorded "
+            f"doc_hash {recorded} — reconcile repairs the body against an intact "
+            "history, not the history itself; accept the file as it is with baseline()"
+        )
 
 
 def _apply_event(state: DocState, ev: Event) -> None:

@@ -262,6 +262,20 @@ class TestReconcileFromABaseline:
         text = imported.dumps().replace('data-aim-version="0.6"', 'data-aim-version="0.7"', 1)
         assert any("snapshot" in problem for problem in aim.loads(text).verify())
 
+    @pytest.mark.parametrize("dry_run", [False, True], ids=["write", "dry-run"])
+    def test_a_snapshot_damaged_without_its_hash_is_refused(self, imported, dry_run):
+        # The snapshot is reconcile's expected origin. Changed and not
+        # rehashed, it was taken as truth anyway: reconcile appended a modify
+        # blaming the untouched body for the difference, and verify() still
+        # failed after it.
+        text = imported.dumps()
+        damaged = text.replace(">Clause two.<\\/p>", ">Clause 2.<\\/p>")  # the snapshot only
+        assert damaged != text and ">Clause two.</p>" in damaged
+        doc = aim.loads(damaged)
+        with pytest.raises(aim.HistoryError, match="snapshot does not hash to the recorded"):
+            doc.reconcile(at=ts(1), dry_run=dry_run)
+        assert doc.dumps() == damaged  # no event written, nothing else touched
+
 
 class TestAdoption:
     HAND = (
