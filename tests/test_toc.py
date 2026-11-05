@@ -330,14 +330,55 @@ class TestSave:
         assert aim.loads(text).dumps() == text
         assert ("M003", "error") in _meta_codes(text)
 
-    def test_a_body_that_loses_its_last_heading_keeps_a_fresh_toc(self):
-        # the stored TOC is rederived, not dropped: one untitled entry
+    def test_an_import_that_loses_every_heading_drops_its_toc(self):
+        # Whether a document carries a TOC depends on its body, not on its
+        # history: once no heading or slide is left, a save removes the TOC,
+        # and the meta block with it when nothing is left in it (an empty
+        # block is M004). The same body imported fresh stores no TOC either.
+        pytest.importorskip("markdown_it")
+        doc = aim.from_markdown("# Title\n\nSome text.\n\n## Sub\n\nMore text.\n")
+        assert doc.meta["toc"] and doc.toc_is_fresh()
+        headings = [c.id for c in doc.chunks if c.tag in ("h1", "h2")]
+        assert len(headings) == 2
+        for i, heading in enumerate(headings):
+            doc.delete_chunk(heading, author=ME, at=ts(9 + i))
+        text = doc.dumps()
+        assert "application/aim-meta+json" not in text
+        saved = aim.loads(text)
+        assert saved.meta is None and not saved.toc_is_fresh()
+        assert [f for f in aim.lint_text(text) if f.level == "error" or f.code[0] == "M"] == []
+        assert aim.from_markdown("Some text.\n\nMore text.\n").meta is None
+        assert saved.dumps() == text
+
+    def test_a_summary_stays_when_the_toc_goes(self):
+        pytest.importorskip("markdown_it")
+        doc = aim.from_markdown("# Title\n\nSome text.\n")
+        heading = next(c.id for c in doc.chunks if c.tag == "h1")
+        doc.delete_chunk(heading, author=ME, at=ts(9))
+        doc.set_summary("Some text.", model="m")
+        assert set(doc.meta) == {"summary", "toc", "toc_doc_hash"}  # the TOC is now stale
+        saved = aim.loads(doc.dumps())
+        assert set(saved.meta) == {"summary"}
+        assert saved.meta["summary"]["text"] == "Some text."
+        assert _meta_codes(saved.dumps()) == set()
+
+    def test_a_meta_block_left_without_summary_or_toc_goes(self):
+        # fields the format does not define cannot keep the block: without a
+        # summary or a TOC it is M004, so it goes with the TOC
         doc = _doc('<h1 data-aim="h">Title</h1>', '<p data-aim="p">Body.</p>')
         doc.dumps()
+        doc._write_meta({**doc.meta, "x_vendor": 1})
         doc.delete_chunk("h", author=ME, at=ts(9))
-        saved = aim.loads(doc.dumps())
-        untitled = {"chunk_count": 1, "id": "p", "level": 1, "title": "", "word_count": 1}
-        assert saved.meta["toc"] == [untitled] and saved.toc_is_fresh()
+        text = doc.dumps()
+        assert aim.loads(text).meta is None
+        assert _meta_codes(text) == set()
+
+    def test_a_body_with_no_heading_left_and_no_toc_keeps_its_meta_block(self):
+        # nothing to remove: a summary-only block is left exactly as it is
+        doc = _doc('<p data-aim="p">Only prose.</p>')
+        doc.set_summary("Prose.", model="m")
+        block = doc._state.script("meta").raw
+        assert aim.loads(doc.dumps())._state.script("meta").raw == block
 
 
 class TestOldShape:
@@ -388,6 +429,59 @@ class TestBelow06:
         # the old shape is that version's own: no finding
         assert _meta_codes(text) == set()
 
+    def test_generate_toc_refuses_the_compact_toc(self):
+        # it wrote a TOC-only block in the 0.6 shape, which that version's
+        # tools reject (M004) and which no save below 0.6 refreshes
+        doc = self._declared_0_5()
+        with pytest.raises(aim.InvalidOperation, match=r"declared 0\.6 or later \(spec §8\.1\)"):
+            doc.generate_toc()
+        assert doc.meta is None
+        doc.set_summary("A title and a body.", model="m")
+        before = doc._state.script("meta").raw
+        with pytest.raises(aim.InvalidOperation):
+            doc.generate_toc()
+        assert doc._state.script("meta").raw == before
+
+    @pytest.mark.parametrize(
+        "meta",
+        [
+            {"toc": [{"chunks": ["h", "p"], "level": 1, "title": "Title"}]},
+            {"toc": [{"chunk_count": 2, "id": "h", "level": 1, "title": "Title", "word_count": 3}]},
+            {},
+        ],
+        ids=["old-shape-toc-only", "compact-toc-only", "empty"],
+    )
+    def test_a_meta_block_without_a_summary_is_M004(self, meta):
+        # v0.5 required a summary, whatever else the block holds
+        doc = self._declared_0_5()
+        doc._write_meta(meta)
+        findings = [f for f in aim.lint_text(doc.dumps()) if f.code[0] == "M"]
+        assert [(f.code, f.level) for f in findings] == [("M004", "error")]
+        assert "summary" in findings[0].message and "0.6" in findings[0].message
+
+    @pytest.mark.parametrize(
+        "entry",
+        [
+            {"level": 1},
+            {"chunks": "h", "level": "1", "title": "Title"},
+            {"chunk_count": 2, "id": "h", "level": 1, "title": "Title", "word_count": "3"},
+            "h",
+        ],
+        ids=["no-title", "chunks-not-list", "compact-string-count", "str"],
+    )
+    def test_entries_get_no_shape_finding(self, entry):
+        # the pre-0.6 shape is that version's own: lint checks no entry
+        # shape below 0.6, where no save would ever rewrite the entries
+        doc = self._declared_0_5()
+        doc._write_meta({"summary": {"model": "m", "text": "t"}, "toc": [entry]})
+        assert _meta_codes(doc.dumps()) == set()
+
+    def test_a_toc_that_is_not_a_list_is_still_M003(self):
+        # not an entry-shape finding: v0.5 defined the TOC as a list too
+        doc = self._declared_0_5()
+        doc._write_meta({"summary": {"model": "m", "text": "t"}, "toc": "h"})
+        assert _meta_codes(doc.dumps()) == {("M003", "error")}
+
 
 class TestLint:
     @staticmethod
@@ -423,11 +517,6 @@ class TestLint:
         text = _with_meta(doc.dumps(), {"toc": [entry], "toc_doc_hash": doc.doc_hash})
         assert {f.code for f in aim.lint_text(text) if f.level == "error"} == {"M003"}
 
-    def test_a_malformed_entry_is_M003_below_0_6_too(self):
-        doc = TestBelow06._declared_0_5()
-        doc._write_meta({"summary": {"model": "m", "text": "t"}, "toc": [{"level": 1}]})
-        assert ("M003", "error") in _meta_codes(doc.dumps())
-
     def test_counts_are_informative(self):
         # a writer that counts differently is not stale: only the hash decides
         doc = self._doc()
@@ -441,6 +530,29 @@ class TestLint:
         entry = {**doc.outline()[0], "x_vendor": 1}
         text = _with_meta(doc.dumps(), {"toc": [entry], "toc_doc_hash": doc.doc_hash})
         assert _meta_codes(text) == set()
+
+    @pytest.mark.parametrize("value", ["n/a", 3, None], ids=["str", "int", "null"])
+    def test_a_chunks_field_that_is_not_a_list_is_an_ignored_unknown_field(self, value):
+        # only a chunks LIST marks the pre-0.6 shape (§8.1)
+        doc = self._doc()
+        entry = {**doc.outline()[0], "chunks": value}
+        text = _with_meta(doc.dumps(), {"toc": [entry], "toc_doc_hash": doc.doc_hash})
+        assert _meta_codes(text) == set()
+        loaded = aim.loads(text)
+        assert loaded.toc_is_fresh()
+        assert loaded.dumps() == text  # fresh: the save keeps the entry as it is
+
+    def test_a_chunks_list_marks_the_pre_0_6_shape(self):
+        # a complete compact entry that also carries a chunks list is read as
+        # the pre-0.6 shape: stale at 0.6, and the save rewrites it
+        doc = self._doc()
+        entry = {**doc.outline()[0], "chunks": ["h", "p"]}
+        text = _with_meta(doc.dumps(), {"toc": [entry], "toc_doc_hash": doc.doc_hash})
+        assert _meta_codes(text) == {("M005", "warning")}
+        loaded = aim.loads(text)
+        assert not loaded.toc_is_fresh()
+        saved = aim.loads(loaded.dumps())
+        assert saved.meta["toc"] == saved.outline() and saved.toc_is_fresh()
 
 
 class TestScaling:

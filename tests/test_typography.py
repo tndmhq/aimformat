@@ -16,14 +16,13 @@ TYPO_SINCE = REGISTRY.typography_since
 
 def _declared(version: str) -> aim.AimDocument:
     """A verifiable document whose marker was rewritten to *version* before
-    its checkpoint — the same shape test_paint uses for legacy files."""
+    its checkpoint — the same shape test_paint uses for legacy files. It is
+    rewritten before the first save, so the file carries no TOC-only meta
+    block, which is v0.6 syntax (M004 under older rules)."""
     doc = aim.new_document(title="An older document")
     doc.add_chunk('<h1 data-aim="t">Title</h1>', author=BOT, at=ts(0))
-    older = aim.loads(
-        doc.dumps().replace(
-            f'data-aim-version="{aim.SPEC_VERSION}"', f'data-aim-version="{version}"'
-        )
-    )
+    doc._state.set_spec_version(version)
+    older = aim.loads(doc.dumps())
     older.checkpoint("as-authored", at=ts(1))
     return older
 

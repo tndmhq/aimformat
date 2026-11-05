@@ -1116,8 +1116,9 @@ class AimDocument:
         stamps the current one. (The stylesheet is safe to refresh — it is
         machine-managed and excluded from hashing — and so is the TOC cache,
         §8.1: in a document declared 0.6 or later it is built when the body
-        has a heading or a slide, and rederived when stale or in the pre-0.6
-        shape. Below 0.6 the meta block is left exactly as it is.)"""
+        has a heading or a slide, rederived when stale or in the pre-0.6
+        shape, and removed once the body has neither. Below 0.6 the meta
+        block is left exactly as it is.)"""
         css = self._state.css_el()
         if css is not None:
             css.raw = "\n" + generate_aim_css()
@@ -4509,9 +4510,19 @@ class AimDocument:
     def generate_toc(self) -> list[dict]:
         """Derive the TOC cache from the body (deterministic) and store it
         with ``toc_doc_hash``, the ``doc_hash`` it was derived from (§8.1):
-        the entries :meth:`outline` lists. In a document declared 0.6 or
-        later every :meth:`dumps` builds and refreshes it anyway; this call
-        stores it now, at any declared version."""
+        the entries :meth:`outline` lists. Every :meth:`dumps` builds and
+        refreshes it anyway; this call stores it now.
+
+        The compact TOC belongs to v0.6: in a document declared below 0.6
+        this raises :class:`InvalidOperation` and leaves the meta block as
+        it is. A TOC-only block fails that version's M004, and the
+        declaration is never raised as a side effect (§3.7)."""
+        if not REGISTRY.version_includes(self.spec_version, toc.SINCE):
+            declared = repr(self.spec_version) if self.spec_version else "no version"
+            raise InvalidOperation(
+                f"the compact TOC needs a document declared {toc.SINCE} or later "
+                f"(spec §8.1); this one declares {declared}"
+            )
         entries = self.outline()
         meta = self.meta or {}
         meta["toc"] = entries
@@ -4561,11 +4572,15 @@ class AimDocument:
 
     def _refresh_toc(self) -> None:
         """dumps(): the TOC is a machine-managed cache like aim.css, derived
-        deterministically, outside doc_hash, never evented. Built when the
-        body has a heading or a slide, rederived when stale, malformed or in
-        the pre-0.6 shape — only in documents declared 0.6 or later. Below
-        that the meta block stays exactly as it is: tools of those versions
-        require a summary beside a TOC (their M004) and read the old shape."""
+        deterministically, outside doc_hash, never evented — only in
+        documents declared 0.6 or later. Built when the body has a heading or
+        a slide, rederived when stale, malformed or in the pre-0.6 shape, and
+        removed (``toc`` and ``toc_doc_hash``) once the body has neither, so
+        whether a document carries a TOC depends on its body, not on its
+        history. A meta block left with neither a summary nor a TOC goes too:
+        it would be M004. Below 0.6 the meta block stays exactly as it is:
+        tools of those versions require a summary beside a TOC (their M004)
+        and read the old shape."""
         if not REGISTRY.version_includes(self.spec_version, toc.SINCE):
             return
         try:
@@ -4573,12 +4588,21 @@ class AimDocument:
         except ParseError:
             return  # a malformed cache is lint's to report (M003), not ours
         present = meta.get("toc") if meta is not None else None
-        if present is None:
-            if not self._has_outline():
-                return
-        elif not isinstance(present, list):
+        if present is not None and not isinstance(present, list):
             return  # lint's too (M003)
-        elif meta is not None and _toc_matches(meta, self.doc_hash):
+        if not self._has_outline():
+            if meta is None or not {"toc", "toc_doc_hash"} & meta.keys():
+                return
+            meta.pop("toc", None)
+            meta.pop("toc_doc_hash", None)
+            if meta.get("summary") is not None:
+                self._write_meta(meta)
+                return
+            el = self._state.script("meta")
+            if el is not None:
+                self._state.head.children.remove(el)
+            return
+        if meta is not None and _toc_matches(meta, self.doc_hash):
             return
         meta = meta if meta is not None else {}
         meta["toc"] = self.outline()

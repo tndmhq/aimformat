@@ -976,7 +976,8 @@ not regenerable: after an import it holds the only copy of each image.
 object with optional `summary {text, model, as_of_seq, doc_hash}`, optional
 `toc` (the table of contents, below) and, when `toc` is present, optional
 `toc_doc_hash`: the `doc_hash` the TOC was derived from. A block with neither
-`summary` nor `toc` is an error (M004; before v0.6 `summary` was required).
+`summary` nor `toc` is an error (M004), and so is a block without `summary`
+in a document declared below v0.6, whose rules required it.
 This is the first thing an agent reads; staleness is checkable against the
 current `doc_hash`, and a reader that finds the TOC stale or absent derives
 the outline from the body instead of trusting it.
@@ -985,7 +986,8 @@ The TOC lists the document's sections in document order, one entry each:
 `{chunk_count, id, level, title, word_count}`, the keys in the order
 canonical JSON writes them (§11.2). `id` is a non-empty string, `title` a
 string, `level` an integer from 1 to 6, and both counts are non-negative
-integers. Unknown fields are ignored.
+integers. Unknown fields are ignored. An entry that carries a `chunks` list is
+read as the pre-v0.6 shape (stale at v0.6 or later).
 
 - A section opens at a top-level heading chunk, whose rank (`h1` … `h6`) is
   its `level` and whose text is its `title`, or at a slide: `level` 1 and
@@ -1000,12 +1002,14 @@ integers. Unknown fields are ignored.
 
 The TOC is derived from the body (deterministic, regenerable), so a writer
 MAY rebuild it whenever it saves a document declared v0.6 or later, like the
-embedded stylesheet. Below v0.6 a writer leaves the block as it is: a
-TOC-only block fails M004 under that version's rules. A TOC whose
-`toc_doc_hash` differs from the current `doc_hash` is stale (M005, a
-warning), and so is one whose entries keep the pre-v0.6 shape
-`{title, level, chunks: [ids]}` in a document declared v0.6 or later; below
-v0.6 that shape is valid. An entry of neither shape is an error (M003).
+embedded stylesheet. Below v0.6 a writer neither builds nor rewrites a TOC
+and leaves the block as it is: a TOC-only block fails M004 under that
+version's rules. A TOC whose `toc_doc_hash` differs from the current
+`doc_hash` is stale (M005, a warning), and so is one whose entries keep the
+pre-v0.6 shape `{title, level, chunks: [ids]}` in a document declared v0.6
+or later; below v0.6 that shape is valid. In a document declared v0.6 or
+later an entry of neither shape is an error (M003); below v0.6 the entries
+are that version's own and a verifier does not check their shape.
 
 *The counts (informative).* A verifier checks the shape of an entry and
 `toc_doc_hash`, never the counts, so two writers may count differently. The
@@ -1459,7 +1463,7 @@ Literal paint (`color` `background-color` `border-color`) is since spec 0.3 (S03
 | M001 | warning | summary cache is stale |
 | M002 | warning | embedding is stale or orphaned |
 | M003 | error | cache block is not valid JSON of the required shape |
-| M004 | error | aim-meta block has neither a summary nor a toc |
+| M004 | error | aim-meta block has neither a summary nor a toc (below 0.6: no summary) |
 | M005 | warning | toc cache is stale (toc_doc_hash mismatch, or entries in the pre-0.6 shape) |
 | D001 | error | aim-doc settings block is not valid JSON of the required shape |
 | D002 | error | more than one aim-doc script in the head |

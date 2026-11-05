@@ -1164,7 +1164,7 @@
     ],
     "M004": [
       "error",
-      "aim-meta block has neither a summary nor a toc"
+      "aim-meta block has neither a summary nor a toc (below 0.6: no summary)"
     ],
     "M005": [
       "warning",

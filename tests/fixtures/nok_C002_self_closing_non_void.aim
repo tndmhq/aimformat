@@ -364,6 +364,6 @@ aim-assets{display:none}
 </style>
 </head>
 <body>
-<p data-aim="syntax"><span/><br><svg><use href="#asset-unused"/></svg></p>
+<p data-aim="syntax"><span/><br><svg><use href="#glyph"/></svg></p>
 </body>
 </html>

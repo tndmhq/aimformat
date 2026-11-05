@@ -1253,7 +1253,19 @@ class _Linter:
         if meta is not None:
             summary = meta.get("summary")
             toc = meta.get("toc")
-            if summary is None and toc is None:
+            # §8.1 judges a document by its declared version. v0.6 made the
+            # summary optional beside a TOC and defined the compact entry;
+            # below it a summary is required and the entries are that
+            # version's own, which no save of such a document rewrites.
+            compact = REGISTRY.version_includes(self.doc.spec_version, TOC_SINCE)
+            if summary is None and not compact:
+                self.add(
+                    "M004",
+                    ERROR,
+                    "aim-meta block has no summary, which a document declared "
+                    "below 0.6 requires (§8.1)",
+                )
+            elif summary is None and toc is None:
                 self.add("M004", ERROR, "aim-meta block has neither a summary nor a toc (§8.1)")
             elif summary is not None and not isinstance(summary, dict):
                 self.add("M003", ERROR, "aim-meta summary is not an object")
@@ -1265,9 +1277,9 @@ class _Linter:
             stale: list[str] = []
             if toc is not None and not isinstance(toc, list):
                 self.add("M003", ERROR, "aim-meta toc is not a list")
-            elif toc is not None:
+            elif toc is not None and compact:
                 # §8.1: the entry shape only — counts are informative and
-                # never recomputed; the pre-0.6 shape is that version's own
+                # never recomputed
                 bad = next(
                     (n for n, e in enumerate(toc, 1) if not (is_entry(e) or is_legacy_entry(e))),
                     None,
@@ -1279,9 +1291,7 @@ class _Linter:
                         f"aim-meta toc entry {bad} is malformed "
                         "(§8.1: {chunk_count, id, level, title, word_count})",
                     )
-                elif any(map(is_legacy_entry, toc)) and REGISTRY.version_includes(
-                    self.doc.spec_version, TOC_SINCE
-                ):
+                elif any(map(is_legacy_entry, toc)):
                     stale.append("entries in the pre-0.6 shape {title, level, chunks}")
             marker = meta.get("toc_doc_hash")
             if marker is not None and not isinstance(marker, str):

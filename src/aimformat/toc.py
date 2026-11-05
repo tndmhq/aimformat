@@ -257,9 +257,10 @@ def _count(value: object) -> bool:
 
 def is_entry(obj: object) -> bool:
     """Whether *obj* is a TOC entry of the v0.6 shape. Unknown keys are
-    ignored, as everywhere in the format's JSON; an entry that still carries
-    the pre-0.6 ``chunks`` list is not one."""
-    if not isinstance(obj, dict) or "chunks" in obj:
+    ignored, as everywhere in the format's JSON, except that an entry
+    carrying a ``chunks`` list is read as the pre-0.6 shape (§8.1), so it is
+    not one; a ``chunks`` value of any other type is an unknown field."""
+    if not isinstance(obj, dict) or isinstance(obj.get("chunks"), list):
         return False
     sid, level = obj.get("id"), obj.get("level")
     return (

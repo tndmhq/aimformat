@@ -309,8 +309,10 @@ def main() -> None:
     files["ok_baseline.aim"] = imported.dumps()
 
     self_closing_exceptions = aim.new_document(title="Self-closing exceptions")
+    # a fragment that names no asset: an "#asset-…" one would resolve to
+    # nothing and add S036 to this file and to the C002 file built from it
     self_closing_exceptions.add_chunk(
-        '<p data-aim="syntax"><span></span><br><svg><use href="#asset-unused"/></svg></p>',
+        '<p data-aim="syntax"><span></span><br><svg><use href="#glyph"/></svg></p>',
         author=BOT,
         at=t(0),
     )

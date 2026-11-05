@@ -320,12 +320,13 @@ class TestVersionUpgrade:
     def older(self) -> aim.AimDocument:
         """A genuine 0.2 file: the version marker is rewritten BEFORE the
         checkpoint, so the recorded hash covers the 0.2 `<html>` line — which
-        is what an in-place bump would go on to break."""
+        is what an in-place bump would go on to break. It is rewritten before
+        the first save too: a 0.6 save of a body with a heading writes a
+        TOC-only meta block, v0.6 syntax that a 0.2 file cannot carry (M004)."""
         doc = aim.new_document(title="An older document")
         doc.add_chunk('<h1 data-aim="t">Title</h1>', author=BOT, at=ts(0))
-        older = aim.loads(
-            doc.dumps().replace(f'data-aim-version="{aim.SPEC_VERSION}"', 'data-aim-version="0.2"')
-        )
+        doc._state.set_spec_version("0.2")
+        older = aim.loads(doc.dumps())
         older.checkpoint("as-authored", at=ts(1))
         return older
 
