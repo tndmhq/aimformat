@@ -3,7 +3,7 @@
 Registry-driven lint over four layers, all collected in one run:
 
 - **S** structural rules (document shape, section order, chunk coverage,
-  runs, container exclusivity, ids)
+  runs, container exclusivity, ids, packed-asset references and ids)
 - **V** vocabulary rules (elements, classes, inline styles, attributes,
   theme grammar)
 - **X** security rules (no executable script, no event handlers, no
@@ -27,7 +27,7 @@ from pathlib import Path
 from . import ids
 from .canonical import LINE_CONTAINERS, document_text
 from .css import generate_aim_css
-from .document import AimDocument, Anchor
+from .document import AimDocument, Anchor, _raster_href
 from .dom import Comment, Element, Text, parse_fragment
 from .errors import AimError, HistoryError, InvalidOperation, ParseError, TargetNotFound
 from .events import _ISO_RE
@@ -113,6 +113,26 @@ class Finding:
         return f"{self.level.upper()} {self.code}{loc}: {self.message}"
 
 
+#: the base64 data-URI form packed image bytes take (spec §9.1)
+_BASE64_IMAGE = re.compile(r"^data:image/[a-z+.-]+;base64,")
+
+
+def _asset_bytes_problem(asset_id: str, href: str | None) -> str | None:
+    """Why a raster asset's id is not the content address of its bytes
+    (S037, spec §9.2); None when it is, or when *href* holds no packed
+    bytes to hash (a vector symbol, or a URL V009/X003 already judge)."""
+    if not href or not _BASE64_IMAGE.match(href):
+        return None
+    try:
+        blob = AimDocument._decode_asset_datauri(href)
+    except InvalidOperation:
+        return f"asset {asset_id!r}: its image data does not decode as base64"
+    expected = AimDocument._asset_id(blob)
+    if expected != asset_id:
+        return f"asset id {asset_id!r} does not match the sha256 of its bytes ({expected!r})"
+    return None
+
+
 def snapshot_entry_problems(doc: AimDocument, line: str) -> list[str]:
     """Why one baseline snapshot entry does not conform (H008): it is not
     exactly one construct, or the construct fails a check a pending payload
@@ -155,6 +175,7 @@ class _Linter:
         self.security()
         self.proposals()
         self.history()
+        self.packed_assets()
         self.caches()
         if self.text is not None:
             self.authored_self_closing()
@@ -1157,6 +1178,69 @@ class _Linter:
                 WARNING,
                 "the history starts at seq 1 but replaying it backwards does not reach an "
                 "empty document: the origin was never recorded (a baseline, §6.9, records it)",
+            )
+
+    # -- S: packed assets (§9) ---------------------------------------------------------------
+    def packed_assets(self) -> None:
+        """S036/S037 (warnings). A packed image's bytes sit outside
+        ``doc_hash`` (§11.3), so neither replay nor H006 sees a blob that went
+        missing or was swapped. Every ``use href="#asset-…"`` — in the body,
+        a pending payload, or the retained history, baseline snapshots
+        included — must resolve to a symbol in ``<aim-assets>`` (S036), and a
+        raster asset's id must be the hash of its bytes (§9.2, S037). A
+        vector symbol's id, the hash of its canonical children, is not
+        checked."""
+        symbols: set[str] = set()
+        sec = self.state.section("aim-assets")
+        for symbol in sec.iter() if sec is not None else ():
+            asset_id = symbol.get("id") if symbol.tag == "symbol" else None
+            if not asset_id:
+                continue
+            symbols.add(asset_id)
+            problem = _asset_bytes_problem(asset_id, _raster_href(symbol))
+            if problem:
+                self.add("S037", WARNING, problem, asset_id)
+
+        missing: dict[str, tuple[str, str]] = {}  # asset id → (where, in what)
+
+        def visit(el: Element, where: str, what: str, *, body: bool = False) -> None:
+            if body:  # in the body, the nearest chunk or container names the place
+                where = el.chunk_id or el.container_id or where
+            if el.tag == "use":
+                href = el.get("href") or ""
+                if href.startswith("#asset-") and href[1:] not in symbols:
+                    missing.setdefault(href[1:], (where, what))
+            for child in el.elements():
+                visit(child, where, what, body=body)
+
+        for top in self.state.constructs():
+            visit(top, "", "the body", body=True)
+        cards = self.state.section("aim-proposals")
+        for card in cards.elements() if cards is not None else ():
+            for tmpl in (c for c in card.elements() if c.tag == "template"):
+                visit(tmpl, card.get("id") or "", "a pending payload")
+        try:
+            payloads = list(self.doc._history_payloads())
+        except AimError:
+            payloads = []  # an unreadable log is H002's
+        for event, markup in payloads:
+            if "#asset-" not in markup:
+                continue
+            seq = str(event.data.get("seq"))
+            what = "a baseline snapshot" if event.kind == "baseline" else "a history payload"
+            try:
+                nodes = parse_fragment(markup)
+            except ParseError:
+                continue  # a malformed payload is H006's
+            for node in nodes:
+                if isinstance(node, Element):
+                    visit(node, seq, what)
+        for asset_id, (where, what) in missing.items():
+            self.add(
+                "S036",
+                WARNING,
+                f'<use href="#{asset_id}"> in {what} resolves to no symbol in <aim-assets>',
+                where,
             )
 
     # -- caches ------------------------------------------------------------------------------------

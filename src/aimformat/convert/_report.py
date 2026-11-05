@@ -25,7 +25,8 @@ __all__ = [
 
 
 class AimImportWarning(UserWarning):
-    """Something in the source was not carried into the .aim document.
+    """Something in the source was not carried into the .aim document, or an
+    image was carried inline instead of being stored once (spec §9).
 
     Emitted once per kind of loss (comments, revisions that produced no
     proposal, parts the importer does not read), so a caller that only sees
@@ -71,7 +72,8 @@ class ImportReport:
     revisions: list[RevisionNote] = field(default_factory=list)
     proposals: list[str] = field(default_factory=list)  # card ids written
     comments: list[CommentNote] = field(default_factory=list)
-    warnings: list[str] = field(default_factory=list)  # everything not carried
+    # everything not carried, and images kept inline instead of stored once
+    warnings: list[str] = field(default_factory=list)
 
     def summary(self) -> str:
         """One paragraph for a human (the CLI prints it to stderr)."""

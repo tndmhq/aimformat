@@ -191,6 +191,51 @@ def _baseline_docs() -> dict[str, str]:
     return out
 
 
+#: two different 1×1 PNGs, base64
+_PNG_DOT = (
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4"
+    "z8DwHwAFBQIAX8jx0gAAAABJRU5ErkJggg=="
+)
+_PNG_OTHER = (
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGNgYGBg"
+    "AAAABQABh6FO1AAAAABJRU5ErkJggg=="
+)
+
+
+def _packed_image_doc() -> aim.AimDocument:
+    """One image stored once, the shape an import writes (spec §9): the chunk
+    and the baseline snapshot reference the asset, the registry holds it."""
+    importer = aim.external("docx-import")
+    doc = aim.new_document(title="Packed image fixture")
+    doc.add_chunk('<p data-aim="p1">A figure follows.</p>', author=importer, at=t(0))
+    doc.add_chunk(
+        f'<figure data-aim="fig1"><img alt="A dot" src="data:image/png;base64,{_PNG_DOT}">'
+        "<figcaption>One dot.</figcaption></figure>",
+        author=importer,
+        at=t(1),
+    )
+    doc.pack_assets(author=importer, at=t(2))
+    doc._drop_history(drop_embeddings=False)  # the import's scaffolding
+    doc.baseline("import", author=importer, explanation="Imported", at=t(3))
+    return doc
+
+
+def _packed_image_noks(ok: str) -> dict[str, str]:
+    """The S036/S037 nok files (warnings): the registry is outside doc_hash,
+    so these defects break no hash and no replay."""
+    start, end = ok.index("<aim-assets>"), ok.index("</aim-assets>\n") + len("</aim-assets>\n")
+    registry = ok[start:end]
+    assert _PNG_DOT in registry
+    return {
+        # the registry deleted out of band: chunk and snapshot point at nothing
+        "nok_S036_unresolved_asset_reference.aim": ok[:start] + ok[end:],
+        # the bytes swapped under the same id
+        "nok_S037_asset_id_mismatch.aim": ok[:start]
+        + registry.replace(_PNG_DOT, _PNG_OTHER)
+        + ok[end:],
+    }
+
+
 def _pending_delete_doc() -> str:
     doc = base_doc()
     doc.propose_delete("i1", author=BOT, explanation="Trim.", at=t(3))
@@ -320,6 +365,8 @@ def main() -> None:
     )
     paginated.add_chunk("<aim-page-break></aim-page-break>", author=ME, after="p1", at=t(4))
     files["ok_pagination.aim"] = paginated.dumps()
+
+    files["ok_packed_image.aim"] = _packed_image_doc().dumps()
 
     # -- nok: one rule per file ------------------------------------------
     # Derived from a HISTORY-LESS base wherever possible, so a surgical body
@@ -466,6 +513,7 @@ def main() -> None:
         "nok_M005_stale_toc.aim": _stale_toc(files["ok_baseline.aim"]),
         **_toc_docs(),
         **_baseline_docs(),
+        **_packed_image_noks(files["ok_packed_image.aim"]),
     }
     files.update(nok)
 

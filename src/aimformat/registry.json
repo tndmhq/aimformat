@@ -958,6 +958,14 @@
       "error",
       "markup from a spec era newer than the declared version"
     ],
+    "S036": [
+      "warning",
+      "asset reference resolves to no symbol in the asset registry"
+    ],
+    "S037": [
+      "warning",
+      "asset id does not match the sha256 of its bytes"
+    ],
     "V001": [
       "error",
       "element not allowed in the asset registry"

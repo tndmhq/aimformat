@@ -22,9 +22,10 @@ A `.aim` file is a single HTML document that is, at the same time:
 - **The full edit history.** An append-only, invertible event log from
   which any past version can be reconstructed and verified against
   checkpoint hashes.
-- **The derived caches.** Summary, table of contents, embeddings and
-  packed assets ride along to help agents; none is load-bearing, and all
-  of them can be rebuilt.
+- **The derived caches.** Summary, table of contents and embeddings ride
+  along to help agents; none is load-bearing, and all of them can be
+  rebuilt. Packed images are not a cache: each is stored once, in a
+  content-addressed asset registry.
 
 Documents are increasingly written *with* AI, in formats designed for a
 single human at a single cursor. Everyone building document workflows with

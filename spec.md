@@ -45,8 +45,7 @@ A `.aim` document is a **single, valid HTML5 file** that is simultaneously:
    which any past version can be reconstructed and verified against
    checkpoint hashes;
 5. **derived caches** — an AI summary, a table of contents, per-chunk
-   embeddings, packed assets — that accelerate agents but are never
-   load-bearing.
+   embeddings — that accelerate agents but are never load-bearing.
 
 It is written and read accurately by LLMs (HTML plus a finite
 Tailwind-vocabulary class subset), reviewable by humans, and manipulable by
@@ -957,12 +956,15 @@ Example — a document created from imported content, one history line:
 | chunk content + order | `aim-meta` (summary, TOC) — carries `as_of_seq`/`doc_hash`/`toc_doc_hash` staleness markers |
 | containers (slides, list/table shells) + geometry | embeddings (per-chunk `text_hash` + `model`) |
 | theme block (`aim:theme`) | `aim.css` (pinned by `data-aim-css`, regenerable) |
-| `aim:doc` settings (page setup, §3.6) | packed asset registry (content-addressed, immutable) |
+| `aim:doc` settings (page setup, §3.6) | |
 
 Caches are never load-bearing: delete them all and the document plus
-history are intact and regenerable. Pending proposals are neither: they are
-live document state, resolved into history — not hashed into `doc_hash`,
-not regenerable.
+history are intact and regenerable. Two kinds of state are neither versioned
+nor caches. Pending proposals are live document state, resolved into
+history — not hashed into `doc_hash`, not regenerable. The packed asset
+registry (§9) is content-addressed state. It is excluded from `doc_hash`,
+because each asset is named by the hash of its own bytes (§9.2), and it is
+not regenerable: after an import it holds the only copy of each image.
 
 ---
 
@@ -1059,12 +1061,18 @@ symbol's children for vector symbols. Replacing an image is a new asset
 plus a chunk MODIFY — asset entries need no history events, because *asset
 history is chunk history*.
 
+The registry is outside `doc_hash` (§11.3), so neither checkpoint hashes nor
+replay see an asset that went missing or changed. A verifier checks it
+separately and warns when a `use href="#asset-…"` in the body, a pending
+payload or the retained history resolves to no symbol (S036), and when a
+raster asset's id does not match the sha256 of its bytes (S037).
+
 ### 9.3 Garbage collection
 
 An asset is live iff referenced by the current body, any retained history
-payload, or any pending payload (old versions must still render after time
-travel). Pruning history widens what is collectable. `gc` runs as the final
-pass of pack/flatten/prune.
+payload (a baseline snapshot included, §6.9), or any pending payload (old
+versions must still render after time travel). Pruning history widens what
+is collectable. `gc` runs as the final pass of pack/flatten/prune.
 
 ---
 
@@ -1400,6 +1408,8 @@ Literal paint (`color` `background-color` `border-color`) is since spec 0.3 (S03
 | S032 | error | literal paint requires a supporting spec version |
 | S033 | error | literal typography requires a supporting spec version |
 | S034 | error | markup from a spec era newer than the declared version |
+| S036 | warning | asset reference resolves to no symbol in the asset registry |
+| S037 | warning | asset id does not match the sha256 of its bytes |
 | V001 | error | element not allowed in the asset registry |
 | V002 | error | element outside the vocabulary |
 | V003 | error | attribute not allowed on this element |

@@ -66,6 +66,35 @@ newer version (S002) with an unknown event kind (H003).
   only for a meta block with neither summary nor TOC. A baseline under a
   declaration below 0.6 is S034. New conformance fixtures for each, plus
   `ok_baseline` and `ok_historyless`.
+- **Imported images are stored once (§9).** `from_docx`, `from_markdown` and
+  `from_docling` move PNG, JPEG and GIF data into the asset registry before
+  any history is written, so the body, the baseline snapshot and a tracked
+  import's pending cards reference one stored copy, and an image found twice
+  is stored once. A tracked DOCX packs both of its views before aligning
+  them, and an image only Word's Accept All has is stored for the card that
+  brings it. Other formats (BMP, WebP, TIFF) and data URIs that are not
+  strict base64 stay inline, and the import goes on; the DOCX import report
+  counts them. On the fixtures, sample3 drops from 67,614 to 50,862
+  characters (about 33,900 to 22,900 o200k tokens, 33% fewer) and
+  legal-addendum from 63,087 to 59,529 (about 22,100 to 19,500 tokens, 12%
+  fewer). The image-free fixtures do not change.
+- **The asset registry is content-addressed state, not a cache (§7, §9).**
+  It is outside `doc_hash` but cannot be regenerated: after an import it
+  holds the only copy of each image. Two new verifier warnings check it
+  instead of the hash: S036 (a `use href="#asset-…"` in the body, a pending
+  payload or the retained history resolves to no symbol) and S037 (a raster
+  asset's id is not the sha256 of its bytes). New conformance fixtures
+  `ok_packed_image`, `nok_S036_unresolved_asset_reference` and
+  `nok_S037_asset_id_mismatch`.
+- **`gc_assets()` counts baseline snapshots (§9.3).** After an out-of-band
+  delete, a gc pass (`aim gc`, pack, or a prune that keeps the baseline)
+  collected an image that only the snapshot still referenced, so time travel
+  to the baseline lost it.
+- **`to_docx` and `to_markdown` export packed images.** Both dropped them
+  without a placeholder, so a DOCX round trip of an imported file lost every
+  image. A packed figure becomes a Word picture, a packed inline image gets
+  the `[image: label]` placeholder an inline `<img>` gets, and Markdown writes
+  `![label](data:…)` from the registry, pending payloads included.
 
 ### Word tracked changes import as proposals (no format change)
 

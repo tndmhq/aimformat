@@ -57,7 +57,7 @@ from ..canonical import escape_attr, escape_text
 from ..document import AimDocument, new_document
 from ..errors import ParseError
 from ..events import Actor, external
-from ..ingest import _containerize, finish_import
+from ..ingest import _containerize, _ImportAssets, finish_import
 from ..pagesetup import _fmt_mm
 from ..registry import REGISTRY
 from ._docx_pages import _match_named_size
@@ -186,10 +186,11 @@ def import_docx_source(
     source_ref = [digest] if digest else None
     comments = read_comments(package.archive)
     revisions = revision_count(package.document_xml)
+    images = _ImportAssets()
     if not revisions and not comments:
         parsed = package.parse(package.document_xml)
         conv = _Converter(parsed)
-        blocks = conv.blocks()
+        blocks = [images.pack(markup) for markup in conv.blocks()]
         doc = _imported_document(
             parsed,
             conv,
@@ -201,13 +202,16 @@ def import_docx_source(
             name=name,
             base=base,
             source=source_ref,
+            assets=images,
         )
+        report.warnings.extend(images.warnings())
         return ImportResult(doc, report)
     return _import_tracked(
         package,
         report,
         comments,
         revisions,
+        images,
         title=title,
         lang=lang,
         theme=theme,
@@ -250,10 +254,12 @@ def _imported_document(
     name: str,
     base: str,
     source: list[str] | None,
+    assets: _ImportAssets,
 ) -> AimDocument:
     """The body every DOCX import builds: theme, title, blocks, page setup —
     recorded as one baseline (§6.9), with the TOC cache when there are
-    headings."""
+    headings. *blocks* arrive packed; *assets* holds the images they
+    reference (§9)."""
     slots = _safe_theme_slots(parsed)
     if theme:
         slots.update(theme)  # the caller's slots win over the derived ones
@@ -271,7 +277,9 @@ def _imported_document(
                 doc.set_page_setup(page, author=who)
             except Exception:  # degenerate sectPr: keep the content, skip the page
                 pass
-    return finish_import(doc, author=who, explanation=f"Imported from {base!r}", source=source)
+    return finish_import(
+        doc, author=who, explanation=f"Imported from {base!r}", source=source, assets=assets
+    )
 
 
 def _import_tracked(
@@ -279,6 +287,7 @@ def _import_tracked(
     report: ImportReport,
     comments: list[Comment],
     revision_total: int,
+    images: _ImportAssets,
     *,
     title: str | None,
     lang: str,
@@ -291,7 +300,12 @@ def _import_tracked(
     max_revisions: int,
     max_proposals: int,
 ) -> ImportResult:
-    """The two-view path: a document with Word revisions and/or comments."""
+    """The two-view path: a document with Word revisions and/or comments.
+
+    Both views are packed through ONE image collection before alignment
+    (§9): the lane validator compares the cards' accept-all with the accept
+    view's units, so the two must spell an image the same way, and an image
+    both views hold must be one asset."""
     from ._docx_tracked import (
         assign_ids,
         normalize_date,
@@ -318,7 +332,7 @@ def _import_tracked(
 
     parsed_o = package.parse(body_root)
     conv_o = _Converter(parsed_o, track_src=True)
-    o_units = units_of(conv_o.blocks(), "O")
+    o_units = units_of([images.pack(markup) for markup in conv_o.blocks()], "O")
     doc = _imported_document(
         parsed_o,
         conv_o,
@@ -330,6 +344,7 @@ def _import_tracked(
         name=name,
         base=base,
         source=source,
+        assets=images,
     )
     assign_ids(o_units, doc)
     report.tracked = tracked if has_revisions else None
@@ -341,7 +356,11 @@ def _import_tracked(
     if has_revisions and tracked == "propose":
         parsed_f = package.parse(accept_root)
         conv_f = _Converter(parsed_f, track_src=True)
-        f_units = units_of(conv_f.blocks(), "F")
+        f_units = units_of([images.pack(markup) for markup in conv_f.blocks()], "F")
+        # images only Word's Accept All has: nothing in the body references
+        # them, so they are stored after the import's gc passes and before
+        # the lane that carries them is written (its trials clone the doc)
+        images.register(doc)
         page_o, page_f = conv_o.page_setup(), conv_f.page_setup()
         page_revs = [r for r in facts.revisions if r.where == "section"]
         page_markup = None
@@ -358,6 +377,9 @@ def _import_tracked(
             max_proposals=max_proposals,
         )
         doc = lane.document
+        # an accept-only image no card carries (the difference was converter
+        # noise, so F adopted O's markup) is referenced by nothing
+        doc.gc_assets()
         noise = lane.plan.noise
         for index, revs in enumerate(lane.plan.spec_revs):
             card = lane.card_ids[index]
@@ -421,6 +443,7 @@ def _import_tracked(
             f"{len(report.comments)} Word comment(s) were not carried (the format has no "
             "comment construct); the import report lists them"
         )
+    report.warnings.extend(images.warnings())
     return ImportResult(doc, report)
 
 

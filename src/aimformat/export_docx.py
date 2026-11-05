@@ -48,7 +48,13 @@ from dataclasses import replace
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from .document import AimDocument, Proposal, _ChainedAddCycle, resolution_order
+from .document import (
+    AimDocument,
+    Proposal,
+    _ChainedAddCycle,
+    _packed_asset_ref,
+    resolution_order,
+)
 from .dom import Element, Text, parse_fragment
 from .errors import InvalidOperation
 from .events import external
@@ -256,6 +262,11 @@ def _runs_of(
                 src = child.get("src") or ""
                 if src and not src.startswith("data:"):
                     label += f" ({src})"
+                runs.append({"text": label, **fmt, "italic": True})
+            elif _packed_asset_ref(child) is not None:
+                # a packed image (§9.1) exports as the embedded <img> it
+                # stands for: the same placeholder, named by its aria-label
+                label = f"[image: {child.get('aria-label') or 'image'}]"
                 runs.append({"text": label, **fmt, "italic": True})
             else:
                 runs += _runs_of(child, fmt, paint, inline=True)
@@ -945,6 +956,8 @@ class _Exporter:
         self.paint = PaintResolver(self.palette)
         for construct in doc._state.constructs():
             self.paint.resolve(construct)
+        # packed images (§9.1) resolve through the registry: asset id → data URI
+        self.assets = doc._raster_assets()
         self.out = docx_mod.Document()
         self.rev = _Revisions()
         # numbering definitions created on demand: per-level literal prefixes
@@ -1658,10 +1671,14 @@ class _Exporter:
         # emit_block routes figures here before its generic alignment code,
         # so the figure's own alignment class lands on the picture paragraph
         align = _alignment_of(el)
-        img = el.find(lambda e: e.tag == "img")
+        img = el.find(lambda e: e.tag == "img" or _packed_asset_ref(e) is not None)
         emitted = False
         if img is not None:
-            src = img.get("src") or ""
+            if img.tag == "img":
+                src, alt = img.get("src") or "", img.get("alt")
+            else:  # a packed image (§9.1): its bytes live in the asset registry
+                src = self.assets.get(_packed_asset_ref(img) or "", "")
+                alt = img.get("aria-label")
             m = re.match(r"^data:image/[a-z+.-]+;base64,(.*)$", src, re.S)
             if m:
                 try:
@@ -1673,7 +1690,7 @@ class _Exporter:
                 except Exception:
                     emitted = False
             if not emitted:
-                alt = img.get("alt") or "image"
+                alt = alt or "image"
                 para = self.out.add_paragraph()
                 if align is not None:
                     para.alignment = align

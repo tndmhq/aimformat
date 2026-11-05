@@ -3,7 +3,8 @@
 
 For every DOCX in ``tests/fixtures/docxs/`` this imports the file and prints
 the raw file size (bytes, and o200k tokens when ``tiktoken`` is installed),
-the body, the history block and the metadata cache. Run it before and after
+the body, the history block, the asset registry (where imported images are
+stored once) and the metadata cache. Run it before and after
 a change to the importers or the history shape to record the effect; the
 numbers are not asserted anywhere (ids are random, so counts move by about
 0.1% between runs).
@@ -51,6 +52,7 @@ def measure(path: pathlib.Path) -> dict:
     text = doc.dumps()
     body = "\n".join(canonical.serialize(el) for el in doc._state.constructs())
     history = _block(text, r'<script type="application/aim-history\+jsonl">.*?</script>')
+    assets = _block(text, r"<aim-assets>.*?</aim-assets>")
     meta = _block(text, r'<script type="application/aim-meta\+json">.*?</script>')
     css = _block(text, r"<style data-aim-css=.*?</style>")
     row: dict = {"fixture": path.stem, "chunks": len(doc.chunks), "events": len(doc.history)}
@@ -59,6 +61,7 @@ def measure(path: pathlib.Path) -> dict:
         ("css", css),
         ("body", body),
         ("history", history),
+        ("assets", assets),
         ("meta", meta),
     ):
         row[f"{name}_bytes"] = len(part.encode())
@@ -71,7 +74,7 @@ def main(argv: list[str]) -> int:
     if "--json" in argv:
         print(json.dumps(rows, indent=1))
         return 0
-    cols = ["fixture", "chunks", "events", "file", "css", "body", "history", "meta"]
+    cols = ["fixture", "chunks", "events", "file", "css", "body", "history", "assets", "meta"]
     print(" | ".join(cols))
     for row in rows:
         cells = [str(row["fixture"]), str(row["chunks"]), str(row["events"])]

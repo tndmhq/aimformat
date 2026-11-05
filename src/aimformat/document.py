@@ -16,7 +16,7 @@ import datetime as _dt
 import hashlib
 import re
 from collections import Counter
-from collections.abc import Callable, Iterable, Sequence
+from collections.abc import Callable, Iterable, Iterator, Sequence
 from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import Path
@@ -192,6 +192,29 @@ def _toc_matches(meta: dict, doc_hash: str) -> bool:
         and meta.get("toc_doc_hash") == doc_hash
         and all(toc.is_entry(e) for e in entries)
     )
+
+
+def _packed_asset_ref(el: Element) -> str | None:
+    """The asset id a packed image reference points at (spec §9.1:
+    ``<svg role="img" aria-label="…"><use href="#asset-…"/></svg>``), or
+    None when *el* is not one."""
+    if el.tag != "svg" or el.get("role") != "img":
+        return None
+    for child in el.elements():
+        href = child.get("href") or ""
+        if child.tag == "use" and href.startswith("#asset-"):
+            return href[1:]
+    return None
+
+
+def _raster_href(symbol: Element) -> str | None:
+    """The image a raster asset symbol holds: the ``href`` of its only
+    element when that is one ``<image>`` (spec §9.2), else None (a vector
+    symbol, or an empty one)."""
+    kids = symbol.elements()
+    if len(kids) == 1 and kids[0].tag == "image":
+        return kids[0].get("href") or None
+    return None
 
 
 @dataclass(frozen=True)
@@ -4671,24 +4694,7 @@ class AimDocument:
             for img in imgs:
                 blob = self._decode_asset_datauri(img.get("src") or "")
                 asset_id = self._register_asset_datauri(img.get("src") or "", img.get("alt") or "")
-                svg = Element("svg", [("role", "img"), ("aria-label", img.get("alt") or "")])
-                w, h = self._image_dimensions(blob) or (100, 100)
-                svg.set("viewBox", f"0 0 {w} {h}")  # the intrinsic aspect ratio
-                styled = self._styled_props(img.get("style") or "")
-                one_axis = ("width" in styled) != ("height" in styled)
-                # unstyled display size = the img's intrinsic size, not the
-                # svg default; with exactly ONE styled axis the other must
-                # stay auto (the viewBox ratio scales it, as it did on the
-                # img) — pinning it to the intrinsic value would distort
-                if not one_axis or "width" in styled:
-                    svg.set("width", str(w))
-                if not one_axis or "height" in styled:
-                    svg.set("height", str(h))
-                for attr in ("class", "style", "dir", "lang", "title"):
-                    if img.get(attr):  # packing is a storage-form change:
-                        svg.set(attr, img.get(attr))  # presentation survives
-                use = Element("use", [("href", f"#{asset_id}")], self_closing=True)
-                svg.children.append(use)
+                svg = self._packed_image(img, asset_id, blob)
                 for m in members:
                     self._swap_node(m, img, svg)
             after = serialize_run(members)
@@ -4707,6 +4713,35 @@ class AimDocument:
             self._append_event(data)
             packed += len(imgs)
         return packed
+
+    @classmethod
+    def _packed_image(cls, img: Element, asset_id: str, blob: bytes) -> Element:
+        """The packed reference standing in for the data-URI *img* (spec §9.1).
+        One builder for ``pack_assets`` and the importers, so a packed image
+        is spelled the same whichever of them wrote it."""
+        svg = Element("svg", [("role", "img"), ("aria-label", img.get("alt") or "")])
+        w, h = cls._image_dimensions(blob) or (100, 100)
+        svg.set("viewBox", f"0 0 {w} {h}")  # the intrinsic aspect ratio
+        styled = cls._styled_props(img.get("style") or "")
+        one_axis = ("width" in styled) != ("height" in styled)
+        # unstyled display size = the img's intrinsic size, not the svg
+        # default; with exactly ONE styled axis the other must stay auto (the
+        # viewBox ratio scales it, as it did on the img) — pinning it to the
+        # intrinsic value would distort
+        if not one_axis or "width" in styled:
+            svg.set("width", str(w))
+        if not one_axis or "height" in styled:
+            svg.set("height", str(h))
+        for attr in ("class", "style", "dir", "lang", "title"):
+            if img.get(attr):  # packing is a storage-form change:
+                svg.set(attr, img.get(attr))  # presentation survives
+        svg.children.append(Element("use", [("href", f"#{asset_id}")], self_closing=True))
+        return svg
+
+    @staticmethod
+    def _asset_id(blob: bytes) -> str:
+        """A raster asset's content address (spec §9.2)."""
+        return "asset-" + hashlib.sha256(blob).hexdigest()[:12]
 
     @staticmethod
     def _styled_props(style: str) -> set[str]:
@@ -4775,7 +4810,7 @@ class AimDocument:
 
     def _register_asset_datauri(self, data_uri: str, label: str) -> str:
         blob = self._decode_asset_datauri(data_uri)
-        asset_id = "asset-" + hashlib.sha256(blob).hexdigest()[:12]
+        asset_id = self._asset_id(blob)
         svg = self._assets_section().elements()[0]
         if any(s.get("id") == asset_id for s in svg.elements()):
             return asset_id
@@ -4792,19 +4827,50 @@ class AimDocument:
         svg.children.append(symbol)
         return asset_id
 
+    def _raster_assets(self) -> dict[str, str]:
+        """``{asset id: data URI}`` for each raster asset in the registry: a
+        symbol whose only element is one ``<image>`` (spec §9.1). A duplicated
+        id resolves to its first symbol, as ``<use href>`` does."""
+        out: dict[str, str] = {}
+        seen: set[str] = set()
+        sec = self._state.section("aim-assets")
+        for symbol in sec.iter() if sec is not None else ():
+            asset_id = symbol.get("id") if symbol.tag == "symbol" else None
+            if not asset_id or asset_id in seen:
+                continue
+            seen.add(asset_id)
+            href = _raster_href(symbol)
+            if href:
+                out[asset_id] = href
+        return out
+
+    def _history_payloads(self) -> Iterator[tuple[Event, str]]:
+        """Every markup payload the retained history keeps (spec §9.3): each
+        event's before/after/proposed/applied, and each construct of a
+        baseline snapshot."""
+        for ev in self._history_events():
+            for key in ("before", "after", "proposed", "applied"):
+                value = ev.get(key)
+                if isinstance(value, str) and value:
+                    yield ev, value
+            snap = ev.get("snapshot")
+            body = snap.get("body") if isinstance(snap, dict) else None
+            for line in body if isinstance(body, list) else ():
+                if isinstance(line, str):
+                    yield ev, line
+
     def gc_assets(self) -> int:
-        """Remove asset symbols referenced neither by the body nor by any
-        retained history payload. Returns the number collected."""
+        """Remove asset symbols referenced neither by the body, nor by any
+        retained history payload (baseline snapshots included), nor by a
+        pending payload (spec §9.3). Returns the number collected."""
         sec = self._state.section("aim-assets")
         if sec is None:
             return 0
         live: set[str] = set()
         hay = [serialize(c) for c in self._state.constructs()]
-        hay += [
-            ev.get(k) or ""
-            for ev in self._history_events()
-            for k in ("before", "after", "proposed", "applied")
-        ]
+        # a snapshot is history too: after an out-of-band delete it may be
+        # the only thing left that still shows the image
+        hay += [payload for _ev, payload in self._history_payloads()]
         hay += [p.payload_html or "" for p in self.proposals]
         text = "\n".join(hay)
         for m in re.finditer(r'href="#(asset-[0-9a-f]{12})"', text):

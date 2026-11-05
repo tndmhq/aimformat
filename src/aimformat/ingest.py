@@ -50,9 +50,12 @@ Mapping (docling label → .aim):
                       (header rows → ``<thead>``/``<th>``, row/col spans
                       kept — cells belong to the row where they *start*);
                       a table caption follows as an ``<em>`` paragraph
-``picture``           ``<figure>`` chunk (attribute-escaped data-URI
-                      ``<img>`` when the conversion embedded images, else an
-                      alt-text placeholder; attached text becomes ``<p>``)
+``picture``           ``<figure>`` chunk: the embedded image when the
+                      conversion embedded one — PNG/JPEG/GIF stored once
+                      in ``<aim-assets>`` and referenced by a packed
+                      ``<svg role="img">`` (spec §9), other data as an
+                      attribute-escaped data-URI ``<img>`` — else an
+                      alt-text placeholder; attached text becomes ``<p>``
 ``caption``           ``<figcaption>`` inside the owning figure
 other grouping nodes  descended (``sheet``, ``form_area``, chapters, …) —
                       a subtree with content is never silently dropped
@@ -71,10 +74,13 @@ lists nested inside a list item become that item's inline content.
 from __future__ import annotations
 
 import re
+from collections import Counter
 from typing import Any
 
-from .canonical import escape_attr, escape_text
+from .canonical import escape_attr, escape_text, serialize
 from .document import AimDocument, new_document
+from .dom import Element, parse_fragment
+from .errors import InvalidOperation
 from .events import Actor, external
 from .registry import REGISTRY
 
@@ -519,12 +525,97 @@ def from_docling(
         title=doc_title or data.get("name") or "Imported document", lang=lang, theme=theme
     )
     source_name = data.get("name") or "document"
+    images = _ImportAssets()
     with doc.batch():
         for markup in blocks:
-            doc.add_chunk(_containerize(markup), author=who)
+            doc.add_chunk(_containerize(images.pack(markup)), author=who)
     return finish_import(
-        doc, author=who, explanation=f"Imported from {source_name!r} via docling ingestion"
+        doc,
+        author=who,
+        explanation=f"Imported from {source_name!r} via docling ingestion",
+        assets=images,
     )
+
+
+class _ImportAssets:
+    """The images one import stores once (spec §9).
+
+    Every block's markup passes through :meth:`pack` BEFORE it becomes a
+    chunk, so no event the import writes holds the image bytes: not the
+    baseline snapshot, and not the ``add`` events kept when a construct
+    cannot be snapshotted (H008). One collection per import, content
+    addressed: the same bytes met twice — or in both views of a tracked
+    DOCX — are one asset. :func:`finish_import` registers it.
+
+    Only PNG, JPEG and GIF are packed, the formats whose size the SDK reads
+    for the packed reference's viewBox. Any other image, and a data URI that
+    is not strict base64, stays an inline ``<img>`` and the import goes on;
+    :meth:`warnings` says so for an import report.
+    """
+
+    def __init__(self) -> None:
+        #: asset id → the data URI it was packed from, in first-seen order
+        self.assets: dict[str, str] = {}
+        #: data URI → why it stayed inline: "undecodable" or "format"
+        self.kept_inline: dict[str, str] = {}
+
+    def pack(self, markup: str) -> str:
+        """*markup* with every packable data-URI ``<img>`` replaced by its
+        packed reference; the same string when nothing packs."""
+        if "data:image/" not in markup:
+            return markup
+        holder = Element("holder")
+        holder.children = parse_fragment(markup)
+        changed = False
+        for parent in list(holder.iter()):
+            for i, child in enumerate(parent.children):
+                if isinstance(child, Element) and child.tag == "img":
+                    packed = self._packed(child)
+                    if packed is not None:
+                        parent.children[i] = packed
+                        changed = True
+        if not changed:
+            return markup
+        return "".join(serialize(node) for node in holder.children)
+
+    def _packed(self, img: Element) -> Element | None:
+        src = img.get("src") or ""
+        if not src.startswith("data:image/"):
+            return None  # an external URL: the authoring form (§9.1)
+        try:
+            blob = AimDocument._decode_asset_datauri(src)
+        except InvalidOperation:
+            self.kept_inline.setdefault(src, "undecodable")
+            return None
+        if AimDocument._image_dimensions(blob) is None:
+            # not PNG/JPEG/GIF: a packed reference would size it 100×100
+            self.kept_inline.setdefault(src, "format")
+            return None
+        asset_id = AimDocument._asset_id(blob)
+        self.assets.setdefault(asset_id, src)
+        return AimDocument._packed_image(img, asset_id, blob)
+
+    def register(self, doc: AimDocument) -> None:
+        """Store every image packed so far in *doc*'s asset registry (an
+        image already there is left as it is)."""
+        for data_uri in self.assets.values():
+            doc._register_asset_datauri(data_uri, "")
+
+    def warnings(self) -> list[str]:
+        """What an import report says about the images left inline."""
+        reasons = Counter(self.kept_inline.values())
+        out = []
+        if reasons["format"]:
+            out.append(
+                f"{reasons['format']} image(s) stay inline in the body: only PNG, JPEG and "
+                "GIF images are stored once in the asset registry"
+            )
+        if reasons["undecodable"]:
+            out.append(
+                f"{reasons['undecodable']} image(s) stay inline in the body: their data "
+                "does not decode as base64"
+            )
+        return out
 
 
 def finish_import(
@@ -533,15 +624,18 @@ def finish_import(
     author: Actor,
     explanation: str,
     source: list[str] | None = None,
+    assets: _ImportAssets | None = None,
 ) -> AimDocument:
-    """Every importer's last step (spec §6.9, §8.1).
+    """Every importer's last step (spec §6.9, §8.1, §9).
 
     The imported state becomes the origin of the history: ONE ``baseline``
     event carrying it, instead of an ``add`` per construct — the content did
     not arrive by editing, so there is nothing to undo and no edit to
-    attribute construct by construct. The TOC cache is built when the body
-    has an outline (a heading or a slide), so the returned document carries
-    it before its first save; every save of the 0.6 document keeps it fresh.
+    attribute construct by construct. The images the importer packed
+    (*assets*) go into the asset registry, which the body and the snapshot
+    only reference. The TOC cache is built when the body has an outline (a
+    heading or a slide), so the returned document carries it before its
+    first save; every save of the 0.6 document keeps it fresh.
     """
     # the per-construct events that built the body are scaffolding, not
     # edits: dropped, so the baseline is the document's seq 1 — unless a
@@ -550,6 +644,10 @@ def finish_import(
     if not doc._unsnapshottable():
         doc._drop_history(drop_embeddings=False)
         doc.baseline("import", author=author, explanation=explanation, source=source)
+    if assets is not None:
+        # stored after the gc passes above, so whether they survive never
+        # depends on what gc counts as a reference
+        assets.register(doc)
     if doc._has_outline():
         doc.generate_toc()
     return doc
