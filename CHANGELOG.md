@@ -57,7 +57,9 @@ tool that reads such files moves to 0.6 with or before this release.
   `toc_doc_hash`. Every save of a document declared 0.6 or later builds the
   TOC when the body has a heading or slide, rewrites it when it is stale or
   in the pre-0.6 shape, and removes it when the body no longer has a heading
-  or slide. A document declared below 0.6 keeps its meta block as it is, and
+  or slide. `generate_toc()` follows the same rule: with no heading or slide
+  it stores no TOC, removes a stored one and returns an empty list. A
+  document declared below 0.6 keeps its meta block as it is, and
   `generate_toc()` refuses it. New `doc.section(id)` returns a `Section` with
   the section's ids, its text (one line per chunk) and its constructs in
   canonical form (the lines `dumps()` writes). MCP `aim_read` never

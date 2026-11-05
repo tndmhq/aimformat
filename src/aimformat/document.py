@@ -4511,7 +4511,10 @@ class AimDocument:
         """Derive the TOC cache from the body (deterministic) and store it
         with ``toc_doc_hash``, the ``doc_hash`` it was derived from (§8.1):
         the entries :meth:`outline` lists. Every :meth:`dumps` builds and
-        refreshes it anyway; this call stores it now.
+        refreshes it anyway; this call stores it now, by the same rule: a
+        body with no heading or slide has no TOC, so then it stores none,
+        removes a stored one (and the meta block with it when no summary is
+        left, as a save does) and returns ``[]``.
 
         The compact TOC belongs to v0.6: in a document declared below 0.6
         this raises :class:`InvalidOperation` and leaves the meta block as
@@ -4523,8 +4526,12 @@ class AimDocument:
                 f"the compact TOC needs a document declared {toc.SINCE} or later "
                 f"(spec §8.1); this one declares {declared}"
             )
+        meta = self.meta
+        if not self._has_outline():
+            self._drop_toc(meta)
+            return []
         entries = self.outline()
-        meta = self.meta or {}
+        meta = meta or {}
         meta["toc"] = entries
         meta["toc_doc_hash"] = self.doc_hash
         self._write_meta(meta)
@@ -4591,16 +4598,7 @@ class AimDocument:
         if present is not None and not isinstance(present, list):
             return  # lint's too (M003)
         if not self._has_outline():
-            if meta is None or not {"toc", "toc_doc_hash"} & meta.keys():
-                return
-            meta.pop("toc", None)
-            meta.pop("toc_doc_hash", None)
-            if meta.get("summary") is not None:
-                self._write_meta(meta)
-                return
-            el = self._state.script("meta")
-            if el is not None:
-                self._state.head.children.remove(el)
+            self._drop_toc(meta)
             return
         if meta is not None and _toc_matches(meta, self.doc_hash):
             return
@@ -4608,6 +4606,22 @@ class AimDocument:
         meta["toc"] = self.outline()
         meta["toc_doc_hash"] = self.doc_hash
         self._write_meta(meta)
+
+    def _drop_toc(self, meta: dict | None) -> None:
+        """Remove a stored TOC (``toc`` and ``toc_doc_hash``) from *meta*, the
+        parsed meta block, and the block itself when no summary is left: a
+        block with neither a summary nor a TOC is M004. Nothing stored,
+        nothing written."""
+        if meta is None or not {"toc", "toc_doc_hash"} & meta.keys():
+            return
+        meta.pop("toc", None)
+        meta.pop("toc_doc_hash", None)
+        if meta.get("summary") is not None:
+            self._write_meta(meta)
+            return
+        el = self._state.script("meta")
+        if el is not None:
+            self._state.head.children.remove(el)
 
     def _write_meta(self, meta: dict) -> None:
         el = self._state.script("meta")

@@ -381,6 +381,43 @@ class TestSave:
         assert aim.loads(doc.dumps())._state.script("meta").raw == block
 
 
+class TestGenerateToc:
+    """generate_toc() stores what a save would: with no heading or slide in
+    the body, no TOC."""
+
+    def test_a_body_without_a_heading_or_slide_stores_no_toc(self):
+        # It stored one untitled entry, which the next save removed: what the
+        # cache held depended on whether the caller saved after the call.
+        doc = _doc('<p data-aim="p">Only prose.</p>', '<p data-aim="q">More prose.</p>')
+        assert doc.generate_toc() == []
+        assert doc.meta is None
+        assert "application/aim-meta+json" not in doc.dumps()
+
+    @pytest.mark.parametrize(
+        "extra",
+        [{}, {"summary": {"model": "m", "text": "Body."}}, {"x_vendor": 1}],
+        ids=["toc-only", "with-summary", "with-unknown-field"],
+    )
+    def test_a_stored_toc_goes_once_no_heading_is_left_as_on_save(self, extra):
+        # the same body saved instead: a save removes the TOC, and the meta
+        # block with it when no summary is left (such a block is M004)
+        docs = [_doc('<h1 data-aim="h">Title</h1>', '<p data-aim="p">Body.</p>') for _ in "ab"]
+        for doc in docs:
+            doc.generate_toc()
+            doc._write_meta({**doc.meta, **extra})
+            doc.delete_chunk("h", author=ME, at=ts(9))
+        called, saved = docs
+        assert called.generate_toc() == []
+        assert called.meta == aim.loads(saved.dumps()).meta
+        assert called.meta is None or set(called.meta) == {"summary"}
+        assert _meta_codes(called.dumps()) == set()
+
+    def test_a_slide_is_enough(self):
+        doc = _doc(SLIDE)
+        assert [e["id"] for e in doc.generate_toc()] == ["s1"]
+        assert doc.meta["toc"] == doc.outline() and doc.toc_is_fresh()
+
+
 class TestOldShape:
     """A TOC in the pre-0.6 shape ``{title, level, chunks}``."""
 
