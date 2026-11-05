@@ -81,10 +81,18 @@ class Doc:
     def dele(self, text: str, by=ALICE, rpr: str = "") -> str:
         return f"<w:del {_who(by, self.ids)}>{del_run(text, rpr)}</w:del>"
 
-    def ins_del(self, text: str, by_ins=ALICE, by_del=BOB) -> str:
-        """Text one author inserted and another deleted: gone in both views."""
-        inner = f"<w:ins {_who(by_ins, self.ids)}>{del_run(text)}</w:ins>"
-        return f"<w:del {_who(by_del, self.ids)}>{inner}</w:del>"
+    def ins_del(self, text: str, by_ins=ALICE, by_del=BOB, *, del_outside: bool = False) -> str:
+        """Text one author inserted and another deleted: gone in both views.
+
+        Word writes the insertion around the deletion, ``ins(del(r))``.
+        ``del_outside`` writes the other nesting ECMA-376 allows,
+        ``del(ins(r))``, which LibreOffice misreads (it drops the deletion).
+        """
+        if del_outside:
+            inner = f"<w:ins {_who(by_ins, self.ids)}>{del_run(text)}</w:ins>"
+            return f"<w:del {_who(by_del, self.ids)}>{inner}</w:del>"
+        inner = f"<w:del {_who(by_del, self.ids)}>{del_run(text)}</w:del>"
+        return f"<w:ins {_who(by_ins, self.ids)}>{inner}</w:ins>"
 
     def bold_change(self, text: str, by=BOB) -> str:
         return run(
@@ -563,7 +571,24 @@ def shapes() -> list[Shape]:
             ["Keep this."],
             ["Keep this."],
             [],
-            note="inserted then deleted: gone in both views, no card",
+            note="inserted then deleted, in Word's nesting: gone in both views, no card",
+        )
+    )
+
+    # The same text with the deletion written around the insertion. ECMA-376
+    # allows both nestings, and either way the text is gone in both views.
+    # LibreOffice drops the outer deletion on import, so its Accept All keeps
+    # the text: scripts/libreoffice_oracle.py lists that as a known misreading.
+    d = Doc()
+    d.body = [d.p(d.t("Keep "), d.ins_del("never ", ALICE, BOB, del_outside=True), d.t("this."))]
+    out.append(
+        Shape(
+            "nested_del_outside_ins",
+            d.build(),
+            ["Keep this."],
+            ["Keep this."],
+            [],
+            note="inserted then deleted, deletion outside: gone in both views, no card",
         )
     )
 

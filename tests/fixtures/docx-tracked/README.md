@@ -44,3 +44,12 @@ Two shapes differ from Word on purpose, and the import report says so:
 
 When a shape disagrees with Word for any other reason, the golden is wrong.
 Fix the shape's declaration in the kit, not the importer's expectations.
+
+LibreOffice misreads one shape. `nested_del_outside_ins` writes a deletion
+around an insertion (`w:del` wrapping `w:ins`). ECMA-376 allows that
+nesting, and the text is gone after either Accept All or Reject All. Word
+writes the insertion around the deletion, as `nested_del_ins` does.
+LibreOffice drops the outer deletion when it opens the file, so its Accept
+All keeps the text. The CI check that runs the shapes through LibreOffice
+(`scripts/libreoffice_oracle.py`) lists this result as a known misreading
+rather than a disagreement, and says when LibreOffice starts to agree.

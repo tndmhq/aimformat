@@ -15,7 +15,9 @@ shape the import must give:
 
 from __future__ import annotations
 
+import importlib.util
 import io
+import pathlib
 import random
 import time
 import warnings
@@ -96,6 +98,67 @@ class TestDeclaredShapes:
         cited = {card for note in result.report.revisions for card in note.cards}
         assert {p.id for p in result.document.proposals} <= cited
         assert set(result.report.proposals) == {p.id for p in result.document.proposals}
+
+
+class TestRevisionNesting:
+    @pytest.mark.parametrize(
+        ("name", "outer", "inner"),
+        [("nested_del_ins", "ins", "del"), ("nested_del_outside_ins", "del", "ins")],
+    )
+    def test_inserted_then_deleted_text_keeps_its_nesting(self, name, outer, inner):
+        # Word writes a deletion of another author's tracked insertion inside
+        # the insertion, ins(del(r)); LibreOffice drops the outer deletion of
+        # del(ins(r)) on import. nested_del_ins carries Word's nesting, so the
+        # LibreOffice check can confirm its golden, and nested_del_outside_ins
+        # keeps the importer tested on the other nesting.
+        from lxml import etree
+
+        shape = next(s for s in SHAPES if s.name == name)
+        with zipfile.ZipFile(io.BytesIO(shape.docx)) as z:
+            root = etree.fromstring(z.read("word/document.xml"))
+        ns = {"w": kit.W_NS}
+        assert root.xpath(f"//w:{outer}/w:{inner}/w:r/w:delText", namespaces=ns)
+        assert not root.xpath(f"//w:{inner}/w:{outer}", namespaces=ns)
+
+
+class TestLibreOfficeOracle:
+    """How ``scripts/libreoffice_oracle.py`` judges one resolution. Running
+    it needs LibreOffice, which only the non-gating CI job has."""
+
+    @pytest.fixture
+    def oracle(self):
+        path = pathlib.Path(__file__).parent.parent / "scripts" / "libreoffice_oracle.py"
+        spec = importlib.util.spec_from_file_location("libreoffice_oracle", path)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module
+
+    def test_known_misreadings_name_shapes_the_oracle_runs(self, oracle):
+        # an entry for a renamed, removed or skipped shape would never match
+        shapes = {s.name: s for s in SHAPES}
+        for (name, view), result in oracle.KNOWN_MISREADINGS.items():
+            assert name in shapes and name not in oracle.SKIP, name
+            assert result != getattr(shapes[name], view), (name, view)
+
+    @pytest.mark.parametrize("listed", [["Wrong."], []], ids=["text", "no_text"])
+    def test_a_listed_resolution(self, oracle, listed):
+        oracle.KNOWN_MISREADINGS = {("shape", "accept"): listed}
+        verdict, line = oracle.compare("shape", "accept", ["Right."], listed)
+        assert verdict == "known" and "known LibreOffice misreading" in line
+        verdict, line = oracle.compare("shape", "accept", ["Right."], ["Right."])
+        assert verdict == "ok"
+        assert line.endswith(": LibreOffice now agrees, drop it from KNOWN_MISREADINGS")
+        # any other wrong result, or the other view, is still a disagreement
+        assert oracle.compare("shape", "accept", ["Right."], ["Other."])[0] == "diff"
+        assert oracle.compare("shape", "reject", ["Right."], listed)[0] == "diff"
+
+    def test_an_unlisted_resolution(self, oracle):
+        oracle.KNOWN_MISREADINGS = {}
+        assert oracle.compare("shape", "accept", ["Right."], ["Right."]) == (
+            "ok",
+            "ok   shape (accept)",
+        )
+        assert oracle.compare("shape", "accept", ["Right."], ["Wrong."])[0] == "diff"
 
 
 class TestAttribution:

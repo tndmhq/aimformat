@@ -17,6 +17,12 @@ LibreOffice draw list numbers that are not text, while the golden carries
 the importer's baked labels) and ``textbox_revision`` (the synthetic
 textbox's placeholder text exists only in the importer's output).
 
+Resolutions LibreOffice is known to get wrong are listed in
+``KNOWN_MISREADINGS`` with the result LibreOffice gives. They still run:
+that result prints as ``lo`` and is not a disagreement, any other wrong
+result is one, and a result that matches the golden prints a note that the
+entry can go.
+
 Run:  python3 scripts/libreoffice_oracle.py OUT_DIR
 """
 
@@ -33,6 +39,14 @@ from xml.etree import ElementTree as ET
 
 W = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
 SKIP = {"baked_numbering_insertion", "textbox_revision"}
+KNOWN_MISREADINGS = {
+    # w:del around w:ins (Word writes w:ins around w:del, as nested_del_ins
+    # does). Writer's DOCX import adds the outer deletion first, then an
+    # insertion over the same range, and drops the deletion as a broken
+    # document (DocumentRedlineManager::PreAppendInsertRedline), so its Accept
+    # All keeps text that is gone in both views.
+    ("nested_del_outside_ins", "accept"): ["Keep never this."],
+}
 COMMANDS = {"accept": ".uno:AcceptAllTrackedChanges", "reject": ".uno:RejectAllTrackedChanges"}
 
 
@@ -57,6 +71,19 @@ def blocks(path: pathlib.Path) -> list[str]:
                 if any(cells):
                     out.append("".join(cells))
     return out
+
+
+def compare(name: str, view: str, golden: list[str], got: list[str]) -> tuple[str, str]:
+    """One resolution's verdict (``ok``, ``known`` or ``diff``) and the line
+    that reports it."""
+    known = KNOWN_MISREADINGS.get((name, view))
+    if got == golden:
+        # an entry may list no text at all ([]): check it exists, not that it is truthy
+        note = "" if known is None else ": LibreOffice now agrees, drop it from KNOWN_MISREADINGS"
+        return "ok", f"ok   {name} ({view}){note}"
+    if got == known:
+        return "known", f"lo   {name} ({view}): known LibreOffice misreading {got}"
+    return "diff", f"DIFF {name} ({view}):\n  golden:      {golden}\n  libreoffice: {got}"
 
 
 def main(argv: list[str]) -> int:
@@ -104,6 +131,7 @@ def main(argv: list[str]) -> int:
         desktop = smgr.createInstanceWithContext("com.sun.star.frame.Desktop", ctx)
         dispatcher = smgr.createInstanceWithContext("com.sun.star.frame.DispatchHelper", ctx)
         failures = 0
+        misread = 0
         checked = 0
         for docx in sorted(folder.glob("*.docx")):
             name = docx.stem
@@ -124,12 +152,16 @@ def main(argv: list[str]) -> int:
                 doc.close(True)
                 got = blocks(out)
                 checked += 1
-                if got != golden:
+                verdict, line = compare(name, view, golden, got)
+                print(line)
+                if verdict == "known":
+                    misread += 1
+                elif verdict == "diff":
                     failures += 1
-                    print(f"DIFF {name} ({view}):\n  golden:      {golden}\n  libreoffice: {got}")
-                else:
-                    print(f"ok   {name} ({view})")
-        print(f"{checked} resolutions checked, {failures} disagree with LibreOffice")
+        print(
+            f"{checked} resolutions checked, {failures} disagree with LibreOffice, "
+            f"{misread} known LibreOffice misreading{'' if misread == 1 else 's'}"
+        )
         return 1 if failures else 0
     finally:
         try:
