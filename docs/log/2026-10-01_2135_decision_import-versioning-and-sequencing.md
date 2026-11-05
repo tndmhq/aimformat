@@ -1,7 +1,7 @@
 ---
 date: 2026-10-01 21:35
 type: decision
-status: todo
+status: superseded
 related: [2026-10-01_2135_decision_import-tracked-changes-as-proposals.md, 2026-10-01_2135_decision_import-batch-propose-and-validate.md, 2026-10-01_2135_decision_history-baseline-event.md, 2026-10-01_2135_decision_toc-on-import-and-freshness.md, 2026-10-01_2135_decision_reconcile-adopts-as-baseline.md]
 ---
 
