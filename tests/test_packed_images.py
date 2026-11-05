@@ -13,6 +13,7 @@ bytes (S037), and the DOCX and Markdown exporters resolve packed images.
 from __future__ import annotations
 
 import base64
+import copy
 import hashlib
 import io
 import json
@@ -360,13 +361,50 @@ _PICTURE_ONLY = {
 }
 
 
+def _track_run(run, tag: str, rid: int) -> None:
+    """Wrap a ``w:r`` element in a ``w:ins`` or ``w:del`` revision (a deleted
+    run's text becomes ``w:delText``)."""
+    from docx.oxml.ns import qn
+
+    wrapper = _revision(tag, rid)
+    run.addprevious(wrapper)
+    wrapper.append(run)
+    if tag == "del":
+        for text in run.findall(qn("w:t")):
+            text.tag = qn("w:delText")
+
+
+def _track_mark(para, tag: str, rid: int) -> None:
+    """Track the paragraph mark of *para* (a python-docx paragraph)."""
+    from docx.oxml import OxmlElement
+
+    props = OxmlElement("w:rPr")
+    props.append(_revision(tag, rid))
+    para._p.get_or_add_pPr().append(props)
+
+
+def _track_paragraph(para, tag: str) -> None:
+    """A whole paragraph inserted or deleted with tracking: its runs and its
+    mark."""
+    from docx.oxml.ns import qn
+
+    for rid, run in enumerate(para._p.findall(qn("w:r")), start=1):
+        _track_run(run, tag, rid)
+    _track_mark(para, tag, 99)
+
+
+def _saved(built) -> bytes:
+    out = io.BytesIO()
+    built.save(out)
+    return out.getvalue()
+
+
 def _tracked_picture_only_paragraph(change: str) -> bytes:
     """A heading and an intro, then a paragraph holding only a picture and
     changed with tracking (*change*, see ``_PICTURE_ONLY``), then a closing
     paragraph. Such a paragraph converts to a figure."""
     pytest.importorskip("docx_parser_converter")
     docx = pytest.importorskip("docx")
-    from docx.oxml import OxmlElement
 
     pictures, tags, mark = _PICTURE_ONLY[change]
     built = docx.Document()
@@ -376,17 +414,134 @@ def _tracked_picture_only_paragraph(change: str) -> bytes:
     for rid, (blob, tag) in enumerate(zip(pictures, tags, strict=True), start=1):
         run = para.add_run()
         run.add_picture(io.BytesIO(blob))
-        wrapper = _revision(tag, rid)
-        run._r.addprevious(wrapper)
-        wrapper.append(run._r)
+        _track_run(run._r, tag, rid)
     if mark:
-        props = OxmlElement("w:rPr")
-        props.append(_revision(tags[0], 99))
-        para._p.get_or_add_pPr().append(props)
+        _track_mark(para, tags[0], 99)
     built.add_paragraph("After.")
-    out = io.BytesIO()
-    built.save(out)
-    return out.getvalue()
+    return _saved(built)
+
+
+def _picture_joined_into_an_empty_paragraph() -> bytes:
+    """A picture inserted with tracking into a paragraph whose mark is
+    deleted with tracking too, followed by an empty paragraph: Word's Accept
+    All joins the picture into that paragraph (the mark owner), which then
+    holds only the picture. Reject All has neither."""
+    pytest.importorskip("docx_parser_converter")
+    docx = pytest.importorskip("docx")
+
+    built = docx.Document()
+    built.add_heading("Joined picture", level=1)
+    built.add_paragraph("Intro.")
+    para = built.add_paragraph()
+    run = para.add_run()
+    run.add_picture(io.BytesIO(PNG_B))
+    _track_run(run._r, "ins", 1)
+    _track_mark(para, "del", 2)
+    built.add_paragraph()  # owns the mark the picture joins
+    built.add_paragraph("After.")
+    return _saved(built)
+
+
+def _moved_picture_only_paragraph() -> bytes:
+    """A heading, then a paragraph holding only a picture that Word moved
+    with tracking past the next paragraph: the source's runs and mark are
+    ``moveFrom``, the destination's ``moveTo``, each side inside a move range
+    named "move1"."""
+    pytest.importorskip("docx_parser_converter")
+    docx = pytest.importorskip("docx")
+    from docx.oxml import OxmlElement
+    from docx.oxml.ns import qn
+
+    built = docx.Document()
+    built.add_heading("Moved picture", level=1)
+    built.add_picture(io.BytesIO(PNG_A))
+    source = built.paragraphs[-1]._p
+    built.add_paragraph("Middle.")
+    end = built.add_paragraph("End.")
+    destination = copy.deepcopy(source)
+    end._p.addprevious(destination)
+    for n, (para, kind) in enumerate(((source, "moveFrom"), (destination, "moveTo"))):
+        runs = para.findall(qn("w:r"))
+        start = _revision(f"{kind}RangeStart", 10 + n)
+        start.set(qn("w:name"), "move1")
+        wrapper = _revision(kind, 20 + n)
+        runs[0].addprevious(start)
+        runs[0].addprevious(wrapper)
+        for run in runs:
+            wrapper.append(run)
+        stop = OxmlElement(f"w:{kind}RangeEnd")
+        stop.set(qn("w:id"), start.get(qn("w:id")))
+        wrapper.addnext(stop)
+        props = para.find(qn("w:pPr"))
+        if props is None:
+            props = OxmlElement("w:pPr")
+            para.insert(0, props)
+        mark = OxmlElement("w:rPr")
+        mark.append(_revision(kind, 30 + n))
+        props.append(mark)
+    return _saved(built)
+
+
+#: a legacy VML picture (``w:pict``): the paragraph's text, the revision on the
+#: picture's run, and whether the paragraph mark carries it too (a paragraph
+#: holding only the picture, inserted or deleted)
+_VML = {
+    "insert": ("", "ins", True),
+    "delete": ("", "del", True),
+    "insert-beside-text": ("Logo follows: ", "ins", False),
+}
+_VML_NS = {
+    "w": "http://schemas.openxmlformats.org/wordprocessingml/2006/main",
+    "v": "urn:schemas-microsoft-com:vml",
+    "o": "urn:schemas-microsoft-com:office:office",
+    "r": "http://schemas.openxmlformats.org/officeDocument/2006/relationships",
+}
+
+
+def _tracked_vml_picture(change: str) -> bytes:
+    """A heading, then a paragraph with a legacy VML picture changed with
+    tracking (*change*, see ``_VML``), then a closing paragraph. The typed
+    model cannot see a VML picture: the importer recovers it after its
+    paragraph as a figure."""
+    pytest.importorskip("docx_parser_converter")
+    docx = pytest.importorskip("docx")
+    from lxml import etree
+
+    text, tag, mark = _VML[change]
+    built = docx.Document()
+    built.add_heading("VML picture", level=1)
+    para = built.add_paragraph(text)
+    rid, _image = built.part.get_or_add_image(io.BytesIO(PNG_B))
+    declarations = " ".join(f'xmlns:{prefix}="{uri}"' for prefix, uri in _VML_NS.items())
+    run = etree.fromstring(
+        f'<w:r {declarations}><w:pict><v:shape id="s1" style="width:30pt;height:30pt">'
+        f'<v:imagedata r:id="{rid}" o:title="Logo"/></v:shape></w:pict></w:r>'
+    )
+    para._p.append(run)
+    _track_run(run, tag, 1)
+    if mark:
+        _track_mark(para, tag, 99)
+    built.add_paragraph("After.")
+    return _saved(built)
+
+
+def _picture_between_list_items(tag: str) -> bytes:
+    """Four bulleted items with a paragraph holding only a picture after the
+    second, inserted (``ins``: Word's Accept All splits the list around it)
+    or deleted (``del``: Accept All joins the two lists) with tracking."""
+    pytest.importorskip("docx_parser_converter")
+    docx = pytest.importorskip("docx")
+
+    built = docx.Document()
+    built.add_heading("Picture in a list", level=1)
+    built.add_paragraph("one", style="List Bullet")
+    built.add_paragraph("two", style="List Bullet")
+    built.add_picture(io.BytesIO(PNG_B))
+    _track_paragraph(built.paragraphs[-1], tag)
+    built.add_paragraph("three", style="List Bullet")
+    built.add_paragraph("four", style="List Bullet")
+    built.add_paragraph("After.")
+    return _saved(built)
 
 
 _IDS = re.compile(r' data-aim(?:-container)?="[^"]*"')
@@ -394,6 +549,22 @@ _IDS = re.compile(r' data-aim(?:-container)?="[^"]*"')
 
 def _body_without_ids(doc: aim.AimDocument) -> list[str]:
     return [_IDS.sub("", serialize(el)) for el in doc._state.constructs()]
+
+
+def _assert_resolves_like_word(doc: aim.AimDocument, data: bytes) -> None:
+    """accept_all() gives Word's Accept All (the tracked='accept' import of
+    *data*) and reject_all() its Reject All, each with every image stored
+    once and no reference left unresolved."""
+    for mode in ("accept", "reject"):
+        word = aim.import_docx(data, tracked=mode).document
+        resolved = aim.loads(doc.dumps())
+        getattr(resolved, f"{mode}_all")(decided_by=ME)
+        assert _body_without_ids(resolved) == _body_without_ids(word), mode
+        parts = _parts(resolved)
+        assert not any("data:image/" in parts[k] for k in ("body", "history", "proposals"))
+        text = resolved.dumps()
+        assert not _dangling(text)
+        assert _codes(text, "error") == [] and resolved.verify() == []
 
 
 class TestTrackedDocxImport:
@@ -451,16 +622,68 @@ class TestTrackedDocxImport:
         assert len(doc.proposals) == 1
         assert all(note.cards for note in result.report.revisions)
         _assert_stored_once(doc, *_PICTURE_ONLY[change][0])
-        for mode in ("accept", "reject"):
-            word = aim.import_docx(data, tracked=mode).document
-            resolved = aim.loads(doc.dumps())
-            getattr(resolved, f"{mode}_all")(decided_by=ME)
-            assert _body_without_ids(resolved) == _body_without_ids(word), mode
-            parts = _parts(resolved)
-            assert not any("data:image/" in parts[k] for k in ("body", "history", "proposals"))
-            text = resolved.dumps()
-            assert not _dangling(text)
-            assert _codes(text, "error") == [] and resolved.verify() == []
+        _assert_resolves_like_word(doc, data)
+
+    def test_a_picture_joined_into_an_empty_paragraph_gets_its_card(self):
+        # Accept All joins the picture's paragraph ("p3") into the empty one
+        # after it ("p4"), whose mark survives, and the result converts to a
+        # figure under a key derived from the mark owner's ("p4#fig0"). The
+        # key kept only the owner's token and lost "p3", which the revisions
+        # name: no card, accept_all without the picture, the report saying
+        # "no visible difference", and the image dropped by gc.
+        data = _picture_joined_into_an_empty_paragraph()
+        result = aim.import_docx(data)
+        doc = result.document
+        (card,) = doc.proposals
+        assert card.action == "add"
+        assert f'<use href="#{_asset(PNG_B)}"/>' in (card.payload_html or "")
+        assert all(note.cards == (card.id,) for note in result.report.revisions)
+        _assert_stored_once(doc, PNG_B)
+        _assert_resolves_like_word(doc, data)
+
+    def test_a_moved_picture_only_paragraph_is_one_move_card(self):
+        # IMPORT-D3: a named Word move becomes a move card. The move marks
+        # name the paragraphs ("p2", "p4") while their figures carry derived
+        # keys ("p2#fig0", "p4#fig0"): looked up by the exact key, the move
+        # came out as a delete and an add.
+        data = _moved_picture_only_paragraph()
+        result = aim.import_docx(data)
+        doc = result.document
+        (card,) = doc.proposals
+        figure = next(c for c in doc.chunks if c.tag == "figure")
+        assert (card.action, card.target) == ("move", figure.id)
+        assert all(note.cards == (card.id,) for note in result.report.revisions)
+        _assert_stored_once(doc, PNG_A)
+        _assert_resolves_like_word(doc, data)
+
+    @pytest.mark.parametrize(
+        ("change", "action"),
+        [("insert", "add"), ("delete", "delete"), ("insert-beside-text", "add")],
+    )
+    def test_a_vml_picture_gets_its_card(self, change, action):
+        # A legacy VML picture is recovered after its paragraph as a figure
+        # keyed "p2#pic", while its revisions name the paragraph ("p2").
+        data = _tracked_vml_picture(change)
+        result = aim.import_docx(data)
+        doc = result.document
+        assert [p.action for p in doc.proposals] == [action]
+        assert all(note.cards for note in result.report.revisions)
+        _assert_stored_once(doc, PNG_B)
+        _assert_resolves_like_word(doc, data)
+
+    @pytest.mark.parametrize("tag", ["ins", "del"], ids=["splits", "joins"])
+    def test_a_picture_that_splits_or_joins_a_list_gets_its_cards(self, tag):
+        # Inserted, the figure splits the list in Accept All: the items after
+        # it leave the list for a new one, citing the figure's revisions.
+        # Deleted, it joins the two lists. Both follow from the figure's
+        # derived key citing its paragraph's revisions.
+        data = _picture_between_list_items(tag)
+        result = aim.import_docx(data)
+        doc = result.document
+        assert sorted(p.action for p in doc.proposals) == ["add", "add", "delete", "delete"]
+        assert all(note.cards for note in result.report.revisions)
+        _assert_stored_once(doc, PNG_B)
+        _assert_resolves_like_word(doc, data)
 
     def test_an_accept_only_image_no_card_carries_is_not_stored(self, monkeypatch):
         # A difference with no revision behind it is converter noise: no card

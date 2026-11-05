@@ -833,21 +833,32 @@ class _Converter:
 
     # -- paragraphs --------------------------------------------------------
 
-    def _src_attr(self, suffix: str = "", src: str | None = None) -> str:
+    def _src_attr(self, suffix: str = "", src: str | None = None, *, absorbed: bool = True) -> str:
         """The provenance attribute for the block being emitted ('' unless
         tracking). *suffix* derives a key for a block the paragraph
-        generates beside itself (a page break, a figure)."""
+        generates beside itself (a page break, a figure).
+
+        The derived key leads, and the keys of the paragraphs this view
+        joined into the paragraph follow it, as they follow the paragraph's
+        own key: a block made from the paragraph's content (a figure, a
+        recovered picture, the page break that ends it) may hold what a
+        joined paragraph brought, so it cites that paragraph's revisions
+        too. ``absorbed=False`` keeps the derived key alone, for a block made
+        from the paragraph's own properties (the page break before it): the
+        mark owner's properties survive a join, the joined paragraph's do
+        not."""
         value = src if src is not None else self._src
         if not self.track_src or not value:
             return ""
         if suffix:
-            value = value.split()[0] + suffix
+            own, *joined = value.split()
+            value = " ".join([own + suffix, *(joined if absorbed else ())])
         return f' data-aim-src="{escape_attr(value)}"'
 
-    def _page_break(self, suffix: str) -> str:
+    def _page_break(self, suffix: str, *, absorbed: bool) -> str:
         if not self.track_src:
             return _PAGE_BREAK
-        return f"<aim-page-break{self._src_attr(suffix)}></aim-page-break>"
+        return f"<aim-page-break{self._src_attr(suffix, absorbed=absorbed)}></aim-page-break>"
 
     def _paragraph(self, para: Any, elem: Any = None, src_elem: Any = None) -> None:
         source = elem if elem is not None else src_elem
@@ -865,7 +876,7 @@ class _Converter:
 
         if effective.get("page_break_before"):
             self._flush_items()
-            self._blocks.append(self._page_break("#before"))
+            self._blocks.append(self._page_break("#before", absorbed=False))
 
         self._emitted_images = set()
         inline, trailing_break = self._inline_markup(para, style_id)
@@ -984,7 +995,7 @@ class _Converter:
             self._blocks.append(self._block("p", "", effective, clause, prefix_attr))
         if trailing_break:
             self._flush_items()
-            self._blocks.append(self._page_break("#after"))
+            self._blocks.append(self._page_break("#after", absorbed=True))
 
         # Pictures dpc's typed model cannot see — grouped DrawingML artwork
         # (a row of logos) and legacy VML — follow their anchor as figures.

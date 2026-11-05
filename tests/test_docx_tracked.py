@@ -230,6 +230,215 @@ class TestNoCardWithoutRevision:
         assert any("produced no proposal" in w for w in result.report.warnings)
 
 
+def _revision(tag: str, rid: int):
+    """A revision record by Alice (python-docx's OXML)."""
+    from docx.oxml import OxmlElement
+    from docx.oxml.ns import qn
+
+    el = OxmlElement(f"w:{tag}")
+    el.set(qn("w:id"), str(rid))
+    el.set(qn("w:author"), kit.ALICE[0])
+    el.set(qn("w:date"), kit.ALICE[1])
+    return el
+
+
+def _track_run(run, tag: str, rid: int) -> None:
+    """Wrap a ``w:r`` element in a ``w:ins`` or ``w:del`` revision (a deleted
+    run's text becomes ``w:delText``)."""
+    from docx.oxml.ns import qn
+
+    wrapper = _revision(tag, rid)
+    run.addprevious(wrapper)
+    wrapper.append(run)
+    if tag == "del":
+        for text in run.findall(qn("w:t")):
+            text.tag = qn("w:delText")
+
+
+def _track_paragraph(para, tag: str) -> None:
+    """A whole paragraph inserted or deleted with tracking: its runs and its
+    mark."""
+    from docx.oxml import OxmlElement
+    from docx.oxml.ns import qn
+
+    for rid, run in enumerate(para._p.findall(qn("w:r")), start=1):
+        _track_run(run, tag, rid)
+    props = OxmlElement("w:rPr")
+    props.append(_revision(tag, 99))
+    para._p.get_or_add_pPr().append(props)
+
+
+_LEAD = [("h1", "Page breaks"), ("p", "Intro.")]
+_TAIL = [("p", "After.")]
+_BREAK = ("aim-page-break", "")
+#: a tracked change around a page break → (Word's Reject All, Word's Accept
+#: All) as (tag, text) chunks, and the cards in lane order
+_PAGE_BREAKS = {
+    # an inserted paragraph that starts a new page (w:pageBreakBefore)
+    "inserted-before": (
+        _LEAD + _TAIL,
+        _LEAD + [_BREAK, ("p", "New page.")] + _TAIL,
+        ["add", "add"],
+    ),
+    # a deleted paragraph that ends in a page break
+    "deleted-after": (
+        _LEAD + [("p", "Last words."), _BREAK] + _TAIL,
+        _LEAD + _TAIL,
+        ["delete", "delete"],
+    ),
+    # a page break inserted at the end of a paragraph that stays
+    "inserted-after": (
+        _LEAD + [("p", "Kept.")] + _TAIL,
+        _LEAD + [("p", "Kept."), _BREAK] + _TAIL,
+        ["add"],
+    ),
+}
+
+
+def _tracked_page_break(change: str) -> bytes:
+    """``_LEAD``, one tracked change around a page break (*change*, see
+    ``_PAGE_BREAKS``), then ``_TAIL``."""
+    import docx
+    from docx.enum.text import WD_BREAK
+
+    built = docx.Document()
+    built.add_heading("Page breaks", level=1)
+    built.add_paragraph("Intro.")
+    if change == "inserted-before":
+        para = built.add_paragraph("New page.")
+        para.paragraph_format.page_break_before = True
+        _track_paragraph(para, "ins")
+    elif change == "deleted-after":
+        para = built.add_paragraph("Last words.")
+        para.add_run().add_break(WD_BREAK.PAGE)
+        _track_paragraph(para, "del")
+    else:
+        run = built.add_paragraph("Kept.").add_run()
+        run.add_break(WD_BREAK.PAGE)
+        _track_run(run._r, "ins", 1)
+    built.add_paragraph("After.")
+    out = io.BytesIO()
+    built.save(out)
+    return out.getvalue()
+
+
+def _chunks(doc: aim.AimDocument) -> list[tuple[str, str]]:
+    return [(c.tag, c.text) for c in doc.chunks]
+
+
+def _new_page(paragraph: str) -> str:
+    """A kit paragraph (one with properties) that starts a new page."""
+    return paragraph.replace("<w:pPr>", "<w:pPr><w:pageBreakBefore/>", 1)
+
+
+class TestDerivedSourceKeys:
+    """A block a paragraph generates beside itself carries a key derived from
+    the paragraph's: a page break before it ("p3#before"), one ending it
+    ("p3#after"). Its revisions and its move mark name the paragraph ("p3"),
+    so the block finds them through that key. Figures, VML pictures and
+    pictures around a list: ``tests/test_packed_images.py``."""
+
+    @pytest.mark.parametrize("change", sorted(_PAGE_BREAKS))
+    def test_a_tracked_page_break_gets_its_card(self, change):
+        reject, accept, actions = _PAGE_BREAKS[change]
+        data = _tracked_page_break(change)
+        result = import_docx(data)
+        doc = result.document
+        assert [p.action for p in doc.proposals] == actions
+        assert all(note.cards for note in result.report.revisions)
+        assert _chunks(doc) == reject
+        assert _chunks(_resolved(doc, "accept")) == accept
+        assert _chunks(_resolved(doc, "reject")) == reject
+        for mode, golden in (("accept", accept), ("reject", reject)):
+            assert _chunks(import_docx(data, tracked=mode).document) == golden, mode
+        assert [f for f in aim.lint_text(doc.dumps()) if f.level == "error"] == []
+        assert doc.verify() == []
+
+    def test_a_moved_paragraph_takes_its_page_break_along(self):
+        # The page break before a moved paragraph is looked up by the
+        # paragraph's move mark too, so both move: two move cards, the
+        # paragraph's landing right after the break.
+        d = kit.Doc()
+        d.body = [
+            d.p(d.t("One.")),
+            _new_page(d.moved("moveFrom", "New page.", "m1")),
+            d.p(d.t("Two.")),
+            _new_page(d.moved("moveTo", "New page.", "m1")),
+            d.p(d.t("Three.")),
+        ]
+        result = import_docx(d.build())
+        doc = result.document
+        assert [p.action for p in doc.proposals] == ["move", "move"]
+        assert not any("whole-container" in w for w in result.report.warnings)
+        page = [_BREAK, ("p", "New page.")]
+        reject = [("p", "One."), *page, ("p", "Two."), ("p", "Three.")]
+        accept = [("p", "One."), ("p", "Two."), *page, ("p", "Three.")]
+        assert _chunks(doc) == reject
+        assert _chunks(_resolved(doc, "accept")) == accept
+        assert _chunks(_resolved(doc, "reject")) == reject
+
+
+class TestMovedRanges:
+    """IMPORT-D3 for a moved range: every paragraph of it is a move card, and
+    the cards land in order after the destination's anchor."""
+
+    @staticmethod
+    def _range(between) -> bytes:
+        """Two paragraphs moved (one named range) past what *between* adds."""
+        d = kit.Doc()
+        d.body = [
+            d.p(d.t("One.")),
+            d.moved("moveFrom", "First moved.", "m1"),
+            d.moved("moveFrom", "Second moved.", "m1"),
+            between(d),
+            d.moved("moveTo", "First moved.", "m1"),
+            d.moved("moveTo", "Second moved.", "m1"),
+            d.p(d.t("Three.")),
+        ]
+        return d.build()
+
+    def test_each_paragraph_of_a_moved_range_is_a_move_card(self):
+        # The second paragraph's move is anchored on the first moved chunk,
+        # which sits right before it at the source too: in the current body
+        # that move changes nothing, so the lane writer dropped it as a
+        # no-op, the lane missed Word's Accept All, and the import fell back
+        # to whole-container cards (a delete and an add per paragraph).
+        doc = import_docx(self._range(lambda d: d.p(d.t("Two.")))).document
+        assert [p.action for p in doc.proposals] == ["move", "move"]
+        accept = ["One.", "Two.", "First moved.", "Second moved.", "Three."]
+        ids = [p.id for p in doc.proposals]
+        for order in (ids, ids[::-1]):
+            # a card refused while the move it lands after is pending waits
+            resolved, pending = aim.loads(doc.dumps()), list(order)
+            for _ in range(len(order) ** 2):
+                pid = pending.pop(0)
+                try:
+                    resolved.accept(pid, decided_by=DECIDER)
+                except InvalidOperation:
+                    pending.append(pid)
+                if not pending:
+                    break
+            assert pending == [] and _texts(resolved) == accept
+        assert _texts(_resolved(doc, "reject")) == _texts(doc)
+        assert [f for f in aim.lint_text(doc.dumps()) if f.level == "error"] == []
+
+    def test_a_range_that_ends_where_it_started_moves_nothing(self):
+        # Moved past a paragraph that is deleted too, the range lands where
+        # it was: its first move is a no-op and is left out, and so is the
+        # second, which follows the first rather than taking its anchor
+        # (taken, it would land in front of the first paragraph).
+        result = import_docx(self._range(lambda d: d.deleted_p("Gone.")))
+        doc = result.document
+        assert [p.action for p in doc.proposals] == ["delete"]
+        assert _texts(_resolved(doc, "accept")) == [
+            "One.",
+            "First moved.",
+            "Second moved.",
+            "Three.",
+        ]
+        assert not any("whole-container" in w for w in result.report.warnings)
+
+
 class TestComments:
     def test_comment_is_reported_and_its_text_kept(self, imported):
         result = imported["comment"]

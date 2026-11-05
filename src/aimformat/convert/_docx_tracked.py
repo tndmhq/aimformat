@@ -28,7 +28,8 @@ deletions and insertions exactly where the source has them.
   plus a modify of the owner and a split is an add plus a modify;
 - a paragraph whose mark is ``moveFrom`` named N and one whose mark is
   ``moveTo`` named N become one ``move`` card (plus a ``modify`` when the
-  moved text was edited too); unnamed pairs stay delete + add;
+  moved text was edited too), one per block when the paragraph converts to
+  several (its page break, its figure); unnamed pairs stay delete + add;
 - an O-only chunk immediately followed by an F-only chunk in the same
   container, both by one author at one date, is one ``modify`` — the shape
   ``to_docx`` writes for a modify.
@@ -549,6 +550,12 @@ class _Planner:
                     entry.revs = _unique(cause)
 
     def _pair_moves(self, top: _Seq) -> None:
+        """Units whose paragraph mark is ``moveFrom`` named N pair, in order,
+        with units whose mark is ``moveTo`` named N, into moves. The marks
+        name the paragraph ("p3"), so a unit with a derived key ("p3#fig0",
+        the figure a picture paragraph converts to) is looked up by its
+        paragraph's key, as :meth:`cites` does: the figure of a moved
+        picture paragraph moves."""
         sources: dict[str, list[_Entry]] = {}
         targets: dict[str, list[_Entry]] = {}
         for seq in _walk(top):
@@ -556,7 +563,7 @@ class _Planner:
                 unit = entry.o if entry.kind == "o" else entry.f if entry.kind == "f" else None
                 if unit is None or unit.is_container or entry.split_of is not None:
                     continue
-                mark = self.facts.move_marks.get(unit.key)
+                mark = self.facts.move_marks.get(unit.key.split("#", 1)[0])
                 if mark is None or not mark[1]:
                     continue
                 kind, name = mark[0], str(mark[1])
@@ -978,9 +985,20 @@ def _without_noop_moves(
     """A move whose destination already IS its position in the current body
     changes nothing and would be refused as a no-op; it is left out of the
     lane. Returns the kept specs and, per original spec, its index among them
-    (None when dropped) — chained adds are re-pointed accordingly."""
+    (None when dropped) — chained adds are re-pointed accordingly.
+
+    The exception is a move anchored on a chunk that an earlier move of the
+    lane takes away: the next paragraph of a moved range, or the next block
+    of a moved paragraph that converts to several (a page break and its
+    text, two figures). The two sat together at the source too, so the move
+    changes nothing in the current body, yet without it the chunk stays
+    behind. It takes the earlier move's anchor instead, and lands right
+    after that move's chunk all the same: same-anchor position cards land in
+    creation order (spec §5.4). When the earlier move is itself left out,
+    its chunk stays where it is, and so does this one."""
     kept: list[_CardSpec] = []
     slots: list[int | None] = []
+    leaders: dict[str, _CardSpec] = {}  # moved chunk id → the kept move taking it
     for spec in specs:
         if spec.action == "move" and spec.target and spec.after_card is None:
             try:
@@ -991,8 +1009,16 @@ def _without_noop_moves(
             except AimError:
                 here, there = None, None
             if here is not None and here == there:
-                slots.append(None)
-                continue
+                leader = leaders.get(spec.after or "")
+                if leader is None or (leader.container, leader.shell) != (
+                    spec.container,
+                    spec.shell,
+                ):
+                    slots.append(None)
+                    continue
+                spec = _replace(spec, after=leader.after, after_card=leader.after_card)
+        if spec.action == "move" and spec.target:
+            leaders[spec.target] = spec
         if spec.after_card is not None:
             remapped = slots[spec.after_card]
             if remapped is None:  # pragma: no cover - only adds are chained onto
