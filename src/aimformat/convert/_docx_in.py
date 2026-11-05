@@ -204,6 +204,7 @@ def import_docx_source(
             source=source_ref,
             assets=images,
         )
+        report.warnings.extend(_not_imported(unreachable_part_revisions(package.archive)))
         report.warnings.extend(images.warnings())
         return ImportResult(doc, report)
     return _import_tracked(
@@ -223,6 +224,16 @@ def import_docx_source(
         max_revisions=max_revisions,
         max_proposals=max_proposals,
     )
+
+
+def _not_imported(unreachable: dict[str, int]) -> list[str]:
+    """The report line for each place whose tracked changes the import does
+    not carry (headers, footers, notes, body-level content controls), worded
+    once for both paths: a body without revisions still has those parts."""
+    return [
+        f"{count} tracked change(s) in {part} were not imported"
+        for part, count in sorted(unreachable.items())
+    ]
 
 
 def _source_digest(source: object) -> str | None:
@@ -436,8 +447,7 @@ def _import_tracked(
             f"{noise} block(s) converted differently in the two views without a tracked "
             "change of their own (for example list numbering); the original was kept"
         )
-    for part, count in sorted(unreachable.items()):
-        report.warnings.append(f"{count} tracked change(s) in {part} were not imported")
+    report.warnings.extend(_not_imported(unreachable))
     if report.comments:
         report.warnings.append(
             f"{len(report.comments)} Word comment(s) were not carried (the format has no "

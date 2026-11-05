@@ -286,6 +286,21 @@ class TestModes:
         assert result.report.tracked is None
         assert result.report.revisions == [] and result.report.warnings == []
 
+    @pytest.mark.parametrize("body_revision", [True, False], ids=["two-view", "single-view"])
+    def test_revisions_in_parts_the_import_skips_are_reported(self, body_revision):
+        # A header's tracked change was reported only when the body had one
+        # too: a body with no revision and no comment took the single-view
+        # path, which never looked at the other parts.
+        d = kit.Doc()
+        d.body = [d.p(d.t("Body."), *([d.ins(" More.", kit.BOB)] if body_revision else []))]
+        data = _with_header_revision(d.build())
+        result = import_docx(data)
+        assert result.report.tracked == ("propose" if body_revision else None)
+        warning = "1 tracked change(s) in headers were not imported"
+        assert [w for w in result.report.warnings if "headers" in w] == [warning]
+        with pytest.warns(AimImportWarning, match="in headers were not imported"):
+            aim.from_docx(data)
+
     def test_cli_flag(self, tmp_path, capsys):
         from aimformat.cli import main
 
@@ -657,6 +672,23 @@ def _view_paragraphs(data: bytes, view: str) -> list[str]:
         root = etree.fromstring(z.read("word/document.xml"))
     view_root = resolve_view(root, view)
     return ["".join(t.text or "" for t in p.iter(f"{w}t")) for p in view_root.iter(f"{w}p")]
+
+
+def _with_header_revision(data: bytes) -> bytes:
+    """*data* plus a header holding one tracked insertion: a part the
+    importer does not read."""
+    import docx
+    from docx.oxml import parse_xml
+
+    document = docx.Document(io.BytesIO(data))
+    header = document.sections[0].header
+    header.is_linked_to_previous = False
+    header.paragraphs[0]._p.append(
+        parse_xml(f'<w:ins xmlns:w="{kit.W_NS}" w:id="90" w:author="Bob">{kit.run("v2")}</w:ins>')
+    )
+    out = io.BytesIO()
+    document.save(out)
+    return out.getvalue()
 
 
 # -- property tests ------------------------------------------------------------------
