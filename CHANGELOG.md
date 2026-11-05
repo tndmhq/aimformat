@@ -57,8 +57,6 @@ newer version (S002) with an unknown event kind (H003).
   below 0.6 is S034. New conformance fixtures for each, plus `ok_baseline`
   and `ok_historyless`.
 
-## 0.5.3 — unreleased
-
 ### Word tracked changes import as proposals (no format change)
 
 Decisions IMPORT-D1 to IMPORT-D8 in `docs/log/` (2026-10-01).
@@ -125,6 +123,24 @@ Decisions IMPORT-D1 to IMPORT-D8 in `docs/log/` (2026-10-01).
   `w:numPr` is ordered too. A pending add inside a numbered list exported
   without its list's `w:numPr`, so Word showed it unnumbered and Accept All
   split the list in two; it now draws from the same list definition.
+
+## 0.5.3 — 2026-10-14
+
+One SDK addition for embedders that print with their own Chromium. No spec,
+event, or format changes.
+
+### Added
+
+- **`aimformat.to_print_html(doc, *, pending="keep", extra_css=None)`** — the
+  exact HTML `to_pdf` prints (the `@page` rule, one named page per slide,
+  then `extra_css`, all spliced before the document's theme), for callers
+  that print with a Chromium of their own, for example an Electron app's
+  `webContents.printToPDF`. `to_pdf` now prints through it, so the two
+  cannot drift. Print with background graphics on and the CSS page size
+  preferred to match `to_pdf` page for page. Needs no optional extra. The
+  output is not a conforming `.aim` file, and its exact bytes are not
+  stable across versions
+  (`docs/log/2026-10-01_2105_decision_public-print-html.md`).
 
 ## 0.5.2 — 2026-09-29
 

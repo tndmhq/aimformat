@@ -22,8 +22,14 @@ path to a good PR is the same:
 ```sh
 git clone https://github.com/tndmhq/aimformat && cd aimformat
 pip install -e '.[dev]'        # pytest + the interop test deps, all pinned
+git config core.hooksPath .githooks   # the pre-commit hook, once per clone
 python3 -m pytest              # the whole suite runs in a few seconds
 ```
+
+The pre-commit hook runs what CI's lint job runs on the files you commit:
+`ruff check`, `ruff format --check`, and `mypy src` when `src/` changes
+(`prettier` and `tsc` for `ts/`). Please don't bypass it with `--no-verify`;
+if it can't find `ruff` and `mypy`, it tells you where it looked.
 
 The package is stdlib-only at runtime; please keep it that way. Heavy or
 optional integrations go behind extras (`[docx]` is the pattern) with lazy

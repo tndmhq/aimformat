@@ -409,10 +409,8 @@ class TestPrintCssAndPdfHtml:
         assert "@media print{body{margin:0;padding:0;max-width:none}}" in css
 
     def test_print_html_splices_page_rule(self, basic_doc):
-        from aimformat.convert._pdf_out import _print_html
-
         basic_doc.set_page_setup({"size": "A5"}, author=ME, at=ts(5))
-        html = _print_html(basic_doc, "keep", "@font-face{font-family:X}")
+        html = aim.to_print_html(basic_doc, pending="keep", extra_css="@font-face{font-family:X}")
         assert "@page{size:148mm 210mm;margin:15mm 15mm 15mm 15mm}" in html
         assert "@font-face{font-family:X}" in html
         assert html.index("@page{") < html.index("</head>")
@@ -421,17 +419,15 @@ class TestPrintCssAndPdfHtml:
         # regression: with pending="accept-all" the @page rule was computed
         # from the PRE-resolution document, printing the accepted A5 page
         # inside the old A4 geometry
-        from aimformat.convert._pdf_out import _print_html
-
         basic_doc.propose_page_setup({"size": "A5"}, author=BOT, at=ts(5))
-        html = _print_html(basic_doc, "accept-all", None)
+        html = aim.to_print_html(basic_doc, pending="accept-all")
         assert "@page{size:148mm 210mm" in html
         assert "@page{size:210mm 297mm" not in html
         assert len(basic_doc.proposals) == 1  # the copy was throwaway
-        html = _print_html(basic_doc, "reject-all", None)
+        html = aim.to_print_html(basic_doc, pending="reject-all")
         assert "@page{size:210mm 297mm" in html
         with pytest.raises(InvalidOperation):
-            _print_html(basic_doc, "bogus", None)
+            aim.to_print_html(basic_doc, pending="bogus")
 
     def test_to_pdf_smoke_page_count(self, basic_doc, tmp_path):
         pytest.importorskip("playwright")

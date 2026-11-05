@@ -9,8 +9,9 @@ proposals, :mod:`._docx_in`; :func:`import_docx` also returns an
 the extension dispatcher :func:`from_path`.
 
 Export: :func:`to_markdown` (stdlib), :func:`to_html` (stdlib),
-:func:`to_pdf` (extra ``pdf``), plus :func:`aimformat.to_docx` re-exported
-for symmetry.
+:func:`to_pdf` (extra ``pdf``), :func:`to_print_html` (stdlib; the exact
+HTML :func:`to_pdf` prints, for callers with their own Chromium), plus
+:func:`aimformat.to_docx` re-exported for symmetry.
 
 The core package stays dependency-free: every heavy dependency is an
 optional extra, imported lazily with an actionable error message.
@@ -31,7 +32,7 @@ from ._docx_pages import apply_docx_pagination
 from ._html_out import to_html
 from ._markdown_in import from_markdown
 from ._markdown_out import to_markdown
-from ._pdf_out import to_pdf
+from ._pdf_out import to_pdf, to_print_html
 from ._report import AimImportWarning, CommentNote, ImportReport, ImportResult, RevisionNote
 
 __all__ = [
@@ -49,6 +50,7 @@ __all__ = [
     "to_markdown",
     "to_html",
     "to_pdf",
+    "to_print_html",
     "to_docx",
     # the python-docx pagination side pass stays available for callers who
     # run a DOCX through docling themselves (from_docling) — the native

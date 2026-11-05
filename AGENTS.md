@@ -80,7 +80,14 @@ technical content only (see Governance below).
 2. **Plan before implementing.** For any non-trivial task, write the plan as a
    `…_plan_…` entry in `docs/log/` (scaffold with
    `python3 scripts/new_log_entry.py plan <slug> --what "…"`) **before**
-   writing code, and get it confirmed when working interactively.
+   writing code, and get it confirmed when working interactively. Before
+   implementing, have the plan reviewed by the other vendor's strongest model
+   at xhigh effort, read-only: Codex reviews a Claude agent's plan, Claude
+   reviews a Codex agent's plan. If that vendor is out of quota, the same
+   vendor's strongest model in a fresh session will do, but say so. Apply or
+   rebut every finding and record the outcome in the plan; a REWORK verdict
+   means revise and review again. (An agent from neither vendor asks either.)
+   When working interactively, show the maintainer the reviewed plan.
 
 3. **Two-tier memory.** Durable, curated facts live in `docs/knowledge/`
    (edit in place, keep current — stale knowledge is worse than none).
@@ -91,6 +98,9 @@ technical content only (see Governance below).
    YAML frontmatter (`status: todo|active|done|superseded`) and a one-line row in
    `docs/log/index.md`. Never rewrite a log entry — supersede it and flip the
    old entry's `status`. Full rules → [`docs/README.md`](docs/README.md).
+   **Never write to an agent's private memory store** (Claude Code's per-user
+   memory, Codex memories and the like): no other agent or human can see it.
+   "Remember this" always means these two tiers.
 
 4. **Consolidate on completion** (part of the definition of done): flip the
    log entry's `status`, update its index row, and promote durable,
@@ -119,6 +129,24 @@ technical content only (see Governance below).
    exit code (lint, format, types, tests); a round CI would have failed anyway
    is wasted. Pure prose needs no round; anything specifying behaviour — spec,
    plan, contract — always gets one.
+
+8. **The pre-commit hook is mandatory.** Where the repo ships `.githooks/`,
+   enable it once per clone (`git config core.hooksPath .githooks`; worktrees
+   share the setting) and let it run on every commit. Never bypass it: no
+   `--no-verify` or `-n`, no `core.hooksPath` override. When it fails, fix what
+   it reports and commit again; when a tool it needs is missing, install the
+   tool rather than skip the check.
+
+9. **Report the decisions you made without the maintainer.** Work that runs
+   without the maintainer watching (an autonomous or overnight run, a fan-out
+   of agents, a long task where you make calls on your own) keeps a table as it
+   goes, decision | why | where (file, PR or commit), in its plan or log entry,
+   and the final report repeats it at the top, most review-worthy first,
+   without being asked. List the calls the maintainer might reasonably
+   disagree with: design choices, scope cuts, departures from a spec,
+   workarounds, merges, anything spent. A decision that changes the `.aim`
+   format also gets a `decision` entry in aimformat's `docs/log/` and a
+   "Decisions for review" section in its PR.
 
 ## Governance (public repo)
 
