@@ -9,6 +9,7 @@ required to add entries.)
 
 | Date | Type | Entry | Status | What |
 |---|---|---|---|---|
+| 2026-11-05 18:16 | plan | [pr40-rework](2026-11-05_1816_plan_pr40-rework.md) | active | Rework of #40 to the maintainer's 2026-11-05 decisions (compact TOC + section read; imported images stored once) plus provisional choices awaiting the maintainer; oracle kit nesting fix; superseding records |
 | 2026-10-01 22:37 | report | [import-fidelity-implementation](2026-10-01_2237_report_import-fidelity-implementation.md) | active | Implementation of IMPORT-D1..D16 (tracked changes as proposals; baseline history; TOC freshness): what was built, measured sizes, deviations from the design |
 | 2026-10-01 21:35 | decision | [import-tracked-changes-as-proposals](2026-10-01_2135_decision_import-tracked-changes-as-proposals.md) | todo (proposed, awaiting founder approval) | IMPORT-D1 (proposed): DOCX tracked changes become pending proposals on the ORIGINAL body (accept-all = Word accept-all, reject-all = Word reject-all); tracked=propose|accept|reject, max_revisions; SDK 0.5.3, no format change |
 | 2026-10-01 21:35 | decision | [import-tracked-chunk-alignment](2026-10-01_2135_decision_import-tracked-chunk-alignment.md) | todo (proposed, awaiting founder approval) | IMPORT-D2 (proposed): tracked-change import aligns the two views by paragraph-mark/row identity (never position), one card per changed chunk, split/merge follow the surviving mark, replacement pairing, and no card unless a revision sits inside that chunk |
