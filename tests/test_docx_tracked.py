@@ -545,24 +545,38 @@ class TestRoundTrip:
         assert _view_texts(back.read_bytes(), "accept") == want
         assert _view_texts(back.read_bytes(), "reject") == _texts(doc)
 
-    @pytest.mark.parametrize("new", [["New1", "New2"], ["New1", "New2", "New3"]])
-    def test_a_moved_chunk_modified_into_several_blocks_keeps_a_paragraph_each(self, new, tmp_path):
+    @pytest.mark.parametrize(
+        ("old", "new"),
+        [
+            (["Old"], ["New1", "New2"]),
+            (["Old"], ["New1", "New2", "New3"]),
+            (["Old1", "Old2"], ["New"]),
+            (["Old1", "Old2", "Old3"], ["New1", "New2"]),
+            (["Old1", "Old2"], []),
+        ],
+        ids=["1-to-2", "1-to-3", "2-to-1", "3-to-2", "2-to-none"],
+    )
+    def test_a_moved_and_modified_chunk_resolves_like_its_two_cards(self, old, new, tmp_path):
         # Every block of the replacement went into the moved paragraph, so
-        # Word's Accept All ran them together ("New1New2") where accepting
-        # the two cards keeps one paragraph per block.
+        # Word's Accept All ran them together ("New1New2"). And every old
+        # block kept a moved paragraph mark of its own that the modify left
+        # standing, so Accept All kept an empty paragraph for each old block
+        # but the last, and for the last one too when the replacement has no
+        # block at all. Accepting the two cards gives none of these.
         ada, bot = aim.human("ada"), aim.agent("model-x")
-        doc = aim.new_document(title="Moved and split")
-        markups = ("<p>Alpha</p>", "<div><p>Old</p></div>", "<p>Beta</p>", "<p>Gamma</p>")
+        doc = aim.new_document(title="Moved and rewritten")
+        before = "".join(f"<p>{text}</p>" for text in old)
+        markups = ("<p>Alpha</p>", f"<div>{before}</div>", "<p>Beta</p>", "<p>Gamma</p>")
         with doc.batch():
             _, moved, beta, _ = (doc.add_chunk(m, author=ada).id for m in markups)
         doc.propose_move(moved, container="body", after=beta, author=ada)
-        blocks = "".join(f"<p>{text}</p>" for text in new)
-        doc.propose_modify(moved, f'<div data-aim="{moved}">{blocks}</div>', author=bot)
+        after = "".join(f"<p>{text}</p>" for text in new)
+        doc.propose_modify(moved, f'<div data-aim="{moved}">{after}</div>', author=bot)
         tracked = tmp_path / "tracked.docx"
         aim.to_docx(doc, tracked, pending="tracked")
         want = {
             "accept": ["Alpha", "Beta", *new, "Gamma"],
-            "reject": ["Alpha", "Old", "Beta", "Gamma"],
+            "reject": ["Alpha", *old, "Beta", "Gamma"],
         }
         for view, paragraphs in want.items():
             resolved = tmp_path / f"{view}.docx"

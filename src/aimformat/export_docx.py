@@ -1296,12 +1296,9 @@ class _Exporter:
                 self.rev.close_move_range(para, "moveFrom", range_id)
 
     def _emit_move_destination(self, prop: Proposal) -> None:
-        """The arrival half of a pending move. A pending modify of the same
-        target lands here too, nested as ``moveTo(del(old))`` + ``ins(new)``:
-        rejecting the move removes both, accepting it keeps only the new
-        text — the same outcomes as resolving the two cards. The first new
-        block shares the last moved paragraph's mark; each further one is an
-        inserted paragraph of its own, as in a modify that did not move."""
+        """The arrival half of a pending move: one moved paragraph per block.
+        A pending modify of the same target lands here too (see
+        :meth:`_emit_moved_replacement`)."""
         target = prop.target or ""
         index = self.aim._state.top_index(target)
         if index is None:  # pragma: no cover - guarded at registration
@@ -1322,46 +1319,59 @@ class _Exporter:
             self._emit_add_paragraphs(arrival)
             return
         blocks = _block_children(el, self.paint)
-        new_blocks: list[Element] = []
         if modify is not None:
-            for new_el in self._payload_elements(modify):
-                new_blocks += _block_children(new_el, self.paint)
+            self._emit_moved_replacement(prop, blocks, modify)
+            return
         name = self._move_names[target]
         range_id = ""
         for i, block in enumerate(blocks):
-            last = i == len(blocks) - 1
             para = self.out.add_paragraph(style=self._safe_style(_style_for(block.tag)))
             self._number_paragraph(para, block)
             self.rev.mark_paragraph(para, "w:moveTo", label, date)
             if i == 0:
                 range_id = self.rev.move_range(para, "moveTo", name, label, date)
             runs = _tracked_block_runs(block, self.paint)
-            if modify is None:
-                self.rev.wrap(para, "w:moveTo", runs, label, date, deleted=False)
-            else:
-                outer = self.rev.wrap(para, "w:moveTo", [], label, date, deleted=False)
-                self.rev.nested(
-                    outer,
-                    "w:del",
-                    para,
-                    runs,
-                    _actor_label(modify.author),
-                    modify.at,
-                    deleted=True,
-                )
-                if last and new_blocks:
-                    self.rev.ins(
-                        para,
-                        _tracked_block_runs(new_blocks[0], self.paint),
-                        _actor_label(modify.author),
-                        modify.at,
-                    )
-            if last:
+            self.rev.wrap(para, "w:moveTo", runs, label, date, deleted=False)
+            if i == len(blocks) - 1:
                 self.rev.close_move_range(para, "moveTo", range_id)
-        if modify is not None:
-            # each further block is a paragraph of its own: appended to the
-            # moved one, the blocks ran together in Word's Accept All
-            self._emit_inserted_blocks(new_blocks[1:], modify)
+
+    def _emit_moved_replacement(
+        self, prop: Proposal, blocks: list[Element], modify: Proposal
+    ) -> None:
+        """A pending move and a pending modify of the same paragraphs, nested
+        as ``moveTo(del(old))`` + ``ins(new)``: rejecting the move removes
+        both, accepting both keeps only the new text — the outcomes of
+        resolving the two cards.
+
+        All the old blocks' text goes into ONE moved paragraph, and the first
+        new block takes its mark over; each further new block is an inserted
+        paragraph of its own, as in a modify that did not move. With a moved
+        paragraph per old block, Accept All kept every mark but the last as
+        an empty paragraph. Tracking those marks as deleted as well (``del``
+        + ``moveTo``) gives the same outcomes, but LibreOffice's Reject All
+        keeps each such mark as an empty paragraph, so the mark is tracked
+        as deleted only when the replacement has no block to take it over.
+        The price of one paragraph: the tracked view shows the old blocks run
+        together, and so does accepting the move but rejecting the modify."""
+        label, date = _actor_label(prop.author), prop.at
+        by, at = _actor_label(modify.author), modify.at
+        new_blocks: list[Element] = []
+        for new_el in self._payload_elements(modify):
+            new_blocks += _block_children(new_el, self.paint)
+        para = self.out.add_paragraph(style=self._safe_style(_style_for(blocks[-1].tag)))
+        self._number_paragraph(para, blocks[-1])
+        if not new_blocks:
+            self.rev.mark_paragraph(para, "w:del", by, at)  # CT_ParaRPr: del before moveTo
+        self.rev.mark_paragraph(para, "w:moveTo", label, date)
+        name = self._move_names[prop.target or ""]
+        range_id = self.rev.move_range(para, "moveTo", name, label, date)
+        old = [run for block in blocks for run in _tracked_block_runs(block, self.paint)]
+        outer = self.rev.wrap(para, "w:moveTo", [], label, date, deleted=False)
+        self.rev.nested(outer, "w:del", para, old, by, at, deleted=True)
+        if new_blocks:
+            self.rev.ins(para, _tracked_block_runs(new_blocks[0], self.paint), by, at)
+        self.rev.close_move_range(para, "moveTo", range_id)
+        self._emit_inserted_blocks(new_blocks[1:], modify)
 
     # -- tracked replacements (exactly once per chunk, never per child) -------
     def emit_tracked_chunk(
