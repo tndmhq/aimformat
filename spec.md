@@ -2,8 +2,9 @@
 
 **Status: v0.6 (draft; v0.5 plus the `baseline` history event — a document
 whose content did not arrive by editing records its origin once, as a
-snapshot, instead of one `add` per construct, §6.9 — and a TOC cache that may
-stand without a summary and carries its own staleness marker, §8.1; v0.5
+snapshot, instead of one `add` per construct, §6.9 — and a compact TOC cache,
+one entry per section with its word and chunk counts, that may stand without
+a summary and carries its own staleness marker, §8.1; v0.5
 added dynamic numbering, §3.8, v0.4 literal per-element typography, v0.3
 literal per-element paint).** This is the
 normative specification
@@ -110,7 +111,7 @@ see §4.4 for id rules):
 <meta charset="utf-8">
 <title>Q3 Proposal — Acme GmbH</title>
 <script type="application/aim-meta+json">
-{"summary":{"as_of_seq":58,"doc_hash":"sha256:9f2c…","model":"model-id","text":"Three-year services proposal…"},"toc":[…],"toc_doc_hash":"sha256:9f2c…"}
+{"summary":{"as_of_seq":58,"doc_hash":"sha256:9f2c…","model":"model-id","text":"Three-year services proposal…"},"toc":[{"chunk_count":6,"id":"8b1f","level":1,"title":"Proposal","word_count":412},…],"toc_doc_hash":"sha256:9f2c…"}
 </script>
 <script type="application/aim-doc+json">
 {"page":{"margins":{"bottom":"15mm","left":"15mm","right":"15mm","top":"15mm"},"orientation":"portrait","size":"A4"}}
@@ -611,9 +612,9 @@ format's.
 
 ### 4.6 Sections don't exist in the body
 
-The document outline is derived from heading chunks; the table of contents
-(§8.1) groups chunk ids as a derived cache; SDKs expose section-range
-operations that expand to per-chunk events in one batch.
+The document outline is derived from heading chunks and slides; the table of
+contents (§8.1) caches it, one entry per section; SDKs expose section reads
+and section-range operations that expand to per-chunk events in one batch.
 
 ---
 
@@ -971,17 +972,52 @@ not regenerable.
 
 `<script type="application/aim-meta+json">` in the head holds one JSON
 object with optional `summary {text, model, as_of_seq, doc_hash}`, optional
-`toc [{title, level, chunks: [ids]}]` and, when `toc` is present, optional
+`toc` (the table of contents, below) and, when `toc` is present, optional
 `toc_doc_hash`: the `doc_hash` the TOC was derived from. A block with neither
 `summary` nor `toc` is an error (M004; before v0.6 `summary` was required).
-`chunks` MAY list chunk *and* container ids, so an entry can span a list or a
-slide. The TOC is derived from heading chunks and slides (deterministic,
-regenerable), so a writer MAY refresh a present TOC whenever it saves, like
-the embedded stylesheet; a TOC whose `toc_doc_hash` differs from the current
-`doc_hash` is stale (M005, a warning). This is the first thing an agent
-reads; staleness is checkable against the current `doc_hash`, and a reader
-that finds the TOC stale or absent derives the outline from the headings
-instead of trusting it.
+This is the first thing an agent reads; staleness is checkable against the
+current `doc_hash`, and a reader that finds the TOC stale or absent derives
+the outline from the body instead of trusting it.
+
+The TOC lists the document's sections in document order, one entry each:
+`{chunk_count, id, level, title, word_count}`, the keys in the order
+canonical JSON writes them (§11.2). `id` is a non-empty string, `title` a
+string, `level` an integer from 1 to 6, and both counts are non-negative
+integers. Unknown fields are ignored.
+
+- A section opens at a top-level heading chunk, whose rank (`h1` … `h6`) is
+  its `level` and whose text is its `title`, or at a slide: `level` 1 and
+  `title` the text of the slide's first heading (`""` without one). `id` is
+  the heading's chunk id or the slide's container id. A heading inside a
+  chunk or a slide opens no section.
+- A section runs to the next one of the same or a higher level (an equal or
+  smaller `level`), so it includes its subsections.
+- Content before the first heading or slide forms an untitled section:
+  `level` 1, `title` `""`, `id` the id of its first construct. It ends at
+  the first heading or slide, whatever that one's level.
+
+The TOC is derived from the body (deterministic, regenerable), so a writer
+MAY rebuild it whenever it saves a document declared v0.6 or later, like the
+embedded stylesheet. Below v0.6 a writer leaves the block as it is: a
+TOC-only block fails M004 under that version's rules. A TOC whose
+`toc_doc_hash` differs from the current `doc_hash` is stale (M005, a
+warning), and so is one whose entries keep the pre-v0.6 shape
+`{title, level, chunks: [ids]}` in a document declared v0.6 or later; below
+v0.6 that shape is valid. An entry of neither shape is an error (M003).
+
+*The counts (informative).* A verifier checks the shape of an entry and
+`toc_doc_hash`, never the counts, so two writers may count differently. The
+reference toolkit counts this way:
+
+- `chunk_count`: the distinct chunk ids in the section. A list item or a
+  table row counts one, a run counts once, a container counts nothing.
+- `word_count`: the whitespace-separated words of the visible text of those
+  chunks. Block, item, row and cell boundaries and `<br>` separate words;
+  inline markup does not (`Ac<strong>me</strong>` is one word); images,
+  `svg`, `template`, `script` and `style` contribute nothing.
+
+A section's counts include its subsections', so adding up every entry counts
+each subsection again.
 
 ### 8.2 Embeddings
 
@@ -1414,7 +1450,7 @@ Literal paint (`color` `background-color` `border-color`) is since spec 0.3 (S03
 | M002 | warning | embedding is stale or orphaned |
 | M003 | error | cache block is not valid JSON of the required shape |
 | M004 | error | aim-meta block has neither a summary nor a toc |
-| M005 | warning | toc cache is stale (toc_doc_hash mismatch) |
+| M005 | warning | toc cache is stale (toc_doc_hash mismatch, or entries in the pre-0.6 shape) |
 | D001 | error | aim-doc settings block is not valid JSON of the required shape |
 | D002 | error | more than one aim-doc script in the head |
 | D003 | error | unknown page size or orientation |
@@ -1443,7 +1479,8 @@ Literal paint (`color` `background-color` `border-color`) is since spec 0.3 (S03
   tier, a proposal's `data-explanation` should carry the change's meaning
   by itself.
 - **Agent read path**: read the metadata cache first; verify
-  `summary.doc_hash` against the document before trusting it.
+  `summary.doc_hash` and `toc_doc_hash` against the document before trusting
+  either; then read the sections you need by the ids the TOC gives.
 
 ## Appendix C. Future extensions (informative)
 

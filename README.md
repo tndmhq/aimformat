@@ -168,7 +168,7 @@ aim.to_docx(doc, "out.docx", pending="reject-all")
 | pending lane | `propose_modify/add/delete/move/theme`, `amend_proposal` (replace a pending payload/explanation in place, unrecorded), `accept` (with optional `applied=` tweaks), `reject`; supersede and chain rebinding are automatic |
 | history | `verify`, `state_at(seq)`, `checkpoint`, `undo`, `redo`, `flatten` (collapse to one checkpoint), `prune`, `baseline` (make the current state the origin), `reconcile` (repair out-of-band edits / adopt hand-written files) |
 | compare versions | `diff_documents` (unit-level: added/deleted/modified/moved), `classify_divergence` (did the log grow, was it rewritten, does it explain the body) |
-| caches | `set_summary`, `generate_toc` (kept fresh on save), `outline`, `set_embedding`, `stale_embeddings` |
+| caches | `set_summary`, `generate_toc` (built and kept fresh on save), `outline`, `section` (one section's ids, text and markup), `set_embedding`, `stale_embeddings` |
 | assets | `pack_assets` (data-URIs into the content-addressed registry), `gc_assets` |
 | convert | `from_path`, `from_text`, `from_markdown`, `from_docx` / `import_docx` (with an `ImportReport`), `from_pdf`, `from_docling`; `to_markdown`, `to_html`, `to_pdf`, `to_print_html` (the HTML `to_pdf` prints, for your own Chromium), `to_docx` |
 | verifier | `lint`, `lint_text`, `lint_path`, each returning `Finding(code, level, message, where)` |
@@ -257,8 +257,9 @@ possible until 1.0.
 - **v0.6** (the current draft) records where a document's history begins:
   an imported document carries its origin once, as a `baseline` snapshot,
   instead of one `add` event per block, so a fresh text-heavy import is about
-  a fifth smaller and `undo` no longer deletes imported content. The TOC cache can
-  stand without a summary and records the hash it was built from.
+  a fifth smaller and `undo` no longer deletes imported content. The TOC cache
+  holds one entry per section (its id, level, title, word count and chunk
+  count), can stand without a summary, and records the hash it was built from.
 - **v0.5** added numbering that survives an edit: a
   block states its level (`num-1` … `num-9`) and the stylesheet draws the
   number, so inserting a clause renumbers everything below it instead of

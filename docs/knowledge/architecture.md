@@ -27,8 +27,9 @@ codes bidirectionally in sync with what `lint.py` can actually emit.
 |---|---|---|
 | `dom.py` | mini-DOM + transparent HTML reader | reports the file as written (no tag inference) so canonical round-trips are byte-exact |
 | `canonical.py` | serializer, escaping, `doc_hash`, canonical JSON | THE definition of equality; every other module defers to it |
-| `document.py` | `AimDocument`: ops, pending lane, verify, time travel, assets; `baseline()` (one snapshot-carrying origin event, §6.9) and `flatten()` (collapse to ONE checkpoint at seq+1 — a pruned log, never zero lines); a present TOC is refreshed by `dumps()` like aim.css | every state change mutates the tree AND appends the matching event — never one without the other; a lazy per-instance `_HistoryIndex` derives parsed events, id reservations/tombstones, and seq/batch counters from authoritative JSONL + pending state, then the three history writers update it incrementally; replay/verify always run on a deep copy (`DocState` over a clone), never the live tree |
+| `document.py` | `AimDocument`: ops, pending lane, verify, time travel, assets; `baseline()` (one snapshot-carrying origin event, §6.9) and `flatten()` (collapse to ONE checkpoint at seq+1 — a pruned log, never zero lines); `dumps()` builds and refreshes the TOC cache like aim.css, in documents declared 0.6 or later (below that it never touches the meta block) | every state change mutates the tree AND appends the matching event — never one without the other; a lazy per-instance `_HistoryIndex` derives parsed events, id reservations/tombstones, and seq/batch counters from authoritative JSONL + pending state, then the three history writers update it incrementally; replay/verify always run on a deep copy (`DocState` over a clone), never the live tree |
 | `events.py` | `Actor`/`Event` over canonical dicts | unknown fields ignored; `x_*` reserved |
+| `toc.py` | the compact TOC (§8.1): which construct opens a section, how far it runs, its word and chunk counts, the entry-shape checks, `Section` reads | pure functions over the top-level constructs, shared by `outline()`, `section()`, `dumps()` and lint; the counts are informative, so lint checks the entry shape and `toc_doc_hash` and never recomputes a count |
 | `lint.py` | the verifier; stable codes S/V/X/P/H/M/C | collects all findings in one run; `C001` byte-compares the source against the canonical serialization |
 | `reconcile.py` | repair out-of-band edits; adoption path for hand-written files | edit script from expected state E (the log's origin — the `baseline` snapshot when the log begins with one, else the empty document — plus forward replay) to actual body A, appended as `origin:"reconcile"` events so `verify()` passes by construction; refuses pruned (incl. flattened) and damaged logs and an ambiguous hand-bumped first-paint version; adopts a history-less file declared ≥ 0.6 as ONE baseline, below that as one `add` per construct (never raises a declaration as a side effect); never rewrites body content (only ids) |
 | `css.py` | deterministic stylesheet | budget guarded by tests (<40 KB raw) |
@@ -47,7 +48,8 @@ codes bidirectionally in sync with what `lint.py` can actually emit.
 - **Zero runtime dependencies.** Anything heavy goes behind an extra
   (`[docx]` pattern) with a lazy import and an actionable error message.
 - **The file is canonical on disk.** `dumps()` refreshes only the
-  machine-managed stylesheet; everything else must already be canonical —
+  machine-managed caches (the stylesheet, and the TOC in 0.6 documents);
+  everything else must already be canonical —
   if a test fails with C001, fix the producer, don't post-process.
 - **Ids are never reused.** Deleted and recorded payload ids stay burned in
   `_HistoryIndex`; its sole instance-lifetime ledger survives prune/flatten

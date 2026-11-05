@@ -57,6 +57,7 @@ from .note import render_note
 from .pagesetup import PageSetup, default_page_setup, page_css
 from .reconcile import ReconcileReport
 from .registry import REGISTRY
+from .toc import Section
 
 __version__ = "0.6.0"
 SPEC_VERSION = REGISTRY.spec_version
@@ -66,6 +67,7 @@ __all__ = [
     "Anchor",
     "Chunk",
     "Proposal",
+    "Section",
     "Event",
     "Actor",
     "Divergence",

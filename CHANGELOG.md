@@ -42,20 +42,30 @@ newer version (S002) with an unknown event kind (H003).
 - **Reconcile adopts a history-less file declared at 0.6 or later as one
   baseline**; below 0.6 it keeps writing one `add` per construct, so no
   declaration is raised as a side effect.
-- **TOC cache (§8.1).** `summary` is optional; the TOC records
-  `toc_doc_hash`; `dumps()` refreshes a present TOC the way it refreshes the
-  stylesheet. Importers build the TOC when the body has a heading or slide.
-  MCP `aim_read` never serves a stale outline: it derives one from the
-  headings when the cache is missing or stale and says which in
-  `toc_source` (both null when there is no heading or slide). New `doc.outline()` and `doc.toc_is_fresh()`.
+- **TOC cache (§8.1).** One compact entry per section,
+  `{chunk_count, id, level, title, word_count}`, instead of a list of every
+  chunk id. A section opens at a top-level heading or a slide and includes
+  its subsections, so its counts include theirs; `id` is the heading's or
+  the slide's id. The counts are informative: lint checks the entry shape and
+  the hash, never the counts. `summary` is optional and the TOC records
+  `toc_doc_hash`. Every save of a document declared 0.6 or later builds the
+  TOC when the body has a heading or slide, and rewrites it when it is stale
+  or in the pre-0.6 shape. A document declared below 0.6 keeps its meta block
+  as it is. New `doc.section(id)` returns a `Section` with the section's ids,
+  its text (one line per chunk) and its exact markup. MCP `aim_read` never
+  serves a stale outline: it derives one from the headings when the cache is
+  missing or stale and says which in `toc_source` (both null when there is no
+  fresh cache and no heading or slide). New `doc.outline()` and
+  `doc.toc_is_fresh()`.
 - **Verifier.** New H007 (baseline not first, or twice), H008 (snapshot
   does not hash to its `doc_hash`, or an entry is not one conforming
   construct; snapshots get the same element, URL, handler and style checks as
   pending payloads), H009 (warning: a seq-1 log that does not explain the
-  document's origin), M005 (warning: stale TOC). M004 now fires only for a
-  meta block with neither summary nor TOC. A baseline under a declaration
-  below 0.6 is S034. New conformance fixtures for each, plus `ok_baseline`
-  and `ok_historyless`.
+  document's origin), M005 (warning: a stale TOC, or pre-0.6 TOC entries in a
+  0.6 document). M003 also checks the shape of each TOC entry. M004 now fires
+  only for a meta block with neither summary nor TOC. A baseline under a
+  declaration below 0.6 is S034. New conformance fixtures for each, plus
+  `ok_baseline` and `ok_historyless`.
 
 ### Word tracked changes import as proposals (no format change)
 

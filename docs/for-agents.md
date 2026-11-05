@@ -25,16 +25,19 @@ section numbers below (§) point into it.
 1. **Read the metadata cache first.** The head contains
    `<script type="application/aim-meta+json">` with one JSON object holding
    an optional `summary {text, model, as_of_seq, doc_hash}` and an optional
-   `toc [{title, level, chunks: [ids]}]` with `toc_doc_hash` (§8.1). This is
-   the cheapest orientation the file offers; imported documents carry a TOC
-   when they have headings.
+   `toc` with `toc_doc_hash` (§8.1): one `{chunk_count, id, level, title,
+   word_count}` entry per section, where `id` is the section's heading or
+   slide and a section includes its subsections. This is the cheapest
+   orientation the file offers; a 0.6 document saved by the SDK carries a
+   TOC whenever it has a heading or a slide. In the SDK, `doc.section(id)`
+   reads one section: its ids, its text and its exact markup.
 2. **Verify before trusting.** The cache is derived and may be stale.
    Compare `summary.doc_hash` and `toc_doc_hash` against the document's
    current hash (`aim hash FILE`, or `doc.doc_hash` in the SDK). If they
    differ, ignore that cache and read the body (`doc.outline()` rebuilds the
    TOC; the MCP `aim_read` tool never serves a stale one and says
-   `toc_source: "cache" | "derived"`, or `null` for both when the document
-   has no heading or slide to outline).
+   `toc_source: "cache" | "derived"`, or `null` for both when there is no
+   fresh cache and the document has no heading or slide to outline).
 3. **Project the file before loading it into context** (§8.3):
    - strip the embedded stylesheet (`<style data-aim-css="…">`) — it is
      machine-managed and regenerable, never content;

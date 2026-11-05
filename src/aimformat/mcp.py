@@ -128,13 +128,15 @@ def create_server() -> FastMCP:
         """Read an .aim document as a projected, token-cheap view: title,
         summary (with staleness flag), table of contents, every chunk with
         its stable data-aim id, and the pending proposals awaiting a
-        decision. The table of contents is never stale: the stored cache
-        when it matches the document, else derived from the headings
-        (toc_source says which; both are null when the document has no
-        heading or slide to outline). Long data: URIs are elided; the stylesheet
-        is never included. Start here before editing. Operates on any
-        absolute path on the host; intended for local, trusted stdio use
-        only."""
+        decision. The table of contents has one entry per section (id,
+        level, title, word_count, chunk_count; a section includes its
+        subsections) and is never stale: the stored cache when it matches
+        the document, else derived from the headings (toc_source says
+        which; both are null when there is no such cache and the document
+        has no heading or slide to outline). Long data: URIs are elided;
+        the stylesheet is never included. Start here before editing.
+        Operates on any absolute path on the host; intended for local,
+        trusted stdio use only."""
         doc = _load(path)
         summary = None
         meta = doc.meta
@@ -145,8 +147,7 @@ def create_server() -> FastMCP:
             }
         # A stale or missing cache is never served: derive the outline live
         # (O(n)) — but only when the body HAS one. Without a heading or a
-        # slide the outline is one untitled entry repeating every chunk id
-        # the "chunks" list already carries: tokens for nothing.
+        # slide the outline is a single untitled entry: it outlines nothing.
         toc: Any = None
         toc_source: str | None = None
         if doc.toc_is_fresh():

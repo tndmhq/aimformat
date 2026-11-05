@@ -80,7 +80,17 @@ class TestImportShape:
     def test_imports_with_headings_carry_a_fresh_toc(self, imported):
         meta = imported.meta
         assert meta is not None and "summary" not in meta
-        assert meta["toc"][0]["title"] == "Contract"
+        contract, fees = meta["toc"]
+        heading = next(c for c in imported.chunks if c.tag == "h1")
+        # one compact entry per section; "Contract" includes its subsection
+        assert contract == {
+            "chunk_count": 6,
+            "id": heading.id,
+            "level": 1,
+            "title": "Contract",
+            "word_count": 8,
+        }
+        assert (fees["title"], fees["level"], fees["chunk_count"]) == ("Fees", 2, 4)
         assert meta["toc_doc_hash"] == imported.doc_hash
         assert imported.toc_is_fresh()
 
@@ -346,9 +356,23 @@ class TestToc:
         assert doc.meta["toc"][0]["title"] == "Agreement"
         assert doc.toc_is_fresh()
 
-    def test_a_document_without_a_toc_does_not_get_one(self):
+    def test_a_save_builds_a_compact_toc_for_a_heading(self):
+        # §8.1 (v0.6): every save builds the TOC once the body has a heading
+        doc = aim.new_document(title="t")
+        heading = doc.add_chunk("<h1>H</h1>", author=ADA)
+        saved = aim.loads(doc.dumps())
+        assert saved.meta == {
+            "toc": [
+                {"chunk_count": 1, "id": heading.id, "level": 1, "title": "H", "word_count": 1}
+            ],
+            "toc_doc_hash": saved.doc_hash,
+        }
+        assert saved.toc_is_fresh()
+
+    def test_a_save_below_0_6_builds_no_toc(self):
         doc = aim.new_document(title="t")
         doc.add_chunk("<h1>H</h1>", author=ADA)
+        doc._state.set_spec_version("0.5")
         assert aim.loads(doc.dumps()).meta is None
 
     def test_a_stale_toc_from_another_writer_is_M005(self, imported):

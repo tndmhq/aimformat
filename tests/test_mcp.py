@@ -1,6 +1,7 @@
 """MCP server: tool surface, read projection, propose/resolve round-trip."""
 
 import json
+import re
 from pathlib import Path
 
 import pytest
@@ -295,27 +296,57 @@ def test_history_payloads_are_elided(tmp_path):
 
 
 def test_read_never_serves_a_stale_outline(tmp_path):
-    # IMPORT-D13: no TOC cache (any 0.5 document) → derived live; a fresh
-    # cache → served as is; a cache a foreign writer left stale → derived
+    # IMPORT-D13: a fresh cache → served as is (a 0.6 save builds it); no
+    # TOC cache (any 0.5 document) → derived live; a cache a foreign writer
+    # left stale → derived
     doc = aim.new_document(title="Outline")
     doc.add_chunk('<h1 data-aim="h1">Intro</h1>', author=BOT)
     doc.add_chunk('<p data-aim="p1">Text.</p>', author=BOT)
     path = tmp_path / "outline.aim"
     doc.save(path)
-    out = _payload(_call("aim_read", {"path": str(path)}))
-    assert out["toc_source"] == "derived"
-    assert out["toc"] == [{"title": "Intro", "level": 1, "chunks": ["h1", "p1"]}]
-
-    doc.generate_toc()
-    doc.save(path)
+    entry = {"chunk_count": 2, "id": "h1", "level": 1, "title": "Intro", "word_count": 2}
     out = _payload(_call("aim_read", {"path": str(path)}))
     assert out["toc_source"] == "cache"
+    assert out["toc"] == [entry]
 
+    meta = re.compile(r'<script type="application/aim-meta\+json">\n.*?\n</script>\n', re.S)
+    path.write_text(meta.sub("", path.read_text("utf-8"), count=1), "utf-8")
+    out = _payload(_call("aim_read", {"path": str(path)}))
+    assert out["toc_source"] == "derived"
+    assert out["toc"] == [entry]
+
+    doc.save(path)
     text = path.read_text("utf-8").replace(">Intro</h1>", ">Overview</h1>")
     path.write_text(text, "utf-8")
     out = _payload(_call("aim_read", {"path": str(path)}))
     assert out["toc_source"] == "derived"
     assert out["toc"][0]["title"] == "Overview"
+
+
+def test_writes_build_the_toc(tmp_path):
+    # the write tools save through the SDK: once a 0.6 document has a
+    # heading, every save carries a fresh compact TOC
+    path = _make_doc(tmp_path)
+    assert aim.load(path).meta is None  # no heading yet, so no TOC
+    html = '<h2 data-aim="h2">Next steps</h2>'
+    assert _payload(_call("aim_edit", {"path": str(path), "action": "add", "html": html}))["ok"]
+    toc = [
+        {"chunk_count": 2, "id": "p1", "level": 1, "title": "", "word_count": 4},
+        {"chunk_count": 1, "id": "h2", "level": 2, "title": "Next steps", "word_count": 2},
+    ]
+    out = _payload(_call("aim_read", {"path": str(path)}))
+    assert (out["toc_source"], out["toc"]) == ("cache", toc)
+
+    proposal = {
+        "path": str(path),
+        "action": "modify",
+        "target": "h2",
+        "html": '<h2 data-aim="h2">Next steps, revised</h2>',
+        "explanation": "Clearer.",
+    }
+    assert _payload(_call("aim_propose", proposal))["ok"]
+    out = _payload(_call("aim_read", {"path": str(path)}))
+    assert (out["toc_source"], out["toc"]) == ("cache", toc)  # pending is not the body
 
 
 def test_history_snapshots_are_elided(tmp_path):

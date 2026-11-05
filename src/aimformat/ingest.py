@@ -540,8 +540,8 @@ def finish_import(
     event carrying it, instead of an ``add`` per construct — the content did
     not arrive by editing, so there is nothing to undo and no edit to
     attribute construct by construct. The TOC cache is built when the body
-    has an outline (a heading or a slide); without one a TOC is a single
-    untitled entry listing every id, which costs tokens and outlines nothing.
+    has an outline (a heading or a slide), so the returned document carries
+    it before its first save; every save of the 0.6 document keeps it fresh.
     """
     # the per-construct events that built the body are scaffolding, not
     # edits: dropped, so the baseline is the document's seq 1 — unless a

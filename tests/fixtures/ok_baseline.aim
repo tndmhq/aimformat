@@ -18,7 +18,7 @@ https://aimformat.com/editors
 -->
 <title>Imported fixture</title>
 <script type="application/aim-meta+json">
-{"toc":[{"chunks":["t1","p1","p2"],"level":1,"title":"Imported"}],"toc_doc_hash":"sha256:3a03f6f642bb6818a648cf966b391a34c3e5a2ea3b585904177d049bcdacf3b1"}
+{"toc":[{"chunk_count":3,"id":"t1","level":1,"title":"Imported","word_count":7}],"toc_doc_hash":"sha256:3a03f6f642bb6818a648cf966b391a34c3e5a2ea3b585904177d049bcdacf3b1"}
 </script>
 <style data-aim-css="0.6">
 :root{--aim-brand-1:#1d4ed8;--aim-brand-2:#0f766e;--aim-brand-3:#b45309;--aim-brand-4:#6d28d9;--aim-font-heading:system-ui, -apple-system, 'Segoe UI', sans-serif;--aim-font-body:system-ui, -apple-system, 'Segoe UI', sans-serif;--aim-font-mono:ui-monospace, 'SF Mono', Menlo, Consolas, monospace}

@@ -33,6 +33,8 @@ from .errors import AimError, HistoryError, InvalidOperation, ParseError, Target
 from .events import _ISO_RE
 from .pagesetup import page_setup_from_obj, parse_doc_settings
 from .registry import REGISTRY, version_key
+from .toc import SINCE as TOC_SINCE
+from .toc import is_entry, is_legacy_entry
 
 __all__ = ["Finding", "lint", "lint_text", "lint_path"]
 
@@ -1176,13 +1178,34 @@ class _Linter:
                 self.doc.doc_hash,
             ):
                 self.add("M001", WARNING, "aim-meta summary is stale (doc_hash mismatch)")
+            stale: list[str] = []
             if toc is not None and not isinstance(toc, list):
                 self.add("M003", ERROR, "aim-meta toc is not a list")
+            elif toc is not None:
+                # §8.1: the entry shape only — counts are informative and
+                # never recomputed; the pre-0.6 shape is that version's own
+                bad = next(
+                    (n for n, e in enumerate(toc, 1) if not (is_entry(e) or is_legacy_entry(e))),
+                    None,
+                )
+                if bad is not None:
+                    self.add(
+                        "M003",
+                        ERROR,
+                        f"aim-meta toc entry {bad} is malformed "
+                        "(§8.1: {chunk_count, id, level, title, word_count})",
+                    )
+                elif any(map(is_legacy_entry, toc)) and REGISTRY.version_includes(
+                    self.doc.spec_version, TOC_SINCE
+                ):
+                    stale.append("entries in the pre-0.6 shape {title, level, chunks}")
             marker = meta.get("toc_doc_hash")
             if marker is not None and not isinstance(marker, str):
                 self.add("M003", ERROR, "aim-meta toc_doc_hash is not a string")
             elif marker is not None and marker != self.doc.doc_hash:
-                self.add("M005", WARNING, "aim-meta toc is stale (toc_doc_hash mismatch)")
+                stale.append("toc_doc_hash mismatch")
+            if stale:
+                self.add("M005", WARNING, f"aim-meta toc is stale ({'; '.join(stale)})")
         try:
             for emb in self.doc.stale_embeddings():
                 self.add(

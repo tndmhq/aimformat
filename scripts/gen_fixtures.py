@@ -43,9 +43,31 @@ def base_doc() -> aim.AimDocument:
 
 def _historyless(doc: aim.AimDocument) -> str:
     """The document with no history block at all — the shape a page export
-    or a hand-written file has."""
+    or a hand-written file has (so no derived TOC either)."""
     doc._drop_history(drop_embeddings=True)
-    return doc.dumps()
+    return _without_meta(doc.dumps())
+
+
+_META = r'<script type="application/aim-meta\+json">\n(.*?)\n</script>\n'
+
+
+def _without_meta(text: str) -> str:
+    """*text* without its aim-meta block: a 0.6 save of a document with a
+    heading builds one (§8.1), which no hand-written file carries."""
+    import re
+
+    return re.sub(_META, "", text, count=1, flags=re.S)
+
+
+def _with_meta(text: str, meta: dict) -> str:
+    """*text* with its aim-meta block holding *meta* instead."""
+    import re
+
+    from aimformat.canonical import canonical_json
+
+    match = re.search(_META, text, flags=re.S)
+    assert match, "no aim-meta block to replace"
+    return text[: match.start(1)] + canonical_json(meta) + text[match.end(1) :]
 
 
 def _stale_toc(text: str) -> str:
@@ -55,6 +77,24 @@ def _stale_toc(text: str) -> str:
     return re.sub(
         r'"toc_doc_hash":"sha256:[0-9a-f]+"', '"toc_doc_hash":"sha256:' + "0" * 64 + '"', text
     )
+
+
+def _toc_docs() -> dict[str, str]:
+    """The TOC nok files: a pre-0.6 entry under a 0.6 declaration (stale,
+    even with a matching hash) and an entry of neither shape."""
+    doc = base_doc()
+    text = doc.dumps()
+    legacy = {"chunks": ["h1", "p1", "l1"], "level": 1, "title": "Fixture"}
+    entry = doc.outline()[0]
+    malformed = {**entry, "word_count": str(entry["word_count"])}  # a string, not a count
+    return {
+        "nok_M005_pre_0_6_toc_shape.aim": _with_meta(
+            text, {"toc": [legacy], "toc_doc_hash": doc.doc_hash}
+        ),
+        "nok_M003_malformed_toc_entry.aim": _with_meta(
+            text, {"toc": [malformed], "toc_doc_hash": doc.doc_hash}
+        ),
+    }
 
 
 def _with_history(doc: aim.AimDocument, events: list[dict]) -> str:
@@ -248,10 +288,10 @@ def main() -> None:
 
     # A previous-version document, still conforming under this toolkit: a
     # 0.3 tool understands 0.2, so neither the version marker nor the
-    # stylesheet stamp is a finding (S002/S006 accept older).
+    # stylesheet stamp is a finding (S002/S006 accept older). No TOC: the
+    # one a 0.6 save builds is v0.6 syntax, hashed under the 0.6 line.
     prior = (
-        base_doc()
-        .dumps()
+        _without_meta(base_doc().dumps())
         .replace(f'data-aim-version="{aim.SPEC_VERSION}"', 'data-aim-version="0.2"')
         .replace(f'data-aim-css="{aim.SPEC_VERSION}"', 'data-aim-css="0.2"')
     )
@@ -287,7 +327,8 @@ def main() -> None:
     # must trip exactly its named code and nothing else. (flatten() keeps
     # an anchoring checkpoint since v0.6, which any body edit would trip.)
     flat = _historyless(base_doc())
-    life = files["ok_lifecycle.aim"]
+    # without its TOC, whose hash a body edit would make stale (M005)
+    life = _without_meta(files["ok_lifecycle.aim"])
 
     pag_doc = base_doc()
     pag_doc.set_page_setup(
@@ -423,6 +464,7 @@ def main() -> None:
             "<title>", '<script type="application/aim-meta+json">\n{}\n</script>\n<title>', 1
         ),
         "nok_M005_stale_toc.aim": _stale_toc(files["ok_baseline.aim"]),
+        **_toc_docs(),
         **_baseline_docs(),
     }
     files.update(nok)

@@ -148,9 +148,12 @@ to one checkpoint; `aim baseline FILE` accepts a file whose history no longer
 explains its body as the new starting point (it discards undo — only when the
 user asks).
 
-The `aim-meta` cache may hold a `toc` without a `summary`; `toc_doc_hash`
-says which `doc_hash` the TOC was derived from. A stale or missing TOC is
-re-derived from the headings — do not trust one whose hash differs.
+The `aim-meta` cache may hold a `toc` without a `summary`: one
+`{chunk_count, id, level, title, word_count}` entry per section (a section
+opens at a top-level heading or a slide and includes its subsections).
+`toc_doc_hash` says which `doc_hash` the TOC was derived from. A stale or
+missing TOC is re-derived from the headings — do not trust one whose hash
+differs.
 
 ## Hashing and canonical form
 

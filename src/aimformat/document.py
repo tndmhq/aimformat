@@ -22,7 +22,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, TypeVar
 
-from . import canonical, ids
+from . import canonical, ids, toc
 from .canonical import canonical_json, serialize, serialize_run
 from .css import generate_aim_css
 from .dom import Comment, Element, Fragment, Text, parse_fragment, parse_html
@@ -37,6 +37,7 @@ from .pagesetup import (
     parse_doc_settings,
 )
 from .registry import REGISTRY, version_key
+from .toc import Section
 
 if TYPE_CHECKING:  # pragma: no cover - import cycle guard, typing only
     from .reconcile import ReconcileReport
@@ -180,6 +181,17 @@ def _payload_marker(el: Element) -> str:
 
 def _now_iso() -> str:
     return _dt.datetime.now(_dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _toc_matches(meta: dict, doc_hash: str) -> bool:
+    """Whether *meta* holds a TOC derived from *doc_hash* in the v0.6 shape
+    (§8.1): the counts are not recomputed, only the marker and the shape."""
+    entries = meta.get("toc")
+    return (
+        isinstance(entries, list)
+        and meta.get("toc_doc_hash") == doc_hash
+        and all(toc.is_entry(e) for e in entries)
+    )
 
 
 @dataclass(frozen=True)
@@ -1071,15 +1083,18 @@ class AimDocument:
 
     # -- io ----------------------------------------------------------------------
     def dumps(self) -> str:
-        """Canonical serialization (refreshes the machine-managed stylesheet).
+        """Canonical serialization (refreshes the machine-managed stylesheet
+        and the TOC cache).
 
         The declared ``data-aim-version`` is deliberately NOT touched: the
         ``<html …>`` open line is hashed state (§11.3), so an implicit
         upgrade would invalidate every checkpoint recorded under the old
         line. Documents carry their birth version; only :func:`new_document`
         stamps the current one. (The stylesheet is safe to refresh — it is
-        machine-managed and excluded from hashing — and so is a present TOC
-        cache, §8.1: it is rederived when its ``toc_doc_hash`` is stale.)"""
+        machine-managed and excluded from hashing — and so is the TOC cache,
+        §8.1: in a document declared 0.6 or later it is built when the body
+        has a heading or a slide, and rederived when stale or in the pre-0.6
+        shape. Below 0.6 the meta block is left exactly as it is.)"""
         css = self._state.css_el()
         if css is not None:
             css.raw = "\n" + generate_aim_css()
@@ -4469,77 +4484,80 @@ class AimDocument:
         self._write_meta(meta)
 
     def generate_toc(self) -> list[dict]:
-        """Derive the TOC cache from heading chunks (deterministic) and store
-        it with ``toc_doc_hash``, the ``doc_hash`` it was derived from (§8.1).
-        Once present, :meth:`dumps` keeps it fresh."""
-        toc = self.outline()
+        """Derive the TOC cache from the body (deterministic) and store it
+        with ``toc_doc_hash``, the ``doc_hash`` it was derived from (§8.1):
+        the entries :meth:`outline` lists. In a document declared 0.6 or
+        later every :meth:`dumps` builds and refreshes it anyway; this call
+        stores it now, at any declared version."""
+        entries = self.outline()
         meta = self.meta or {}
-        meta["toc"] = toc
+        meta["toc"] = entries
         meta["toc_doc_hash"] = self.doc_hash
         self._write_meta(meta)
-        return toc
+        return entries
 
     def outline(self) -> list[dict]:
-        """The TOC derived live from the body (headings and slides), without
-        touching the cache — what :meth:`generate_toc` stores."""
-        toc: list[dict] = []
-        current: dict | None = None
-        for top in self._state.constructs():
-            cid = top.chunk_id or top.container_id
-            if top.tag in ("h1", "h2", "h3", "h4", "h5", "h6"):
-                current = {"title": top.text(), "level": int(top.tag[1]), "chunks": [cid]}
-                toc.append(current)
-            elif top.tag == "aim-slide":
-                heading = top.find(lambda e: e.tag in ("h1", "h2", "h3", "h4", "h5", "h6"))
-                entry = {"title": heading.text() if heading else "", "level": 1, "chunks": [cid]}
-                entry["chunks"] += [
-                    e.chunk_id or e.container_id
-                    for e in top.elements()
-                    if (e.chunk_id or e.container_id)
-                ]
-                toc.append(entry)
-                current = None
-            elif current is not None:
-                current["chunks"].append(cid)
-            else:
-                current = {"title": "", "level": 1, "chunks": [cid]}
-                toc.append(current)
-        return toc
+        """The TOC derived live from the body, without touching the cache —
+        what :meth:`generate_toc` stores (§8.1). One ``{chunk_count, id,
+        level, title, word_count}`` entry per section, in document order: a
+        section opens at a top-level heading chunk or a slide and includes
+        its subsections, so an entry's counts include theirs. Content before
+        the first heading is an untitled level-1 entry. :meth:`section`
+        reads one section whole."""
+        return toc.outline(self._state.constructs())
+
+    def section(self, section_id: str) -> Section:
+        """One section by the id that opens it: a heading chunk's id, a
+        slide's container id, or the first construct's id for the untitled
+        section before the first heading (§8.1).
+
+        The :class:`Section` carries the counts of its TOC entry, its ids
+        (chunks and containers, a container before its items), its text (one
+        line per chunk) and its markup (the file's own lines). Pending
+        proposals are not part of it. Raises :class:`TargetNotFound` for an
+        id that opens no section."""
+        found = toc.section(self._state.constructs(), section_id)
+        if found is None:
+            raise TargetNotFound(f"no section opens at {section_id!r} (see outline())")
+        return found
 
     def _has_outline(self) -> bool:
-        """Whether the body has anything to outline (a heading or a slide).
-        Without one, :meth:`outline` is a single untitled entry listing every
-        id — it costs tokens and outlines nothing."""
-        return any(
-            top.tag in ("h1", "h2", "h3", "h4", "h5", "h6", "aim-slide")
-            for top in self._state.constructs()
-        )
+        """Whether the body has anything to outline: a top-level heading
+        chunk or a slide. Without one no TOC is built (§8.1)."""
+        return any(toc.section_level(top) is not None for top in self._state.constructs())
 
     def toc_is_fresh(self) -> bool:
-        """Whether the stored TOC carries the current ``doc_hash`` (a TOC
-        without ``toc_doc_hash`` — written before v0.6 — cannot be judged
-        and counts as not fresh)."""
+        """Whether the stored TOC carries the current ``doc_hash`` and the
+        v0.6 entry shape. A TOC without ``toc_doc_hash`` cannot be judged,
+        and one with pre-0.6 entries is stale: neither is fresh."""
         try:
             meta = self.meta
         except ParseError:
             return False
-        return (
-            meta is not None
-            and isinstance(meta.get("toc"), list)
-            and meta.get("toc_doc_hash") == self.doc_hash
-        )
+        return meta is not None and _toc_matches(meta, self.doc_hash)
 
     def _refresh_toc(self) -> None:
-        """dumps(): a present TOC is a machine-managed cache like aim.css —
-        rederived deterministically, outside doc_hash, never evented."""
+        """dumps(): the TOC is a machine-managed cache like aim.css, derived
+        deterministically, outside doc_hash, never evented. Built when the
+        body has a heading or a slide, rederived when stale, malformed or in
+        the pre-0.6 shape — only in documents declared 0.6 or later. Below
+        that the meta block stays exactly as it is: tools of those versions
+        require a summary beside a TOC (their M004) and read the old shape."""
+        if not REGISTRY.version_includes(self.spec_version, toc.SINCE):
+            return
         try:
             meta = self.meta
         except ParseError:
             return  # a malformed cache is lint's to report (M003), not ours
-        if meta is None or not isinstance(meta.get("toc"), list):
+        present = meta.get("toc") if meta is not None else None
+        if present is None:
+            if not self._has_outline():
+                return
+        elif not isinstance(present, list):
+            return  # lint's too (M003)
+        elif meta is not None and _toc_matches(meta, self.doc_hash):
             return
-        if meta.get("toc_doc_hash") == self.doc_hash:
-            return
+        meta = meta if meta is not None else {}
         meta["toc"] = self.outline()
         meta["toc_doc_hash"] = self.doc_hash
         self._write_meta(meta)
