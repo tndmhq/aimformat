@@ -60,12 +60,19 @@ Provisional (awaiting the maintainer):
    and reshapes old-shape or malformed entries, **only in documents declared 0.6 or later**.
    Below 0.6 a save leaves the meta block byte-identical, so a 0.5 tool never meets a
    TOC-only meta block written by a save (its M004 requires a summary). An explicit
-   `generate_toc()` is not gated.
-6. Lint: an old-shape entry in a document declared 0.6 or later is M005 (stale), with no
-   finding below 0.6, where that shape is the version's own; an entry of neither shape is
-   M003 at any version.
-7. A document with no heading or slide gets no TOC from a save. One whose stored TOC loses
-   its last heading keeps a fresh TOC of one untitled entry.
+   `generate_toc()` on a document declared below 0.6 raises `InvalidOperation`: the
+   compact shape belongs to 0.6, and raising the declaration as a side effect is
+   forbidden (§3.7).
+6. Lint judges a document by its declared version. At 0.6 or later an old-shape entry is
+   M005 (stale), an entry of neither shape is M003, and M004 fires only for a meta block
+   with neither summary nor TOC. Below 0.6 there is no entry-shape finding (the pre-0.6
+   shape is that version's own) and a meta block still needs a summary (M004), as v0.5
+   required.
+7. A document with no heading or slide gets no TOC from a save, and a save removes a
+   stored TOC once the body has no heading or slide left, and the meta block when it holds
+   no summary (other fields in it go too: a block with neither summary nor TOC is M004),
+   so whether a document carries a TOC depends on its body, not its
+   history.
 8. Numbered clauses (`num-1`/`num-2` blocks) open no sections here; #42 decides that for its
    agent outline.
 
@@ -80,6 +87,11 @@ Provisional (awaiting the maintainer):
   `[first..last]` ranges today).
 
 ## Compatibility and migration
+
+A 0.6 document saved with a heading or a slide and no summary carries a TOC-only meta
+block, which a 0.5 tool reports as M004. A downstream tool that lints such files needs a
+0.6 version before 0.6 documents reach it; the order of that release is the maintainer's
+call.
 
 Spec v0.5 defined `toc [{title, level, chunks: [ids]}]`. Such files stay valid: below 0.6
 nothing changes and lint is silent; in a 0.6 document the old shape is stale and the next

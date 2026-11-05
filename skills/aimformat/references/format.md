@@ -23,7 +23,7 @@ current document before any blob:
 <body>
   …content chunks and containers…
   <aim-proposals>…</aim-proposals>             ← pending lane (≤1)
-  <aim-assets>…</aim-assets>                   ← packed assets (≤1)
+  <aim-assets>…</aim-assets>                   ← packed assets (≤1; the only copy of imported images)
   <script type="application/aim-history+jsonl">… ← append-only history (≤1)
   <script type="application/aim-embeddings+jsonl">… (≤1)
 </body></html>

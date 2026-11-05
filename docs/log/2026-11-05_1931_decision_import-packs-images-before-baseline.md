@@ -32,8 +32,9 @@ sample3, two images took 22,624 of 35,584 tokens. §9 already defines the packed
 Decided (maintainer, 2026-11-05):
 
 1. Importers move embedded images into the asset registry before the baseline, so the body
-   and the snapshot reference one stored image. No format change; the importers' default
-   output changes.
+   and the snapshot reference one stored image. No change to the file structure (the packed
+   form is §9's); the importers' default output changes. S036, S037 and the §7 and §9.3
+   wording below are spec changes, provisional.
 
 Provisional (awaiting the maintainer):
 
@@ -60,8 +61,10 @@ history events unless every save packs them.
 
 ## Consequences
 
-- Whole-file size: sample3 67,614 → 50,862 characters (about 33,900 → 22,900 o200k tokens);
-  legal-addendum 63,087 → 59,529 (about 22,100 → 19,500). Image-free fixtures do not change.
+- Whole-file size, against the same branch before this change and with the compact TOC
+  (IMPORT-D13b): sample3 67,616 → 50,916 bytes (33,934 → 22,848 o200k tokens);
+  legal-addendum 63,253 → 58,958 (22,102 → 19,027). Image-free fixtures change only by their
+  TOC.
 - Raw readers meet `<svg role="img"><use>` in the body; the bytes sit once in `<aim-assets>`
   after the content. Browsers render it natively.
 - The condition D15 named, a downstream editor that shows and edits packed images, is not

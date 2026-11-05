@@ -5,10 +5,14 @@ version tracks the spec version it implements (0.x minors may break).
 
 ## 0.6.0 — unreleased
 
-Spec v0.6. Decisions IMPORT-D9 to IMPORT-D16 in `docs/log/` (2026-10-01).
-Every v0.5 document stays valid and unchanged, and nothing is migrated.
-Documents these importers write declare 0.6, which a 0.5 tool reports as a
-newer version (S002) with an unknown event kind (H003).
+Spec v0.6. Decisions IMPORT-D9 to IMPORT-D16 in `docs/log/` (2026-10-01);
+IMPORT-D13 and IMPORT-D15 are superseded by IMPORT-D13b and IMPORT-D15b
+(2026-11-05). Every v0.5 document stays valid and unchanged, and nothing is
+migrated. Documents these importers write declare 0.6, which a 0.5 tool
+reports as a newer version (S002) with an unknown event kind (H003). A 0.6
+document saved with a heading or a slide carries a meta block with a TOC and
+no summary, which a 0.5 tool reports as M004 (v0.5 required a summary), so a
+tool that reads such files moves to 0.6 with or before this release.
 
 - **New `baseline` history event (§6.9).** It makes the current state the
   origin of the log and carries that state once, as a `snapshot` of exactly
@@ -22,9 +26,10 @@ newer version (S002) with an unknown event kind (H003).
   so editing them by hand is not a snapshot mismatch.
 - **Importers record one baseline instead of one `add` per block**
   (`from_docx`, `from_markdown`, `from_text`, `from_docling`/`from_pdf`). On
-  the five DOCX fixtures a fresh import is 15–21% smaller in o200k tokens for
-  text-heavy files (long-report 130,274 → 103,077) and 5–6% for image- or
-  table-heavy ones, including the new TOC. The history is one line, `undo()`
+  the five DOCX fixtures a fresh import, with images stored once and the
+  compact TOC, is 6–36% smaller in o200k tokens than in 0.5.2: sample3
+  35,590 → 22,848, legal-addendum 28,153 → 19,027, long-report 130,278 →
+  102,474, multi-column 13,020 → 11,044, tables-merged 18,180 → 17,109. The history is one line, `undo()`
   right after an import has nothing to undo (it used to delete the last
   imported block), and the save-path history replay starts from one event.
   The DOCX baseline records `source: ["sha256:<input bytes>"]`.
@@ -49,10 +54,12 @@ newer version (S002) with an unknown event kind (H003).
   the slide's id. The counts are informative: lint checks the entry shape and
   the hash, never the counts. `summary` is optional and the TOC records
   `toc_doc_hash`. Every save of a document declared 0.6 or later builds the
-  TOC when the body has a heading or slide, and rewrites it when it is stale
-  or in the pre-0.6 shape. A document declared below 0.6 keeps its meta block
-  as it is. New `doc.section(id)` returns a `Section` with the section's ids,
-  its text (one line per chunk) and its exact markup. MCP `aim_read` never
+  TOC when the body has a heading or slide, rewrites it when it is stale or
+  in the pre-0.6 shape, and removes it when the body no longer has a heading
+  or slide. A document declared below 0.6 keeps its meta block as it is, and
+  `generate_toc()` refuses it. New `doc.section(id)` returns a `Section` with
+  the section's ids, its text (one line per chunk) and its constructs in
+  canonical form (the lines `dumps()` writes). MCP `aim_read` never
   serves a stale outline: it derives one from the headings when the cache is
   missing or stale and says which in `toc_source` (both null when there is no
   fresh cache and no heading or slide). New `doc.outline()` and
@@ -62,8 +69,10 @@ newer version (S002) with an unknown event kind (H003).
   construct; snapshots get the same element, URL, handler and style checks as
   pending payloads), H009 (warning: a seq-1 log that does not explain the
   document's origin), M005 (warning: a stale TOC, or pre-0.6 TOC entries in a
-  0.6 document). M003 also checks the shape of each TOC entry. M004 now fires
-  only for a meta block with neither summary nor TOC. A baseline under a
+  0.6 document). M003 also checks the shape of each TOC entry in a document
+  declared 0.6 or later. M004 follows the declared version: from 0.6 it fires
+  only for a meta block with neither summary nor TOC; below 0.6 a meta block
+  still needs a summary. A baseline under a
   declaration below 0.6 is S034. New conformance fixtures for each, plus
   `ok_baseline` and `ok_historyless`.
 - **Imported images are stored once (§9).** `from_docx`, `from_markdown` and
@@ -74,10 +83,10 @@ newer version (S002) with an unknown event kind (H003).
   them, and an image only Word's Accept All has is stored for the card that
   brings it. Other formats (BMP, WebP, TIFF) and data URIs that are not
   strict base64 stay inline, and the import goes on; the DOCX import report
-  counts them. On the fixtures, sample3 drops from 67,614 to 50,862
-  characters (about 33,900 to 22,900 o200k tokens, 33% fewer) and
-  legal-addendum from 63,087 to 59,529 (about 22,100 to 19,500 tokens, 12%
-  fewer). The image-free fixtures do not change.
+  counts them. Against the same branch before this change, and with
+  the compact TOC, sample3's import drops from 67,616 to 50,916 bytes (33,934
+  to 22,848 o200k tokens) and legal-addendum's from 63,253 to 58,958 (22,102
+  to 19,027). The image-free fixtures change only by their TOC.
 - **The asset registry is content-addressed state, not a cache (§7, §9).**
   It is outside `doc_hash` but cannot be regenerated: after an import it
   holds the only copy of each image. Two new verifier warnings check it

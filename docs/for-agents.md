@@ -30,7 +30,8 @@ section numbers below (§) point into it.
    slide and a section includes its subsections. This is the cheapest
    orientation the file offers; a 0.6 document saved by the SDK carries a
    TOC whenever it has a heading or a slide. In the SDK, `doc.section(id)`
-   reads one section: its ids, its text and its exact markup.
+   reads one section: its ids, its text and its constructs in canonical form
+   (the lines `dumps()` writes, which are the file's own when it is canonical).
 2. **Verify before trusting.** The cache is derived and may be stale.
    Compare `summary.doc_hash` and `toc_doc_hash` against the document's
    current hash (`aim hash FILE`, or `doc.doc_hash` in the SDK). If they
@@ -260,6 +261,11 @@ invariants or you will corrupt identity and history:
   find-and-replace over the raw file that also hits the snapshot breaks
   verification (H008/H006), exactly as one hitting an earlier `add` payload
   would.
+- **`<aim-assets>` is not a cache.** After an import it holds the only copy
+  of each image, which the body, pending payloads and history reference as
+  `<svg role="img" aria-label="…"><use href="#asset-…"/></svg>`. Never delete
+  the block or edit a symbol: S036 warns when a reference resolves to no
+  symbol, S037 when an image's bytes no longer match its id.
 - **The `aim-meta` summary may now be stale.** That is tolerable — readers
   check `summary.doc_hash` before trusting it — but do not leave a wrong
   summary you know is misleading; deleting the whole meta script is always
