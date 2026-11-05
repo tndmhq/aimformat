@@ -521,6 +521,31 @@ class TestRoundTrip:
         assert _view_texts(back.read_bytes(), "accept") == want
         assert _view_texts(back.read_bytes(), "reject") == _texts(doc)
 
+    @pytest.mark.parametrize("new", [["New1", "New2"], ["New1", "New2", "New3"]])
+    def test_a_moved_chunk_modified_into_several_blocks_keeps_a_paragraph_each(self, new, tmp_path):
+        # Every block of the replacement went into the moved paragraph, so
+        # Word's Accept All ran them together ("New1New2") where accepting
+        # the two cards keeps one paragraph per block.
+        ada, bot = aim.human("ada"), aim.agent("model-x")
+        doc = aim.new_document(title="Moved and split")
+        markups = ("<p>Alpha</p>", "<div><p>Old</p></div>", "<p>Beta</p>", "<p>Gamma</p>")
+        with doc.batch():
+            _, moved, beta, _ = (doc.add_chunk(m, author=ada).id for m in markups)
+        doc.propose_move(moved, container="body", after=beta, author=ada)
+        blocks = "".join(f"<p>{text}</p>" for text in new)
+        doc.propose_modify(moved, f'<div data-aim="{moved}">{blocks}</div>', author=bot)
+        tracked = tmp_path / "tracked.docx"
+        aim.to_docx(doc, tracked, pending="tracked")
+        want = {
+            "accept": ["Alpha", "Beta", *new, "Gamma"],
+            "reject": ["Alpha", "Old", "Beta", "Gamma"],
+        }
+        for view, paragraphs in want.items():
+            resolved = tmp_path / f"{view}.docx"
+            aim.to_docx(doc, resolved, pending=f"{view}-all")  # the SDK's own outcome
+            assert _view_paragraphs(resolved.read_bytes(), view) == paragraphs
+            assert _view_paragraphs(tracked.read_bytes(), view) == paragraphs
+
     @pytest.mark.parametrize("forward", [True, False], ids=["later", "earlier"])
     @pytest.mark.parametrize(
         "order",
@@ -620,6 +645,18 @@ def _view_texts(data: bytes, view: str) -> list[str]:
         if text:
             out.append(text)
     return out
+
+
+def _view_paragraphs(data: bytes, view: str) -> list[str]:
+    """Every paragraph of a resolved .docx view, empty ones included: an
+    empty paragraph is a blank line in Word, which ``_view_texts`` hides."""
+    from lxml import etree
+
+    w = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
+    with zipfile.ZipFile(io.BytesIO(data)) as z:
+        root = etree.fromstring(z.read("word/document.xml"))
+    view_root = resolve_view(root, view)
+    return ["".join(t.text or "" for t in p.iter(f"{w}t")) for p in view_root.iter(f"{w}p")]
 
 
 # -- property tests ------------------------------------------------------------------

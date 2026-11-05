@@ -1299,7 +1299,9 @@ class _Exporter:
         """The arrival half of a pending move. A pending modify of the same
         target lands here too, nested as ``moveTo(del(old))`` + ``ins(new)``:
         rejecting the move removes both, accepting it keeps only the new
-        text — the same outcomes as resolving the two cards."""
+        text — the same outcomes as resolving the two cards. The first new
+        block shares the last moved paragraph's mark; each further one is an
+        inserted paragraph of its own, as in a modify that did not move."""
         target = prop.target or ""
         index = self.aim._state.top_index(target)
         if index is None:  # pragma: no cover - guarded at registration
@@ -1327,6 +1329,7 @@ class _Exporter:
         name = self._move_names[target]
         range_id = ""
         for i, block in enumerate(blocks):
+            last = i == len(blocks) - 1
             para = self.out.add_paragraph(style=self._safe_style(_style_for(block.tag)))
             self._number_paragraph(para, block)
             self.rev.mark_paragraph(para, "w:moveTo", label, date)
@@ -1346,16 +1349,19 @@ class _Exporter:
                     modify.at,
                     deleted=True,
                 )
-                if i == len(blocks) - 1:
-                    for extra in new_blocks:
-                        self.rev.ins(
-                            para,
-                            _tracked_block_runs(extra, self.paint),
-                            _actor_label(modify.author),
-                            modify.at,
-                        )
-            if i == len(blocks) - 1:
+                if last and new_blocks:
+                    self.rev.ins(
+                        para,
+                        _tracked_block_runs(new_blocks[0], self.paint),
+                        _actor_label(modify.author),
+                        modify.at,
+                    )
+            if last:
                 self.rev.close_move_range(para, "moveTo", range_id)
+        if modify is not None:
+            # each further block is a paragraph of its own: appended to the
+            # moved one, the blocks ran together in Word's Accept All
+            self._emit_inserted_blocks(new_blocks[1:], modify)
 
     # -- tracked replacements (exactly once per chunk, never per child) -------
     def emit_tracked_chunk(
@@ -1376,13 +1382,20 @@ class _Exporter:
             self.rev.dele(para, _tracked_block_runs(block, self.paint), label, date)
         if payload and prop.action == "modify":
             for new_el in self._payload_elements(prop):
-                for block in _block_children(new_el, self.paint):
-                    para = self.out.add_paragraph(
-                        style=style or self._safe_style(_style_for(block.tag))
-                    )
-                    self._number_paragraph(para, block)
-                    self.rev.mark_paragraph(para, "w:ins", label, date)
-                    self.rev.ins(para, _tracked_block_runs(block, self.paint), label, date)
+                self._emit_inserted_blocks(_block_children(new_el, self.paint), prop, style)
+
+    def _emit_inserted_blocks(
+        self, blocks: list[Element], prop: Proposal, style: str | None = None
+    ) -> None:
+        """One inserted paragraph per block of *prop*'s replacement, its mark
+        tracked as well as its runs: Accept All keeps each block's paragraph,
+        Reject All leaves no empty one behind."""
+        label, date = _actor_label(prop.author), prop.at
+        for block in blocks:
+            para = self.out.add_paragraph(style=style or self._safe_style(_style_for(block.tag)))
+            self._number_paragraph(para, block)
+            self.rev.mark_paragraph(para, "w:ins", label, date)
+            self.rev.ins(para, _tracked_block_runs(block, self.paint), label, date)
 
     def emit_tracked_list_container(self, el: Element, prop: Proposal) -> None:
         label, date = _actor_label(prop.author), prop.at
