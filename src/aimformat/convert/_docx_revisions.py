@@ -44,6 +44,7 @@ import bisect
 import copy
 import re
 import zipfile
+import zlib
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -362,7 +363,9 @@ def unreachable_part_revisions(zf: zipfile.ZipFile) -> dict[str, int]:
             if pattern.match(name):
                 try:
                     count = len(_PART_REVISION.findall(zf.read(name)))
-                except KeyError:
+                except (KeyError, zipfile.BadZipFile, zlib.error, OSError):
+                    # only counted for the report: a damaged part must not
+                    # stop an import that never carries it
                     count = 0
                 if count:
                     shown = f"{label}s" if label in ("header", "footer") else label

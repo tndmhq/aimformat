@@ -301,6 +301,15 @@ class TestModes:
         with pytest.warns(AimImportWarning, match="in headers were not imported"):
             aim.from_docx(data)
 
+    def test_a_damaged_part_the_import_skips_does_not_stop_it(self):
+        # Counting the skipped parts' revisions reads them on every import; a
+        # header whose bytes fail their checksum must not make that fatal.
+        d = kit.Doc()
+        d.body = [d.p(d.t("Body."))]
+        data = _damaged_member(_with_header_revision(d.build()), "word/header")
+        result = import_docx(data)
+        assert _texts(result.document) == ["Body."]
+
     def test_cli_flag(self, tmp_path, capsys):
         from aimformat.cli import main
 
@@ -672,6 +681,20 @@ def _view_paragraphs(data: bytes, view: str) -> list[str]:
         root = etree.fromstring(z.read("word/document.xml"))
     view_root = resolve_view(root, view)
     return ["".join(t.text or "" for t in p.iter(f"{w}t")) for p in view_root.iter(f"{w}p")]
+
+
+def _damaged_member(data: bytes, prefix: str) -> bytes:
+    """*data* with one byte flipped inside the compressed bytes of the first
+    member whose name starts with *prefix*: the archive still opens, reading
+    that member fails its checksum or inflate."""
+    buf = bytearray(data)
+    with zipfile.ZipFile(io.BytesIO(data)) as zf:
+        info = next(i for i in zf.infolist() if i.filename.startswith(prefix))
+    off = info.header_offset
+    start = off + 30 + int.from_bytes(buf[off + 26 : off + 28], "little")
+    start += int.from_bytes(buf[off + 28 : off + 30], "little")
+    buf[start + info.compress_size // 2] ^= 0xFF
+    return bytes(buf)
 
 
 def _with_header_revision(data: bytes) -> bytes:
