@@ -46,7 +46,8 @@ tool that reads such files moves to 0.6 with or before this release.
   page with no history.
 - **Reconcile adopts a history-less file declared at 0.6 or later as one
   baseline**; below 0.6 it keeps writing one `add` per construct, so no
-  declaration is raised as a side effect.
+  declaration is raised as a side effect. Reconcile refuses a baseline whose
+  snapshot does not hash to its `doc_hash`, before writing anything.
 - **TOC cache (§8.1).** One compact entry per section,
   `{chunk_count, id, level, title, word_count}`, instead of a list of every
   chunk id. A section opens at a top-level heading or a slide and includes

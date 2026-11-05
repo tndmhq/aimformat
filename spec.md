@@ -875,7 +875,10 @@ adoption path for hand-edited files). The reference toolkit implements
 reconcile as `AimDocument.reconcile()` / `aim reconcile`; it requires the
 full retained log, or a log that begins with a baseline (reconciling a pruned
 history is an error there — the state below the prune floor is
-unrecoverable; `baseline` accepts such a file as it is). Adopting a file with
+unrecoverable; `baseline` accepts such a file as it is). It also refuses a
+baseline whose snapshot does not hash to its `doc_hash` (§6.9): reconcile
+repairs the body against an intact history, never the history itself.
+Adopting a file with
 no history records one baseline when the file declares a version that
 defines baselines, and one `add` per construct below it or when a construct
 could not be a snapshot entry (H008, §6.9). It also refuses an
