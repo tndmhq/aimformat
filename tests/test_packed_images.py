@@ -275,16 +275,21 @@ class TestKeptInline:
 # -- a tracked DOCX packs both views before alignment (P9) ----------------------
 
 
-def _ins(rid: int):
-    """A ``w:ins`` revision record by Alice (python-docx's OXML)."""
+def _revision(tag: str, rid: int):
+    """A ``w:ins`` or ``w:del`` revision record by Alice (python-docx's OXML)."""
     from docx.oxml import OxmlElement
     from docx.oxml.ns import qn
 
-    el = OxmlElement("w:ins")
+    el = OxmlElement(f"w:{tag}")
     el.set(qn("w:id"), str(rid))
     el.set(qn("w:author"), "Alice Smith")
     el.set(qn("w:date"), "2026-09-01T10:00:00Z")
     return el
+
+
+def _ins(rid: int):
+    """A ``w:ins`` revision record by Alice (python-docx's OXML)."""
+    return _revision("ins", rid)
 
 
 def _tracked_docx_with_images() -> bytes:
@@ -344,6 +349,53 @@ def _tracked_docx_with_an_inserted_figure() -> bytes:
     return out.getvalue()
 
 
+#: what each tracked change does to a paragraph holding only a picture: the
+#: pictures it holds, the revision wrapping each one's run, and whether its
+#: paragraph mark carries the same revision (a whole paragraph inserted or
+#: deleted) or stays (the picture replaced inside a paragraph both views keep)
+_PICTURE_ONLY = {
+    "insert": ((PNG_B,), ("ins",), True),
+    "delete": ((PNG_A,), ("del",), True),
+    "replace": ((PNG_A, PNG_B), ("del", "ins"), False),
+}
+
+
+def _tracked_picture_only_paragraph(change: str) -> bytes:
+    """A heading and an intro, then a paragraph holding only a picture and
+    changed with tracking (*change*, see ``_PICTURE_ONLY``), then a closing
+    paragraph. Such a paragraph converts to a figure."""
+    pytest.importorskip("docx_parser_converter")
+    docx = pytest.importorskip("docx")
+    from docx.oxml import OxmlElement
+
+    pictures, tags, mark = _PICTURE_ONLY[change]
+    built = docx.Document()
+    built.add_heading("Tracked picture", level=1)
+    built.add_paragraph("Intro.")
+    para = built.add_paragraph()
+    for rid, (blob, tag) in enumerate(zip(pictures, tags, strict=True), start=1):
+        run = para.add_run()
+        run.add_picture(io.BytesIO(blob))
+        wrapper = _revision(tag, rid)
+        run._r.addprevious(wrapper)
+        wrapper.append(run._r)
+    if mark:
+        props = OxmlElement("w:rPr")
+        props.append(_revision(tags[0], 99))
+        para._p.get_or_add_pPr().append(props)
+    built.add_paragraph("After.")
+    out = io.BytesIO()
+    built.save(out)
+    return out.getvalue()
+
+
+_IDS = re.compile(r' data-aim(?:-container)?="[^"]*"')
+
+
+def _body_without_ids(doc: aim.AimDocument) -> list[str]:
+    return [_IDS.sub("", serialize(el)) for el in doc._state.constructs()]
+
+
 class TestTrackedDocxImport:
     def test_propose_mode_packs_the_body_and_the_lane(self):
         result = aim.import_docx(_tracked_docx_with_images())
@@ -370,17 +422,61 @@ class TestTrackedDocxImport:
         assert not result.document.proposals
         _assert_stored_once(result.document, *blobs)
 
-    def test_an_accept_only_image_no_card_carries_is_not_stored(self):
-        # The accept view's image is stored before the lane is written. When
-        # no card ends up carrying it (today the lane reads this inserted
-        # figure as converter noise: its derived "#fig" source key cites no
-        # revision), the import must not ship a copy nothing references.
+    def test_an_accept_only_image_is_stored_for_the_card_that_brings_it(self):
+        # The accept view's image is stored before the lane is written, and
+        # the card that inserts the figure carries it: the figure's derived
+        # source key ("#fig") cites the revisions of its paragraph.
         data = _tracked_docx_with_an_inserted_figure()
         accepted = aim.import_docx(data, tracked="accept").document
         assert _asset(PNG_B) in _symbols(accepted.dumps())  # Word's Accept All has it
-        text = aim.import_docx(data).document.dumps()
+        doc = aim.import_docx(data).document
+        (card,) = doc.proposals
+        assert card.action == "add"
+        assert f'<use href="#{_asset(PNG_B)}"/>' in (card.payload_html or "")
+        text = doc.dumps()
+        assert _symbols(text) == {_asset(PNG_A), _asset(PNG_B)}
         assert not _dangling(text)
         assert aim.loads(text).gc_assets() == 0  # every stored image is referenced
+        assert _codes(text, "error") == [] and aim.loads(text).verify() == []
+
+    @pytest.mark.parametrize("change", sorted(_PICTURE_ONLY))
+    def test_a_picture_only_paragraph_gets_its_card(self, change):
+        # The paragraph converts to a figure under a derived source key
+        # ("p3#fig0") while its revisions name the paragraph ("p3"). Looked up
+        # by the exact key they produced no card, and accept_all kept the
+        # original picture where Word's Accept All has none or another.
+        data = _tracked_picture_only_paragraph(change)
+        result = aim.import_docx(data)
+        doc = result.document
+        assert len(doc.proposals) == 1
+        assert all(note.cards for note in result.report.revisions)
+        _assert_stored_once(doc, *_PICTURE_ONLY[change][0])
+        for mode in ("accept", "reject"):
+            word = aim.import_docx(data, tracked=mode).document
+            resolved = aim.loads(doc.dumps())
+            getattr(resolved, f"{mode}_all")(decided_by=ME)
+            assert _body_without_ids(resolved) == _body_without_ids(word), mode
+            parts = _parts(resolved)
+            assert not any("data:image/" in parts[k] for k in ("body", "history", "proposals"))
+            text = resolved.dumps()
+            assert not _dangling(text)
+            assert _codes(text, "error") == [] and resolved.verify() == []
+
+    def test_an_accept_only_image_no_card_carries_is_not_stored(self, monkeypatch):
+        # A difference with no revision behind it is converter noise: no card
+        # carries it and the original markup stays. An image only the accept
+        # view has is stored before the lane is written, so when no card ends
+        # up carrying it, the import's gc pass must drop it. Here every
+        # difference reads as noise: the lane cites no revision at all.
+        from aimformat.convert import _docx_tracked
+
+        monkeypatch.setattr(_docx_tracked._Planner, "cites", lambda self, *units: [])
+        result = aim.import_docx(_tracked_docx_with_an_inserted_figure())
+        assert not result.document.proposals
+        text = result.document.dumps()
+        assert _symbols(text) == {_asset(PNG_A)}  # not the image nothing references
+        assert aim.loads(text).gc_assets() == 0
+        assert not _dangling(text)
         assert _codes(text, "error") == [] and aim.loads(text).verify() == []
 
 

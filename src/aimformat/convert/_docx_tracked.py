@@ -324,13 +324,19 @@ class _Planner:
 
     # -- citation ------------------------------------------------------------
     def cites(self, *units: Unit | None) -> list[Revision]:
+        """The revisions whose source element lies inside *units*. A block a
+        paragraph generates beside itself carries a derived key ("p3#fig0",
+        a figure converted from a paragraph holding only a picture), while
+        the revisions name the paragraph ("p3"): a derived key also cites
+        its paragraph's revisions."""
         seen: dict[int, Revision] = {}
         for unit in units:
             if unit is None:
                 continue
             for member in unit.members:
-                for rev in self.by_src.get(member, ()):
-                    seen[rev.index] = rev
+                for key in dict.fromkeys((member, member.split("#", 1)[0])):
+                    for rev in self.by_src.get(key, ()):
+                        seen[rev.index] = rev
         return [seen[i] for i in sorted(seen)]
 
     # -- alignment -----------------------------------------------------------
