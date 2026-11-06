@@ -17,6 +17,13 @@ def snap(doc: aim.AimDocument) -> aim.AimDocument:
     return aim.loads(doc.dumps())
 
 
+def _history_end(text: str) -> int:
+    """Where the history block closes: the place to append a forged line.
+    Found by its script type — the first ``</script>`` is the meta block's
+    once a save has built the TOC."""
+    return text.index("\n</script>", text.index("application/aim-history+jsonl"))
+
+
 @pytest.fixture
 def doc() -> aim.AimDocument:
     d = aim.new_document(title="Diff fixture")
@@ -340,8 +347,7 @@ def test_divergence_malformed_appended_event_is_drift(doc):
     # A replay the log cannot account for is the definition of drift.
     old = snap(doc)
     text = doc.dumps()
-    marker = "\n</script>"
-    idx = text.index(marker)
+    idx = _history_end(text)
     bogus = '\n{"seq": 99, "t": "2026-01-01T00:00:00Z"}'
     tampered = aim.loads(text[:idx] + bogus + text[idx:])
     div = aim.classify_divergence(old, tampered)
@@ -354,8 +360,7 @@ def test_divergence_unparseable_appended_history_is_drift(doc):
     # surfaced from the events extraction, not the replay guard.
     old = snap(doc)
     text = doc.dumps()
-    marker = "\n</script>"
-    idx = text.index(marker)
+    idx = _history_end(text)
     tampered = aim.loads(text[:idx] + "\n{this is not json" + text[idx:])
     div = aim.classify_divergence(old, tampered)
     assert div.content_drift and not div.explained
@@ -374,8 +379,7 @@ def test_divergence_bool_payload_event_is_drift(doc):
     # where markup belongs raised AttributeError through the replay guard
     old = snap(doc)
     text = doc.dumps()
-    marker = "\n</script>"
-    idx = text.index(marker)
+    idx = _history_end(text)
     bogus = (
         '\n{"action":"modify","after":true,"before":true,"author":'
         '{"type":"agent","model":"m"},"batch":"bx","kind":"direct_edit",'
@@ -405,7 +409,7 @@ def test_divergence_unknown_kind_suffix_is_drift_not_explained(doc):
     # "explained" with the invalid event in new_events
     old = snap(doc)
     text = doc.dumps()
-    idx = text.index("\n</script>")
+    idx = _history_end(text)
     bogus = (
         '\n{"author":{"type":"agent","model":"m"},"batch":"bx",'
         '"kind":"bogus","seq":99,"t":"2026-01-01T00:00:00Z"}'
@@ -439,7 +443,7 @@ def test_divergence_incomplete_checkpoint_is_drift(doc):
     # corrupt suffix classifies as drift instead of "explained"
     old = snap(doc)
     text = doc.dumps()
-    idx = text.index("\n</script>")
+    idx = _history_end(text)
     bogus = (
         '\n{"kind":"checkpoint","seq":99,"t":"2026-01-01T00:00:00Z",'
         '"author":{"type":"agent","model":"m"},"batch":"bx"}'
@@ -456,7 +460,7 @@ def test_divergence_reused_seq_checkpoint_is_drift(doc):
     old = snap(doc)
     last_seq = old.seq
     text = doc.dumps()
-    idx = text.index("\n</script>")
+    idx = _history_end(text)
     bogus = (
         f'\n{{"kind":"checkpoint","seq":{last_seq},"t":"2026-01-01T00:00:00Z",'
         '"author":{"type":"agent","model":"m"},"batch":"bx",'

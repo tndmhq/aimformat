@@ -225,8 +225,12 @@ class TestStructure:
     def test_page_break_chunk(self, imported):
         assert any(c.tag == "aim-page-break" for c in imported.chunks)
 
-    def test_image_embeds_as_data_uri(self, html):
-        assert 'src="data:image/png;base64,' in html
+    def test_image_is_stored_once_in_the_asset_registry(self, imported, html):
+        # spec §9: the chunk references the image; its bytes sit once in
+        # <aim-assets>, out of the body and the baseline snapshot
+        assert re.search(r'<svg[^>]*role="img"[^>]*><use href="#asset-[0-9a-f]{12}"/></svg>', html)
+        assert "data:image/" not in html
+        assert 'href="data:image/png;base64,' in imported.dumps()
 
     def test_page_setup_carried(self, imported):
         text = imported.dumps()
@@ -496,13 +500,14 @@ class TestTextbox:
         assert "Caption" in [c.text for c in imported.chunks]
         return "\n".join(c.html for c in imported.chunks)
 
+    # (an imported image is a packed reference, spec §9: one per image)
     def test_vml_image_in_a_textbox_is_recovered_once(self):
         # dpc cannot see VML; without the seam's recovery this image is LOST
-        assert self._textbox_with_image("vml").count("<img") == 1
+        assert self._textbox_with_image("vml").count('<use href="#asset-') == 1
 
     def test_drawingml_image_in_a_textbox_is_not_doubled(self):
         # dpc's own walk already emits this one, so the seam must not re-add it
-        assert self._textbox_with_image("drawingml").count("<img") == 1
+        assert self._textbox_with_image("drawingml").count('<use href="#asset-') == 1
 
     def test_an_mce_wrapped_image_in_a_textbox_is_recovered(self):
         # the third case, and the one that makes "skip blips inside textboxes"
@@ -510,7 +515,7 @@ class TestTextbox:
         # never sees this picture and the seam is the only thing that can
         # recover it. Everything Word draws beyond a plain inline image —
         # grouped artwork, shapes with a picture fill, SmartArt — lands here.
-        assert self._textbox_with_image("drawingml-mce").count("<img") == 1
+        assert self._textbox_with_image("drawingml-mce").count('<use href="#asset-') == 1
 
 
 class TestArchiveGuards:
@@ -691,7 +696,9 @@ class TestNumberingVocabularyIsValid:
         # went unchecked: a num-3 in a 0.4 document linted clean
         doc = aim.new_document(title="Gate")
         doc.add_chunk('<p class="num-3">x</p>', author=aim.external("t"))
-        body = doc.dumps().replace('data-aim-version="0.5"', f'data-aim-version="{declared}"')
+        body = doc.dumps().replace(
+            f'data-aim-version="{REGISTRY.spec_version}"', f'data-aim-version="{declared}"'
+        )
         codes = {f.code for f in aim.lint(aim.loads(body)) if f.level == "error"}
         assert "S034" in codes, f"a 0.5 class went unchecked under {declared}"
 
@@ -706,7 +713,9 @@ class TestNumberingVocabularyIsValid:
         ):
             doc = aim.new_document(title="Gate")
             doc.add_chunk(markup, author=aim.external("t"))
-            body = doc.dumps().replace('data-aim-version="0.5"', 'data-aim-version="0.4"')
+            body = doc.dumps().replace(
+                f'data-aim-version="{REGISTRY.spec_version}"', 'data-aim-version="0.4"'
+            )
             codes = {f.code for f in aim.lint(aim.loads(body)) if f.level == "error"}
             assert "S034" in codes, f"{markup} went unchecked in a 0.4 document"
 
@@ -1010,7 +1019,10 @@ class TestImageParagraphs:
         doc.save(out)
         out.seek(0)
         body = convert_docx(out).dumps()
-        assert re.search(r"<figure[^>]*><img[^>]*data:image/png[^>]*></figure>", body), body[:400]
+        # the figure holds the packed reference; the PNG sits in the registry
+        packed = r'<svg[^>]*role="img"[^>]*><use href="#asset-[0-9a-f]{12}"/></svg>'
+        assert re.search(rf"<figure[^>]*>{packed}</figure>", body), body[:400]
+        assert 'href="data:image/png;base64,' in body
 
     def test_figure_roundtrips_through_export(self, tmp_path):
         from PIL import Image as PILImage
@@ -1044,7 +1056,7 @@ class TestImageParagraphs:
         doc.save(out)
         out.seek(0)
         a = convert_docx(out)
-        assert re.search(r'<figure[^>]*class="text-center"[^>]*><img', a.dumps())
+        assert re.search(r'<figure[^>]*class="text-center"[^>]*><svg[^>]*role="img"', a.dumps())
         path = tmp_path / "centered.docx"
         aim.to_docx(a, str(path))
         d = Document(str(path))

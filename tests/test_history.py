@@ -350,9 +350,21 @@ class TestCheckpointsAndTravel:
 class TestLifecycleOps:
     def test_flatten_removes_history_and_embeddings(self, rich_doc):
         rich_doc.set_embedding("intro", model="m", vec=[0.1, 0.2])
+        before = rich_doc.seq
         rich_doc.flatten()
-        assert rich_doc.history == [] and rich_doc.embeddings == []
+        # collapsed to ONE checkpoint at the next seq (IMPORT-D12): seq never
+        # goes backwards, and the state stays hash-anchored
+        (event,) = rich_doc.history
+        assert event.kind == "checkpoint" and event.seq == before + 1
+        assert event.get("doc_hash") == rich_doc.doc_hash
+        assert rich_doc.embeddings == []
         assert aim.loads(rich_doc.dumps()).chunks  # still a valid doc
+        assert rich_doc.verify() == []
+
+    def test_flatten_of_a_historyless_document_stays_historyless(self):
+        doc = aim.loads(aim.to_html(aim.new_document(title="Bare")))
+        doc.flatten()
+        assert doc.history == []
 
     def test_prune_by_label_keeps_checkpoint(self, lifecycle_doc):
         dropped = lifecycle_doc.prune(before="reviewed")

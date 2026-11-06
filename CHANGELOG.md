@@ -3,6 +3,178 @@
 All notable changes to the spec and the reference toolkit. The package
 version tracks the spec version it implements (0.x minors may break).
 
+## 0.6.0 — unreleased
+
+Spec v0.6. Decisions IMPORT-D9 to IMPORT-D16 in `docs/log/` (2026-10-01);
+IMPORT-D13 and IMPORT-D15 are superseded by IMPORT-D13b and IMPORT-D15b
+(2026-11-05). Every v0.5 document stays valid and unchanged, and nothing is
+migrated. Documents these importers write declare 0.6, which a 0.5 tool
+reports as a newer version (S002) with an unknown event kind (H003). A 0.6
+document saved with a heading or a slide carries a meta block with a TOC and
+no summary, which a 0.5 tool reports as M004 (v0.5 required a summary), so a
+tool that reads such files moves to 0.6 with or before this release.
+
+- **New `baseline` history event (§6.9).** It makes the current state the
+  origin of the log and carries that state once, as a `snapshot` of exactly
+  the lines `doc_hash` hashes. Verification, time travel and reconcile work
+  from the file alone: reconcile's expected state is the snapshot plus the
+  later events, so a hand edit to imported content no later event touched is
+  still adopted with its true `before`. Theme and settings in the snapshot
+  are tracked origin state. Recording a baseline raises the declared version
+  to at least 0.6, with no version event (§3.7). The `<html>` line is
+  compared on the declared version only: no event records `lang` or `dir`,
+  so editing them by hand is not a snapshot mismatch.
+- **Importers record one baseline instead of one `add` per block**
+  (`from_docx`, `from_markdown`, `from_text`, `from_docling`/`from_pdf`). On
+  the five DOCX fixtures a fresh import, with images stored once and the
+  compact TOC, is 6–36% smaller in o200k tokens than in 0.5.2: sample3
+  35,590 → 22,848, legal-addendum 28,153 → 19,027, long-report 130,278 →
+  102,474, multi-column 13,020 → 11,044, tables-merged 18,180 → 17,109. The history is one line, `undo()`
+  right after an import has nothing to undo (it used to delete the last
+  imported block), and the save-path history replay starts from one event.
+  The DOCX baseline records `source: ["sha256:<input bytes>"]`.
+- **`AimDocument.baseline(label)` and `aim baseline FILE`.** SDK and CLI
+  only, never an MCP tool: it discards undo and provenance. It is also the
+  recovery for a file whose history no longer explains its body.
+- **`flatten()` keeps one checkpoint.** It now collapses the history to a
+  checkpoint at the next seq instead of deleting it. The file stays valid at
+  any version (a pruned log, H004), seq never goes backwards, `verify()`
+  still catches a later hand edit, and `reconcile()` refuses with the
+  pruned-log message. Before, flatten followed by an SDK edit made the next
+  reconcile crash, and a hand edit after flatten could not be detected. A
+  document without history stays without one. `to_html()` still writes a
+  page with no history.
+- **Reconcile adopts a history-less file declared at 0.6 or later as one
+  baseline**; below 0.6 it keeps writing one `add` per construct, so no
+  declaration is raised as a side effect. Reconcile refuses a baseline whose
+  snapshot does not hash to its `doc_hash`, before writing anything.
+- **TOC cache (§8.1).** One compact entry per section,
+  `{chunk_count, id, level, title, word_count}`, instead of a list of every
+  chunk id. A section opens at a top-level heading or a slide and includes
+  its subsections, so its counts include theirs; `id` is the heading's or
+  the slide's id. The counts are informative: lint checks the entry shape and
+  the hash, never the counts. `summary` is optional and the TOC records
+  `toc_doc_hash`. Every save of a document declared 0.6 or later builds the
+  TOC when the body has a heading or slide, rewrites it when it is stale or
+  in the pre-0.6 shape, and removes it when the body no longer has a heading
+  or slide. `generate_toc()` follows the same rule: with no heading or slide
+  it stores no TOC, removes a stored one and returns an empty list. A
+  document declared below 0.6 keeps its meta block as it is, and
+  `generate_toc()` refuses it. New `doc.section(id)` returns a `Section` with
+  the section's ids, its text (one line per chunk) and its constructs in
+  canonical form (the lines `dumps()` writes). MCP `aim_read` never
+  serves a stale outline: it derives one from the headings when the cache is
+  missing or stale and says which in `toc_source` (both null when there is no
+  fresh cache and no heading or slide). New `doc.outline()` and
+  `doc.toc_is_fresh()`.
+- **Verifier.** New H007 (baseline not first, or twice), H008 (snapshot
+  does not hash to its `doc_hash`, or an entry is not one conforming
+  construct; snapshots get the same element, URL, handler and style checks as
+  pending payloads), H009 (warning: a seq-1 log that does not explain the
+  document's origin), M005 (warning: a stale TOC, or pre-0.6 TOC entries in a
+  0.6 document). M003 also checks the shape of each TOC entry in a document
+  declared 0.6 or later. M004 follows the declared version: from 0.6 it fires
+  only for a meta block with neither summary nor TOC; below 0.6 a meta block
+  still needs a summary. A baseline under a
+  declaration below 0.6 is S034. New conformance fixtures for each, plus
+  `ok_baseline` and `ok_historyless`.
+- **Imported images are stored once (§9).** `from_docx`, `from_markdown` and
+  `from_docling` move PNG, JPEG and GIF data into the asset registry before
+  any history is written, so the body, the baseline snapshot and a tracked
+  import's pending cards reference one stored copy, and an image found twice
+  is stored once. A tracked DOCX packs both of its views before aligning
+  them, and an image only Word's Accept All has is stored for the card that
+  brings it. Other formats (BMP, WebP, TIFF) and data URIs that are not
+  strict base64 stay inline, and the import goes on; the DOCX import report
+  counts them. Against the same branch before this change, and with
+  the compact TOC, sample3's import drops from 67,616 to 50,916 bytes (33,934
+  to 22,848 o200k tokens) and legal-addendum's from 63,253 to 58,958 (22,102
+  to 19,027). The image-free fixtures change only by their TOC.
+- **The asset registry is content-addressed state, not a cache (§7, §9).**
+  It is outside `doc_hash` but cannot be regenerated: after an import it
+  holds the only copy of each image. Two new verifier warnings check it
+  instead of the hash: S036 (a `use href="#asset-…"` in the body, a pending
+  payload or the retained history resolves to no symbol) and S037 (a raster
+  asset's id is not the sha256 of its bytes). New conformance fixtures
+  `ok_packed_image`, `nok_S036_unresolved_asset_reference` and
+  `nok_S037_asset_id_mismatch`.
+- **`gc_assets()` counts baseline snapshots (§9.3).** After an out-of-band
+  delete, a gc pass (`aim gc`, pack, or a prune that keeps the baseline)
+  collected an image that only the snapshot still referenced, so time travel
+  to the baseline lost it.
+- **`to_docx` and `to_markdown` export packed images.** Both dropped them
+  without a placeholder, so a DOCX round trip of an imported file lost every
+  image. A packed figure becomes a Word picture, a packed inline image gets
+  the `[image: label]` placeholder an inline `<img>` gets, and Markdown writes
+  `![label](data:…)` from the registry, pending payloads included.
+
+### Word tracked changes import as proposals (no format change)
+
+Decisions IMPORT-D1 to IMPORT-D8 in `docs/log/` (2026-10-01).
+
+- **DOCX tracked changes are no longer lost on import.** Before, the importer
+  skipped every `w:ins`/`w:del` wrapper: an inline edit came out as text that
+  matched neither version ("within  days."), a moved clause vanished from both
+  places, and inserted or deleted table rows arrived as rows with empty cells.
+  `from_docx` now keeps the ORIGINAL text as the body and writes each tracked
+  change as a pending proposal attributed to its Word author (`w:author`,
+  `w:date`). The document's `accept_all()` gives Word's Accept All and
+  `reject_all()` gives Word's Reject All. Two exceptions are reported: number
+  labels the format stores as text keep the original numbering, and
+  formatting the format cannot express produces no proposal.
+- One card per changed chunk. The two versions are aligned by the source
+  paragraph and row they came from, never by position. Splits and merges
+  follow the surviving paragraph mark, named Word moves become `move` cards
+  (plus a `modify` when the moved text was also edited), and a deleted
+  paragraph directly followed by its replacement from the same author is one
+  `modify`. A difference that no revision touches (for example a list
+  `start` value shifted by an inserted item) never becomes a card.
+- New `tracked="propose"|"accept"|"reject"` keyword on `from_docx`,
+  `from_path` and the new `import_docx`, and `aim import --tracked`. The
+  resolved modes import the accepted or the rejected text with no proposals.
+  In `"propose"` mode, `max_revisions` (default 5,000) refuses a document
+  with more revision records, and `max_proposals` (default 500) refuses one
+  whose changes would become more pending cards. Writing and checking the
+  lane takes time that grows with the square of its card count, and one
+  revision can produce many cards (a deleted paragraph that joins two lists
+  carries every item of the second list).
+- **`import_docx()` returns an `ImportResult(document, report)`.** The
+  `ImportReport` lists every revision with the cards that carry it (or why
+  none does), every Word comment (author, date, text, anchored text, the
+  chunk or card it sits on, reply threading, resolved state), and in words
+  everything the import did not carry. `from_docx` keeps its return type and
+  emits one `AimImportWarning` per kind of loss. Comments are reported and
+  never stored: the format has no comment construct.
+- The lane is written through a new internal batch-propose primitive that
+  shares id minting, card serialization and the pending-lane checks with
+  `propose_*`, then validated once (accept-all, reject-all, the proposals
+  lint pass). An import of 800 chunks with 300 changed paragraphs takes
+  about 5 s. A document whose revisions cannot be expressed raises
+  `ParseError` naming the first block that diverged, instead of importing
+  wrong text.
+- **`to_docx(pending="tracked")` exports pending moves** of body paragraphs
+  as Word move revisions (`w:moveFrom`/`w:moveTo` in a named range), so a
+  Word reviewer sees them; before, a pending move exported as unchanged
+  text. A moved container, figure or rule exports as a tracked deletion plus
+  insertion, and a move with a pending modify of the same block lands as
+  `moveTo(del(old))` plus `ins(new)`.
+- **Pending row adds and row deletes now mark the row itself** (`w:trPr`).
+  Without the marker, Word's Reject All left an empty row where a pending
+  add had been, and Accept All left an empty row where a pending delete had
+  been.
+- `modify_chunk` returns its chunk view without rebuilding every chunk view
+  in the document (it was O(document) per call).
+- A tracked deletion that joins two lists in Word's Accept All (the paragraph
+  between them deleted) while the second list also loses an item no longer
+  drops that list's untouched items: they become adds into the joined list.
+- **Tracked DOCX export: schema order and list numbering.** The tracked
+  paragraph mark (`w:pPr/w:rPr`) was inserted as the FIRST child of `w:pPr`,
+  ahead of `w:pStyle`/`w:numPr`, which the OOXML schema forbids and Word may
+  report as unreadable content; it now sits where `CT_PPr` puts it, and
+  `w:numPr` is ordered too. A pending add inside a numbered list exported
+  without its list's `w:numPr`, so Word showed it unnumbered and Accept All
+  split the list in two; it now draws from the same list definition.
+
 ## 0.5.3 — 2026-10-14
 
 One SDK addition for embedders that print with their own Chromium. No spec,

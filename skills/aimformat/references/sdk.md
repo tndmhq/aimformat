@@ -19,9 +19,9 @@ name collision with AimStack's `aim`). `python -m aimformat.cli` also works.
 | agent note | `doc.note` · `doc.set_note()` · `doc.remove_note()` · `doc.has_canonical_note()` |
 | verify / repair | `aim.lint(doc)` / `aim.lint_path(p)` → `[Finding]` · `doc.verify()` → `[problems]` · `doc.reconcile()` → `ReconcileReport` |
 | compare versions | `aim.diff_documents(old, new)` → `DocumentDiff` (added/deleted/modified/moved unit ids) · `aim.classify_divergence(old, new)` → `Divergence` (new_events, new/removed proposals, history_rewritten, content_drift) |
-| time travel | `doc.state_at(seq)` · `doc.checkpoint(label)` · `doc.undo(author=…)` · `doc.redo(author=…)` · `doc.flatten()` · `doc.prune(before=…)` |
-| caches | `doc.set_summary(text, model=…)` · `doc.generate_toc()` · `doc.set_embedding(…)` · `doc.stale_embeddings()` |
-| interop | `aim.from_path(p)` (md/txt/docx/pdf/.aim) · `aim.from_text` · `aim.from_markdown` · `aim.from_docling` · `aim.to_docx(doc, p, pending=…)` · `aim.to_markdown` · `aim.to_html` · `aim.to_pdf` · `aim.to_print_html(doc, pending=…, extra_css=…)` (exact HTML `to_pdf` prints; for a caller with its own Chromium) |
+| time travel | `doc.state_at(seq)` · `doc.checkpoint(label)` · `doc.undo(author=…)` · `doc.redo(author=…)` · `doc.flatten()` (→ one checkpoint) · `doc.prune(before=…)` · `doc.baseline(label)` (current state becomes the origin; discards undo — only when asked) |
+| caches | `doc.set_summary(text, model=…)` · `doc.generate_toc()` (one `{chunk_count, id, level, title, word_count}` entry per section, stored with `toc_doc_hash`; `dumps()` builds and refreshes it in 0.6 documents; with no heading or slide, both store none, remove a stored one, and `generate_toc()` returns `[]`; raises `InvalidOperation` in a document declared below 0.6) · `doc.outline()` (live, no cache) · `doc.section(id)` → `Section` (`ids`, `text`, `html`; a section includes its subsections) · `doc.set_embedding(…)` · `doc.stale_embeddings()` |
+| interop | `aim.from_path(p)` (md/txt/docx/pdf/.aim) · `aim.from_text` · `aim.from_markdown` · `aim.from_docx(p, tracked="propose"\|"accept"\|"reject")` · `aim.import_docx(p)` → `ImportResult(document, report)` · `aim.from_docling` · `aim.to_docx(doc, p, pending=…)` · `aim.to_markdown` · `aim.to_html` · `aim.to_pdf` · `aim.to_print_html(doc, pending=…, extra_css=…)` (exact HTML `to_pdf` prints; for a caller with its own Chromium) |
 
 Notes: `after=` accepts an id, `None` (first position), or the default
 `aim.LAST` (end of container). Direct edits and resolutions append history
@@ -41,10 +41,11 @@ aim propose {modify,add,delete,move,theme} FILE …
 aim accept FILE [PID...] [--all]
 aim reject FILE [PID...] [--all]
 aim flatten FILE [-o OUT] [--keep-embeddings]
+aim baseline FILE [--label L] [--author A] [-o OUT]
 aim reconcile FILE [--check] [-o OUT]
 aim diff OLD NEW [--format json]
 aim css [--stats]
-aim import IN -o FILE.aim [--title T]
+aim import IN -o FILE.aim [--title T] [--tracked propose|accept|reject]
 aim export FILE.aim -o OUT.{docx,md,html,pdf} [--pending …]
 aim mcp
 ```

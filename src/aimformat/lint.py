@@ -3,7 +3,7 @@
 Registry-driven lint over four layers, all collected in one run:
 
 - **S** structural rules (document shape, section order, chunk coverage,
-  runs, container exclusivity, ids)
+  runs, container exclusivity, ids, packed-asset references and ids)
 - **V** vocabulary rules (elements, classes, inline styles, attributes,
   theme grammar)
 - **X** security rules (no executable script, no event handlers, no
@@ -27,12 +27,14 @@ from pathlib import Path
 from . import ids
 from .canonical import LINE_CONTAINERS, document_text
 from .css import generate_aim_css
-from .document import AimDocument, Anchor
+from .document import AimDocument, Anchor, _raster_href
 from .dom import Comment, Element, Text, parse_fragment
 from .errors import AimError, HistoryError, InvalidOperation, ParseError, TargetNotFound
 from .events import _ISO_RE
 from .pagesetup import page_setup_from_obj, parse_doc_settings
 from .registry import REGISTRY, version_key
+from .toc import SINCE as TOC_SINCE
+from .toc import is_entry, is_legacy_entry
 
 __all__ = ["Finding", "lint", "lint_text", "lint_path"]
 
@@ -111,6 +113,47 @@ class Finding:
         return f"{self.level.upper()} {self.code}{loc}: {self.message}"
 
 
+#: the base64 data-URI form packed image bytes take (spec §9.1)
+_BASE64_IMAGE = re.compile(r"^data:image/[a-z+.-]+;base64,")
+
+
+def _asset_bytes_problem(asset_id: str, href: str | None) -> str | None:
+    """Why a raster asset's id is not the content address of its bytes
+    (S037, spec §9.2); None when it is, or when *href* holds no packed
+    bytes to hash (a vector symbol, or a URL V009/X003 already judge)."""
+    if not href or not _BASE64_IMAGE.match(href):
+        return None
+    try:
+        blob = AimDocument._decode_asset_datauri(href)
+    except InvalidOperation:
+        return f"asset {asset_id!r}: its image data does not decode as base64"
+    expected = AimDocument._asset_id(blob)
+    if expected != asset_id:
+        return f"asset id {asset_id!r} does not match the sha256 of its bytes ({expected!r})"
+    return None
+
+
+def snapshot_entry_problems(doc: AimDocument, line: str) -> list[str]:
+    """Why one baseline snapshot entry does not conform (H008): it is not
+    exactly one construct, or the construct fails a check a pending payload
+    passes. Shared by the verifier and by ``AimDocument.baseline()``, which
+    refuses to record what this rejects — a baseline is never undone, so a
+    frozen error could never be fixed."""
+    nodes = parse_fragment(line)
+    elements = [n for n in nodes if isinstance(n, Element)]
+    stray = [n for n in nodes if not isinstance(n, Element) and str(getattr(n, "data", "")).strip()]
+    if len(elements) != 1 or stray:
+        return ["snapshot entry is not exactly one construct"]
+    probe = _Linter(doc, None)
+    for el in elements[0].iter():
+        probe.check_element(el, context="payload")
+    return [
+        f"snapshot entry fails {finding.code}: {finding.message}"
+        for finding in probe.findings
+        if finding.level == ERROR
+    ]
+
+
 class _Linter:
     def __init__(self, doc: AimDocument, source_text: str | None):
         self.doc = doc
@@ -132,6 +175,7 @@ class _Linter:
         self.security()
         self.proposals()
         self.history()
+        self.packed_assets()
         self.caches()
         if self.text is not None:
             self.authored_self_closing()
@@ -1034,7 +1078,19 @@ class _Linter:
             # seq-ordering and chain checks below need well-formed seqs
             # and would otherwise crash into a generic S000 (AIM-05)
         seqs = [e.seq for e in events]
-        if seqs[0] != 1:
+        baselines = [e for e in events if e.kind == "baseline"]
+        misplaced = bool(baselines) and (len(baselines) > 1 or events[0].kind != "baseline")
+        if misplaced:
+            self.add(
+                "H007",
+                ERROR,
+                "a baseline must be the first retained event and occur once (found at seq "
+                + ", ".join(str(e.seq) for e in baselines)
+                + ")",
+            )
+        if events[0].kind == "baseline":
+            self.check_snapshot(events[0])
+        elif seqs[0] != 1:
             self.add("H004", WARNING, f"history starts at seq {seqs[0]} (pruned)")
         for line in (el.raw or "").split("\n"):
             if not line.strip():
@@ -1052,11 +1108,140 @@ class _Linter:
                     f"seq {obj.get('seq')}: history line is not canonical "
                     "JSON (sorted keys, compact, <\\/ escape)",
                 )
+        if misplaced:
+            return  # the chain cannot be replayed through it; H007 says why
         try:
-            for problem in self.doc.verify():
-                self.add("H006", ERROR, problem)
+            problems = self.doc._verify(check_snapshot=False)
         except HistoryError as exc:
             self.add("H002", ERROR, str(exc))
+            return
+        for problem in problems:
+            self.add("H006", ERROR, problem)
+        if not problems and seqs[0] == 1 and events[0].kind != "baseline":
+            self.check_origin()
+
+    def check_snapshot(self, event) -> None:
+        """H008: a baseline snapshot hashes to its doc_hash, and every entry
+        is exactly one construct passing the checks a pending payload passes
+        (elements, attributes, URLs, handlers, styles) — the snapshot feeds
+        reconcile's expected state, so it must not smuggle what lint would
+        refuse anywhere else."""
+        from .document import snapshot_hash
+        from .events import snapshot_problems
+
+        snap = event.get("snapshot")
+        where = str(event.data.get("seq"))
+        if snapshot_problems(snap):
+            return  # a shape problem is H003's, already reported
+        if snapshot_hash(snap) != event.get("doc_hash"):
+            self.add(
+                "H008", ERROR, "baseline snapshot does not hash to the recorded doc_hash", where
+            )
+        shell = [n for n in parse_fragment(snap["html"] + "</html>") if isinstance(n, Element)]
+        if len(shell) != 1 or shell[0].tag != "html" or shell[0].elements():
+            self.add("H008", ERROR, "baseline snapshot 'html' is not one <html> open tag", where)
+        else:
+            for name, _ in shell[0].attrs:
+                if name.startswith("on"):
+                    self.add("H008", ERROR, f"baseline snapshot <html> carries {name!r}", where)
+        if snap.get("theme") is not None:
+            theme = [n for n in parse_fragment(snap["theme"]) if isinstance(n, Element)]
+            if len(theme) != 1 or theme[0].tag != "style" or not theme[0].has("data-aim-theme"):
+                self.add("H008", ERROR, "baseline snapshot 'theme' is not the theme block", where)
+        if snap.get("doc") is not None:
+            settings = [n for n in parse_fragment(snap["doc"]) if isinstance(n, Element)]
+            if (
+                len(settings) != 1
+                or settings[0].tag != "script"
+                or settings[0].get("type") != REGISTRY.script_types["doc"]
+            ):
+                self.add("H008", ERROR, "baseline snapshot 'doc' is not the settings block", where)
+        for i, line in enumerate(snap["body"]):
+            label = f"{where}, snapshot construct {i + 1}"
+            for problem in snapshot_entry_problems(self.doc, line):
+                self.add("H008", ERROR, problem, label)
+
+    def check_origin(self) -> None:
+        """H009 (warning): a log that starts at seq 1 claims to explain the
+        document from nothing, so replaying it backwards must reach an empty
+        body (and no settings block). A theme block nothing recorded is
+        tolerated: importers set it at creation, which reconcile already
+        aligns. A flattened-then-edited file trips this."""
+        try:
+            origin = self.doc.state_at(0)
+        except AimError:
+            return  # chain problems are H006's
+        state = origin._state
+        if state.constructs() or state.script("doc") is not None:
+            self.add(
+                "H009",
+                WARNING,
+                "the history starts at seq 1 but replaying it backwards does not reach an "
+                "empty document: the origin was never recorded (a baseline, §6.9, records it)",
+            )
+
+    # -- S: packed assets (§9) ---------------------------------------------------------------
+    def packed_assets(self) -> None:
+        """S036/S037 (warnings). A packed image's bytes sit outside
+        ``doc_hash`` (§11.3), so neither replay nor H006 sees a blob that went
+        missing or was swapped. Every ``use href="#asset-…"`` — in the body,
+        a pending payload, or the retained history, baseline snapshots
+        included — must resolve to a symbol in ``<aim-assets>`` (S036), and a
+        raster asset's id must be the hash of its bytes (§9.2, S037). A
+        vector symbol's id, the hash of its canonical children, is not
+        checked."""
+        symbols: set[str] = set()
+        sec = self.state.section("aim-assets")
+        for symbol in sec.iter() if sec is not None else ():
+            asset_id = symbol.get("id") if symbol.tag == "symbol" else None
+            if not asset_id:
+                continue
+            symbols.add(asset_id)
+            problem = _asset_bytes_problem(asset_id, _raster_href(symbol))
+            if problem:
+                self.add("S037", WARNING, problem, asset_id)
+
+        missing: dict[str, tuple[str, str]] = {}  # asset id → (where, in what)
+
+        def visit(el: Element, where: str, what: str, *, body: bool = False) -> None:
+            if body:  # in the body, the nearest chunk or container names the place
+                where = el.chunk_id or el.container_id or where
+            if el.tag == "use":
+                href = el.get("href") or ""
+                if href.startswith("#asset-") and href[1:] not in symbols:
+                    missing.setdefault(href[1:], (where, what))
+            for child in el.elements():
+                visit(child, where, what, body=body)
+
+        for top in self.state.constructs():
+            visit(top, "", "the body", body=True)
+        cards = self.state.section("aim-proposals")
+        for card in cards.elements() if cards is not None else ():
+            for tmpl in (c for c in card.elements() if c.tag == "template"):
+                visit(tmpl, card.get("id") or "", "a pending payload")
+        try:
+            payloads = list(self.doc._history_payloads())
+        except AimError:
+            payloads = []  # an unreadable log is H002's
+        for event, markup in payloads:
+            if "#asset-" not in markup:
+                continue
+            seq = str(event.data.get("seq"))
+            what = "a baseline snapshot" if event.kind == "baseline" else "a history payload"
+            try:
+                nodes = parse_fragment(markup)
+            except ParseError:
+                continue  # a malformed payload is H006's
+            for node in nodes:
+                if isinstance(node, Element):
+                    visit(node, seq, what)
+        for asset_id, (where, what) in missing.items():
+            self.add(
+                "S036",
+                WARNING,
+                f'<use href="#{asset_id}"> in {what} resolves to no symbol in <aim-assets>',
+                where,
+            )
 
     # -- caches ------------------------------------------------------------------------------------
     def caches(self) -> None:
@@ -1067,12 +1252,54 @@ class _Linter:
             meta = None
         if meta is not None:
             summary = meta.get("summary")
-            if summary is None:
-                self.add("M004", ERROR, "aim-meta block present but has no summary (§8.1)")
-            elif not isinstance(summary, dict):
+            toc = meta.get("toc")
+            # §8.1 judges a document by its declared version. v0.6 made the
+            # summary optional beside a TOC and defined the compact entry;
+            # below it a summary is required and the entries are that
+            # version's own, which no save of such a document rewrites.
+            compact = REGISTRY.version_includes(self.doc.spec_version, TOC_SINCE)
+            if summary is None and not compact:
+                self.add(
+                    "M004",
+                    ERROR,
+                    "aim-meta block has no summary, which a document declared "
+                    "below 0.6 requires (§8.1)",
+                )
+            elif summary is None and toc is None:
+                self.add("M004", ERROR, "aim-meta block has neither a summary nor a toc (§8.1)")
+            elif summary is not None and not isinstance(summary, dict):
                 self.add("M003", ERROR, "aim-meta summary is not an object")
-            elif summary.get("doc_hash") not in (None, self.doc.doc_hash):
+            elif summary is not None and summary.get("doc_hash") not in (
+                None,
+                self.doc.doc_hash,
+            ):
                 self.add("M001", WARNING, "aim-meta summary is stale (doc_hash mismatch)")
+            stale: list[str] = []
+            if toc is not None and not isinstance(toc, list):
+                self.add("M003", ERROR, "aim-meta toc is not a list")
+            elif toc is not None and compact:
+                # §8.1: the entry shape only — counts are informative and
+                # never recomputed
+                bad = next(
+                    (n for n, e in enumerate(toc, 1) if not (is_entry(e) or is_legacy_entry(e))),
+                    None,
+                )
+                if bad is not None:
+                    self.add(
+                        "M003",
+                        ERROR,
+                        f"aim-meta toc entry {bad} is malformed "
+                        "(§8.1: {chunk_count, id, level, title, word_count})",
+                    )
+                elif any(map(is_legacy_entry, toc)):
+                    stale.append("entries in the pre-0.6 shape {title, level, chunks}")
+            marker = meta.get("toc_doc_hash")
+            if marker is not None and not isinstance(marker, str):
+                self.add("M003", ERROR, "aim-meta toc_doc_hash is not a string")
+            elif marker is not None and marker != self.doc.doc_hash:
+                stale.append("toc_doc_hash mismatch")
+            if stale:
+                self.add("M005", WARNING, f"aim-meta toc is stale ({'; '.join(stale)})")
         try:
             for emb in self.doc.stale_embeddings():
                 self.add(

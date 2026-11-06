@@ -1,6 +1,6 @@
 # Contributing
 
-Thanks for your interest in `.aim`. The repo carries the v0.5 draft of the
+Thanks for your interest in `.aim`. The repo carries the v0.6 draft of the
 spec and the reference toolkit; breaking changes are possible until 1.0,
 and design discussion via issues is as welcome as PRs.
 

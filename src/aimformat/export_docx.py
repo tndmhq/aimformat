@@ -24,10 +24,18 @@ structure, marks, and the per-chunk pending lane survive. The same
 degradation contract as the Markdown exporter, on pages instead of ``---``.
 A faithful canvas export is the PDF's job (and a future PPTX exporter's).
 
-Not represented in v0.1: ``move`` proposals, ``aim:theme``/``aim:doc``
-proposals, and proposals targeting a *whole slide* (all export as unchanged
-current content), plus hyperlink relationships (links render as text with
-the URL in parentheses). These are deliberate scope cuts, not oversights.
+Pending ``move`` proposals of body-level blocks export as Word's own move
+revisions (``w:moveFrom``/``w:moveTo`` with a named range) when the block is
+paragraph text; a moved container, figure, rule or page break — which Word
+cannot track as a move — exports as a tracked deletion at the source plus a
+tracked insertion at the destination. A move with a pending modify of the
+same target lands as ``moveTo(del(old))`` followed by ``ins(new)``.
+
+Not represented: moves of list items, table rows and chunks inside slides,
+``aim:theme``/``aim:doc`` proposals, and proposals targeting a *whole slide*
+(all export as unchanged current content), plus hyperlink relationships
+(links render as text with the URL in parentheses). These are deliberate
+scope cuts, not oversights.
 """
 
 from __future__ import annotations
@@ -36,10 +44,17 @@ import base64
 import io
 import re
 from collections.abc import Mapping
+from dataclasses import replace
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from .document import AimDocument, Proposal, _ChainedAddCycle, resolution_order
+from .document import (
+    AimDocument,
+    Proposal,
+    _ChainedAddCycle,
+    _packed_asset_ref,
+    resolution_order,
+)
 from .dom import Element, Text, parse_fragment
 from .errors import InvalidOperation
 from .events import external
@@ -248,6 +263,11 @@ def _runs_of(
                 if src and not src.startswith("data:"):
                     label += f" ({src})"
                 runs.append({"text": label, **fmt, "italic": True})
+            elif _packed_asset_ref(child) is not None:
+                # a packed image (§9.1) exports as the embedded <img> it
+                # stands for: the same placeholder, named by its aria-label
+                label = f"[image: {child.get('aria-label') or 'image'}]"
+                runs.append({"text": label, **fmt, "italic": True})
             else:
                 runs += _runs_of(child, fmt, paint, inline=True)
     return runs
@@ -399,6 +419,39 @@ _SUCCESSORS = {
         "w:shd": ("w:fitText", "w:vertAlign", "w:rtl", "w:cs", "w:em", "w:lang"),
     },
     "w:pPr": {
+        # CT_PPr: numPr precedes everything from suppressLineNumbers on,
+        # the mark's rPr among them (Word refuses an out-of-order pPr)
+        "w:numPr": (
+            "w:suppressLineNumbers",
+            "w:pBdr",
+            "w:shd",
+            "w:tabs",
+            "w:suppressAutoHyphens",
+            "w:kinsoku",
+            "w:wordWrap",
+            "w:overflowPunct",
+            "w:topLinePunct",
+            "w:autoSpaceDE",
+            "w:autoSpaceDN",
+            "w:bidi",
+            "w:adjustRightInd",
+            "w:snapToGrid",
+            "w:spacing",
+            "w:ind",
+            "w:contextualSpacing",
+            "w:mirrorIndents",
+            "w:suppressOverlap",
+            "w:jc",
+            "w:textDirection",
+            "w:textAlignment",
+            "w:textboxTightWrap",
+            "w:outlineLvl",
+            "w:divId",
+            "w:cnfStyle",
+            "w:rPr",
+            "w:sectPr",
+            "w:pPrChange",
+        ),
         "w:pBdr": ("w:shd", "w:tabs", "w:spacing", "w:ind", "w:jc", "w:rPr", "w:sectPr"),
         "w:shd": ("w:tabs", "w:spacing", "w:ind", "w:jc", "w:rPr", "w:sectPr"),
     },
@@ -521,8 +574,10 @@ class _Revisions:
         r_pr = p_pr.find(qn("w:rPr"))
         if r_pr is None:
             r_pr = OxmlElement("w:rPr")
-            # w:rPr is the first child of w:pPr in the OOXML content model
-            p_pr.insert(0, r_pr)
+            # CT_PPr puts the mark's rPr LAST but for sectPr/pPrChange — not
+            # first: before pStyle/numPr it is a schema violation Word
+            # reports as unreadable content
+            p_pr.insert_element_before(r_pr, "w:sectPr", "w:pPrChange")
         revision = OxmlElement(tag)
         self._attrs(revision, author, date)
         r_pr.append(revision)
@@ -568,6 +623,50 @@ class _Revisions:
         removed.append(prior)
         paragraph._p.append(removed)
         self.ins(paragraph, runs, author, date)
+
+    def wrap(self, paragraph, tag: str, runs: list[dict], author: str, date: str, *, deleted: bool):
+        """Append one revision wrapper (``w:moveFrom``/``w:moveTo``/…) holding
+        *runs*; returns it so a caller can nest a further revision inside."""
+        from docx.oxml import OxmlElement
+
+        wrap = OxmlElement(tag)
+        self._attrs(wrap, author, date)
+        for spec in runs:
+            wrap.append(self._make_run(paragraph, spec, deleted=deleted))
+        paragraph._p.append(wrap)
+        return wrap
+
+    def nested(self, outer, tag: str, paragraph, runs, author: str, date: str, *, deleted: bool):
+        """A revision inside another one (``moveTo(del(…))``): the inner
+        content goes when EITHER revision would remove it."""
+        from docx.oxml import OxmlElement
+
+        inner = OxmlElement(tag)
+        self._attrs(inner, author, date)
+        for spec in runs:
+            inner.append(self._make_run(paragraph, spec, deleted=deleted))
+        outer.append(inner)
+
+    def move_range(self, paragraph, kind: str, name: str, author: str, date: str) -> str:
+        """Open a named move range (``w:moveFromRangeStart``/``moveToRangeStart``)
+        in *paragraph*; returns its id for :meth:`close_move_range`."""
+        from docx.oxml import OxmlElement
+        from docx.oxml.ns import qn
+
+        start = OxmlElement(f"w:{kind}RangeStart")
+        self._attrs(start, author, date)
+        start.set(qn("w:name"), name)
+        paragraph._p.append(start)
+        return start.get(qn("w:id"))
+
+    @staticmethod
+    def close_move_range(paragraph, kind: str, range_id: str) -> None:
+        from docx.oxml import OxmlElement
+        from docx.oxml.ns import qn
+
+        end = OxmlElement(f"w:{kind}RangeEnd")
+        end.set(qn("w:id"), range_id)
+        paragraph._p.append(end)
 
     def row_ins(self, tr, author: str, date: str) -> None:
         self._row_change(tr, "w:ins", author, date)
@@ -857,6 +956,8 @@ class _Exporter:
         self.paint = PaintResolver(self.palette)
         for construct in doc._state.constructs():
             self.paint.resolve(construct)
+        # packed images (§9.1) resolve through the registry: asset id → data URI
+        self.assets = doc._raster_assets()
         self.out = docx_mod.Document()
         self.rev = _Revisions()
         # numbering definitions created on demand: per-level literal prefixes
@@ -874,6 +975,10 @@ class _Exporter:
         self._break_before_next: bool | Proposal = False
         self.pending_mod: dict[str, Proposal] = {}
         self.pending_del: dict[str, Proposal] = {}
+        # pending moves of body-level constructs within the body: the source
+        # position emits the removal, the destination anchor the arrival
+        self.pending_move: dict[str, Proposal] = {}
+        self._move_names: dict[str, str] = {}
         # adds keyed by (container, after) — every container, not just body
         self.adds_by_anchor: dict[tuple[str, str | None], list[Proposal]] = {}
         # dependency-adjusted creation order — the order the accepted lane
@@ -892,6 +997,33 @@ class _Exporter:
             elif p.action == "add":
                 key = (p.anchor_container or "body", p.anchor_after)
                 self.adds_by_anchor.setdefault(key, []).append(p)
+        for p in doc.proposals:
+            if (
+                p.action == "move"
+                and p.target
+                and (p.anchor_container or "body") == "body"
+                and doc._state.top_index(p.target) is not None
+                and p.target not in self.pending_del
+            ):
+                el = doc._state.constructs()[doc._state.top_index(p.target) or 0]
+                if el.tag == "aim-slide":
+                    continue  # whole-slide proposals export as current content
+                self.pending_move[p.target] = p
+                self._move_names[p.target] = f"aim-move-{len(self._move_names) + 1}"
+                self.adds_by_anchor.setdefault(("body", p.anchor_after), []).append(p)
+        # Cards anchored after a moving chunk split by creation order: one
+        # made before the move lands at the chunk's old place, one made after
+        # it follows the chunk to its new place (accept order is card order).
+        self._after_move: dict[str, list[Proposal]] = {}
+        for target, move in self.pending_move.items():
+            here = self.adds_by_anchor.pop(("body", target), [])
+            cut = self._card_order.get(move.id, 0)
+            early = [q for q in here if self._card_order.get(q.id, 0) < cut]
+            late = [q for q in here if self._card_order.get(q.id, 0) > cut]
+            if early:
+                self.adds_by_anchor[("body", target)] = early
+            if late:
+                self._after_move[target] = late
 
     # -- top level -----------------------------------------------------------
     def run(self) -> None:
@@ -968,6 +1100,10 @@ class _Exporter:
         while pool:
             pool.sort(key=lambda p: self._card_order.get(p.id, 0))
             prop = pool.pop(0)
+            if prop.action == "move":
+                self._emit_move_destination(prop)
+                pool += self._after_move.pop(prop.target or "", [])
+                continue
             self._emit_add_paragraphs(prop)
             pool += self._pop_adds(container, prop.id)
 
@@ -1090,6 +1226,9 @@ class _Exporter:
             self._break_before_next = False
             self._page_break(owner if isinstance(owner, Proposal) else None)
         cid = el.chunk_id or el.container_id or ""
+        if cid in self.pending_move:
+            self._emit_move_source(el, self.pending_move[cid])
+            return
         prop = self.pending_del.get(cid) or self.pending_mod.get(cid)
         if el.container_id and el.tag in ("ul", "ol"):
             if prop is not None:
@@ -1112,6 +1251,128 @@ class _Exporter:
             for block in _block_children(el, self.paint):
                 self.emit_block(block, cid)
 
+    # -- tracked moves ------------------------------------------------------------
+    #: blocks Word can carry as tracked moves of paragraph text
+    _MOVABLE = frozenset({"p", "h1", "h2", "h3", "h4", "h5", "h6", "blockquote", "li"})
+
+    def _move_is_paragraphs(self, el: Element) -> bool:
+        """Word tracks moves of paragraph text only; a container, figure,
+        rule or page break moves as a tracked deletion plus insertion."""
+        if el.container_id is not None:
+            return False
+        blocks = _block_children(el, self.paint)
+        return bool(blocks) and all(b.tag in self._MOVABLE for b in blocks)
+
+    def _emit_move_source(self, el: Element, prop: Proposal) -> None:
+        cid = el.chunk_id or el.container_id or ""
+        label, date = _actor_label(prop.author), prop.at
+        if not self._move_is_paragraphs(el):
+            removal = replace(prop, action="delete", payload_html=None)
+            if el.container_id and el.tag in ("ul", "ol"):
+                self.emit_tracked_list_container(el, removal)
+            elif el.container_id and el.tag == "table":
+                self.emit_table(el, force="del", prop=removal)
+            else:
+                self.emit_tracked_chunk(el, removal, payload=False)
+            return
+        blocks = _block_children(el, self.paint)
+        name = self._move_names[cid]
+        range_id = ""
+        for i, block in enumerate(blocks):
+            para = self.out.add_paragraph(style=self._safe_style(_style_for(block.tag)))
+            self._number_paragraph(para, block)
+            self.rev.mark_paragraph(para, "w:moveFrom", label, date)
+            if i == 0:
+                range_id = self.rev.move_range(para, "moveFrom", name, label, date)
+            self.rev.wrap(
+                para,
+                "w:moveFrom",
+                _tracked_block_runs(block, self.paint),
+                label,
+                date,
+                deleted=False,
+            )
+            if i == len(blocks) - 1:
+                self.rev.close_move_range(para, "moveFrom", range_id)
+
+    def _emit_move_destination(self, prop: Proposal) -> None:
+        """The arrival half of a pending move: one moved paragraph per block.
+        A pending modify of the same target lands here too (see
+        :meth:`_emit_moved_replacement`)."""
+        target = prop.target or ""
+        index = self.aim._state.top_index(target)
+        if index is None:  # pragma: no cover - guarded at registration
+            return
+        el = self.aim._state.constructs()[index]
+        label, date = _actor_label(prop.author), prop.at
+        modify = self.pending_mod.get(target)
+        if not self._move_is_paragraphs(el):
+            # what arrives is what accepting both cards leaves: the modified
+            # content when a modify is pending too, else the current content
+            content = modify.payload_html if modify is not None else None
+            arrival = replace(
+                prop,
+                action="add",
+                payload_html=content or self.aim._state.serial(target),
+                target=None,
+            )
+            self._emit_add_paragraphs(arrival)
+            return
+        blocks = _block_children(el, self.paint)
+        if modify is not None:
+            self._emit_moved_replacement(prop, blocks, modify)
+            return
+        name = self._move_names[target]
+        range_id = ""
+        for i, block in enumerate(blocks):
+            para = self.out.add_paragraph(style=self._safe_style(_style_for(block.tag)))
+            self._number_paragraph(para, block)
+            self.rev.mark_paragraph(para, "w:moveTo", label, date)
+            if i == 0:
+                range_id = self.rev.move_range(para, "moveTo", name, label, date)
+            runs = _tracked_block_runs(block, self.paint)
+            self.rev.wrap(para, "w:moveTo", runs, label, date, deleted=False)
+            if i == len(blocks) - 1:
+                self.rev.close_move_range(para, "moveTo", range_id)
+
+    def _emit_moved_replacement(
+        self, prop: Proposal, blocks: list[Element], modify: Proposal
+    ) -> None:
+        """A pending move and a pending modify of the same paragraphs, nested
+        as ``moveTo(del(old))`` + ``ins(new)``: rejecting the move removes
+        both, accepting both keeps only the new text — the outcomes of
+        resolving the two cards.
+
+        All the old blocks' text goes into ONE moved paragraph, and the first
+        new block takes its mark over; each further new block is an inserted
+        paragraph of its own, as in a modify that did not move. With a moved
+        paragraph per old block, Accept All kept every mark but the last as
+        an empty paragraph. Tracking those marks as deleted as well (``del``
+        + ``moveTo``) gives the same outcomes, but LibreOffice's Reject All
+        keeps each such mark as an empty paragraph, so the mark is tracked
+        as deleted only when the replacement has no block to take it over.
+        The price of one paragraph: the tracked view shows the old blocks run
+        together, and so does accepting the move but rejecting the modify."""
+        label, date = _actor_label(prop.author), prop.at
+        by, at = _actor_label(modify.author), modify.at
+        new_blocks: list[Element] = []
+        for new_el in self._payload_elements(modify):
+            new_blocks += _block_children(new_el, self.paint)
+        para = self.out.add_paragraph(style=self._safe_style(_style_for(blocks[-1].tag)))
+        self._number_paragraph(para, blocks[-1])
+        if not new_blocks:
+            self.rev.mark_paragraph(para, "w:del", by, at)  # CT_ParaRPr: del before moveTo
+        self.rev.mark_paragraph(para, "w:moveTo", label, date)
+        name = self._move_names[prop.target or ""]
+        range_id = self.rev.move_range(para, "moveTo", name, label, date)
+        old = [run for block in blocks for run in _tracked_block_runs(block, self.paint)]
+        outer = self.rev.wrap(para, "w:moveTo", [], label, date, deleted=False)
+        self.rev.nested(outer, "w:del", para, old, by, at, deleted=True)
+        if new_blocks:
+            self.rev.ins(para, _tracked_block_runs(new_blocks[0], self.paint), by, at)
+        self.rev.close_move_range(para, "moveTo", range_id)
+        self._emit_inserted_blocks(new_blocks[1:], modify)
+
     # -- tracked replacements (exactly once per chunk, never per child) -------
     def emit_tracked_chunk(
         self, el: Element, prop: Proposal, style: str | None = None, *, payload: bool = True
@@ -1131,13 +1392,20 @@ class _Exporter:
             self.rev.dele(para, _tracked_block_runs(block, self.paint), label, date)
         if payload and prop.action == "modify":
             for new_el in self._payload_elements(prop):
-                for block in _block_children(new_el, self.paint):
-                    para = self.out.add_paragraph(
-                        style=style or self._safe_style(_style_for(block.tag))
-                    )
-                    self._number_paragraph(para, block)
-                    self.rev.mark_paragraph(para, "w:ins", label, date)
-                    self.rev.ins(para, _tracked_block_runs(block, self.paint), label, date)
+                self._emit_inserted_blocks(_block_children(new_el, self.paint), prop, style)
+
+    def _emit_inserted_blocks(
+        self, blocks: list[Element], prop: Proposal, style: str | None = None
+    ) -> None:
+        """One inserted paragraph per block of *prop*'s replacement, its mark
+        tracked as well as its runs: Accept All keeps each block's paragraph,
+        Reject All leaves no empty one behind."""
+        label, date = _actor_label(prop.author), prop.at
+        for block in blocks:
+            para = self.out.add_paragraph(style=style or self._safe_style(_style_for(block.tag)))
+            self._number_paragraph(para, block)
+            self.rev.mark_paragraph(para, "w:ins", label, date)
+            self.rev.ins(para, _tracked_block_runs(block, self.paint), label, date)
 
     def emit_tracked_list_container(self, el: Element, prop: Proposal) -> None:
         label, date = _actor_label(prop.author), prop.at
@@ -1326,7 +1594,7 @@ class _Exporter:
         from docx.oxml.ns import qn
 
         props = para._p.get_or_add_pPr()
-        num_pr = _fresh_child(props, "w:numPr", ordered_in="pPr")
+        num_pr = _fresh_child(props, "w:numPr", ordered_in="w:pPr")
         _fresh_child(num_pr, "w:ilvl").set(qn("w:val"), str(ilvl))
         _fresh_child(num_pr, "w:numId").set(qn("w:val"), str(num_id))
 
@@ -1426,10 +1694,14 @@ class _Exporter:
         # emit_block routes figures here before its generic alignment code,
         # so the figure's own alignment class lands on the picture paragraph
         align = _alignment_of(el)
-        img = el.find(lambda e: e.tag == "img")
+        img = el.find(lambda e: e.tag == "img" or _packed_asset_ref(e) is not None)
         emitted = False
         if img is not None:
-            src = img.get("src") or ""
+            if img.tag == "img":
+                src, alt = img.get("src") or "", img.get("alt")
+            else:  # a packed image (§9.1): its bytes live in the asset registry
+                src = self.assets.get(_packed_asset_ref(img) or "", "")
+                alt = img.get("aria-label")
             m = re.match(r"^data:image/[a-z+.-]+;base64,(.*)$", src, re.S)
             if m:
                 try:
@@ -1441,7 +1713,7 @@ class _Exporter:
                 except Exception:
                     emitted = False
             if not emitted:
-                alt = img.get("alt") or "image"
+                alt = alt or "image"
                 para = self.out.add_paragraph()
                 if align is not None:
                     para.alignment = align
@@ -1538,8 +1810,12 @@ class _Exporter:
         if level == 0:
             num_id = self._list_num_id(el)
         container_id = el.container_id
+        # an added item draws from the same list definition as its siblings:
+        # without the numPr Word shows it unnumbered, and Accept All splits
+        # the list in two around it
+        num = (num_id, level) if num_id is not None else None
         if container_id:
-            self._emit_list_adds(container_id, None, style)
+            self._emit_list_adds(container_id, None, style, num)
         items = el.elements()
         i = 0
         while i < len(items):
@@ -1579,15 +1855,25 @@ class _Exporter:
                 for sub in nested:
                     self.emit_list(sub, level + 1, num_id)
             if container_id and cid:
-                self._emit_list_adds(container_id, cid, style)
+                self._emit_list_adds(container_id, cid, style, num)
 
-    def _emit_list_adds(self, container: str, after: str | None, style: str | None) -> None:
+    def _emit_list_adds(
+        self,
+        container: str,
+        after: str | None,
+        style: str | None,
+        num: tuple[int, int] | None = None,
+    ) -> None:
         # creation-order pool, for the same reason as _emit_anchored_adds
         pool = self._pop_adds(container, after)
         while pool:
             pool.sort(key=lambda p: self._card_order.get(p.id, 0))
             prop = pool.pop(0)
-            self._emit_add_paragraphs(prop, style=style)
+            self._list_item_num = num
+            try:
+                self._emit_add_paragraphs(prop, style=style)
+            finally:
+                self._list_item_num = None
             pool += self._pop_adds(container, prop.id)
 
     # -- tables ----------------------------------------------------------------------
@@ -1715,6 +2001,13 @@ class _Exporter:
         for ri in sorted(structural_del):
             prop_mod = self.pending_mod[rows[ri].chunk_id or ""]
             self.rev.row_dele(orig_trs[ri], _actor_label(prop_mod.author), prop_mod.at)
+        if not force:
+            # a pending row DELETE removes the row itself, not only its text:
+            # without the trPr marker Word's Accept All leaves an empty row
+            for ri, row in enumerate(rows):
+                prop_del = self.pending_del.get(row.chunk_id or "")
+                if prop_del is not None:
+                    self.rev.row_dele(orig_trs[ri], _actor_label(prop_del.author), prop_del.at)
         if container_id and not force:
             self._emit_row_adds(table, None, container_id, None, ncols, first=True)
             for ri, row in enumerate(rows):
@@ -1830,6 +2123,9 @@ class _Exporter:
                     _actor_label(prop.author),
                     prop.at,
                 )
+            # the row itself is the insertion: without the trPr marker Word's
+            # Reject All strands an empty row where the add was
+            self.rev.row_ins(new_row._tr, _actor_label(prop.author), prop.at)
             if first:
                 table.rows[0]._tr.addprevious(new_row._tr)
                 first = False  # later siblings chain after this row

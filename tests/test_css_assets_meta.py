@@ -114,13 +114,17 @@ class TestCaches:
         assert meta["summary"]["as_of_seq"] == basic_doc.seq
         assert meta["summary"]["doc_hash"] == basic_doc.doc_hash
 
-    def test_generate_toc_groups_under_headings(self, rich_doc):
+    def test_generate_toc_lists_one_compact_entry_per_section(self, rich_doc):
         toc = rich_doc.generate_toc()
-        first = toc[0]
-        assert first["title"] == "Report" and first["level"] == 1
-        assert {"intro", "scope", "list", "tbl"} <= set(first["chunks"])
-        slide_entry = next(t for t in toc if "s1" in t["chunks"])
-        assert slide_entry["title"] == "Deck"
+        # the h1 section runs to the slide: h1, intro, the section chunk,
+        # two list items (li2 is a run, counted once) and three table rows;
+        # the containers count no chunk
+        assert toc == [
+            {"chunk_count": 8, "id": "h1", "level": 1, "title": "Report", "word_count": 24},
+            {"chunk_count": 1, "id": "s1", "level": 1, "title": "Deck", "word_count": 1},
+        ]
+        assert rich_doc.meta["toc"] == toc
+        assert rich_doc.meta["toc_doc_hash"] == rich_doc.doc_hash
 
     def test_embeddings_roundtrip_and_staleness(self, basic_doc):
         basic_doc.set_embedding("intro", model="m", vec=[0.25, -0.5])

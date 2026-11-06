@@ -41,6 +41,201 @@ def base_doc() -> aim.AimDocument:
     return doc
 
 
+def _historyless(doc: aim.AimDocument) -> str:
+    """The document with no history block at all — the shape a page export
+    or a hand-written file has (so no derived TOC either)."""
+    doc._drop_history(drop_embeddings=True)
+    return _without_meta(doc.dumps())
+
+
+_META = r'<script type="application/aim-meta\+json">\n(.*?)\n</script>\n'
+
+
+def _without_meta(text: str) -> str:
+    """*text* without its aim-meta block: a 0.6 save of a document with a
+    heading builds one (§8.1), which no hand-written file carries."""
+    import re
+
+    return re.sub(_META, "", text, count=1, flags=re.S)
+
+
+def _with_meta(text: str, meta: dict) -> str:
+    """*text* with its aim-meta block holding *meta* instead."""
+    import re
+
+    from aimformat.canonical import canonical_json
+
+    match = re.search(_META, text, flags=re.S)
+    assert match, "no aim-meta block to replace"
+    return text[: match.start(1)] + canonical_json(meta) + text[match.end(1) :]
+
+
+def _stale_toc(text: str) -> str:
+    """A TOC whose recorded hash no longer matches (a foreign writer)."""
+    import re
+
+    return re.sub(
+        r'"toc_doc_hash":"sha256:[0-9a-f]+"', '"toc_doc_hash":"sha256:' + "0" * 64 + '"', text
+    )
+
+
+def _toc_docs() -> dict[str, str]:
+    """The TOC nok files: a pre-0.6 entry under a 0.6 declaration (stale,
+    even with a matching hash) and an entry of neither shape."""
+    doc = base_doc()
+    text = doc.dumps()
+    legacy = {"chunks": ["h1", "p1", "l1"], "level": 1, "title": "Fixture"}
+    entry = doc.outline()[0]
+    malformed = {**entry, "word_count": str(entry["word_count"])}  # a string, not a count
+    return {
+        "nok_M005_pre_0_6_toc_shape.aim": _with_meta(
+            text, {"toc": [legacy], "toc_doc_hash": doc.doc_hash}
+        ),
+        "nok_M003_malformed_toc_entry.aim": _with_meta(
+            text, {"toc": [malformed], "toc_doc_hash": doc.doc_hash}
+        ),
+    }
+
+
+def _with_history(doc: aim.AimDocument, events: list[dict]) -> str:
+    """*doc* serialized with its history block replaced by *events* (each
+    a canonical event dict) — for nok files whose defect IS the log."""
+    from aimformat.canonical import canonical_json
+
+    text = doc.dumps()
+    lines = "\n".join(canonical_json(e) for e in events)
+    block = f'<script type="application/aim-history+jsonl">\n{lines}\n</script>'
+    marker = '<script type="application/aim-history+jsonl">'
+    if marker not in text:  # no history block yet: it goes last in <body>
+        return text.replace("</body>", block + "\n</body>", 1)
+    start = text.index(marker)
+    end = text.index("</script>", start) + len("</script>")
+    return text[:start] + block + text[end:]
+
+
+def _baseline_docs() -> dict[str, str]:
+    """The G2 nok files: a baseline in the wrong place, a snapshot whose
+    hash or content is wrong, a baseline under an older declaration."""
+    from aimformat.document import snapshot_hash
+
+    out: dict[str, str] = {}
+
+    # H007: a valid baseline appended after ordinary edits
+    doc = aim.new_document(title="Baseline fixture")
+    doc.add_chunk('<p data-aim="p1">One.</p>', author=ME, at=t(0))
+    doc.add_chunk('<p data-aim="p2">Two.</p>', author=ME, at=t(1))
+    events = [e.data for e in doc.history]
+    snap = doc._state.snapshot()
+    late = {
+        "seq": 3,
+        "kind": "baseline",
+        "t": t(2),
+        "label": "late",
+        "doc_hash": snapshot_hash(snap),
+        "snapshot": snap,
+    }
+    out["nok_H007_baseline_not_first.aim"] = _with_history(doc, events + [late])
+
+    # H008: a snapshot entry carrying an event handler — the live body was
+    # cleaned by a later recorded edit, so the chain itself verifies
+    doc = aim.new_document(title="Baseline fixture")
+    doc.add_chunk('<p data-aim="p1">One.</p>', author=ME, at=t(0))
+    doc._drop_history(drop_embeddings=False)
+    dirty = '<p data-aim="p1" onclick="steal()">One.</p>'
+    snap = doc._state.snapshot()
+    snap["body"] = [dirty]
+    origin = {
+        "seq": 1,
+        "kind": "baseline",
+        "t": t(1),
+        "label": "import",
+        "doc_hash": snapshot_hash(snap),
+        "snapshot": snap,
+    }
+    clean = {
+        "seq": 2,
+        "kind": "direct_edit",
+        "t": t(2),
+        "target": "p1",
+        "action": "modify",
+        "before": dirty,
+        "after": '<p data-aim="p1">One.</p>',
+        "author": ME.to_obj(),
+        "batch": "b1",
+    }
+    out["nok_H008_snapshot_event_handler.aim"] = _with_history(doc, [origin, clean])
+
+    # S034: a baseline retained under a 0.5 declaration
+    doc = aim.new_document(title="Baseline fixture")
+    doc.add_chunk('<p data-aim="p1">One.</p>', author=ME, at=t(0))
+    doc._drop_history(drop_embeddings=False)
+    doc._state.set_spec_version("0.5")
+    snap = doc._state.snapshot()
+    origin = {
+        "seq": 1,
+        "kind": "baseline",
+        "t": t(1),
+        "label": "import",
+        "doc_hash": snapshot_hash(snap),
+        "snapshot": snap,
+    }
+    out["nok_S034_baseline_under_prior_version.aim"] = _with_history(doc, [origin])
+
+    # H009 (warning): a construct the seq-1 log never recorded
+    doc = aim.new_document(title="Unrecorded origin")
+    doc.add_chunk('<p data-aim="p1">Recorded.</p>', author=ME, at=t(0))
+    out["nok_H009_unrecorded_origin.aim"] = doc.dumps().replace(
+        '<p data-aim="p1">Recorded.</p>',
+        '<p data-aim="p0">Never recorded.</p>\n<p data-aim="p1">Recorded.</p>',
+    )
+    return out
+
+
+#: two different 1×1 PNGs, base64
+_PNG_DOT = (
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4"
+    "z8DwHwAFBQIAX8jx0gAAAABJRU5ErkJggg=="
+)
+_PNG_OTHER = (
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGNgYGBg"
+    "AAAABQABh6FO1AAAAABJRU5ErkJggg=="
+)
+
+
+def _packed_image_doc() -> aim.AimDocument:
+    """One image stored once, the shape an import writes (spec §9): the chunk
+    and the baseline snapshot reference the asset, the registry holds it."""
+    importer = aim.external("docx-import")
+    doc = aim.new_document(title="Packed image fixture")
+    doc.add_chunk('<p data-aim="p1">A figure follows.</p>', author=importer, at=t(0))
+    doc.add_chunk(
+        f'<figure data-aim="fig1"><img alt="A dot" src="data:image/png;base64,{_PNG_DOT}">'
+        "<figcaption>One dot.</figcaption></figure>",
+        author=importer,
+        at=t(1),
+    )
+    doc.pack_assets(author=importer, at=t(2))
+    doc._drop_history(drop_embeddings=False)  # the import's scaffolding
+    doc.baseline("import", author=importer, explanation="Imported", at=t(3))
+    return doc
+
+
+def _packed_image_noks(ok: str) -> dict[str, str]:
+    """The S036/S037 nok files (warnings): the registry is outside doc_hash,
+    so these defects break no hash and no replay."""
+    start, end = ok.index("<aim-assets>"), ok.index("</aim-assets>\n") + len("</aim-assets>\n")
+    registry = ok[start:end]
+    assert _PNG_DOT in registry
+    return {
+        # the registry deleted out of band: chunk and snapshot point at nothing
+        "nok_S036_unresolved_asset_reference.aim": ok[:start] + ok[end:],
+        # the bytes swapped under the same id
+        "nok_S037_asset_id_mismatch.aim": ok[:start]
+        + registry.replace(_PNG_DOT, _PNG_OTHER)
+        + ok[end:],
+    }
+
+
 def _pending_delete_doc() -> str:
     doc = base_doc()
     doc.propose_delete("i1", author=BOT, explanation="Trim.", at=t(3))
@@ -99,17 +294,29 @@ def main() -> None:
     files["ok_slides.aim"] = deck.dumps()
 
     flat = base_doc()
-    flat.flatten()
+    flat.flatten(at=t(9))  # one anchoring checkpoint: a pruned log (H004)
     files["ok_flattened.aim"] = flat.dumps()
 
+    files["ok_historyless.aim"] = _historyless(base_doc())  # H001 only
+
+    imported = aim.new_document(title="Imported fixture")
+    for markup in ('<h1 data-aim="t1">Imported</h1>', '<p data-aim="p1">From a file.</p>'):
+        imported.add_chunk(markup, author=aim.external("docx-import"), at=t(0))
+    imported._drop_history(drop_embeddings=False)  # the import's scaffolding
+    imported.baseline("import", author=aim.external("docx-import"), explanation="Imported", at=t(1))
+    imported.generate_toc()
+    imported.add_chunk('<p data-aim="p2">Edited after import.</p>', author=ME, at=t(2))
+    files["ok_baseline.aim"] = imported.dumps()
+
     self_closing_exceptions = aim.new_document(title="Self-closing exceptions")
+    # a fragment that names no asset: an "#asset-…" one would resolve to
+    # nothing and add S036 to this file and to the C002 file built from it
     self_closing_exceptions.add_chunk(
-        '<p data-aim="syntax"><span></span><br><svg><use href="#asset-unused"/></svg></p>',
+        '<p data-aim="syntax"><span></span><br><svg><use href="#glyph"/></svg></p>',
         author=BOT,
         at=t(0),
     )
-    self_closing_exceptions.flatten()
-    files["ok_self_closing_exceptions.aim"] = self_closing_exceptions.dumps()
+    files["ok_self_closing_exceptions.aim"] = _historyless(self_closing_exceptions)
 
     painted = aim.new_document(title="Literal paint fixture")
     painted.add_chunk(
@@ -128,10 +335,10 @@ def main() -> None:
 
     # A previous-version document, still conforming under this toolkit: a
     # 0.3 tool understands 0.2, so neither the version marker nor the
-    # stylesheet stamp is a finding (S002/S006 accept older).
+    # stylesheet stamp is a finding (S002/S006 accept older). No TOC: the
+    # one a 0.6 save builds is v0.6 syntax, hashed under the 0.6 line.
     prior = (
-        base_doc()
-        .dumps()
+        _without_meta(base_doc().dumps())
         .replace(f'data-aim-version="{aim.SPEC_VERSION}"', 'data-aim-version="0.2"')
         .replace(f'data-aim-css="{aim.SPEC_VERSION}"', 'data-aim-css="0.2"')
     )
@@ -161,14 +368,16 @@ def main() -> None:
     paginated.add_chunk("<aim-page-break></aim-page-break>", author=ME, after="p1", at=t(4))
     files["ok_pagination.aim"] = paginated.dumps()
 
+    files["ok_packed_image.aim"] = _packed_image_doc().dumps()
+
     # -- nok: one rule per file ------------------------------------------
-    # Derived from a FLATTENED base wherever possible, so a surgical body
+    # Derived from a HISTORY-LESS base wherever possible, so a surgical body
     # defect cannot co-fire history-chain errors (H006) — each nok file
-    # must trip exactly its named code and nothing else.
-    flat_doc = base_doc()
-    flat_doc.flatten()
-    flat = flat_doc.dumps()
-    life = files["ok_lifecycle.aim"]
+    # must trip exactly its named code and nothing else. (flatten() keeps
+    # an anchoring checkpoint since v0.6, which any body edit would trip.)
+    flat = _historyless(base_doc())
+    # without its TOC, whose hash a body edit would make stale (M005)
+    life = _without_meta(files["ok_lifecycle.aim"])
 
     pag_doc = base_doc()
     pag_doc.set_page_setup(
@@ -180,8 +389,7 @@ def main() -> None:
         author=ME,
         at=t(3),
     )
-    pag_doc.flatten()
-    pag_flat = pag_doc.dumps()
+    pag_flat = _historyless(pag_doc)
 
     nok = {
         "nok_S001_missing_version.aim": flat.replace(f' data-aim-version="{aim.SPEC_VERSION}"', ""),
@@ -301,6 +509,13 @@ def main() -> None:
         "nok_C002_self_closing_non_void.aim": files["ok_self_closing_exceptions.aim"].replace(
             "<span></span>", "<span/>"
         ),
+        "nok_M004_meta_without_summary_or_toc.aim": flat.replace(
+            "<title>", '<script type="application/aim-meta+json">\n{}\n</script>\n<title>', 1
+        ),
+        "nok_M005_stale_toc.aim": _stale_toc(files["ok_baseline.aim"]),
+        **_toc_docs(),
+        **_baseline_docs(),
+        **_packed_image_noks(files["ok_packed_image.aim"]),
     }
     files.update(nok)
 

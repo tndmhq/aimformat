@@ -1,6 +1,6 @@
 """Property-based tests (Hypothesis) for the public SDK surface (WS5, L4).
 
-Four invariant families, each exercised over generated inputs:
+Five invariant families, each exercised over generated inputs:
 
 1. Round-trip identity — ``dumps()`` is a fixed point of ``loads``:
    ``aim.loads(doc.dumps()).dumps()`` is byte-identical.
@@ -12,6 +12,8 @@ Four invariant families, each exercised over generated inputs:
    chunk's payload.
 4. Parser totality — ``aim.loads`` on arbitrary text either returns a
    document or raises a defined ``AimError``; never any other exception.
+5. Table of contents — a save stores the live outline as a fresh TOC, and
+   every entry's counts are those of its section read.
 
 Documents are built through the public API (``new_document`` + document
 ops) with deterministic ids and timestamps so failures shrink and replay
@@ -175,6 +177,30 @@ def test_reconcile_is_a_noop_on_untouched_documents(doc: aim.AimDocument) -> Non
     second = doc.reconcile(author=aim.external(), at=ts(7201))
     assert second.changed is False
     assert doc.verify() == []
+
+
+@given(doc=documents())
+@_DOC_SETTINGS
+def test_a_save_stores_the_outline_and_sections_match_their_entries(
+    doc: aim.AimDocument,
+) -> None:
+    """A save stores the live outline as a fresh TOC exactly when the body
+    has a heading (the strategy sets no summary, so otherwise there is no
+    meta block at all), and every entry carries its section's counts."""
+    saved = aim.loads(doc.dumps())
+    outline = saved.outline()
+    if any(c.tag == "h2" for c in saved.chunks):
+        assert saved.meta == {"toc": outline, "toc_doc_hash": saved.doc_hash}
+        assert saved.toc_is_fresh()
+    else:
+        assert saved.meta is None
+    for entry in outline:
+        section = saved.section(entry["id"])
+        assert section.entry() == entry
+        assert len(section.text.split()) == entry["word_count"]
+    # every heading here is an h2, so no section nests in another: the
+    # untitled section and the h2 sections partition the body's chunks
+    assert sum(e["chunk_count"] for e in outline) == len(saved.chunks)
 
 
 @st.composite

@@ -534,21 +534,29 @@ class TestAdoption:
             },
         ]
 
-    def test_flattened_document_readopts(self, rich_doc):
+    def test_a_clean_flattened_document_verifies(self, rich_doc):
+        # flatten collapses the log to one anchoring checkpoint (IMPORT-D12):
+        # a pruned log, so verify() vouches for the body and reconcile — which
+        # needs the full origin — refuses like for any pruned file
         rich_doc.flatten()
         doc = aim.loads(rich_doc.dumps())
-        h = doc.doc_hash
-        report = reconciled(doc)
-        # one add per top construct; items ride inside container payloads
-        assert [(e.action, e.target) for e in report.events] == [
-            ("add", "h1"),
-            ("add", "intro"),
-            ("add", "scope"),
-            ("add", "list"),
-            ("add", "tbl"),
-            ("add", "s1"),
-        ]
-        assert doc.doc_hash == h  # adoption changed nothing visible
+        assert doc.verify() == []
+        with pytest.raises(aim.HistoryError, match="pruned"):
+            doc.reconcile(at=ts(60))
+
+    def test_a_hand_edited_flattened_document_is_refused_then_rebaselined(self, rich_doc):
+        # before IMPORT-D12 this case either adopted silently or crashed on
+        # replay from a wrong (empty) origin; now verify sees the edit,
+        # reconcile refuses cleanly, and baseline() accepts the file as it is
+        rich_doc.flatten()
+        text = rich_doc.dumps().replace("We looked at the numbers.", "We looked again.")
+        doc = aim.loads(text)
+        assert doc.verify()  # the checkpoint no longer matches
+        with pytest.raises(aim.HistoryError, match="baseline"):
+            doc.reconcile(at=ts(60))
+        doc.baseline("accepted-as-is", author=aim.human("ada"), at=ts(61))
+        assert doc.verify() == []
+        assert [f for f in aim.lint(doc) if f.level == "error"] == []
 
     def test_adoption_is_idempotent(self):
         doc = aim.loads(self.HAND_WRITTEN)

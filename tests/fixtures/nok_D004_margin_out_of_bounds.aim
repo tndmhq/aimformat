@@ -1,9 +1,9 @@
 <!doctype html>
-<html data-aim-version="0.5" lang="en">
+<html data-aim-version="0.6" lang="en">
 <head>
 <meta charset="utf-8">
 <!--
-aim-note: This file is an AIM document (open format, v0.5) — valid HTML plus
+aim-note: This file is an AIM document (open format, v0.6) — valid HTML plus
 chunk identity, a pending-suggestions lane, and an edit history.
 Agent docs: https://aimformat.com/llms.txt
 The reliable way to edit this file is the `aimformat` tooling, which manages
@@ -20,7 +20,7 @@ https://aimformat.com/editors
 <script type="application/aim-doc+json">
 {"page":{"margins":{"bottom":"20mm","left":"18mm","right":"18mm","top":"250mm"},"orientation":"portrait","size":"A4"}}
 </script>
-<style data-aim-css="0.5">
+<style data-aim-css="0.6">
 :root{--aim-brand-1:#1d4ed8;--aim-brand-2:#0f766e;--aim-brand-3:#b45309;--aim-brand-4:#6d28d9;--aim-font-heading:system-ui, -apple-system, 'Segoe UI', sans-serif;--aim-font-body:system-ui, -apple-system, 'Segoe UI', sans-serif;--aim-font-mono:ui-monospace, 'SF Mono', Menlo, Consolas, monospace}
 body{counter-reset:aim-c1 aim-c2 aim-c3 aim-c4 aim-c5 aim-c6 aim-c7 aim-c8 aim-c9}
 html{-webkit-text-size-adjust:100%}

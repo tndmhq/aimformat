@@ -72,6 +72,7 @@ __all__ = [
     "DocxTheme",
     "NumberingEngine",
     "NumberLevel",
+    "DocxPackage",
     "ParsedDocx",
     "data_uri",
     "effective_run_props",
@@ -82,6 +83,7 @@ __all__ = [
     "paragraph_checkbox",
     "paragraph_math_text",
     "paragraph_run_baseline",
+    "open_docx_package",
     "parse_docx",
     "resolve_color",
     "shading_hex",
@@ -90,6 +92,7 @@ __all__ = [
     "table_look_val",
     "table_style_looks",
     "textbox_paragraphs",
+    "textbox_paragraph_pairs",
     "picture_relationships",
     "twips_to_mm",
 ]
@@ -255,6 +258,29 @@ class ParsedDocx:
 
 def parse_docx(source: str | bytes | BinaryIO) -> ParsedDocx:
     """Open and parse *source* through the pinned parse layer + gap-fillers."""
+    package = open_docx_package(source)
+    return package.parse(package.document_xml)
+
+
+@dataclass
+class DocxPackage:
+    """An opened, guarded ``.docx`` archive and its parsed ``document.xml``.
+
+    The tracked-change importer resolves ``document_xml`` into two views and
+    parses each through :meth:`parse`; everything else (styles, numbering
+    definitions, relationships, images, the theme) comes from the same
+    archive for both. Each :meth:`parse` builds a fresh
+    :class:`NumberingEngine`: its counters are stateful, one walk each."""
+
+    archive: zipfile.ZipFile
+    document_xml: Any
+
+    def parse(self, doc_elem: Any) -> ParsedDocx:
+        return _parsed_from(self.archive, doc_elem)
+
+
+def open_docx_package(source: str | bytes | BinaryIO) -> DocxPackage:
+    """Open *source* (path, bytes, or stream) and parse its ``document.xml``."""
     try:
         zf = _api.open_docx(source)
         _guard_archive(zf)  # every input, not only the Strict-OOXML branch
@@ -272,6 +298,10 @@ def parse_docx(source: str | bytes | BinaryIO) -> ParsedDocx:
         # DocxReadError: the CLI printed a traceback, and every caller had to
         # guess which third-party class to catch.
         raise ParseError(f"not a readable .docx file: {exc}") from exc
+    return DocxPackage(zf, doc_elem)
+
+
+def _parsed_from(zf: zipfile.ZipFile, doc_elem: Any) -> ParsedDocx:
     document = _api.parse_document(doc_elem)
     if document is None:
         raise ValueError("not a WordprocessingML document (no document body)")
@@ -1673,9 +1703,14 @@ def textbox_paragraphs(elem: Any) -> list[Any]:
     shape, MCE-resolved), deduped by identity so a nested textbox is not
     counted twice. One level deep: a paragraph emitted from here is not
     itself re-scanned for textboxes."""
+    return [parsed for parsed, _ in textbox_paragraph_pairs(elem)]
+
+
+def textbox_paragraph_pairs(elem: Any) -> list[tuple[Any, Any]]:
+    """:func:`textbox_paragraphs`, each paired with its source ``w:p``."""
     txbx_tag = f"{{{_W_NS}}}txbxContent"
     seen: set[int] = set()
-    out: list[Any] = []
+    out: list[tuple[Any, Any]] = []
     for txbx in (c for c in _effective_descendants(elem) if c.tag == txbx_tag):
         for p in txbx.findall(f".//{{{_W_NS}}}p"):
             if id(p) in seen:
@@ -1683,5 +1718,5 @@ def textbox_paragraphs(elem: Any) -> list[Any]:
             seen.add(id(p))
             parsed = parse_paragraph(p)
             if parsed is not None:
-                out.append(parsed)
+                out.append((parsed, p))
     return out
