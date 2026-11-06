@@ -1024,6 +1024,25 @@ class _Exporter:
                 self.adds_by_anchor[("body", target)] = early
             if late:
                 self._after_move[target] = late
+        # Card order is the order a body anchor's arrivals land in only while
+        # every move relocates its block. A move whose block already stands
+        # at its destination once the earlier cards are accepted lands
+        # nothing, so it rebinds no later card on its anchor (accept's
+        # noop_move), and those cards land in front of the block. With a move
+        # pending, body arrivals therefore emit in the order the lane's own
+        # accept-all replay puts them, keyed by proposal id; a lane that does
+        # not replay keeps card order.
+        self._landing: dict[str, int] = {}
+        if self.pending_move:
+            where = _projected_body_index(doc)
+            for p in doc.proposals:
+                if (p.anchor_container or "body") != "body":
+                    continue
+                block = p.target if p.action == "move" else None
+                if p.action == "add":
+                    block = doc._payload_root_id(p.payload_html or "")
+                if block and block in where:
+                    self._landing[p.id] = where[block]
 
     # -- top level -----------------------------------------------------------
     def run(self) -> None:
@@ -1092,13 +1111,20 @@ class _Exporter:
     def _pop_adds(self, container: str, after: str | None) -> list[Proposal]:
         return self.adds_by_anchor.pop((container, after), [])
 
+    def _arrival_order(self, prop: Proposal) -> tuple[int, int]:
+        """Where *prop*'s block lands in the accept-all replay when that is
+        known (see ``_landing``), then card order."""
+        card = self._card_order.get(prop.id, 0)
+        return (self._landing.get(prop.id, len(self._card_order)), card)
+
     def _emit_anchored_adds(self, container: str, anchor: str | None) -> None:
         # creation order: acceptance rebinds every later same-anchor sibling
-        # onto the block that just landed, so the lane lands in card order; a
-        # chained add joins the pool once the add it anchors on is emitted
+        # onto the block that just landed, so the lane lands in card order —
+        # unless a move lands nothing (see _landing); a chained add joins the
+        # pool once the add it anchors on is emitted
         pool = self._pop_adds(container, anchor)
         while pool:
-            pool.sort(key=lambda p: self._card_order.get(p.id, 0))
+            pool.sort(key=self._arrival_order)
             prop = pool.pop(0)
             if prop.action == "move":
                 self._emit_move_destination(prop)
@@ -2137,6 +2163,25 @@ class _Exporter:
 
 
 # --------------------------------------------------------------------------
+def _projected_body_index(doc: AimDocument) -> dict[str, int]:
+    """Each body-level block's index once the pending lane is accepted in
+    creation order, replayed on a copy exactly as ``accept_all()`` replays
+    it; empty when the lane does not replay."""
+    try:
+        projection = doc._clone()
+        decider = external("docx-export")
+        for proposal in resolution_order(projection.proposals):
+            projection.accept(proposal.id, decided_by=decider)
+    except Exception:  # foreign cards may fail outside AimError, as in accept_all
+        return {}
+    index: dict[str, int] = {}
+    for i, el in enumerate(projection._state.constructs()):
+        cid = el.chunk_id or el.container_id
+        if cid:
+            index.setdefault(cid, i)
+    return index
+
+
 def _resolve_copy(doc: AimDocument, decision: str) -> AimDocument:
     clone = AimDocument.loads(doc.dumps())
     decider = external("docx-export")

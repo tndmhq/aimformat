@@ -624,6 +624,93 @@ class TestRoundTrip:
         assert _view_texts(back.read_bytes(), "accept") == want
         assert _view_texts(back.read_bytes(), "reject") == _texts(doc)
 
+    @pytest.mark.parametrize(
+        ("lane", "want"),
+        [
+            # codex #40 round 3: once A lands after B, B already stands first
+            ([("move", "A", "B"), ("move", "B", None), ("move", "C", None)], "C B A D"),
+            ([("move", "A", "B"), ("move", "B", None), ("add", "New", None)], "New B A C D"),
+            (
+                [
+                    ("move", "A", "B"),
+                    ("move", "B", None),
+                    ("add", "New", None),
+                    ("add", "Chained", "New"),
+                ],
+                "New Chained B A C D",
+            ),
+            # the deletion of C leaves D after B already
+            (
+                [("delete", "C"), ("move", "D", "B"), ("add", "New", "B"), ("add", "Newer", "B")],
+                "A B New Newer D",
+            ),
+            # moving C after A puts B after C already
+            ([("move", "C", "A"), ("move", "B", "C"), ("move", "A", "C")], "C A B D"),
+            # an add made after A's move follows A to its new place
+            (
+                [("move", "A", "B"), ("add", "New", "A"), ("move", "B", None), ("move", "C", None)],
+                "C B A New D",
+            ),
+            # A's own move is the no-op: the add made before it stays after A
+            (
+                [
+                    ("add", "New", "A"),
+                    ("move", "B", None),
+                    ("move", "A", "B"),
+                    ("add", "Newer", "B"),
+                ],
+                "B Newer A New C D",
+            ),
+            # B also has a pending modify: the moved-and-modified layout
+            (
+                [("move", "A", "B"), ("move", "B", None), ("modify", "B"), ("move", "C", None)],
+                "C B2 A D",
+            ),
+        ],
+        ids=[
+            "move-on-its-anchor",
+            "add-on-its-anchor",
+            "chained-add-on-its-anchor",
+            "after-a-deletion",
+            "chain-of-moves",
+            "add-following-a-move",
+            "adds-on-both-sides",
+            "moved-and-modified",
+        ],
+    )
+    def test_a_move_earlier_cards_made_a_no_op_lands_like_accept_all(self, lane, want, tmp_path):
+        # A move whose block already stands at its destination once the
+        # earlier cards are accepted changes nothing: it lands nothing, so it
+        # rebinds no later card on its anchor, and those land in front of the
+        # block. The export ordered the arrivals as if every move relocated
+        # its block.
+        doc = _lettered_lane("ABCD", lane)
+        assert _texts(_resolved(doc, "accept")) == want.split()
+        back = tmp_path / "noop.docx"
+        aim.to_docx(doc, back, pending="tracked")
+        assert _view_texts(back.read_bytes(), "accept") == want.split()
+        assert _view_texts(back.read_bytes(), "reject") == list("ABCD")
+
+    def test_a_foreign_move_to_where_its_block_stands_lands_nothing(self, tmp_path):
+        # propose_move refuses a move that changes nothing in the current
+        # body, but a hand-written card can still say "B after A" with B
+        # already there: an add made after it on the same anchor lands in
+        # front of B.
+        ada = aim.human("ada")
+        doc = aim.new_document(title="Moves")
+        with doc.batch():
+            a, b, c, _ = (doc.add_chunk(f"<p>{t}</p>", author=ada).id for t in "ABCD")
+        move = doc.propose_move(b, container="body", after=c, author=ada)
+        doc.propose_add("<p>New</p>", after=a, author=ada)
+        doc._card_el(move.id).set("data-anchor-after", a)  # foreign-authored
+        doc = aim.loads(doc.dumps())
+        want = ["A", "New", "B", "C", "D"]
+        assert _texts(_resolved(doc, "accept")) == want
+        back = tmp_path / "noop.docx"
+        aim.to_docx(doc, back, pending="tracked")
+        assert _view_texts(back.read_bytes(), "accept") == want
+        assert _view_texts(back.read_bytes(), "reject") == list("ABCD")
+
     def test_an_inserted_list_item_round_trips_as_one_card(self, tmp_path):
         # The exported insertion must keep its list's numPr: without it Word
         # shows the item unnumbered and the re-import reads a list split
@@ -695,6 +782,30 @@ def _view_paragraphs(data: bytes, view: str) -> list[str]:
         root = etree.fromstring(z.read("word/document.xml"))
     view_root = resolve_view(root, view)
     return ["".join(t.text or "" for t in p.iter(f"{w}t")) for p in view_root.iter(f"{w}p")]
+
+
+def _lettered_lane(names: str, lane: list[tuple]) -> aim.AimDocument:
+    """One paragraph per letter of *names*, then *lane*'s cards in order:
+    ``("move", X, after)``, ``("add", text, after)``, ``("delete", X)`` and
+    ``("modify", X)`` (X's text becomes X2, proposed by another author). An
+    anchor is a letter, an earlier add's text, or None for the first
+    position."""
+    ada, bot = aim.human("ada"), aim.agent("model-x")
+    doc = aim.new_document(title="Lane")
+    with doc.batch():
+        ids = {name: doc.add_chunk(f"<p>{name}</p>", author=ada).id for name in names}
+    for action, name, *after in lane:
+        anchor = ids[after[0]] if after and after[0] is not None else None
+        if action == "move":
+            doc.propose_move(ids[name], container="body", after=anchor, author=ada)
+        elif action == "add":
+            ids[name] = doc.propose_add(f"<p>{name}</p>", after=anchor, author=ada).id
+        elif action == "delete":
+            doc.propose_delete(ids[name], author=ada)
+        else:
+            markup = f'<p data-aim="{ids[name]}">{name}2</p>'
+            doc.propose_modify(ids[name], markup, author=bot)
+    return doc
 
 
 def _damaged_member(data: bytes, prefix: str) -> bytes:
