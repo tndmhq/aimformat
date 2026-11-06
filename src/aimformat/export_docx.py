@@ -58,6 +58,7 @@ from .document import (
 from .dom import Element, Text, parse_fragment
 from .errors import InvalidOperation
 from .events import external
+from .ids import is_valid_proposal_id
 from .paint import BorderSide, Paint, PaintResolver, brand_defaults
 from .registry import REGISTRY
 
@@ -989,7 +990,16 @@ class _Exporter:
         except _ChainedAddCycle:
             ordered = list(doc.proposals)
         self._card_order: dict[str, int] = {p.id: i for i, p in enumerate(ordered)}
+        # for _may_land_nothing: every card by id, how many moves each block
+        # has, and the first card (in card order) that deletes or moves it
+        self._cards: dict[str, Proposal] = {}
+        moved: dict[str, int] = {}
+        self._gone: dict[str, int] = {}
         for p in doc.proposals:
+            self._cards[p.id] = p
+            if p.target and p.action in ("delete", "move"):
+                at = self._card_order.get(p.id, 0)
+                self._gone[p.target] = min(at, self._gone.get(p.target, at))
             if p.action == "modify" and p.target and p.target not in ("aim:theme", "aim:doc"):
                 self.pending_mod[p.target] = p
             elif p.action == "delete" and p.target:
@@ -997,6 +1007,9 @@ class _Exporter:
             elif p.action == "add":
                 key = (p.anchor_container or "body", p.anchor_after)
                 self.adds_by_anchor.setdefault(key, []).append(p)
+            elif p.action == "move" and p.target:
+                moved[p.target] = moved.get(p.target, 0) + 1
+        self._moved_twice = {block for block, n in moved.items() if n > 1}
         for p in doc.proposals:
             if (
                 p.action == "move"
@@ -1011,6 +1024,9 @@ class _Exporter:
                 self.pending_move[p.target] = p
                 self._move_names[p.target] = f"aim-move-{len(self._move_names) + 1}"
                 self.adds_by_anchor.setdefault(("body", p.anchor_after), []).append(p)
+        # blocks a pending move takes elsewhere without the export showing it
+        self._unshown_moves = set(moved).difference(self.pending_move)
+        self._spans: tuple[list[Element], dict[str, int], dict[str, int]] | None = None
         # Cards anchored after a moving chunk split by creation order: one
         # made before the move lands at the chunk's old place, one made after
         # it follows the chunk to its new place (accept order is card order).
@@ -1028,12 +1044,13 @@ class _Exporter:
         # every move relocates its block. A move whose block already stands
         # at its destination once the earlier cards are accepted lands
         # nothing, so it rebinds no later card on its anchor (accept's
-        # noop_move), and those cards land in front of the block. With a move
-        # pending, body arrivals therefore emit in the order the lane's own
-        # accept-all replay puts them, keyed by proposal id; a lane that does
-        # not replay keeps card order.
+        # noop_move), and those cards land in front of the block. Where that,
+        # or anything else, can take a run out of card order (see
+        # _moves_can_reorder), body arrivals therefore emit in the order the
+        # lane's own accept-all replay puts them, keyed by proposal id; a
+        # lane that does not replay keeps card order.
         self._landing: dict[str, int] = {}
-        if self.pending_move:
+        if self._moves_can_reorder():
             where = _projected_body_index(doc)
             for p in doc.proposals:
                 if (p.anchor_container or "body") != "body":
@@ -1110,6 +1127,161 @@ class _Exporter:
 
     def _pop_adds(self, container: str, after: str | None) -> list[Proposal]:
         return self.adds_by_anchor.pop((container, after), [])
+
+    def _joins(self, prop: Proposal) -> list[Proposal]:
+        """The body cards that join a run once *prop* is emitted: the adds
+        chained on an add, the late followers of a moved block."""
+        if prop.action == "move":
+            return self._after_move.get(prop.target or "", [])
+        return self.adds_by_anchor.get(("body", prop.id), [])
+
+    def _moves_can_reorder(self) -> bool:
+        """Whether a pending body move can land the cards of its run out of
+        card order, the one case the export pays for the accept-all replay
+        (about one ``accept_all()`` dry run, which grows much faster than
+        the lane).
+
+        A run is what lands at one body anchor: the cards on it and those
+        that join them as they are emitted (:meth:`_joins`). A move that
+        lands nothing rebinds none of the later cards of its run onto its
+        block, so they land in front of the block, all but the cards that
+        join the run through the move (its block's late followers, and
+        theirs), which still land behind it. The other cards land in card
+        order whatever the moves do, so a run can leave card order only
+        where a move that may land nothing (:meth:`_may_land_nothing`) has
+        a later card that does not join through it.
+
+        That holds while each card joins the run after the card it chains
+        on, and while the run's anchor stays where it is. Card order puts a
+        chained add after its parent, but a move chained on an add can come
+        first (a partial resolution leaves such chains): it lands before its
+        parent and takes the run's later cards behind its block. And a
+        pending move the export does not show (of a block also pending
+        deletion, of a whole slide, or out of the body) can take the anchor
+        elsewhere: the run's cards made before it land at the anchor's old
+        place, the later ones at its new place. Only the replay knows the
+        order of such a run."""
+        if not self.pending_move:
+            return False
+        if self._moves_are_foreign():
+            return True
+        body = [p for (c, _), pool in self.adds_by_anchor.items() if c == "body" for p in pool]
+        body += [p for late in self._after_move.values() for p in late]
+        chain_parents = {p.id for p in body if p.action == "add"}
+        seen: set[str] = set()
+        for (container, anchor), pool in self.adds_by_anchor.items():
+            if container != "body" or anchor in chain_parents:
+                continue  # these cards join the run of the add they chain on
+            # the run in emission-tree preorder, with each card's subtree end
+            order: list[Proposal] = []
+            ends: list[int] = []
+            stack: list[tuple[int, Proposal | None]] = [(-1, p) for p in reversed(pool)]
+            while stack:
+                opened, prop = stack.pop()
+                if prop is None:  # every card of this subtree is listed
+                    ends[opened] = len(order)
+                    continue
+                if prop.id in seen:
+                    continue
+                seen.add(prop.id)
+                stack.append((len(order), None))
+                order.append(prop)
+                ends.append(len(order))
+                joins = self._joins(prop)
+                at = self._card_order.get(prop.id, 0)
+                if any(self._card_order.get(q.id, 0) < at for q in joins):
+                    return True  # a card that lands before the card it chains on
+                stack.extend((-1, q) for q in reversed(joins))
+            if len(order) > 1 and anchor in self._unshown_moves:
+                return True
+            cards = [self._card_order.get(p.id, 0) for p in order]
+            # the latest card before each position, and from each position on
+            before, after = [-1], [-1]
+            for card in cards:
+                before.append(max(before[-1], card))
+            for card in reversed(cards):
+                after.append(max(after[-1], card))
+            after.reverse()
+            for i, prop in enumerate(order):
+                if (
+                    prop.action == "move"
+                    and max(before[i], after[ends[i]]) > cards[i]
+                    and self._may_land_nothing(prop)
+                ):
+                    return True
+        return False
+
+    def _moves_are_foreign(self) -> bool:
+        """Whether two cards move one block, or a card moves a block the
+        body does not hold yet (an add's payload): only a hand-written lane
+        does either, and that move can carry a block that landed on an
+        anchor, with the cards rebound onto it, where the reasoning of
+        :meth:`_moves_can_reorder` does not follow. Such a lane replays."""
+        if self._moved_twice:
+            return True
+        held = self.aim._state.all_ids()
+        return any(block not in held for block in self._unshown_moves)
+
+    def _may_land_nothing(self, move: Proposal) -> bool:
+        """Whether *move*'s block may already stand at its destination when
+        the accept-all replay reaches it.
+
+        The move lands after its anchor, or after the cards that landed on
+        the anchor before it, which stand in front of everything that
+        followed the anchor. So it lands nothing only if its block stands
+        right behind them by then, and a block leaves the body only when a
+        card deleting or moving it is accepted. If no earlier card (in card
+        order) moves or deletes the anchor, the move relocates its block
+        whenever, in the current body, the block stands before the anchor or
+        some block between them is deleted or moved by no earlier card.
+        Anything less plain (a chain through a card that is not a body add)
+        counts as may."""
+        cut = self._card_order.get(move.id, 0)
+
+        def gone(block: str) -> bool:
+            return self._gone.get(block, cut) < cut
+
+        target = move.target or ""
+        anchor = move.anchor_after
+        chain: set[str] = set()
+        while anchor is not None and is_valid_proposal_id(anchor):
+            parent = self._cards.get(anchor)  # chained: an add lands on its own anchor
+            if (
+                parent is None
+                or parent.action != "add"
+                or (parent.anchor_container or "body") != "body"
+                or anchor in chain
+            ):
+                return True
+            chain.add(anchor)
+            anchor = parent.anchor_after
+        if anchor == target or (anchor and gone(anchor)):
+            return True
+        constructs, first, last = self._body_spans()
+        if target not in first or (anchor is not None and anchor not in first):
+            return True
+        start = -1 if anchor is None else last[anchor]
+        if first[target] <= start:  # the block stands before its anchor
+            return anchor is not None and last[target] >= first[anchor]
+        for el in constructs[start + 1 : first[target]]:
+            cid = el.chunk_id or el.container_id
+            if not cid or not gone(cid):
+                return False
+        return True
+
+    def _body_spans(self) -> tuple[list[Element], dict[str, int], dict[str, int]]:
+        """The body's constructs, and the first and last index of each id."""
+        if self._spans is None:
+            constructs = self.aim._state.constructs()
+            first: dict[str, int] = {}
+            last: dict[str, int] = {}
+            for i, el in enumerate(constructs):
+                cid = el.chunk_id or el.container_id
+                if cid:
+                    first.setdefault(cid, i)
+                    last[cid] = i
+            self._spans = (constructs, first, last)
+        return self._spans
 
     def _arrival_order(self, prop: Proposal) -> tuple[int, int]:
         """Where *prop*'s block lands in the accept-all replay when that is

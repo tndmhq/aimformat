@@ -666,6 +666,23 @@ class TestRoundTrip:
                 [("move", "A", "B"), ("move", "B", None), ("modify", "B"), ("move", "C", None)],
                 "C B2 A D",
             ),
+            # the card landing in front of C joins the run through New, an
+            # add made before the move
+            (
+                [("delete", "B"), ("add", "New", "A"), ("move", "C", "A"), ("add", "Newer", "New")],
+                "A New Newer C D",
+            ),
+            # ... or through D, moved before C: New follows D, not C
+            (
+                [("delete", "B"), ("move", "D", "A"), ("move", "C", "A"), ("add", "New", "D")],
+                "A D New C",
+            ),
+            # C's move, not shown (C is deleted too), takes the anchor of N1
+            # and B's move elsewhere: N1 stays at C's old place, behind B
+            (
+                [("add", "N1", "C"), ("move", "C", "A"), ("move", "B", "C"), ("delete", "C")],
+                "A B N1 D",
+            ),
         ],
         ids=[
             "move-on-its-anchor",
@@ -676,6 +693,9 @@ class TestRoundTrip:
             "add-following-a-move",
             "adds-on-both-sides",
             "moved-and-modified",
+            "chained-on-an-earlier-add",
+            "follower-of-an-earlier-move",
+            "anchor-moved-and-deleted",
         ],
     )
     def test_a_move_earlier_cards_made_a_no_op_lands_like_accept_all(self, lane, want, tmp_path):
@@ -688,6 +708,55 @@ class TestRoundTrip:
         assert _texts(_resolved(doc, "accept")) == want.split()
         back = tmp_path / "noop.docx"
         aim.to_docx(doc, back, pending="tracked")
+        assert _view_texts(back.read_bytes(), "accept") == want.split()
+        assert _view_texts(back.read_bytes(), "reject") == list("ABCD")
+
+    @pytest.mark.parametrize(
+        ("lane", "want"),
+        [
+            # nothing else lands where A goes
+            ([("move", "A", "C"), ("add", "New", "D")], "B C A D New"),
+            # B's move is a no-op, but New was made before it: New lands first
+            ([("add", "New", None), ("move", "A", "B"), ("move", "B", None)], "New B A C D"),
+            # B's move is a no-op, and only B's own follower comes after it
+            ([("move", "A", "B"), ("move", "B", None), ("add", "New", "B")], "B New A C D"),
+            # B and C, which no card deletes or moves, stand between A and D
+            ([("move", "D", "A"), ("add", "New", "A")], "A D New B C"),
+            # A stands in front of C, and no card moves either of them first
+            ([("move", "A", "C"), ("add", "New", "C")], "B C A New D"),
+        ],
+        ids=[
+            "alone",
+            "after-an-earlier-add",
+            "before-its-own-follower",
+            "blocks-between",
+            "block-before-its-anchor",
+        ],
+    )
+    def test_a_move_that_cannot_reorder_its_run_exports_without_a_replay(
+        self, lane, want, tmp_path, monkeypatch
+    ):
+        # Replaying the lane to order a run costs about one accept_all() dry
+        # run, which grows much faster than the lane: about 50 s instead of
+        # 0.4 s for 2,000 paragraphs with 500 cards. A move reorders its run
+        # only if it may land nothing (its block may already stand where it
+        # goes by the time it is accepted) and a later card of the run,
+        # other than its own block's followers, would then land in front of
+        # it. Anywhere else card order is the order accept_all() gives, and
+        # the export must not replay.
+        doc = _lettered_lane("ABCD", lane)
+        assert _texts(_resolved(doc, "accept")) == want.split()
+        accepted: list[str] = []
+        accept = AimDocument.accept
+
+        def counted(self, pid, **kwargs):
+            accepted.append(pid)
+            return accept(self, pid, **kwargs)
+
+        monkeypatch.setattr(AimDocument, "accept", counted)
+        back = tmp_path / "plain.docx"
+        aim.to_docx(doc, back, pending="tracked")
+        assert accepted == []
         assert _view_texts(back.read_bytes(), "accept") == want.split()
         assert _view_texts(back.read_bytes(), "reject") == list("ABCD")
 
@@ -710,6 +779,30 @@ class TestRoundTrip:
         aim.to_docx(doc, back, pending="tracked")
         assert _view_texts(back.read_bytes(), "accept") == want
         assert _view_texts(back.read_bytes(), "reject") == list("ABCD")
+
+    def test_a_move_chained_on_a_later_add_lands_like_accept_all(self, tmp_path):
+        # Accepting B's move dissolves D's earlier move, made "after B", onto
+        # the last card of A's run: it now chains on N2, an add made after
+        # it. In card order it lands first, ahead of its parent, and takes
+        # E's move (made before N2) behind D.
+        doc = _lettered_lane(
+            "ABCDEF",
+            [
+                ("move", "D", "B"),
+                ("add", "N1", "A"),
+                ("move", "E", "A"),
+                ("add", "N2", "N1"),
+                ("move", "B", "F"),
+            ],
+        )
+        b = next(c.id for c in doc.chunks if c.text == "B")
+        doc.accept(next(p.id for p in doc.proposals if p.target == b), decided_by=DECIDER)
+        want = "A N1 N2 D E C F B".split()
+        assert _texts(_resolved(doc, "accept")) == want
+        back = tmp_path / "chained.docx"
+        aim.to_docx(doc, back, pending="tracked")
+        assert _view_texts(back.read_bytes(), "accept") == want
+        assert _view_texts(back.read_bytes(), "reject") == "A C D E F B".split()
 
     def test_an_inserted_list_item_round_trips_as_one_card(self, tmp_path):
         # The exported insertion must keep its list's numPr: without it Word
