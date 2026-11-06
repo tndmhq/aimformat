@@ -48,6 +48,7 @@ utilities and border-colour paint, not per-side border geometry.
 
 from __future__ import annotations
 
+import json
 import re
 from collections.abc import Sequence
 from pathlib import Path
@@ -604,8 +605,9 @@ class _Converter:
     emitted block, list item and table row carries its source key (stamped
     on the OOXML by :mod:`._docx_revisions`) as a private ``data-aim-src``
     attribute, so two conversions of the same file can be aligned by
-    identity. The importer strips the attribute before anything is written;
-    the markup is otherwise identical to an untracked conversion.
+    identity, and every table what its style paint is computed from
+    (``data-aim-look``). The importer strips both before anything is
+    written; the markup is otherwise identical to an untracked conversion.
     """
 
     def __init__(self, parsed: ParsedDocx, *, track_src: bool = False):
@@ -1391,6 +1393,12 @@ class _Converter:
             # no flags at all we would default to "has a header row" and band
             # a table Word draws plain.
             tbl_look = _tbl_look_bits(table_look_val(elem))
+        if table_src:
+            # what the cells' style paint below is computed from: a tracked
+            # w:tblPrChange that alters it repaints rows it sits outside of
+            # (the tracked importer compares the two views' marks)
+            look = json.dumps([looks, tbl_look], sort_keys=True, separators=(",", ":"))
+            table_src += f' data-aim-look="{escape_attr(look)}"'
         # v_merge continuation cells collapse into the restart cell's rowspan
         spans: dict[tuple[int, int], int] = {}  # (row, col) -> rowspan
         skip: set[tuple[int, int]] = set()

@@ -39,7 +39,10 @@ insertion can change how an untouched neighbour converts. A difference
 becomes a card only when it cites a revision record whose source element
 lies inside that chunk; any other difference is converter noise, F adopts
 O's markup for it, and the report says so. Fabricated attribution would be
-worse than a missing card.
+worse than a missing card. One record changes chunks it lies outside of: a
+table's ``tblPrChange``, whose new style or ``tblLook`` flags repaint the
+rows. A row cites it when what the table's paint is computed from differs
+between the views and the row's own paint does too.
 
 The lane is written through the SDK's batch-propose primitive and validated
 once on the result: accept-all must reproduce the adjusted F view, reject-all
@@ -64,6 +67,11 @@ from ..ingest import _containerize
 from ._docx_revisions import EXCERPT_CAP, Revision, TrackedDocument, clean
 
 _SRC = "data-aim-src"
+#: a table's style-paint inputs, in provenance mode (``_Converter._table_markup``)
+_LOOK = "data-aim-look"
+#: what a table style gives a row: its cells' fill and text colour
+#: (``_Converter._cell_style``); nothing else in a row depends on the table
+_PAINT = ("background-color", "color")
 _CAUSES = ("add", "delete", "modify")
 _IDS = re.compile(r' data-aim(?:-container)?="[^"]*"')
 _CONTAINERS = ("ul", "ol", "table")
@@ -116,6 +124,7 @@ class Unit:
     shell: str | None = None  # thead/tbody/tfoot for a table row
     order: tuple[float, float] = (0.0, 0.0)
     id: str | None = None  # O side: the live id once the body is built
+    look: str | None = None  # a table: what its style paint is computed from
 
     @property
     def tag(self) -> str:
@@ -202,14 +211,16 @@ def _unit(el: Element, fallback: str, last: tuple[float, float]) -> Unit:
                 )
             )
     own = el.get(_SRC)
+    look = el.get(_LOOK)
     key = own.split()[0] if own else (f"list:{items[0].key}" if items else fallback)
     order = _order_of(own.split()[0], last) if own else (items[0].order if items else last)
     members = frozenset(_tokens(el)) | {key}
     for node in el.iter():
         node.remove_attr(_SRC)
+        node.remove_attr(_LOOK)
     for member in items:
         member.markup = serialize(member.el)
-    return Unit(key, members, el, serialize(el), container, items, None, order)
+    return Unit(key, members, el, serialize(el), container, items, None, order, look=look)
 
 
 def actual_signature(doc: AimDocument) -> list[tuple]:
@@ -277,6 +288,9 @@ class _Seq:
     container: str  # "body" or the live O container id
     family: str  # body | list | table
     entries: list[_Entry] = field(default_factory=list)
+    #: a table whose style paint changed: the property revisions on it that
+    #: the rows they repaint cite (``_Planner._items``)
+    repaint: list[Revision] = field(default_factory=list)
 
 
 @dataclass
@@ -339,6 +353,17 @@ class _Planner:
                         seen[rev.index] = rev
         return [seen[i] for i in sorted(seen)]
 
+    def _table_property_revisions(self, *tables: Unit) -> list[Revision]:
+        """The ``tblPrChange`` records of *tables* themselves, whose innermost
+        source is the table. (A nested table's record also names the row
+        holding it, which cites it already.)"""
+        seen: dict[int, Revision] = {}
+        for table in tables:
+            for rev in self.by_src.get(table.key, ()):
+                if rev.kind == "tblPrChange" and rev.srcs[:1] == (table.key,):
+                    seen[rev.index] = rev
+        return [seen[i] for i in sorted(seen)]
+
     # -- alignment -----------------------------------------------------------
     def build(self) -> _Seq:
         top = _Seq("body", "body")
@@ -387,6 +412,14 @@ class _Planner:
         seq = _Seq(o.id, _family(o))
         if not self.fine:
             return seq
+        if o.look != f.look:
+            # A table's tblPrChange sits in its own tblPr, outside every row,
+            # so no row's citation reaches it — yet a new style or new
+            # tblLook flags repaint rows. Only a change of what the paint is
+            # computed from counts: a width or a border the format cannot
+            # express repaints nothing, not even the rows an inserted row
+            # shifted to another band.
+            seq.repaint = self._table_property_revisions(o, f)
         o_by_key = {i.key: i for i in o.items}
         taken: set[str] = set()
         f_entries: list[_Entry] = []
@@ -431,6 +464,9 @@ class _Planner:
                 return
             if o.markup != f.markup:
                 revs = self.cites(o, f)
+                if entry.seq.repaint and _paint(o) != _paint(f):
+                    # a row its table's property change repainted
+                    revs = _unique(revs + entry.seq.repaint)
                 if revs:
                     entry.action, entry.revs = "modify", revs
                 else:
@@ -733,6 +769,16 @@ def _coarse_markup(o: Unit, f: Unit) -> str:
         if item.key in o_ids:
             el.set("data-aim", o_ids[item.key] or "")
     return serialize(root)
+
+
+def _paint(row: Unit) -> list[list[tuple[str, str]]]:
+    """Each cell's fill and text colour: all of a row a table style reaches."""
+    out: list[list[tuple[str, str]]] = []
+    for cell in row.el.elements():
+        if cell.tag in ("td", "th"):
+            decls = (d.partition(":") for d in (cell.get("style") or "").split(";"))
+            out.append([(k.strip(), v.strip()) for k, _, v in decls if k.strip() in _PAINT])
+    return out
 
 
 def _sig(unit: Unit, seq: _Seq) -> tuple:

@@ -19,6 +19,7 @@ import importlib.util
 import io
 import pathlib
 import random
+import re
 import time
 import warnings
 import zipfile
@@ -46,6 +47,23 @@ SHAPES = kit.shapes()
 
 def _texts(doc: aim.AimDocument) -> list[str]:
     return [c.text for c in doc.chunks]
+
+
+def _fills(doc: aim.AimDocument) -> list[list[str | None]]:
+    """Each table row's cell fills (``background-color``), row by row."""
+    from aimformat.dom import Element, parse_fragment
+
+    out: list[list[str | None]] = []
+    for chunk in doc.chunks:
+        if chunk.tag != "tr":
+            continue
+        (row,) = [x for x in parse_fragment(chunk.html) if isinstance(x, Element)]
+        fills: list[str | None] = []
+        for cell in row.elements():
+            found = re.search(r"background-color:\s*([^;]+)", cell.get("style") or "")
+            fills.append(found.group(1).strip() if found else None)
+        out.append(fills)
+    return out
 
 
 def _label(actor: aim.Actor) -> str:
@@ -228,6 +246,89 @@ class TestNoCardWithoutRevision:
         (note,) = result.report.revisions
         assert note.cards == () and note.reason == "formatting the format cannot express"
         assert any("produced no proposal" in w for w in result.report.warnings)
+
+
+class TestTablePropertyRevisions:
+    """A ``w:tblPrChange`` sits in the table's own ``tblPr``, outside every
+    row, yet the table style and its ``tblLook`` flags paint the rows'
+    cells. No row cited it: the new paint was converter noise, the original
+    paint was kept, and the change was reported as formatting the format
+    cannot express."""
+
+    # the kit's Medium Shading 1 Accent 1, as python-docx's template defines it
+    HEAD, BAND, NONE = ["#4f81bd"] * 2, ["#d3dfee"] * 2, [None, None]
+
+    @staticmethod
+    def _table_note(result: aim.ImportResult):
+        (note,) = [n for n in result.report.revisions if n.kind == "tblPrChange"]
+        return note
+
+    @pytest.mark.parametrize("name", ["table_style_change", "table_banding_change"])
+    def test_the_rows_it_repaints_become_modifies(self, name, imported):
+        result = imported[name]
+        doc = result.document
+        assert _fills(doc) == [self.NONE] * 4
+        assert _fills(_resolved(doc, "accept")) == [self.HEAD, self.BAND, self.NONE, self.BAND]
+        assert _fills(_resolved(doc, "reject")) == [self.NONE] * 4
+        note = self._table_note(result)
+        assert sorted(note.cards) == sorted(p.id for p in doc.proposals)
+        assert note.reason is None
+        assert {p.explanation for p in doc.proposals} == {"Word: Bob Jones changed formatting"}
+        assert not any("converted differently" in w for w in result.report.warnings)
+        assert "data-aim-look" not in doc.dumps()  # the converter's private mark
+
+    def test_a_row_the_style_does_not_repaint_keeps_its_own_author(self, imported):
+        result = imported["table_style_change_with_cell_edits"]
+        doc = result.document
+        assert _fills(_resolved(doc, "accept")) == [self.HEAD, self.BAND, self.NONE, self.BAND]
+        training = next(c for c in doc.chunks if c.text.startswith("Training"))
+        (card,) = [p for p in doc.proposals if p.target == training.id]
+        assert card.author == aim.human("Alice Smith")
+        assert "formatting" not in (card.explanation or "")
+        note = self._table_note(result)
+        assert len(note.cards) == 3 and card.id not in note.cards
+
+    @pytest.mark.parametrize(
+        "name", ["table_width_change_with_cell_edit", "table_width_change_with_row_insertion"]
+    )
+    def test_a_change_the_format_cannot_express_is_cited_by_no_row(self, name, imported):
+        # the rows below an inserted row change band; that is not the width's doing
+        result = imported[name]
+        note = self._table_note(result)
+        assert note.cards == () and note.reason == "formatting the format cannot express"
+        assert any("produced no proposal" in w for w in result.report.warnings)
+
+    @pytest.mark.parametrize(
+        "name",
+        [
+            "table_style_change",
+            "table_banding_change",
+            "table_style_change_with_cell_edits",
+            "table_width_change_with_cell_edit",
+            "table_style_change_with_row_insertion",
+            "cell_shading_change",
+            "header_row_change",
+        ],
+    )
+    def test_accept_all_is_the_accept_import_cell_for_cell(self, name, imported):
+        # paint, header text colour, th/thead and all. (Not with the width
+        # change and an inserted row: the bands it shifts stay as they were.)
+        from aimformat.convert._docx_tracked import actual_signature
+
+        shape = next(s for s in SHAPES if s.name == name)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", AimImportWarning)
+            accepted = import_docx(shape.docx, tracked="accept").document
+            rejected = import_docx(shape.docx, tracked="reject").document
+        doc = imported[name].document
+        assert actual_signature(_resolved(doc, "accept")) == actual_signature(accepted)
+        assert actual_signature(_resolved(doc, "reject")) == actual_signature(rejected)
+        assert actual_signature(doc) == actual_signature(rejected)
+
+    def test_a_cells_own_fill_change_is_its_rows_modify(self, imported):
+        doc = imported["cell_shading_change"].document
+        assert _fills(doc) == [self.NONE, self.NONE]
+        assert _fills(_resolved(doc, "accept")) == [self.NONE, ["#ffff00", None]]
 
 
 class TestComments:

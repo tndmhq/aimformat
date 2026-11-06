@@ -175,22 +175,48 @@ class Doc:
     def deleted_p(self, text: str, by=ALICE, **kw) -> str:
         return self.p(self.dele(text, by), mark=("del", by), **kw)
 
-    def table(self, rows: list[tuple[list[str], str | None, tuple | None]]) -> str:
-        """Rows of plain cell texts; a row mark is ``("ins"|"del", by)``."""
-        out = ['<w:tbl><w:tblPr><w:tblW w:w="0" w:type="auto"/></w:tblPr>']
+    def table(
+        self,
+        rows: list[tuple[list, str | None, tuple | None]],
+        *,
+        style: str | None = None,
+        look: str = "",
+        tblpr_change: tuple[str, tuple] | None = None,
+    ) -> str:
+        """Rows of plain cell texts; a row mark is ``("ins"|"del", by)``, and
+        any other mark is ``trPr`` children as XML. A cell is its text, or
+        ``(text, tcPr children as XML)``. ``style`` and ``look`` are the
+        table's ``w:tblStyle`` and ``w:tblLook``; ``tblpr_change=(old tblPr
+        children as XML, by)`` records a property change on the table (the
+        record holds the OLD properties)."""
+        tblpr = table_props(style, look)
+        if tblpr_change:
+            old, by_change = tblpr_change
+            tblpr += (
+                f"<w:tblPrChange {_who(by_change, self.ids)}>"
+                f"<w:tblPr>{old}</w:tblPr></w:tblPrChange>"
+            )
+        out = [f"<w:tbl><w:tblPr>{tblpr}</w:tblPr>"]
         cols = max(len(cells) for cells, _, _ in rows)
         out.append("<w:tblGrid>" + '<w:gridCol w:w="2000"/>' * cols + "</w:tblGrid>")
         for cells, kind, by in rows:
-            trpr = f"<w:trPr><w:{kind} {_who(by, self.ids)}/></w:trPr>" if kind else ""
+            trpr = ""
+            if kind in ("ins", "del"):
+                trpr = f"<w:trPr><w:{kind} {_who(by, self.ids)}/></w:trPr>"
+            elif kind:
+                trpr = f"<w:trPr>{kind}</w:trPr>"
             tcs = []
-            for text in cells:
+            for cell in cells:
+                text, tcpr = cell if isinstance(cell, tuple) else (cell, "")
                 if kind == "ins":
                     para = self.p(self.ins(text, by), mark=("ins", by))
                 elif kind == "del":
                     para = self.p(self.dele(text, by), mark=("del", by))
                 else:
                     para = self.p(text if text.startswith("<w:") else run(text))
-                tcs.append(f'<w:tc><w:tcPr><w:tcW w:w="2000" w:type="dxa"/></w:tcPr>{para}</w:tc>')
+                tcs.append(
+                    f'<w:tc><w:tcPr><w:tcW w:w="2000" w:type="dxa"/>{tcpr}</w:tcPr>{para}</w:tc>'
+                )
             out.append(f"<w:tr>{trpr}{''.join(tcs)}</w:tr>")
         out.append("</w:tbl>")
         return "".join(out)
@@ -316,6 +342,29 @@ NUMBERING = (
     '<w:num w:numId="7"><w:abstractNumId w:val="70"/></w:num>'
     '<w:num w:numId="8"><w:abstractNumId w:val="80"/></w:num>'
 )
+
+#: Table styles of python-docx's default template. "Medium Shading 1 Accent
+#: 1" paints the header row 4F81BD with white text and the first band of
+#: body rows D3DFEE (the second band nothing); "Table Grid" paints nothing.
+SHADED_STYLE, GRID_STYLE = "MediumShading1-Accent1", "TableGrid"
+#: ``w:tblLook`` with the header row and horizontal banding on (Word's
+#: default for a new table), and with both off
+BANDED_LOOK = (
+    '<w:tblLook w:val="04A0" w:firstRow="1" w:lastRow="0" w:firstColumn="1" '
+    'w:lastColumn="0" w:noHBand="0" w:noVBand="1"/>'
+)
+PLAIN_LOOK = (
+    '<w:tblLook w:val="0600" w:firstRow="0" w:lastRow="0" w:firstColumn="0" '
+    'w:lastColumn="0" w:noHBand="1" w:noVBand="1"/>'
+)
+
+
+def table_props(
+    style: str | None, look: str = "", width: str = '<w:tblW w:w="0" w:type="auto"/>'
+) -> str:
+    """``w:tblPr`` children in schema order: a table's own properties, or
+    the OLD ones a ``w:tblPrChange`` records."""
+    return (f'<w:tblStyle w:val="{style}"/>' if style else "") + width + look
 
 
 @dataclass
@@ -1025,6 +1074,170 @@ def shapes() -> list[Shape]:
             [("delete", EXT), ("delete", EXT), ("add", _label(ALICE))]
             + [("delete", _label(BOB)), ("add", EXT), ("add", EXT)],
             note="a split-off part a join attaches to the next list moves there",
+        )
+    )
+
+    # A table property change. Its record sits in the table's own tblPr,
+    # outside every row, yet the style and its tblLook flags paint the rows'
+    # cells: the header and the first-band rows change, the second band
+    # (Training) does not. Same text in both views.
+    priced = [
+        (["Item", "Price"], None, None),
+        (["Support", "EUR 500"], None, None),
+        (["Training", "EUR 900"], None, None),
+        (["Hosting", "EUR 100"], None, None),
+    ]
+    priced_texts = ["ItemPrice", "SupportEUR 500", "TrainingEUR 900", "HostingEUR 100"]
+    d = Doc()
+    old = table_props(GRID_STYLE, BANDED_LOOK)
+    d.body = [d.table(priced, style=SHADED_STYLE, look=BANDED_LOOK, tblpr_change=(old, BOB))]
+    out.append(
+        Shape(
+            "table_style_change",
+            d.build(),
+            priced_texts,
+            priced_texts,
+            [("modify", _label(BOB))] * 3,
+            note="Table Grid → Medium Shading 1: a modify per row it repaints",
+        )
+    )
+
+    d = Doc()
+    old = table_props(SHADED_STYLE, PLAIN_LOOK)
+    d.body = [d.table(priced, style=SHADED_STYLE, look=BANDED_LOOK, tblpr_change=(old, BOB))]
+    out.append(
+        Shape(
+            "table_banding_change",
+            d.build(),
+            priced_texts,
+            priced_texts,
+            [("modify", _label(BOB))] * 3,
+            note="header row and banding turned on: a modify per row it repaints",
+        )
+    )
+
+    # The same style change with cell edits by another author: a repainted
+    # row carries both changes, a row the style leaves alone only its edit.
+    d = Doc()
+    support = d.t("EUR ") + d.dele("500", ALICE) + d.ins("550", ALICE)
+    training = d.t("EUR ") + d.dele("900", ALICE) + d.ins("950", ALICE)
+    d.body = [
+        d.table(
+            [
+                (["Item", "Price"], None, None),
+                (["Support", support], None, None),
+                (["Training", training], None, None),
+                (["Hosting", "EUR 100"], None, None),
+            ],
+            style=SHADED_STYLE,
+            look=BANDED_LOOK,
+            tblpr_change=(table_props(GRID_STYLE, BANDED_LOOK), BOB),
+        )
+    ]
+    out.append(
+        Shape(
+            "table_style_change_with_cell_edits",
+            d.build(),
+            priced_texts,
+            ["ItemPrice", "SupportEUR 550", "TrainingEUR 950", "HostingEUR 100"],
+            [
+                ("modify", _label(BOB)),
+                ("modify", EXT),
+                ("modify", _label(ALICE)),
+                ("modify", _label(BOB)),
+            ],
+        )
+    )
+
+    # A table property change the format cannot express (the width), in a
+    # styled table with a cell edit: the edit's row is its author's alone.
+    d = Doc()
+    old = table_props(SHADED_STYLE, BANDED_LOOK, '<w:tblW w:w="5000" w:type="pct"/>')
+    d.body = [
+        d.table(
+            [
+                (["Item", "Price"], None, None),
+                (["Support", d.t("EUR ") + d.dele("500", ALICE) + d.ins("550", ALICE)], None, None),
+            ],
+            style=SHADED_STYLE,
+            look=BANDED_LOOK,
+            tblpr_change=(old, BOB),
+        )
+    ]
+    out.append(
+        Shape(
+            "table_width_change_with_cell_edit",
+            d.build(),
+            ["ItemPrice", "SupportEUR 500"],
+            ["ItemPrice", "SupportEUR 550"],
+            [("modify", _label(ALICE))],
+            note="the width change has no card; the report says so",
+        )
+    )
+
+    # An inserted row shifts the banding of the rows below it. With the
+    # style switched too, those rows are repainted by the switch.
+    with_audit = [*priced[:2], (["Audit", "EUR 300"], "ins", ALICE), *priced[2:]]
+    audit_texts = [*priced_texts[:2], "AuditEUR 300", *priced_texts[2:]]
+    d = Doc()
+    old = table_props(GRID_STYLE, BANDED_LOOK)
+    d.body = [d.table(with_audit, style=SHADED_STYLE, look=BANDED_LOOK, tblpr_change=(old, BOB))]
+    out.append(
+        Shape(
+            "table_style_change_with_row_insertion",
+            d.build(),
+            priced_texts,
+            audit_texts,
+            [("modify", _label(BOB))] * 2 + [("add", _label(ALICE)), ("modify", _label(BOB))],
+        )
+    )
+
+    # …and with only the width changed, the switch repaints nothing: no row
+    # may cite it (the shifted bands are another matter, see the tests).
+    d = Doc()
+    old = table_props(SHADED_STYLE, BANDED_LOOK, '<w:tblW w:w="5000" w:type="pct"/>')
+    d.body = [d.table(with_audit, style=SHADED_STYLE, look=BANDED_LOOK, tblpr_change=(old, BOB))]
+    out.append(
+        Shape(
+            "table_width_change_with_row_insertion",
+            d.build(),
+            priced_texts,
+            audit_texts,
+            None,
+            note="the width change has no card",
+        )
+    )
+
+    # Row and cell property changes live inside the row they change.
+    d = Doc()
+    fill = '<w:shd w:val="clear" w:color="auto" w:fill="FFFF00"/>'
+    old_cell = '<w:tcPr><w:tcW w:w="2000" w:type="dxa"/></w:tcPr>'
+    shaded = fill + f"<w:tcPrChange {_who(ALICE, d.ids)}>{old_cell}</w:tcPrChange>"
+    d.body = [
+        d.table([(["Item", "Price"], None, None), ([("Support", shaded), "EUR 500"], None, None)])
+    ]
+    out.append(
+        Shape(
+            "cell_shading_change",
+            d.build(),
+            ["ItemPrice", "SupportEUR 500"],
+            ["ItemPrice", "SupportEUR 500"],
+            [("modify", _label(ALICE))],
+            note="a cell's own fill: a modify of its row",
+        )
+    )
+
+    d = Doc()
+    header = f"<w:tblHeader/><w:trPrChange {_who(ALICE, d.ids)}><w:trPr/></w:trPrChange>"
+    d.body = [d.table([(["Item", "Price"], header, None), (["Support", "EUR 500"], None, None)])]
+    out.append(
+        Shape(
+            "header_row_change",
+            d.build(),
+            ["ItemPrice", "SupportEUR 500"],
+            ["ItemPrice", "SupportEUR 500"],
+            [("modify", _label(ALICE))],
+            note="a body row made the header row (td → th, tbody → thead)",
         )
     )
     return out
