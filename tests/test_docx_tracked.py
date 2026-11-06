@@ -289,14 +289,92 @@ class TestTablePropertyRevisions:
         assert len(note.cards) == 3 and card.id not in note.cards
 
     @pytest.mark.parametrize(
-        "name", ["table_width_change_with_cell_edit", "table_width_change_with_row_insertion"]
+        "name",
+        [
+            "table_width_change_with_cell_edit",
+            "table_width_change_with_row_insertion",
+            "table_width_change_sparse_look_with_row_insertion",
+            "table_first_column_toggle_with_row_insertion",
+            "table_banded_columns_toggle_with_row_deletion",
+            "table_first_column_toggle_with_cell_shading",
+        ],
     )
-    def test_a_change_the_format_cannot_express_is_cited_by_no_row(self, name, imported):
-        # the rows below an inserted row change band; that is not the width's doing
+    def test_a_change_that_repaints_no_row_is_cited_by_no_row(self, name, imported):
+        # The rows an inserted or deleted row moves to the other band change
+        # paint, and so does a cell another author shaded: neither is the
+        # table change's doing. A width, a tblLook spelled differently, First
+        # Column and Banded Columns paint no row.
         result = imported[name]
         note = self._table_note(result)
         assert note.cards == () and note.reason == "formatting the format cannot express"
         assert any("produced no proposal" in w for w in result.report.warnings)
+        assert all(p.author != aim.human("Bob Jones") for p in result.document.proposals)
+
+    @pytest.mark.parametrize(
+        ("name", "row"),
+        [
+            ("table_first_column_toggle_with_cell_shading", "Training"),
+            # the style's band would paint Support, but its cells' own fills win
+            ("table_style_change_with_own_fills", "Support"),
+        ],
+    )
+    def test_another_authors_fill_keeps_its_author(self, name, row, imported):
+        result = imported[name]
+        doc = result.document
+        chunk = next(c for c in doc.chunks if c.text.startswith(row))
+        (card,) = [p for p in doc.proposals if p.target == chunk.id]
+        assert card.author == aim.human("Alice Smith")
+        assert card.id not in self._table_note(result).cards
+
+    def test_rows_are_judged_where_the_source_has_them(self):
+        # A header row below body rows converts into <thead>, before them,
+        # but the converter bands the rows in source order: Bob's banding
+        # repaints Item (the first row), Support and Hosting (band 1), not
+        # the header row Training or Extra (band 2).
+        from aimformat.convert._docx_in import _Converter
+        from aimformat.convert._docx_revisions import stamp_sources
+        from aimformat.convert._docx_seam import open_docx_package
+        from aimformat.convert._docx_tracked import _repainted, units_of
+
+        names = ["Item", "Support", "Training", "Hosting", "Extra"]
+        rows = [([n, "EUR 1"], "<w:tblHeader/>" if n == "Training" else None, None) for n in names]
+        d = kit.Doc()
+        old = kit.table_props(kit.SHADED_STYLE, kit.PLAIN_LOOK)
+        d.body = [
+            d.table(rows, style=kit.SHADED_STYLE, look=kit.BANDED_LOOK, tblpr_change=(old, kit.BOB))
+        ]
+        package = open_docx_package(d.build())
+        stamp_sources(package.document_xml)
+        o, f = (
+            next(
+                unit
+                for unit in units_of(
+                    _Converter(
+                        package.parse(resolve_view(package.document_xml, view)), track_src=True
+                    ).blocks(),
+                    view,
+                )
+                if unit.tag == "table"
+            )
+            for view in ("reject", "accept")
+        )
+        assert "Training" in f.items[0].markup  # moved into <thead>
+        repainted = _repainted(o, f)
+        assert [n for n in names for i in f.items if n in i.markup and i.key in repainted] == [
+            "Item",
+            "Support",
+            "Hosting",
+        ]
+
+    def test_a_change_that_repaints_one_row_is_cited_by_that_row(self, imported):
+        # Total Row on: the last row only, wherever Alice's insertion puts it
+        result = imported["table_total_row_toggle_with_row_insertion"]
+        doc = result.document
+        total = next(c for c in doc.chunks if c.text.startswith("Total"))
+        (card,) = [p for p in doc.proposals if p.author == aim.human("Bob Jones")]
+        assert card.target == total.id
+        assert self._table_note(result).cards == (card.id,)
+        assert _fills(_resolved(doc, "accept"))[-1] == ["#4f81bd"] * 2
 
     @pytest.mark.parametrize(
         "name",
@@ -306,13 +384,17 @@ class TestTablePropertyRevisions:
             "table_style_change_with_cell_edits",
             "table_width_change_with_cell_edit",
             "table_style_change_with_row_insertion",
+            "table_style_change_with_own_fills",
+            "table_style_change_with_row_deletion",
+            "table_first_column_toggle_with_cell_shading",
             "cell_shading_change",
             "header_row_change",
         ],
     )
     def test_accept_all_is_the_accept_import_cell_for_cell(self, name, imported):
-        # paint, header text colour, th/thead and all. (Not with the width
-        # change and an inserted row: the bands it shifts stay as they were.)
+        # paint, header text colour, th/thead and all. (Not where an inserted
+        # or deleted row moves rows the table change does not repaint to the
+        # other band: those keep their old band.)
         from aimformat.convert._docx_tracked import actual_signature
 
         shape = next(s for s in SHAPES if s.name == name)

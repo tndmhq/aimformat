@@ -605,7 +605,7 @@ class _Converter:
     emitted block, list item and table row carries its source key (stamped
     on the OOXML by :mod:`._docx_revisions`) as a private ``data-aim-src``
     attribute, so two conversions of the same file can be aligned by
-    identity, and every table what its style paint is computed from
+    identity, and every table its inputs to the style paint of its rows
     (``data-aim-look``). The importer strips both before anything is
     written; the markup is otherwise identical to an untracked conversion.
     """
@@ -1394,9 +1394,10 @@ class _Converter:
             # a table Word draws plain.
             tbl_look = _tbl_look_bits(table_look_val(elem))
         if table_src:
-            # what the cells' style paint below is computed from: a tracked
-            # w:tblPrChange that alters it repaints rows it sits outside of
-            # (the tracked importer compares the two views' marks)
+            # the table's inputs to _style_look below, as it takes them: a
+            # tracked w:tblPrChange repaints rows it sits outside of, and the
+            # tracked importer replays _style_look on each row with the other
+            # view's inputs to find which
             look = json.dumps([looks, tbl_look], sort_keys=True, separators=(",", ":"))
             table_src += f' data-aim-look="{escape_attr(look)}"'
         # v_merge continuation cells collapse into the restart cell's rowspan

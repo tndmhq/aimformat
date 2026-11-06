@@ -347,6 +347,9 @@ NUMBERING = (
 #: 1" paints the header row 4F81BD with white text and the first band of
 #: body rows D3DFEE (the second band nothing); "Table Grid" paints nothing.
 SHADED_STYLE, GRID_STYLE = "MediumShading1-Accent1", "TableGrid"
+#: "Medium Grid 3 Accent 1" also paints the last row (Total Row on) 4F81BD
+#: with white text; its first band is A7BFDE, the second D3DFEE.
+TOTALLED_STYLE = "MediumGrid3-Accent1"
 #: ``w:tblLook`` with the header row and horizontal banding on (Word's
 #: default for a new table), and with both off
 BANDED_LOOK = (
@@ -357,6 +360,23 @@ PLAIN_LOOK = (
     '<w:tblLook w:val="0600" w:firstRow="0" w:lastRow="0" w:firstColumn="0" '
     'w:lastColumn="0" w:noHBand="1" w:noVBand="1"/>'
 )
+#: ``BANDED_LOOK`` with one Table Style Option changed: First Column off,
+#: Banded Columns on (neither paints a row), and Total Row on
+NO_FIRST_COLUMN_LOOK = (
+    '<w:tblLook w:val="0420" w:firstRow="1" w:lastRow="0" w:firstColumn="0" '
+    'w:lastColumn="0" w:noHBand="0" w:noVBand="1"/>'
+)
+BANDED_COLUMNS_LOOK = (
+    '<w:tblLook w:val="00A0" w:firstRow="1" w:lastRow="0" w:firstColumn="1" '
+    'w:lastColumn="0" w:noHBand="0" w:noVBand="0"/>'
+)
+TOTAL_ROW_LOOK = (
+    '<w:tblLook w:val="04E0" w:firstRow="1" w:lastRow="1" w:firstColumn="1" '
+    'w:lastColumn="0" w:noHBand="0" w:noVBand="1"/>'
+)
+#: the header row and banding of ``BANDED_LOOK``, spelled with only the
+#: attributes that are on (an attribute left out is off)
+SPARSE_BANDED_LOOK = '<w:tblLook w:firstRow="1" w:noVBand="1"/>'
 
 
 def table_props(
@@ -1205,6 +1225,139 @@ def shapes() -> list[Shape]:
             audit_texts,
             None,
             note="the width change has no card",
+        )
+    )
+
+    # A row cites the table's change only where the change repaints it, at
+    # its place in Word's Accept All: not a row another author's inserted or
+    # deleted row moved to the other band, not another author's own fill.
+    # First Column and Banded Columns paint no row; the sparse old tblLook
+    # paints the rows as BANDED_LOOK does (the change is the width).
+    for name, old in (
+        (
+            "table_first_column_toggle_with_row_insertion",
+            table_props(SHADED_STYLE, NO_FIRST_COLUMN_LOOK),
+        ),
+        (
+            "table_width_change_sparse_look_with_row_insertion",
+            table_props(SHADED_STYLE, SPARSE_BANDED_LOOK, '<w:tblW w:w="5000" w:type="pct"/>'),
+        ),
+    ):
+        d = Doc()
+        d.body = [
+            d.table(with_audit, style=SHADED_STYLE, look=BANDED_LOOK, tblpr_change=(old, BOB))
+        ]
+        out.append(Shape(name, d.build(), priced_texts, audit_texts, [("add", _label(ALICE))]))
+
+    d = Doc()
+    old = table_props(SHADED_STYLE, BANDED_COLUMNS_LOOK)
+    d.body = [
+        d.table(
+            [priced[0], (["Support", "EUR 500"], "del", ALICE), *priced[2:]],
+            style=SHADED_STYLE,
+            look=BANDED_LOOK,
+            tblpr_change=(old, BOB),
+        )
+    ]
+    out.append(
+        Shape(
+            "table_banded_columns_toggle_with_row_deletion",
+            d.build(),
+            priced_texts,
+            ["ItemPrice", "TrainingEUR 900", "HostingEUR 100"],
+            [("delete", _label(ALICE))],
+        )
+    )
+
+    yellow = '<w:shd w:val="clear" w:color="auto" w:fill="FFFF00"/>'
+    d = Doc()
+    old_cell = '<w:tcPr><w:tcW w:w="2000" w:type="dxa"/></w:tcPr>'
+    shaded = yellow + f"<w:tcPrChange {_who(ALICE, d.ids)}>{old_cell}</w:tcPrChange>"
+    d.body = [
+        d.table(
+            [*priced[:2], ([("Training", shaded), "EUR 900"], None, None), priced[3]],
+            style=SHADED_STYLE,
+            look=BANDED_LOOK,
+            tblpr_change=(table_props(SHADED_STYLE, NO_FIRST_COLUMN_LOOK), BOB),
+        )
+    ]
+    out.append(
+        Shape(
+            "table_first_column_toggle_with_cell_shading",
+            d.build(),
+            priced_texts,
+            priced_texts,
+            [("modify", _label(ALICE))],
+        )
+    )
+
+    # Support's cells have fills of their own, which beat the style's band:
+    # the switch repaints Item and Hosting, not Support, whose own fill
+    # Alice changed.
+    green = '<w:shd w:val="clear" w:color="auto" w:fill="00FF00"/>'
+    d = Doc()
+    old_cell = f'<w:tcPr><w:tcW w:w="2000" w:type="dxa"/>{green}</w:tcPr>'
+    shaded = yellow + f"<w:tcPrChange {_who(ALICE, d.ids)}>{old_cell}</w:tcPrChange>"
+    d.body = [
+        d.table(
+            [priced[0], ([("Support", shaded), ("EUR 500", green)], None, None), *priced[2:]],
+            style=SHADED_STYLE,
+            look=BANDED_LOOK,
+            tblpr_change=(table_props(GRID_STYLE, BANDED_LOOK), BOB),
+        )
+    ]
+    out.append(
+        Shape(
+            "table_style_change_with_own_fills",
+            d.build(),
+            priced_texts,
+            priced_texts,
+            [("modify", _label(BOB)), ("modify", _label(ALICE)), ("modify", _label(BOB))],
+        )
+    )
+
+    # Total Row on repaints the last row only; the rows Alice's insertion
+    # moved to the other band are not Bob's doing.
+    totalled = [*with_audit, (["Total", "EUR 1500"], None, None)]
+    d = Doc()
+    old = table_props(TOTALLED_STYLE, BANDED_LOOK)
+    d.body = [d.table(totalled, style=TOTALLED_STYLE, look=TOTAL_ROW_LOOK, tblpr_change=(old, BOB))]
+    out.append(
+        Shape(
+            "table_total_row_toggle_with_row_insertion",
+            d.build(),
+            [*priced_texts, "TotalEUR 1500"],
+            [*audit_texts, "TotalEUR 1500"],
+            [("add", _label(ALICE)), ("modify", _label(BOB))],
+        )
+    )
+
+    # Medium Grid 3 → Medium Shading 1, and Alice deletes Support: Training
+    # moves from the old style's second band to the new style's first, both
+    # D3DFEE. The switch repaints its place, but its paint is unchanged, so
+    # its card is Alice's edit alone; Hosting's is Bob's.
+    d = Doc()
+    training = d.t("EUR ") + d.dele("900", ALICE) + d.ins("950", ALICE)
+    d.body = [
+        d.table(
+            [
+                priced[0],
+                (["Support", "EUR 500"], "del", ALICE),
+                (["Training", training], None, None),
+                priced[3],
+            ],
+            style=SHADED_STYLE,
+            look=BANDED_LOOK,
+            tblpr_change=(table_props(TOTALLED_STYLE, BANDED_LOOK), BOB),
+        )
+    ]
+    out.append(
+        Shape(
+            "table_style_change_with_row_deletion",
+            d.build(),
+            priced_texts,
+            ["ItemPrice", "TrainingEUR 950", "HostingEUR 100"],
+            [("delete", _label(ALICE)), ("modify", _label(ALICE)), ("modify", _label(BOB))],
         )
     )
 

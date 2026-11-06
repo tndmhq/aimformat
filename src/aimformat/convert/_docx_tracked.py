@@ -41,8 +41,10 @@ lies inside that chunk; any other difference is converter noise, F adopts
 O's markup for it, and the report says so. Fabricated attribution would be
 worse than a missing card. One record changes chunks it lies outside of: a
 table's ``tblPrChange``, whose new style or ``tblLook`` flags repaint the
-rows. A row cites it when what the table's paint is computed from differs
-between the views and the row's own paint does too.
+rows. A row cites it when the change repaints that row where it stands in
+F (the row's style look under the old and the new table properties differs
+on its cells) and the row's paint differs between the views. The band that
+an inserted or deleted row moves a row to is not the change's doing.
 
 The lane is written through the SDK's batch-propose primitive and validated
 once on the result: accept-all must reproduce the adjusted F view, reject-all
@@ -54,6 +56,7 @@ refuses with the first diverging block named. Content is never dropped.
 from __future__ import annotations
 
 import datetime as _dt
+import json
 import re
 from collections.abc import Iterable
 from dataclasses import dataclass, field
@@ -64,10 +67,12 @@ from ..dom import Element, parse_fragment
 from ..errors import AimError, ParseError
 from ..events import Actor, external
 from ..ingest import _containerize
+from ._docx_in import _Converter
 from ._docx_revisions import EXCERPT_CAP, Revision, TrackedDocument, clean
 
 _SRC = "data-aim-src"
-#: a table's style-paint inputs, in provenance mode (``_Converter._table_markup``)
+#: a table's style-paint inputs (the style's looks and the tblLook flags, as
+#: ``_Converter._style_look`` takes them), in provenance mode
 _LOOK = "data-aim-look"
 #: what a table style gives a row: its cells' fill and text colour
 #: (``_Converter._cell_style``); nothing else in a row depends on the table
@@ -124,7 +129,7 @@ class Unit:
     shell: str | None = None  # thead/tbody/tfoot for a table row
     order: tuple[float, float] = (0.0, 0.0)
     id: str | None = None  # O side: the live id once the body is built
-    look: str | None = None  # a table: what its style paint is computed from
+    look: str | None = None  # a table: its style-paint inputs (``_LOOK``)
 
     @property
     def tag(self) -> str:
@@ -288,9 +293,11 @@ class _Seq:
     container: str  # "body" or the live O container id
     family: str  # body | list | table
     entries: list[_Entry] = field(default_factory=list)
-    #: a table whose style paint changed: the property revisions on it that
-    #: the rows they repaint cite (``_Planner._items``)
+    #: a table whose style paint inputs changed: the property revisions on
+    #: it, and the keys of the F rows they repaint, which cite them
+    #: (``_Planner._items``)
     repaint: list[Revision] = field(default_factory=list)
+    repainted: frozenset[str] = frozenset()
 
 
 @dataclass
@@ -414,12 +421,15 @@ class _Planner:
             return seq
         if o.look != f.look:
             # A table's tblPrChange sits in its own tblPr, outside every row,
-            # so no row's citation reaches it — yet a new style or new
-            # tblLook flags repaint rows. Only a change of what the paint is
-            # computed from counts: a width or a border the format cannot
-            # express repaints nothing, not even the rows an inserted row
-            # shifted to another band.
+            # so no row's citation reaches it, yet a new style or new tblLook
+            # flags repaint rows. Each row is judged where it stands in F,
+            # under the old and the new properties: the band an inserted or
+            # deleted row moved it to is not this change's doing, and a flag
+            # the paint does not read (First Column, Banded Columns) repaints
+            # nothing.
             seq.repaint = self._table_property_revisions(o, f)
+            if seq.repaint:
+                seq.repainted = _repainted(o, f)
         o_by_key = {i.key: i for i in o.items}
         taken: set[str] = set()
         f_entries: list[_Entry] = []
@@ -464,7 +474,7 @@ class _Planner:
                 return
             if o.markup != f.markup:
                 revs = self.cites(o, f)
-                if entry.seq.repaint and _paint(o) != _paint(f):
+                if f.key in entry.seq.repainted and _paint(o) != _paint(f):
                     # a row its table's property change repainted
                     revs = _unique(revs + entry.seq.repaint)
                 if revs:
@@ -779,6 +789,41 @@ def _paint(row: Unit) -> list[list[tuple[str, str]]]:
             decls = (d.partition(":") for d in (cell.get("style") or "").split(";"))
             out.append([(k.strip(), v.strip()) for k, _, v in decls if k.strip() in _PAINT])
     return out
+
+
+def _repainted(o: Unit, f: Unit) -> frozenset[str]:
+    """The keys of table *f*'s rows that changing the table properties from
+    *o*'s to *f*'s repaints. Each row is judged where it stands in *f*: its
+    style look under *o*'s inputs and under *f*'s (``_Converter._style_look``,
+    replayed with the converter's own arguments), compared on its cells."""
+    if not o.look or not f.look:
+        return frozenset()
+    (old_looks, old_flags), (new_looks, new_flags) = json.loads(o.look), json.loads(f.look)
+    # the converter counts rows in source order, which <thead> does not keep
+    rows = sorted(f.items, key=lambda row: row.order)
+    out: set[str] = set()
+    for index, row in enumerate(rows):
+        place = (index, row.shell == "thead", len(rows))
+        old = _Converter._style_look(old_looks, old_flags, *place)
+        new = _Converter._style_look(new_looks, new_flags, *place)
+        if _shows(row, old, new):
+            out.add(row.key)
+    return frozenset(out)
+
+
+def _shows(row: Unit, old: dict, new: dict) -> bool:
+    """Whether *row*, painted with the style look *new*, would look different
+    with *old*. A text colour shows on every cell; a fill only on the cells
+    without a fill of their own, which beats the style's, as in
+    ``_Converter._cell_style`` (a cell whose own fill is *new*'s counts as
+    showing the style's)."""
+    cells = [dict(cell) for cell in _paint(row)]
+    if (old.get("color") or None) != (new.get("color") or None):
+        return bool(cells)
+    fill = new.get("fill") or None
+    if (old.get("fill") or None) == fill:
+        return False
+    return any(cell.get("background-color") == fill for cell in cells)
 
 
 def _sig(unit: Unit, seq: _Seq) -> tuple:
