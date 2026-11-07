@@ -41,8 +41,10 @@ lies inside that chunk; any other difference is converter noise, F adopts
 O's markup for it, and the report says so. Fabricated attribution would be
 worse than a missing card. One record changes chunks it lies outside of: a
 table's ``tblPrChange``, whose new style or ``tblLook`` flags repaint the
-rows. A row cites it when what the table's paint is computed from differs
-between the views and the row's own paint does too.
+rows. A row cites it when the change repainted that row: its paint differs
+between the views, and in the accept view it differs from the paint the row
+would carry under the table's old properties. A row an insertion moved to
+another band, or one whose own new fill hides the style, was not repainted.
 
 The lane is written through the SDK's batch-propose primitive and validated
 once on the result: accept-all must reproduce the adjusted F view, reject-all
@@ -64,11 +66,14 @@ from ..dom import Element, parse_fragment
 from ..errors import AimError, ParseError
 from ..events import Actor, external
 from ..ingest import _containerize
+from ._docx_in import table_row_paint
 from ._docx_revisions import EXCERPT_CAP, Revision, TrackedDocument, clean
 
 _SRC = "data-aim-src"
-#: a table's style-paint inputs, in provenance mode (``_Converter._table_markup``)
+#: a table's and a row's style-paint inputs, in provenance mode
+#: (``_Converter._table_markup``, ``table_row_paint``)
 _LOOK = "data-aim-look"
+_ROW = "data-aim-row"
 #: what a table style gives a row: its cells' fill and text colour
 #: (``_Converter._cell_style``); nothing else in a row depends on the table
 _PAINT = ("background-color", "color")
@@ -125,6 +130,7 @@ class Unit:
     order: tuple[float, float] = (0.0, 0.0)
     id: str | None = None  # O side: the live id once the body is built
     look: str | None = None  # a table: what its style paint is computed from
+    paint: str | None = None  # a table row: the rest of its paint inputs
 
     @property
     def tag(self) -> str:
@@ -208,6 +214,7 @@ def _unit(el: Element, fallback: str, last: tuple[float, float]) -> Unit:
                     is_container=False,
                     shell=shell,
                     order=order,
+                    paint=item.get(_ROW),
                 )
             )
     own = el.get(_SRC)
@@ -218,6 +225,7 @@ def _unit(el: Element, fallback: str, last: tuple[float, float]) -> Unit:
     for node in el.iter():
         node.remove_attr(_SRC)
         node.remove_attr(_LOOK)
+        node.remove_attr(_ROW)
     for member in items:
         member.markup = serialize(member.el)
     return Unit(key, members, el, serialize(el), container, items, None, order, look=look)
@@ -288,9 +296,11 @@ class _Seq:
     container: str  # "body" or the live O container id
     family: str  # body | list | table
     entries: list[_Entry] = field(default_factory=list)
-    #: a table whose style paint changed: the property revisions on it that
-    #: the rows they repaint cite (``_Planner._items``)
+    #: a table whose style paint inputs changed: the property revisions on
+    #: it, which the rows they repaint cite, and its paint inputs in the two
+    #: views (``_Planner._items``, ``_repainted``)
     repaint: list[Revision] = field(default_factory=list)
+    looks: tuple[str, str] | None = None
 
 
 @dataclass
@@ -412,14 +422,15 @@ class _Planner:
         seq = _Seq(o.id, _family(o))
         if not self.fine:
             return seq
-        if o.look != f.look:
+        if o.look is not None and f.look is not None and o.look != f.look:
             # A table's tblPrChange sits in its own tblPr, outside every row,
             # so no row's citation reaches it — yet a new style or new
             # tblLook flags repaint rows. Only a change of what the paint is
-            # computed from counts: a width or a border the format cannot
-            # express repaints nothing, not even the rows an inserted row
-            # shifted to another band.
+            # computed from counts (a width, a border or a column flag
+            # repaints nothing), and only in the rows it repaints, row by row
+            # (_decide_entry).
             seq.repaint = self._table_property_revisions(o, f)
+            seq.looks = (o.look, f.look)
         o_by_key = {i.key: i for i in o.items}
         taken: set[str] = set()
         f_entries: list[_Entry] = []
@@ -464,8 +475,7 @@ class _Planner:
                 return
             if o.markup != f.markup:
                 revs = self.cites(o, f)
-                if entry.seq.repaint and _paint(o) != _paint(f):
-                    # a row its table's property change repainted
+                if entry.seq.repaint and _repainted(o, f, entry.seq):
                     revs = _unique(revs + entry.seq.repaint)
                 if revs:
                     entry.action, entry.revs = "modify", revs
@@ -779,6 +789,19 @@ def _paint(row: Unit) -> list[list[tuple[str, str]]]:
             decls = (d.partition(":") for d in (cell.get("style") or "").split(";"))
             out.append([(k.strip(), v.strip()) for k, _, v in decls if k.strip() in _PAINT])
     return out
+
+
+def _repainted(o: Unit, f: Unit, seq: _Seq) -> bool:
+    """Whether the property change of *seq*'s table repainted the row *o*
+    becomes in F: the row's paint differs between the views, and in F it
+    differs from the paint F's row would carry under O's table properties
+    (everything else as Accept All leaves it). The rows an inserted or
+    deleted row moved to another band, and a cell whose own fill hides the
+    style either way, are not the change's doing."""
+    if seq.looks is None or f.paint is None or _paint(o) == _paint(f):
+        return False
+    old, new = seq.looks
+    return table_row_paint(new, f.paint) != table_row_paint(old, f.paint)
 
 
 def _sig(unit: Unit, seq: _Seq) -> tuple:

@@ -605,9 +605,12 @@ class _Converter:
     emitted block, list item and table row carries its source key (stamped
     on the OOXML by :mod:`._docx_revisions`) as a private ``data-aim-src``
     attribute, so two conversions of the same file can be aligned by
-    identity, and every table what its style paint is computed from
-    (``data-aim-look``). The importer strips both before anything is
-    written; the markup is otherwise identical to an untracked conversion.
+    identity. A table also carries what its style paint is computed from
+    (``data-aim-look``) and each of its rows the rest of its cells' paint
+    inputs (``data-aim-row``), so the importer can tell which rows a table
+    property change repainted (:func:`table_row_paint`). The importer strips
+    all three before anything is written; the markup is otherwise identical
+    to an untracked conversion.
     """
 
     def __init__(self, parsed: ParsedDocx, *, track_src: bool = False):
@@ -1393,12 +1396,12 @@ class _Converter:
             # no flags at all we would default to "has a header row" and band
             # a table Word draws plain.
             tbl_look = _tbl_look_bits(table_look_val(elem))
+        flags = _paint_flags(tbl_look)
         if table_src:
-            # what the cells' style paint below is computed from: a tracked
-            # w:tblPrChange that alters it repaints rows it sits outside of
-            # (the tracked importer compares the two views' marks)
-            look = json.dumps([looks, tbl_look], sort_keys=True, separators=(",", ":"))
-            table_src += f' data-aim-look="{escape_attr(look)}"'
+            # what the cells' style paint below is computed from, and nothing
+            # else: a tracked w:tblPrChange that alters it repaints rows it
+            # sits outside of (the tracked importer compares the two views')
+            table_src += f' data-aim-look="{escape_attr(_mark([looks, flags]))}"'
         # v_merge continuation cells collapse into the restart cell's rowspan
         spans: dict[tuple[int, int], int] = {}  # (row, col) -> rowspan
         skip: set[tuple[int, int]] = set()
@@ -1428,7 +1431,9 @@ class _Converter:
         body: list[str] = []
         for ri, cells in enumerate(grid):
             header_row = bool(getattr(getattr(rows[ri], "tr_pr", None), "tbl_header", None))
+            style_look = self._style_look(looks, flags, ri, header_row, len(grid))
             out: list[str] = []
+            own_fills: list[str | None] = []
             col = 0
             for cell, colspan in cells:
                 if (ri, col) in skip:
@@ -1441,12 +1446,17 @@ class _Converter:
                 rowspan = spans.get((ri, col), 1)
                 if rowspan > 1:
                     attrs += f' rowspan="{rowspan}"'
-                attrs += self._cell_style(
-                    cell, self._style_look(looks, tbl_look, ri, header_row, len(grid))
-                )
+                attrs += self._cell_style(cell, style_look)
+                if table_src:
+                    own_fills.append(_own_fill(cell))
                 out.append(f"<{tag}{attrs}>{self._cell_markup(cell)}</{tag}>")
                 col += colspan
-            row_html = f"<tr{row_srcs[ri]}>" + "".join(out) + "</tr>"
+            row_attrs = row_srcs[ri]
+            if table_src:
+                # the row's paint inputs beside its table's (table_row_paint)
+                row = _mark([ri, header_row, len(grid), own_fills])
+                row_attrs += f' data-aim-row="{escape_attr(row)}"'
+            row_html = f"<tr{row_attrs}>" + "".join(out) + "</tr>"
             (head if header_row else body).append(row_html)
         html = f"<table{table_src}>"
         if head:
@@ -1457,22 +1467,22 @@ class _Converter:
 
     @staticmethod
     def _style_look(
-        looks: dict, tbl_look: dict, row_index: int, header_row: bool, row_count: int
+        looks: dict, flags: dict, row_index: int, header_row: bool, row_count: int
     ) -> dict:
         """The table style's conditional look for this row: the header band,
         the last row, or the alternating body bands — gated by the table's
-        own ``tblLook`` flags, which is how Word decides whether a style's
-        header/banding formats apply at all."""
+        own ``tblLook`` flags (:func:`_paint_flags`), which is how Word
+        decides whether a style's header/banding formats apply at all."""
         if not looks:
             return {}
-        first = header_row or (row_index == 0 and tbl_look.get("first_row", True))
+        first = header_row or (row_index == 0 and flags["first_row"])
         if first and "firstRow" in looks:
             return looks["firstRow"]
-        if row_index == row_count - 1 and tbl_look.get("last_row") and "lastRow" in looks:
+        if row_index == row_count - 1 and flags["last_row"] and "lastRow" in looks:
             return looks["lastRow"]
-        if not tbl_look.get("no_h_band"):
+        if not flags["no_h_band"]:
             # banding counts from the first body row, alternating band1/band2
-            body_index = row_index - (1 if tbl_look.get("first_row", True) else 0)
+            body_index = row_index - (1 if flags["first_row"] else 0)
             if body_index >= 0:
                 band = "band1Horz" if body_index % 2 == 0 else "band2Horz"
                 if band in looks:
@@ -1492,10 +1502,10 @@ class _Converter:
         width = _cell_width_px(getattr(pr, "tc_w", None))
         if width:
             styles.append(("width", f"{width}px"))
-        fill = shading_hex(model_dump(getattr(pr, "shd", None)))
         look = style_look or {}
         # a cell's OWN shading beats the table style's, as in Word
-        fill = fill or look.get("fill")
+        # (table_row_paint computes the same two declarations)
+        fill = _own_fill(cell) or look.get("fill")
         if fill:
             styles.append(("background-color", fill))
         if look.get("color"):
@@ -1558,6 +1568,46 @@ def _group_runs(items: list[tuple[int, int, str, str, int]]):
         if i == len(items) or items[i][0] != items[start][0]:
             yield items[start][0], items[start:i]
             start = i
+
+
+def _paint_flags(tbl_look: dict) -> dict[str, bool]:
+    """The ``tblLook`` flags a table's style paint depends on, as
+    :meth:`_Converter._style_look` reads them: a header row (on unless the
+    flags say otherwise), a last row, and horizontal banding off. The column
+    flags (first and last column, vertical banding) style columns, which
+    the conversion does not paint, so a change of them repaints nothing."""
+    return {
+        "first_row": bool(tbl_look.get("first_row", True)),
+        "last_row": bool(tbl_look.get("last_row")),
+        "no_h_band": bool(tbl_look.get("no_h_band")),
+    }
+
+
+def _own_fill(cell: Any) -> str | None:
+    """A cell's own shading (``w:tcPr/w:shd``), which beats its table style's."""
+    return shading_hex(model_dump(getattr(getattr(cell, "tc_pr", None), "shd", None)))
+
+
+def _mark(value: Any) -> str:
+    """A provenance mark's value: compact, key-sorted JSON."""
+    return json.dumps(value, sort_keys=True, separators=(",", ":"))
+
+
+def table_row_paint(look: str, row: str) -> list[tuple[str | None, str | None]]:
+    """Each cell's (fill, text colour) of a provenance-mode table row, had
+    its table the paint inputs *look*.
+
+    *row* is the row's ``data-aim-row`` mark (its index, whether it is a
+    header row, the table's row count and its cells' own fills) and *look*
+    a table's ``data-aim-look`` mark, the row's own table's or another's.
+    With the row's own table's look this is the paint its cells carry; with
+    the look of the same table in the other view of a tracked document, the
+    paint the row would carry had only the table's properties not changed.
+    """
+    looks, flags = json.loads(look)
+    index, header_row, count, own_fills = json.loads(row)
+    style = _Converter._style_look(looks, flags, index, header_row, count)
+    return [(own or style.get("fill"), style.get("color")) for own in own_fills]
 
 
 def _tbl_look_bits(val: Any) -> dict[str, bool]:

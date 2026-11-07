@@ -275,7 +275,8 @@ class TestTablePropertyRevisions:
         assert note.reason is None
         assert {p.explanation for p in doc.proposals} == {"Word: Bob Jones changed formatting"}
         assert not any("converted differently" in w for w in result.report.warnings)
-        assert "data-aim-look" not in doc.dumps()  # the converter's private mark
+        # the converter's private marks
+        assert not re.search(r"data-aim-(?:src|look|row)", doc.dumps())
 
     def test_a_row_the_style_does_not_repaint_keeps_its_own_author(self, imported):
         result = imported["table_style_change_with_cell_edits"]
@@ -288,11 +289,46 @@ class TestTablePropertyRevisions:
         note = self._table_note(result)
         assert len(note.cards) == 3 and card.id not in note.cards
 
+    def test_a_fill_in_a_row_the_style_does_not_repaint_is_its_authors_alone(self, imported):
+        # Training is the second band, which neither style paints: under the
+        # old properties and the new its paint is Alice's fill, so the switch
+        # changed nothing in it, although its row changed too
+        result = imported["table_style_change_with_cell_fill"]
+        doc = result.document
+        filled = ["#ffff00", None]
+        assert _fills(_resolved(doc, "accept")) == [self.HEAD, self.BAND, filled, self.BAND]
+        training = next(c for c in doc.chunks if c.text.startswith("Training"))
+        (card,) = [p for p in doc.proposals if p.target == training.id]
+        assert card.author == aim.human("Alice Smith")
+        assert card.explanation == "Word: Alice Smith changed formatting"
+        note = self._table_note(result)
+        assert len(note.cards) == 3 and card.id not in note.cards
+
+    def test_rows_an_insertion_moves_to_another_band_do_not_cite_it(self, imported):
+        # Light Shading Accent 1 paints the first band as Medium Shading 1
+        # Accent 1 does: the switch repaints the header row and nothing else.
+        # Training and Hosting change band only because Alice inserted Audit
+        # above them, which no revision of theirs records: converter noise.
+        result = imported["table_style_change_same_band_with_row_insertion"]
+        doc = result.document
+        note = self._table_note(result)
+        item = next(c for c in doc.chunks if c.text.startswith("Item"))
+        assert [p.target for p in doc.proposals if p.id in note.cards] == [item.id]
+        assert any("converted differently" in w for w in result.report.warnings)
+
     @pytest.mark.parametrize(
-        "name", ["table_width_change_with_cell_edit", "table_width_change_with_row_insertion"]
+        "name",
+        [
+            "table_width_change_with_cell_edit",
+            "table_width_change_with_row_insertion",
+            "table_first_column_change_with_row_insertion",
+            "table_column_flags_change_with_row_insertion",
+        ],
     )
     def test_a_change_the_format_cannot_express_is_cited_by_no_row(self, name, imported):
-        # the rows below an inserted row change band; that is not the width's doing
+        # The rows below an inserted row change band; that is not the
+        # change's doing. Column flags gate column formats the import does
+        # not read.
         result = imported[name]
         note = self._table_note(result)
         assert note.cards == () and note.reason == "formatting the format cannot express"
@@ -304,6 +340,7 @@ class TestTablePropertyRevisions:
             "table_style_change",
             "table_banding_change",
             "table_style_change_with_cell_edits",
+            "table_style_change_with_cell_fill",
             "table_width_change_with_cell_edit",
             "table_style_change_with_row_insertion",
             "cell_shading_change",

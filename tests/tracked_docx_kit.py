@@ -357,6 +357,17 @@ PLAIN_LOOK = (
     '<w:tblLook w:val="0600" w:firstRow="0" w:lastRow="0" w:firstColumn="0" '
     'w:lastColumn="0" w:noHBand="1" w:noVBand="1"/>'
 )
+#: ``BANDED_LOOK`` with First Column off, and with First Column off and
+#: vertical banding on: flags gating column formats, which the import reads
+#: none of
+FIRST_COLUMN_OFF_LOOK = (
+    '<w:tblLook w:val="0420" w:firstRow="1" w:lastRow="0" w:firstColumn="0" '
+    'w:lastColumn="0" w:noHBand="0" w:noVBand="1"/>'
+)
+COLUMN_FLAGS_OFF_LOOK = (
+    '<w:tblLook w:val="0020" w:firstRow="1" w:lastRow="0" w:firstColumn="0" '
+    'w:lastColumn="0" w:noHBand="0" w:noVBand="0"/>'
+)
 
 
 def table_props(
@@ -1208,13 +1219,77 @@ def shapes() -> list[Shape]:
         )
     )
 
-    # Row and cell property changes live inside the row they change.
+    # Whether the switch repainted a row is decided row by row, under the two
+    # tables' properties: a style whose first band is the same colour (Light
+    # Shading Accent 1 also paints it D3DFEE) repaints the header row only.
+    # Training and Hosting change band because Alice inserted Audit above
+    # them, which no revision of theirs records (see the tests).
     d = Doc()
-    fill = '<w:shd w:val="clear" w:color="auto" w:fill="FFFF00"/>'
-    old_cell = '<w:tcPr><w:tcW w:w="2000" w:type="dxa"/></w:tcPr>'
-    shaded = fill + f"<w:tcPrChange {_who(ALICE, d.ids)}>{old_cell}</w:tcPrChange>"
+    old = table_props("LightShading-Accent1", BANDED_LOOK)
+    d.body = [d.table(with_audit, style=SHADED_STYLE, look=BANDED_LOOK, tblpr_change=(old, BOB))]
+    out.append(
+        Shape(
+            "table_style_change_same_band_with_row_insertion",
+            d.build(),
+            priced_texts,
+            audit_texts,
+            [("modify", _label(BOB)), ("add", _label(ALICE))],
+            note="the switch repaints the header row only",
+        )
+    )
+
+    # tblLook flags the paint never reads (First Column, No Vertical Banding
+    # gate column formats, which the import does not read) repaint nothing,
+    # like the width.
+    for name, old_look in [
+        ("table_first_column_change_with_row_insertion", FIRST_COLUMN_OFF_LOOK),
+        ("table_column_flags_change_with_row_insertion", COLUMN_FLAGS_OFF_LOOK),
+    ]:
+        d = Doc()
+        old = table_props(SHADED_STYLE, old_look)
+        d.body = [
+            d.table(with_audit, style=SHADED_STYLE, look=BANDED_LOOK, tblpr_change=(old, BOB))
+        ]
+        out.append(
+            Shape(
+                name,
+                d.build(),
+                priced_texts,
+                audit_texts,
+                [("add", _label(ALICE))],
+                note="the column flags change has no card",
+            )
+        )
+
+    # Row and cell property changes live inside the row they change.
+    def filled(d: Doc) -> str:
+        """``tcPr`` children: a yellow fill Alice gave the cell."""
+        fill = '<w:shd w:val="clear" w:color="auto" w:fill="FFFF00"/>'
+        old_cell = '<w:tcPr><w:tcW w:w="2000" w:type="dxa"/></w:tcPr>'
+        return fill + f"<w:tcPrChange {_who(ALICE, d.ids)}>{old_cell}</w:tcPrChange>"
+
+    # A fill in a row the style switch leaves alone (Training, the second
+    # band, which neither style paints) is its author's change alone.
+    d = Doc()
+    rows = [*priced[:2], ([("Training", filled(d)), "EUR 900"], None, None), priced[3]]
+    old = table_props(GRID_STYLE, BANDED_LOOK)
+    d.body = [d.table(rows, style=SHADED_STYLE, look=BANDED_LOOK, tblpr_change=(old, BOB))]
+    out.append(
+        Shape(
+            "table_style_change_with_cell_fill",
+            d.build(),
+            priced_texts,
+            priced_texts,
+            [("modify", _label(BOB))] * 2 + [("modify", _label(ALICE)), ("modify", _label(BOB))],
+            note="Alice's fill in a row the switch does not repaint is hers alone",
+        )
+    )
+
+    d = Doc()
     d.body = [
-        d.table([(["Item", "Price"], None, None), ([("Support", shaded), "EUR 500"], None, None)])
+        d.table(
+            [(["Item", "Price"], None, None), ([("Support", filled(d)), "EUR 500"], None, None)]
+        )
     ]
     out.append(
         Shape(
