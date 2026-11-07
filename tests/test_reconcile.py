@@ -535,26 +535,25 @@ class TestAdoption:
         ]
 
     def test_a_clean_flattened_document_verifies(self, rich_doc):
-        # flatten collapses the log to one anchoring checkpoint (IMPORT-D12):
-        # a pruned log, so verify() vouches for the body and reconcile — which
-        # needs the full origin — refuses like for any pruned file
+        # flatten collapses a 0.6 log to one baseline (IMPORT-D12b): verify()
+        # vouches for the body and reconcile finds nothing to record
         rich_doc.flatten()
         doc = aim.loads(rich_doc.dumps())
         assert doc.verify() == []
-        with pytest.raises(aim.HistoryError, match="pruned"):
-            doc.reconcile(at=ts(60))
+        assert not doc.reconcile(at=ts(60)).changed
 
-    def test_a_hand_edited_flattened_document_is_refused_then_rebaselined(self, rich_doc):
-        # before IMPORT-D12 this case either adopted silently or crashed on
-        # replay from a wrong (empty) origin; now verify sees the edit,
-        # reconcile refuses cleanly, and baseline() accepts the file as it is
+    def test_a_hand_edited_flattened_document_is_reconciled(self, rich_doc):
+        # under IMPORT-D12 the one event was a checkpoint: verify saw the
+        # edit, reconcile refused it as a pruned log, and only baseline()
+        # could accept the file. The baseline's snapshot is the origin now,
+        # so the edit is adopted with its true before.
         rich_doc.flatten()
-        text = rich_doc.dumps().replace("We looked at the numbers.", "We looked again.")
+        # ">…</p>" hits the body line only: the snapshot spells it "<\/p>"
+        text = rich_doc.dumps().replace(">We looked at the numbers.</p>", ">We looked again.</p>")
         doc = aim.loads(text)
-        assert doc.verify()  # the checkpoint no longer matches
-        with pytest.raises(aim.HistoryError, match="baseline"):
-            doc.reconcile(at=ts(60))
-        doc.baseline("accepted-as-is", author=aim.human("ada"), at=ts(61))
+        assert doc.verify()  # the snapshot no longer matches the body
+        (event,) = doc.reconcile(at=ts(60)).events
+        assert event.action == "modify" and "We looked at the numbers." in event.get("before")
         assert doc.verify() == []
         assert [f for f in aim.lint(doc) if f.level == "error"] == []
 

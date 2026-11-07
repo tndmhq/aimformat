@@ -436,9 +436,20 @@ class TestHistoryAndCacheRules:
         text = aim.to_html(lifecycle_doc)  # a page export drops the history
         assert "H001" in warn_codes(text) and not codes(text)
 
-    def test_flattened_doc_is_a_pruned_log(self, lifecycle_doc):
+    def test_a_flattened_06_doc_begins_with_its_baseline(self, lifecycle_doc):
         lifecycle_doc.flatten()
         text = lifecycle_doc.dumps()
+        assert not codes(text) and not warn_codes(text)
+
+    def test_a_flattened_05_doc_is_a_pruned_log(self):
+        doc = aim.loads(
+            aim.new_document(title="T")
+            .dumps()
+            .replace(f'data-aim-version="{aim.SPEC_VERSION}"', 'data-aim-version="0.5"')
+        )
+        doc.add_chunk('<p data-aim="x">x</p>', author=ME, at=ts(0))
+        doc.flatten()
+        text = doc.dumps()
         assert "H004" in warn_codes(text) and not codes(text)
 
     def test_H004_pruned_history_warns(self, lifecycle_doc):

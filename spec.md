@@ -1454,7 +1454,7 @@ Literal paint (`color` `background-color` `border-color`) is since spec 0.3 (S03
 | P016 | error | position proposal anchor is not valid in its container |
 | P017 | error | duplicate pending proposal id |
 | P018 | error | second pending move on one target (§5.4 supersede invariant) |
-| H001 | warning | no history block (flattened document) |
+| H001 | warning | no history block (a page export or a hand-written file) |
 | H002 | error | unparseable history line |
 | H003 | error | event violates its field schema |
 | H004 | warning | history starts above seq 1 (pruned) |

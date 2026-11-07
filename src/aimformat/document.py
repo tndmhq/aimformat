@@ -4336,16 +4336,26 @@ class AimDocument:
     def flatten(
         self, *, drop_embeddings: bool = True, label: str = "flatten", at: str | None = None
     ) -> None:
-        """Collapse the history to one checkpoint (and by default drop the
-        embeddings) — a clean file (§6.8).
+        """Collapse the history to one event (and by default drop the
+        embeddings): a clean file (§6.8).
 
-        A document with history keeps exactly one event: a checkpoint at the
-        next seq, anchoring the current state's ``doc_hash``. The file is a
-        pruned log, valid at any version: ``verify()`` still detects a later
-        hand edit, and ``reconcile()`` refuses with the pruned-log message
-        instead of replaying from a wrong origin; :meth:`baseline` accepts
-        such a file as the new starting point. Seq never goes backwards. A
-        document without history stays without it.
+        A document with history keeps exactly one event, at the next seq, so
+        seq never goes backwards. In a document declared 0.6 or later it is a
+        baseline (§6.9) labeled *label*, with no author, recorded by the same
+        code as :meth:`baseline`: verification, time travel to it and
+        ``reconcile()`` keep working from the file alone, so a hand edit
+        after the flatten is adopted with its true ``before``. A body that
+        cannot be a snapshot (units without a usable id, a construct H008
+        rejects) is refused with :meth:`baseline`'s messages before anything
+        changes, the embeddings included. Below 0.6 the event is a
+        checkpoint anchoring the current state's ``doc_hash``, and the
+        declared version is never raised: the file is a pruned log, so
+        ``verify()`` still detects a later hand edit and ``reconcile()``
+        refuses with the pruned-log message; :meth:`baseline` accepts such a
+        file as the new starting point. A document without history stays
+        without it. A history that cannot be read is refused
+        (:class:`HistoryError`); ``baseline(..., discard_history=True)`` is
+        the repair.
 
         Ids the dropped log had burned stay burned on this instance (§4.4:
         an id is never reused within a document lifetime), so an id seen
@@ -4353,12 +4363,18 @@ class AimDocument:
         file carries no burn ledger — reloading it starts a fresh lifetime.
         """
         index = self._get_history_index()
+        hist = self._state.script("history")
+        keep = bool(index.events) and hist is not None
+        as_baseline = keep and REGISTRY.version_includes(self.spec_version, REGISTRY.baseline_since)
+        if as_baseline:
+            self._refuse_unsnapshottable()
         if drop_embeddings:
             emb = self._state.script("embeddings")
             if emb is not None:
                 self._state.body.children.remove(emb)
-        hist = self._state.script("history")
-        if index.events and hist is not None:
+        if as_baseline:
+            self._record_baseline(label, seq=self.seq + 1, at=at)
+        elif keep and hist is not None:
             data = {
                 "seq": self.seq + 1,
                 "kind": "checkpoint",

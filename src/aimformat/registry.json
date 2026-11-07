@@ -1116,7 +1116,7 @@
     ],
     "H001": [
       "warning",
-      "no history block (flattened document)"
+      "no history block (a page export or a hand-written file)"
     ],
     "H002": [
       "error",

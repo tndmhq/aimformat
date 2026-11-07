@@ -1059,7 +1059,7 @@ class _Linter:
     def history(self) -> None:
         el = self.state.script("history")
         if el is None:
-            self.add("H001", WARNING, "no history block (flattened document)")
+            self.add("H001", WARNING, "no history block (a page export or a hand-written file)")
             return
         try:
             events = self.doc.history
@@ -1166,7 +1166,8 @@ class _Linter:
         document from nothing, so replaying it backwards must reach an empty
         body (and no settings block). A theme block nothing recorded is
         tolerated: importers set it at creation, which reconcile already
-        aligns. A flattened-then-edited file trips this."""
+        aligns. A file whose history was dropped and then restarted by an
+        edit trips this."""
         try:
             origin = self.doc.state_at(0)
         except AimError:
