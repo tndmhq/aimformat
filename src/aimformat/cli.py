@@ -874,8 +874,9 @@ def build_parser() -> argparse.ArgumentParser:
         "flatten",
         help="collapse history to one event (a baseline in documents declared 0.6 or "
         "later, a checkpoint below) and drop embeddings; at 0.6 or later it refuses a "
-        "body a baseline cannot hold, before it changes anything; modifies the file in "
-        "place unless -o is given",
+        "body a baseline cannot hold, before it changes anything, and the baseline "
+        "repeats the body, so run aim pack first to store inline images once; modifies "
+        "the file in place unless -o is given",
     )
     p.add_argument("file")
     p.add_argument("-o", "--output")
@@ -902,7 +903,9 @@ def build_parser() -> argparse.ArgumentParser:
         "fresh history from one baseline. A pending proposal that names an id the repair "
         "replaced is rejected, and the rejection recorded. The dropped lines go to "
         "OUT.discarded-history.jsonl (owner-only; never overwritten: .1, .2, ... when "
-        "taken), and OUT is replaced atomically",
+        "taken), and OUT is replaced atomically. An image only the dropped lines "
+        "referenced is removed with them: the side file keeps the reference, not the "
+        "image",
     )
     p.set_defaults(func=_cmd_baseline)
 

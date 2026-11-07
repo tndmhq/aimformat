@@ -436,6 +436,15 @@ class TestHistoryAndCacheRules:
         text = aim.to_html(lifecycle_doc)  # a page export drops the history
         assert "H001" in warn_codes(text) and not codes(text)
 
+    def test_H001_names_each_way_a_file_loses_its_history_block(self):
+        # every file an SDK before 0.6 flattened has no history block, and a
+        # flatten still removes a block that holds no events
+        doc = aim.new_document(title="T")
+        doc.flatten()
+        (h001,) = [f for f in lint_text(doc.dumps()) if f.code == "H001"]
+        for source in ("by an SDK before 0.6", "no events", "page export", "hand-written"):
+            assert source in h001.message
+
     def test_a_flattened_06_doc_begins_with_its_baseline(self, lifecycle_doc):
         lifecycle_doc.flatten()
         text = lifecycle_doc.dumps()

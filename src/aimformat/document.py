@@ -4347,7 +4347,10 @@ class AimDocument:
         after the flatten is adopted with its true ``before``. A body that
         cannot be a snapshot (units without a usable id, a construct H008
         rejects) is refused with :meth:`baseline`'s messages before anything
-        changes, the embeddings included. Below 0.6 the event is a
+        changes, the embeddings included. The snapshot repeats the body, so
+        an image kept inline as a data URI is stored twice, in the body and
+        in the snapshot; :meth:`pack_assets` before the flatten stores it
+        once, as importers do before their baseline. Below 0.6 the event is a
         checkpoint anchoring the current state's ``doc_hash``, and the
         declared version is never raised: the file is a pruned log, so
         ``verify()`` still detects a later hand edit and ``reconcile()``
@@ -4429,20 +4432,24 @@ class AimDocument:
         that cannot be read (lint H002): the stored history block is dropped
         without being parsed, readable or not, and the baseline is recorded
         exactly as on a readable log. Its seq is one above the highest
-        integer ``seq`` among the dropped lines that still parse as JSON
-        objects (1 when there is none). Units without a usable id (missing,
-        duplicated or invalid) get fresh ids instead of a refusal; every id
-        already usable stays, including one a pending payload names, and
+        positive integer ``seq`` among the dropped lines that still parse as
+        JSON objects, or 1 when there is none, so never below 1. Units
+        without a usable id (missing, duplicated or invalid) get fresh ids
+        instead of a refusal, so the flag is also the way out for a readable
+        log that ``reconcile()`` refuses (a pruned one, for instance). Every
+        id already usable stays, including one a pending payload names, and
         fresh ids avoid every id the pending lane uses. A pending card whose
         target or anchor names an id the repair replaced (an invalid
         spelling) could never be accepted, so it is rejected, as reconcile
         rejects a card that no longer applies: the rejections follow the
         baseline in the new history, in one batch, decided by *author* (an
-        external actor when none is given). Ids named only in the
-        dropped text are not burned (it is not parsed). Read
-        :meth:`history_text` first to keep what is dropped;
-        ``aim baseline FILE --discard-history`` writes it to a file next to
-        the document.
+        external actor when none is given). Ids named only in the dropped
+        text are not burned (it is not parsed). Read :meth:`history_text`
+        first to keep what is dropped; ``aim baseline FILE
+        --discard-history`` writes it to a file next to the document. The
+        final gc pass removes an image only the dropped text referenced, so
+        a kept copy of that text names an asset the document no longer
+        holds.
 
         Recording a baseline raises the declared version to at least the one
         that defines it (no version event: no earlier state is retained to
@@ -4557,15 +4564,26 @@ class AimDocument:
         """Raise :class:`InvalidOperation` unless the current body can become
         a baseline snapshot: every unit has a usable id, and no construct
         fails H008. Changes nothing."""
-        from .reconcile import _fixup_ids  # lazy: reconcile imports this module
+        from .reconcile import _check_log, _fixup_ids  # lazy: reconcile imports this module
 
         probe = self._clone()
         if _fixup_ids(probe, probe._state.all_ids()):
             # a snapshot with a missing, duplicated or invalid id would be an
             # origin no later reconcile can converge from
+            try:
+                _check_log(self.history)
+                hint = "reconcile() assigns them"
+            except HistoryError:
+                # reconcile() refuses this log (pruned, gapped, ...) and points
+                # back here: name the one call that assigns the ids anyway
+                hint = (
+                    "reconcile() refuses this history, so it cannot assign them; "
+                    "baseline(..., discard_history=True) (aim baseline FILE "
+                    "--discard-history) assigns them and starts a fresh history"
+                )
             raise InvalidOperation(
                 "cannot record a baseline: the body has units without a usable id "
-                "(missing, duplicated or invalid); reconcile() assigns them"
+                f"(missing, duplicated or invalid); {hint}"
             )
         problems = self._unsnapshottable()
         if problems:

@@ -297,6 +297,14 @@ def main() -> None:
     flat.flatten(at=t(9))  # one baseline at the next seq (a 0.6 document; §6.8, §6.9)
     files["ok_flattened.aim"] = flat.dumps()
 
+    # a pruned log: it begins with a checkpoint above seq 1 (H004 warns, no
+    # error), the shape prune() and a flatten below 0.6 leave
+    pruned = base_doc()
+    pruned.checkpoint("sent", at=t(9))
+    pruned.add_chunk('<p data-aim="p2">Added after the checkpoint.</p>', author=ME, at=t(10))
+    pruned.prune(before="sent")
+    files["ok_pruned.aim"] = pruned.dumps()
+
     files["ok_historyless.aim"] = _historyless(base_doc())  # H001 only
 
     imported = aim.new_document(title="Imported fixture")

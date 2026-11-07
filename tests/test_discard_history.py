@@ -361,6 +361,43 @@ class TestDiscardHistory:
         with pytest.raises(aim.HistoryError, match="discard_history"):
             doc.baseline("repair")
 
+    def test_the_id_refusal_names_the_repair_when_reconcile_refuses_the_log(self):
+        # A readable but pruned 0.6 log (a checkpoint first, above seq 1)
+        # and a hand-added unit without an id. reconcile() refuses the log
+        # and points at baseline(), so baseline() and flatten() must not
+        # point back at reconcile(): the one call that gets out is the repair
+        doc = _contract()
+        doc.checkpoint("sent", at=ts(5))
+        doc.add_chunk('<p data-aim="late">Late.</p>', author=ADA, at=ts(6))
+        doc.prune(before="sent")
+        text = _loose(doc.dumps())
+        with pytest.raises(aim.HistoryError, match="pruned"):
+            aim.loads(text).reconcile(at=ts(9))
+        for refused in (
+            lambda d: d.baseline("accept", at=ts(9)),
+            lambda d: d.flatten(at=ts(9)),
+        ):
+            doc = aim.loads(text)
+            with pytest.raises(aim.InvalidOperation, match="usable id") as caught:
+                refused(doc)
+            message = str(caught.value)
+            assert "discard_history=True" in message and "--discard-history" in message
+            assert "reconcile() assigns them" not in message
+            assert doc.dumps() == aim.loads(text).dumps()  # refused before any change
+        doc = aim.loads(text)
+        doc.baseline("accept", discard_history=True, at=ts(9))
+        assert aim.lint_text(doc.dumps()) == [] and doc.verify() == []
+
+    def test_the_id_refusal_names_reconcile_when_reconcile_can_assign_the_ids(self):
+        text = _loose(_contract().dumps())
+        with pytest.raises(aim.InvalidOperation, match=r"reconcile\(\) assigns them") as caught:
+            aim.loads(text).baseline("accept", at=ts(9))
+        assert "discard" not in str(caught.value)
+        doc = aim.loads(text)
+        doc.reconcile(at=ts(9))
+        doc.baseline("accept", at=ts(10))
+        assert aim.lint_text(doc.dumps()) == []
+
 
 # ===========================================================================
 def _mixed(block: str) -> str:

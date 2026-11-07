@@ -1059,7 +1059,12 @@ class _Linter:
     def history(self) -> None:
         el = self.state.script("history")
         if el is None:
-            self.add("H001", WARNING, "no history block (a page export or a hand-written file)")
+            self.add(
+                "H001",
+                WARNING,
+                "no history block (flattened by an SDK before 0.6 or with no events to keep, "
+                "a page export, or hand-written)",
+            )
             return
         try:
             events = self.doc.history

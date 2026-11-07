@@ -9,6 +9,7 @@ from pathlib import Path
 
 import pytest
 
+from aimformat import load
 from aimformat.lint import lint_path
 from aimformat.registry import REGISTRY
 
@@ -21,6 +22,31 @@ def test_fixture_suite_is_present():
     # floors track the shipped kit: a fixture-losing refactor must fail,
     # not shrink quietly (the old >= 15 floor hid half the nok set)
     assert len(OK) >= 5 and len(NOK) >= 31
+
+
+@pytest.mark.parametrize(
+    ("name", "first", "warning"),
+    [
+        ("ok_pruned.aim", "checkpoint", "H004"),  # a log cut above seq 1
+        ("ok_flattened.aim", "baseline", None),  # a 0.6 flatten: its own origin
+        ("ok_baseline.aim", "baseline", None),
+        ("ok_historyless.aim", None, "H001"),
+    ],
+)
+def test_the_suite_keeps_each_valid_log_shape(name, first, warning):
+    """A verifier that wrongly errors on one valid shape of log (pruned,
+    starting at a baseline, or absent) must fail an ok_* fixture, so each
+    shape keeps one. A pruned log is valid and warns H004."""
+    path = FIXTURES / name
+    history = load(path).history
+    if first is None:
+        assert history == []
+    else:
+        assert history[0].kind == first
+        if first == "checkpoint":
+            assert history[0].seq > 1
+    warnings = {f.code for f in lint_path(path) if f.level == "warning"}
+    assert (warning in warnings) if warning else not {"H001", "H004"} & warnings
 
 
 @pytest.mark.parametrize("path", OK, ids=lambda p: p.name)
