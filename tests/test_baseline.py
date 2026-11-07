@@ -4,9 +4,9 @@ A baseline makes the current state the origin of the retained log: ONE event
 carrying the state as a snapshot, instead of an ``add`` per construct. These
 tests pin what the decisions IMPORT-D9 to IMPORT-D16 promise: verification,
 time travel and reconcile work from the file alone; undo has nothing to undo;
-flatten collapses to a checkpoint; importers write exactly one history line
-whose snapshot is the reduced projection; the TOC cache is built and kept
-fresh.
+flatten collapses to a baseline in a document declared 0.6 or later and to a
+checkpoint below; importers write exactly one history line whose snapshot is
+the reduced projection; the TOC cache is built and kept fresh.
 """
 
 from __future__ import annotations
@@ -158,7 +158,7 @@ class TestBaselineOperation:
         assert event.seq == 4 and [e.kind for e in doc.history] == ["baseline"]
         assert doc.proposal(p.id)  # the pending lane stays
         doc.flatten(at=ts(6))
-        assert [(e.kind, e.seq) for e in doc.history] == [("checkpoint", 5)]
+        assert [(e.kind, e.seq) for e in doc.history] == [("baseline", 5)]
 
     def test_raises_an_older_declaration_without_a_version_event(self):
         doc = aim.loads(
@@ -328,21 +328,131 @@ class TestAdoption:
         assert _errors(hand) == []
 
 
+def _declared(version: str) -> aim.AimDocument:
+    """An empty document declaring *version*, with history from here on."""
+    return aim.loads(
+        aim.new_document(title="t")
+        .dumps()
+        .replace(f'data-aim-version="{aim.SPEC_VERSION}"', f'data-aim-version="{version}"')
+    )
+
+
 class TestFlatten:
-    def test_flatten_after_an_sdk_edit_no_longer_crashes_reconcile(self, imported):
-        # the measured bug: flatten → SDK edit → reconcile replayed from an
-        # empty origin and raised "cannot replace …: not found"
-        imported.flatten()
-        imported.add_chunk("<p>Later.</p>", author=ADA)
+    """Flatten keeps a copy at 0.6 and later (8c): the one event it leaves is
+    a baseline, so a hand edit after it reconciles with its true ``before``.
+    Below 0.6 it stays a checkpoint and never raises the declaration."""
+
+    def test_a_06_flatten_records_one_baseline_whose_snapshot_verifies(self, imported):
+        imported.add_chunk("<p>After.</p>", author=ADA, at=ts(1))
+        imported.set_embedding(imported.chunks[0].id, model="m", vec=[0.1])
+        before = imported.seq
+        imported.flatten(at=ts(2))
+        (event,) = imported.history
+        assert (event.kind, event.seq, event.get("label"), event.t) == (
+            "baseline",
+            before + 1,
+            "flatten",
+            ts(2),
+        )
+        assert "author" not in event.data and "explanation" not in event.data
+        assert event.get("snapshot") == imported._state.snapshot()
+        assert event.get("doc_hash") == imported.doc_hash
+        assert imported.embeddings == []
+        assert imported.verify() == [] and _errors(imported) == []
+        reloaded = aim.loads(imported.dumps())
+        assert reloaded.verify() == [] and aim.lint_text(imported.dumps()) == []
+
+    def test_flatten_then_a_hand_edit_reconciles_with_its_true_before(self, imported):
+        # the 2026-11-06 probe: after a flatten that left a checkpoint, this
+        # edit could only be accepted wholesale with baseline()
+        target = next(c for c in imported.chunks if c.text == "Clause two.")
+        imported.modify_chunk(
+            target.id, f'<p data-aim="{target.id}">Clause 2.</p>', author=ADA, at=ts(1)
+        )
+        imported.flatten(at=ts(2))
+        text = imported.dumps().replace(">Clause one.</p>", ">Clause one, amended.</p>")
+        doc = aim.loads(text)
+        assert doc.verify()  # the snapshot no longer matches the body
+        (edit,) = doc.reconcile(at=ts(3)).events
+        assert edit.action == "modify" and ">Clause one.</p>" in edit.get("before")
+        assert doc.verify() == [] and _errors(doc) == []
+
+    def test_flatten_after_an_sdk_edit_reconciles_cleanly(self, imported):
+        # the measured bug before IMPORT-D12: flatten, an SDK edit, then a
+        # reconcile that replayed from an empty origin and crashed
+        imported.flatten(at=ts(1))
+        imported.add_chunk("<p>Later.</p>", author=ADA, at=ts(2))
         doc = aim.loads(imported.dumps())
         assert doc.verify() == []
-        with pytest.raises(aim.HistoryError, match="pruned"):
-            doc.reconcile()
+        assert not doc.reconcile(at=ts(3)).changed
 
     def test_flatten_then_hand_edit_is_detected(self, imported):
         imported.flatten()
         doc = aim.loads(imported.dumps().replace(">Clause one.</p>", ">Clause uno.</p>"))
         assert doc.verify()
+
+    def test_a_05_flatten_keeps_a_checkpoint_and_the_version(self):
+        doc = _declared("0.5")
+        doc.add_chunk("<p>One.</p>", author=ADA, at=ts(0))
+        # a construct a snapshot could not hold is no reason to refuse here:
+        # a checkpoint carries no snapshot
+        doc.add_chunk('<p class="bogus">Two.</p>', author=ADA, at=ts(1))
+        doc.flatten(at=ts(2))
+        (event,) = doc.history
+        assert (event.kind, event.seq, event.get("doc_hash")) == ("checkpoint", 3, doc.doc_hash)
+        assert doc.spec_version == "0.5"
+        assert doc.verify() == []
+        assert "H004" in {f.code for f in aim.lint_text(doc.dumps())}
+
+    @pytest.mark.parametrize(
+        ("damage", "match"),
+        [
+            (
+                lambda first, second: (
+                    f'<p data-aim="{first}">',
+                    f'<p data-aim="{first}" class="bogus">',
+                ),
+                "V005",
+            ),
+            (lambda first, second: (f'data-aim="{second}"', f'data-aim="{first}"'), "usable id"),
+        ],
+        ids=["H008", "duplicated-id"],
+    )
+    def test_a_refused_flatten_leaves_the_document_byte_identical(self, damage, match):
+        doc = aim.new_document(title="t")
+        first = doc.add_chunk("<p>Fine.</p>", author=ADA, at=ts(0)).id
+        second = doc.add_chunk("<p>Second.</p>", author=ADA, at=ts(1)).id
+        doc.set_embedding(first, model="m", vec=[0.1])
+        damaged = aim.loads(doc.dumps().replace(*damage(first, second), 1))
+        before = damaged.dumps()
+        with pytest.raises(aim.InvalidOperation, match=match):
+            damaged.flatten(at=ts(2))
+        assert damaged.dumps() == before  # the embeddings and the log included
+
+    def test_gc_after_keeps_what_the_snapshot_shows(self):
+        import base64
+
+        png = base64.b64encode(_tiny_png()).decode()
+        doc = aim.new_document(title="t")
+        doc.add_chunk(
+            f'<figure data-aim="kept"><img alt="kept" src="data:image/png;base64,{png}"></figure>',
+            author=ADA,
+            at=ts(0),
+        )
+        doc.add_chunk(
+            '<figure data-aim="gone"><img alt="gone" '
+            f'src="data:image/gif;base64,{base64.b64encode(_tiny_gif()).decode()}"></figure>',
+            author=ADA,
+            at=ts(1),
+        )
+        doc.pack_assets(author=aim.external("packer"), at=ts(2))
+        doc.delete_chunk("gone", author=ADA, at=ts(3))
+        assert doc.dumps().count('<symbol id="asset-') == 2  # the delete keeps "gone"
+        doc.flatten(at=ts(4))
+        text = doc.dumps()
+        assert text.count('<symbol id="asset-') == 1  # only the dropped log kept "gone"
+        assert aim.lint_text(text) == [] and doc.verify() == []
+        assert doc.state_at(doc.history[0].seq).doc_hash == doc.doc_hash
 
 
 class TestOrigin:
@@ -396,6 +506,31 @@ class TestToc:
         findings = aim.lint_text(text)
         assert "M005" in {f.code for f in findings}
         assert not [f for f in findings if f.level == "error"]
+
+
+def _tiny_png() -> bytes:
+    import struct
+    import zlib
+
+    def chunk(tag: bytes, data: bytes) -> bytes:
+        body = tag + data
+        return struct.pack(">I", len(data)) + body + struct.pack(">I", zlib.crc32(body))
+
+    ihdr = struct.pack(">IIBBBBB", 1, 1, 8, 6, 0, 0, 0)
+    return (
+        b"\x89PNG\r\n\x1a\n"
+        + chunk(b"IHDR", ihdr)
+        + chunk(b"IDAT", zlib.compress(b"\x00\x00\x00\x00\xff"))
+        + chunk(b"IEND", b"")
+    )
+
+
+def _tiny_gif() -> bytes:
+    """A 1x1 GIF89a."""
+    return (
+        b"GIF89a\x01\x00\x01\x00\x80\x00\x00\x00\x00\x00\xff\xff\xff!\xf9\x04\x01"
+        b"\x00\x00\x00\x00,\x00\x00\x00\x00\x01\x00\x01\x00\x00\x02\x02D\x01\x00;"
+    )
 
 
 class _no_warning:

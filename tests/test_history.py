@@ -352,11 +352,13 @@ class TestLifecycleOps:
         rich_doc.set_embedding("intro", model="m", vec=[0.1, 0.2])
         before = rich_doc.seq
         rich_doc.flatten()
-        # collapsed to ONE checkpoint at the next seq (IMPORT-D12): seq never
-        # goes backwards, and the state stays hash-anchored
+        # collapsed to ONE event at the next seq: seq never goes backwards. In
+        # a 0.6 document it is a baseline (IMPORT-D12b), so the state is
+        # written out, not only hash-anchored
         (event,) = rich_doc.history
-        assert event.kind == "checkpoint" and event.seq == before + 1
+        assert event.kind == "baseline" and event.seq == before + 1
         assert event.get("doc_hash") == rich_doc.doc_hash
+        assert event.get("snapshot") == rich_doc._state.snapshot()
         assert rich_doc.embeddings == []
         assert aim.loads(rich_doc.dumps()).chunks  # still a valid doc
         assert rich_doc.verify() == []

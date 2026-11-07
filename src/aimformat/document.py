@@ -14,6 +14,7 @@ import base64
 import contextlib
 import datetime as _dt
 import hashlib
+import json
 import re
 from collections import Counter
 from collections.abc import Callable, Iterable, Iterator, Sequence
@@ -27,7 +28,7 @@ from .canonical import canonical_json, serialize, serialize_run
 from .css import generate_aim_css
 from .dom import Comment, Element, Fragment, Text, parse_fragment, parse_html
 from .errors import AimError, HistoryError, InvalidOperation, ParseError, TargetNotFound
-from .events import Actor, Event, snapshot_problems
+from .events import Actor, Event, external, snapshot_problems
 from .note import find_note, is_canonical, render_note
 from .pagesetup import (
     PageSetup,
@@ -731,6 +732,29 @@ def _recorded_html_line(snapshot_html: str, state: DocState) -> str:
     else:
         shell.set("data-aim-version", declared)
     return f"<html{canonical.canonical_attrs(shell, in_svg=False)}>"
+
+
+_LINE_BREAK = re.compile(r"\r\n|\r|\n")
+
+
+def _seq_after_dropped(raw: str) -> int:
+    """The seq of a baseline that replaces the history text *raw* without
+    parsing it as a log: one above the highest integer ``seq`` (JSON
+    booleans excluded) among the lines that parse as JSON objects, and never
+    below 1. A damaged line is skipped, so seq never goes backwards as far as
+    the file can tell."""
+    highest = 0
+    for line in _LINE_BREAK.split(raw):
+        if not line.strip():
+            continue
+        try:
+            obj = json.loads(line)
+        except (ValueError, RecursionError):  # damaged, or nested past the decoder
+            continue
+        seq = obj.get("seq") if isinstance(obj, dict) else None
+        if isinstance(seq, int) and not isinstance(seq, bool):
+            highest = max(highest, seq)
+    return highest + 1
 
 
 def _snapshot_lines(snap: dict) -> list[str]:
@@ -1573,6 +1597,13 @@ class AimDocument:
         # x_* fields. Return defensive copies so mutating a read result cannot
         # corrupt the cache or diverge it from the authoritative JSONL.
         return [Event(deepcopy(event.data)) for event in self._history_events()]
+
+    def history_text(self) -> str:
+        """The history block's content exactly as stored, unparsed: ``""``
+        when the document has no history block. Read it before
+        ``baseline(..., discard_history=True)`` to keep what the repair
+        drops; it never raises, whatever the block holds."""
+        return self._history_raw() or ""
 
     def _history_script(self) -> Element:
         """The history block, created in its section slot when absent."""
@@ -4449,16 +4480,29 @@ class AimDocument:
     def flatten(
         self, *, drop_embeddings: bool = True, label: str = "flatten", at: str | None = None
     ) -> None:
-        """Collapse the history to one checkpoint (and by default drop the
-        embeddings) — a clean file (§6.8).
+        """Collapse the history to one event (and by default drop the
+        embeddings): a clean file (§6.8).
 
-        A document with history keeps exactly one event: a checkpoint at the
-        next seq, anchoring the current state's ``doc_hash``. The file is a
-        pruned log, valid at any version: ``verify()`` still detects a later
-        hand edit, and ``reconcile()`` refuses with the pruned-log message
-        instead of replaying from a wrong origin; :meth:`baseline` accepts
-        such a file as the new starting point. Seq never goes backwards. A
-        document without history stays without it.
+        A document with history keeps exactly one event, at the next seq, so
+        seq never goes backwards. In a document declared 0.6 or later it is a
+        baseline (§6.9) labeled *label*, with no author, recorded by the same
+        code as :meth:`baseline`: verification, time travel to it and
+        ``reconcile()`` keep working from the file alone, so a hand edit
+        after the flatten is adopted with its true ``before``. A body that
+        cannot be a snapshot (units without a usable id, a construct H008
+        rejects) is refused with :meth:`baseline`'s messages before anything
+        changes, the embeddings included. The snapshot repeats the body, so
+        an image kept inline as a data URI is stored twice, in the body and
+        in the snapshot; :meth:`pack_assets` before the flatten stores it
+        once, as importers do before their baseline. Below 0.6 the event is a
+        checkpoint anchoring the current state's ``doc_hash``, and the
+        declared version is never raised: the file is a pruned log, so
+        ``verify()`` still detects a later hand edit and ``reconcile()``
+        refuses with the pruned-log message; :meth:`baseline` accepts such a
+        file as the new starting point. A document without history stays
+        without it. A history that cannot be read is refused
+        (:class:`HistoryError`); ``baseline(..., discard_history=True)`` is
+        the repair.
 
         Ids the dropped log had burned stay burned on this instance (§4.4:
         an id is never reused within a document lifetime), so an id seen
@@ -4466,12 +4510,18 @@ class AimDocument:
         file carries no burn ledger — reloading it starts a fresh lifetime.
         """
         index = self._get_history_index()
+        hist = self._state.script("history")
+        keep = bool(index.events) and hist is not None
+        as_baseline = keep and REGISTRY.version_includes(self.spec_version, REGISTRY.baseline_since)
+        if as_baseline:
+            self._refuse_unsnapshottable()
         if drop_embeddings:
             emb = self._state.script("embeddings")
             if emb is not None:
                 self._state.body.children.remove(emb)
-        hist = self._state.script("history")
-        if index.events and hist is not None:
+        if as_baseline:
+            self._record_baseline(label, seq=self.seq + 1, at=at)
+        elif keep and hist is not None:
             data = {
                 "seq": self.seq + 1,
                 "kind": "checkpoint",
@@ -4509,6 +4559,7 @@ class AimDocument:
         explanation: str | None = None,
         source: Sequence[str] | None = None,
         at: str | None = None,
+        discard_history: bool = False,
     ) -> Event:
         """Make the current state the origin of the history (§6.9, since 0.6).
 
@@ -4521,6 +4572,29 @@ class AimDocument:
         construct, and it is the recovery for a file whose history cannot
         explain its body ("accept the file as it is").
 
+        With ``discard_history=True`` it is also the repair for a history
+        that cannot be read (lint H002): the stored history block is dropped
+        without being parsed, readable or not, and the baseline is recorded
+        exactly as on a readable log. Its seq is one above the highest
+        positive integer ``seq`` among the dropped lines that still parse as
+        JSON objects, or 1 when there is none, so never below 1. Units
+        without a usable id (missing, duplicated or invalid) get fresh ids
+        instead of a refusal, so the flag is also the way out for a readable
+        log that ``reconcile()`` refuses (a pruned one, for instance). Every
+        id already usable stays, including one a pending payload names, and
+        fresh ids avoid every id the pending lane uses. A pending card whose
+        target or anchor names an id the repair replaced (an invalid
+        spelling) could never be accepted, so it is rejected, as reconcile
+        rejects a card that no longer applies: the rejections follow the
+        baseline in the new history, in one batch, decided by *author* (an
+        external actor when none is given). Ids named only in the dropped
+        text are not burned (it is not parsed). Read :meth:`history_text`
+        first to keep what is dropped; ``aim baseline FILE
+        --discard-history`` writes it to a file next to the document. The
+        final gc pass removes an image only the dropped text referenced, so
+        a kept copy of that text names an asset the document no longer
+        holds.
+
         Recording a baseline raises the declared version to at least the one
         that defines it (no version event: no earlier state is retained to
         record it against, §3.7). Destructive to undo and provenance, so it
@@ -4528,15 +4602,135 @@ class AimDocument:
         """
         if not label:
             raise InvalidOperation("a baseline needs a label")
+        if discard_history:
+            return self._baseline_discarding_history(
+                label, author=author, explanation=explanation, source=source, at=at
+            )
+        try:
+            self._get_history_index()
+        except HistoryError as exc:
+            raise HistoryError(
+                f"{exc} — the history cannot be read; baseline(..., discard_history=True) "
+                "(aim baseline FILE --discard-history) drops it unparsed and starts a fresh one"
+            ) from exc
+        self._refuse_unsnapshottable()
+        event = self._record_baseline(
+            label,
+            seq=self.seq + 1,
+            author=author,
+            explanation=explanation,
+            source=source,
+            at=at,
+        )
+        self.gc_assets()  # §9.3: the dropped events may have kept blobs alive
+        return event
+
+    def _baseline_discarding_history(
+        self,
+        label: str,
+        *,
+        author: Actor | None,
+        explanation: str | None,
+        source: Sequence[str] | None,
+        at: str | None,
+    ) -> Event:
+        """:meth:`baseline` with ``discard_history=True``. Everything runs on
+        a copy whose history block is emptied unread, so a refusal leaves
+        this instance untouched; the copy's state is taken over at the end,
+        as ``reconcile()`` takes over its scratch document."""
         from .reconcile import _fixup_ids  # lazy: reconcile imports this module
+
+        seq = _seq_after_dropped(self._history_raw() or "")
+        work = AimDocument(parse_html(canonical.document_text(self._fragment)))
+        hist = work._state.script("history")
+        if hist is not None:
+            hist.raw = "\n"
+        # tombstones this instance already holds stay; nothing is parsed to
+        # add more (the index of a log that cannot be read is never built)
+        lifetime = self._history_index.burned_ids if self._history_index is not None else ()
+        work._rebuild_history_index(burned_seed=lifetime)
+        # Every body id counts as expected alive, so each usable one (valid,
+        # first in document order) stays even when a pending payload names it
+        # (a pending modify carries its target's id); only units without a
+        # usable id are renamed, and fresh draws avoid the pending lane.
+        # Adoption's empty set would rename such a target and dangle the card.
+        before = work._state.all_ids()
+        _fixup_ids(work, before)
+        # invalid spellings, all renamed; a reserved target ("body", "aim:theme")
+        # a unit carried is renamed too, but cards naming it mean the target
+        # itself (every top-level add's container, a theme card), not the unit
+        replaced = (before - work._state.all_ids()) - ids.RESERVED_TARGETS
+        work._refuse_unsnapshottable()
+        event = work._record_baseline(
+            label, seq=seq, author=author, explanation=explanation, source=source, at=at
+        )
+        decided_by = author if author is not None else external()
+        work._reject_cards_naming(replaced, decided_by=decided_by, at=at)
+        work.gc_assets()  # §9.3: the dropped text and rejected cards may have kept blobs alive
+        burned = set(work._get_history_index().burned_ids)
+        self._fragment = work._fragment
+        self._state = work._state
+        self._rebuild_history_index(burned_seed=burned)
+        return event
+
+    def _reject_cards_naming(self, gone: set[str], *, decided_by: Actor, at: str | None) -> None:
+        """Reject, in one batch, every pending card whose target or anchor
+        names an id in *gone* (ids the discard repair replaced): such a card
+        could never be accepted (P008, or an anchor that no longer resolves),
+        as reconcile rejects a card that no longer applies. Rejecting an add
+        rebinds the cards chained onto it to its own anchor, so the scan
+        restarts until no card names a gone id. Cards on ids that stayed are
+        untouched, and so is an anchor naming a live pending card (a chained
+        add), even when a unit carried that card's id."""
+
+        def first() -> tuple[Proposal, str] | None:
+            cards = self.proposals
+            live = {p.id for p in cards}
+            for p in cards:
+                for ref in (p.target, p.anchor_after, p.anchor_container):
+                    if ref is not None and ref in gone and ref not in live:
+                        return p, ref
+            return None
+
+        if not gone or first() is None:
+            return
+        with self.batch():
+            while (hit := first()) is not None:
+                card, ref = hit
+                self.reject(
+                    card.id,
+                    decided_by=decided_by,
+                    at=at,
+                    explanation=(
+                        f"discard-history repair: {ref!r} was not a usable id and was "
+                        "replaced, so the proposal no longer applies"
+                    ),
+                )
+
+    def _refuse_unsnapshottable(self) -> None:
+        """Raise :class:`InvalidOperation` unless the current body can become
+        a baseline snapshot: every unit has a usable id, and no construct
+        fails H008. Changes nothing."""
+        from .reconcile import _check_log, _fixup_ids  # lazy: reconcile imports this module
 
         probe = self._clone()
         if _fixup_ids(probe, probe._state.all_ids()):
             # a snapshot with a missing, duplicated or invalid id would be an
             # origin no later reconcile can converge from
+            try:
+                _check_log(self.history)
+                hint = "reconcile() assigns them"
+            except HistoryError:
+                # reconcile() refuses this log (pruned, gapped, ...) and points
+                # back here: name the one call that assigns the ids anyway
+                hint = (
+                    "reconcile() refuses this history, so it cannot assign them; "
+                    "baseline(..., discard_history=True) (aim baseline FILE "
+                    "--discard-history) assigns them and starts a fresh history"
+                )
             raise InvalidOperation(
                 "cannot record a baseline: the body has units without a usable id "
-                "(missing, duplicated or invalid); reconcile() assigns them"
+                f"(missing, duplicated or invalid); {hint}"
             )
         problems = self._unsnapshottable()
         if problems:
@@ -4544,8 +4738,21 @@ class AimDocument:
                 f"cannot record a baseline: {problems[0]} — a baseline is never "
                 "undone, so the error could never be fixed; correct the body first"
             )
+
+    def _record_baseline(
+        self,
+        label: str,
+        *,
+        seq: int,
+        author: Actor | None = None,
+        explanation: str | None = None,
+        source: Sequence[str] | None = None,
+        at: str | None = None,
+    ) -> Event:
+        """Replace the retained log with ONE baseline event at *seq* for the
+        current state. The shared write of :meth:`baseline` and
+        :meth:`flatten`: the callers check the body first and run gc after."""
         index = self._get_history_index()
-        seq = self.seq + 1
         if not REGISTRY.version_includes(self.spec_version, REGISTRY.baseline_since):
             self._state.set_spec_version(REGISTRY.baseline_since)
         snap = self._state.snapshot()
@@ -4566,7 +4773,6 @@ class AimDocument:
         hist = self._history_script()
         hist.raw = "\n" + canonical_json(data) + "\n"
         index.replace_events([Event(deepcopy(data))], hist.raw)
-        self.gc_assets()  # §9.3: the dropped events may have kept blobs alive
         return Event(deepcopy(data))
 
     def _unsnapshottable(self) -> list[str]:

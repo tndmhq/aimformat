@@ -372,7 +372,7 @@ aim-assets{display:none}
 <p data-aim="p1">One paragraph &amp; some text.</p>
 <ul data-aim-container="l1"><li data-aim="i1">First</li><li data-aim="i2">Run…</li><li data-aim="i2">…run</li></ul>
 <script type="application/aim-history+jsonl">
-{"doc_hash":"sha256:7b856a786f86d70342a7a74ccd520dc53309db238dc3e8647e215bf8e3d0d55f","kind":"checkpoint","label":"flatten","seq":4,"t":"2026-07-07T12:00:09Z"}
+{"doc_hash":"sha256:7b856a786f86d70342a7a74ccd520dc53309db238dc3e8647e215bf8e3d0d55f","kind":"baseline","label":"flatten","seq":4,"snapshot":{"body":["<h1 data-aim=\"h1\" class=\"font-bold text-3xl\">Fixture<\/h1>","<p data-aim=\"p1\">One paragraph &amp; some text.<\/p>","<ul data-aim-container=\"l1\"><li data-aim=\"i1\">First<\/li><li data-aim=\"i2\">Run…<\/li><li data-aim=\"i2\">…run<\/li><\/ul>"],"html":"<html data-aim-version=\"0.6\" lang=\"en\">","theme":"<style data-aim-theme>:root{--aim-brand-1:#1a73e8}<\/style>"},"t":"2026-07-07T12:00:09Z"}
 </script>
 </body>
 </html>

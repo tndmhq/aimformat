@@ -294,8 +294,16 @@ def main() -> None:
     files["ok_slides.aim"] = deck.dumps()
 
     flat = base_doc()
-    flat.flatten(at=t(9))  # one anchoring checkpoint: a pruned log (H004)
+    flat.flatten(at=t(9))  # one baseline at the next seq (a 0.6 document; §6.8, §6.9)
     files["ok_flattened.aim"] = flat.dumps()
+
+    # a pruned log: it begins with a checkpoint above seq 1 (H004 warns, no
+    # error), the shape prune() and a flatten below 0.6 leave
+    pruned = base_doc()
+    pruned.checkpoint("sent", at=t(9))
+    pruned.add_chunk('<p data-aim="p2">Added after the checkpoint.</p>', author=ME, at=t(10))
+    pruned.prune(before="sent")
+    files["ok_pruned.aim"] = pruned.dumps()
 
     files["ok_historyless.aim"] = _historyless(base_doc())  # H001 only
 
@@ -374,7 +382,7 @@ def main() -> None:
     # Derived from a HISTORY-LESS base wherever possible, so a surgical body
     # defect cannot co-fire history-chain errors (H006) — each nok file
     # must trip exactly its named code and nothing else. (flatten() keeps
-    # an anchoring checkpoint since v0.6, which any body edit would trip.)
+    # one event, a baseline in a 0.6 document, which any body edit would trip.)
     flat = _historyless(base_doc())
     # without its TOC, whose hash a body edit would make stale (M005)
     life = _without_meta(files["ok_lifecycle.aim"])

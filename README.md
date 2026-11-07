@@ -164,10 +164,10 @@ aim.to_docx(doc, "out.docx", pending="reject-all")
 | Area | API |
 |---|---|
 | load / create | `load`, `loads`, `new_document`, `doc.save`, `doc.dumps` |
-| read | `doc.chunks`, `doc.chunk(id)`, `doc.containers`, `doc.proposals`, `doc.history`, `doc.meta`, `doc.theme`, `doc.doc_hash`, `doc.seq` |
+| read | `doc.chunks`, `doc.chunk(id)`, `doc.containers`, `doc.proposals`, `doc.history`, `doc.history_text()` (the history block as stored, unparsed), `doc.meta`, `doc.theme`, `doc.doc_hash`, `doc.seq` |
 | direct edits | `add_chunk`, `modify_chunk`, `delete_chunk`, `move_chunk`, `set_theme`, `doc.batch()` |
 | pending lane | `propose_modify/add/delete/move/theme`, `amend_proposal` (replace a pending payload/explanation in place, unrecorded), `accept` (with optional `applied=` tweaks), `reject`; supersede and chain rebinding are automatic |
-| history | `verify`, `state_at(seq)`, `checkpoint`, `undo`, `redo`, `flatten` (collapse to one checkpoint), `prune`, `baseline` (make the current state the origin), `reconcile` (repair out-of-band edits / adopt hand-written files) |
+| history | `verify`, `state_at(seq)`, `checkpoint`, `undo`, `redo`, `flatten` (collapse to one event: a baseline in documents declared 0.6 or later, a checkpoint below), `prune`, `baseline` (make the current state the origin; `discard_history=True` repairs a history that cannot be read), `reconcile` (repair out-of-band edits / adopt hand-written files) |
 | compare versions | `diff_documents` (unit-level: added/deleted/modified/moved), `classify_divergence` (did the log grow, was it rewritten, does it explain the body) |
 | caches | `set_summary`, `generate_toc` (built and kept fresh on save in documents declared 0.6 or later), `outline`, `section` (one section's ids, text and markup), `set_embedding`, `stale_embeddings` |
 | assets | `pack_assets` (data-URIs into the content-addressed registry), `gc_assets` |
@@ -258,7 +258,10 @@ possible until 1.0.
 - **v0.6** (the current draft) records where a document's history begins:
   an imported document carries its origin once, as a `baseline` snapshot,
   instead of one `add` event per block, so a fresh text-heavy import is about
-  a fifth smaller and `undo` no longer deletes imported content. The TOC cache
+  a fifth smaller and `undo` no longer deletes imported content. A flatten
+  records a baseline too, so a hand edit after it still reconciles, and
+  `aim baseline FILE --discard-history` repairs a history that cannot be
+  read. The TOC cache
   holds one entry per section (its id, level, title, word count and chunk
   count), can stand without a summary, and records the hash it was built from.
 - **v0.5** added numbering that survives an edit: a

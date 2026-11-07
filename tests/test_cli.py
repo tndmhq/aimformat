@@ -117,8 +117,8 @@ class TestOtherCommands:
     def test_flatten_removes_history(self, saved, tmp_path, capsys):
         out = tmp_path / "flat.aim"
         assert main(["flatten", str(saved), "-o", str(out)]) == 0
-        # one anchoring checkpoint remains (IMPORT-D12): a pruned log
-        assert [e.kind for e in aim.load(out).history] == ["checkpoint"]
+        # one event remains, a baseline in a 0.6 document (IMPORT-D12b)
+        assert [e.kind for e in aim.load(out).history] == ["baseline"]
         assert main(["lint", str(out)]) == 0  # flattened is still conformant
 
     def test_css_output_and_stats(self, capsys):

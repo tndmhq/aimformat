@@ -348,7 +348,8 @@ def unicode_attrs_doc() -> aim.AimDocument:
 
 def flattened_doc() -> aim.AimDocument:
     """A history-less file: no history trailer (H001 warning tier) — the shape
-    flatten() produced before v0.6 and a page export still does."""
+    flatten() produced before v0.6 and a page export still does (flatten keeps
+    one event now)."""
     doc = aim.new_document(title="Flattened")
     with doc.batch():
         doc.add_chunk('<h1 data-aim="ttl">Flattened</h1>', author=BOT, at=t(0))
@@ -357,7 +358,7 @@ def flattened_doc() -> aim.AimDocument:
         "p1", '<p data-aim="p1">History has been dropped.</p>', author=BOT, at=t(2)
     )
     doc.accept(p.id, decided_by=ME, at=t(3))
-    doc._drop_history()  # no history trailer at all (flatten() keeps a checkpoint since v0.6)
+    doc._drop_history()  # no history trailer at all (flatten() keeps one event since v0.6)
     return doc
 
 
@@ -394,7 +395,7 @@ def noncanonical_dup_attrs_text() -> str:
     doc = aim.new_document(title="Non-canonical — duplicate attributes")
     with doc.batch():
         doc.add_chunk('<p data-aim="p1" class="zz">First attribute wins.</p>', author=BOT, at=t(0))
-    doc._drop_history()  # no history trailer at all (flatten() keeps a checkpoint since v0.6)
+    doc._drop_history()  # no history trailer at all (flatten() keeps one event since v0.6)
     return _edited(
         doc,
         (
@@ -421,7 +422,7 @@ def noncanonical_self_closing_text() -> str:
             author=BOT,
             at=t(2),
         )
-    doc._drop_history()  # no history trailer at all (flatten() keeps a checkpoint since v0.6)
+    doc._drop_history()  # no history trailer at all (flatten() keeps one event since v0.6)
     return _edited(
         doc,
         ('<p data-aim="sc">PLACEHOLDER</p>', '<p data-aim="sc"/>'),
@@ -451,7 +452,7 @@ def noncanonical_charrefs_text() -> str:
         doc.add_chunk(
             '<p data-aim="c2" title="ATTR_REFS">Attribute references.</p>', author=BOT, at=t(1)
         )
-    doc._drop_history()  # no history trailer at all (flatten() keeps a checkpoint since v0.6)
+    doc._drop_history()  # no history trailer at all (flatten() keeps one event since v0.6)
     return _edited(
         doc,
         (
@@ -485,7 +486,7 @@ def noncanonical_unicode_margins_text() -> str:
         author=ME,
         at=t(1),
     )
-    doc._drop_history()  # no history trailer at all (flatten() keeps a checkpoint since v0.6)
+    doc._drop_history()  # no history trailer at all (flatten() keeps one event since v0.6)
     return _edited(
         doc,
         ('"top":"15mm"', '"top":"١٥mm"'),  # Arabic-Indic 15
@@ -519,7 +520,7 @@ def noncanonical_dup_ids_text() -> str:
             author=BOT,
             at=t(3),
         )
-    doc._drop_history()  # no history trailer at all (flatten() keeps a checkpoint since v0.6)
+    doc._drop_history()  # no history trailer at all (flatten() keeps one event since v0.6)
     return _edited(
         doc,
         ('data-aim="d2a"', 'data-aim="dup"'),
@@ -554,7 +555,7 @@ def noncanonical_dup_top_level_text() -> str:
             author=BOT,
             at=t(3),
         )
-    doc._drop_history()  # no history trailer at all (flatten() keeps a checkpoint since v0.6)
+    doc._drop_history()  # no history trailer at all (flatten() keeps one event since v0.6)
     return _edited(
         doc,
         ('data-aim="n1"', 'data-aim="dup"'),
@@ -583,7 +584,7 @@ def noncanonical_rawtext_closes_text() -> str:
         author=ME,
         at=t(1),
     )
-    doc._drop_history()  # no history trailer at all (flatten() keeps a checkpoint since v0.6)
+    doc._drop_history()  # no history trailer at all (flatten() keeps one event since v0.6)
     return _edited(
         doc,
         ("</style>", "/* a fake close </styleq> stays raw */</STYLE >"),

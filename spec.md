@@ -861,9 +861,12 @@ event records a change to them.
 ### 6.8 Lifecycle operations
 
 Defined operations (SDK/CLI verbs): **flatten** (collapse the history to one
-checkpoint at the next seq → clean file; a document without history stays
-without it), **prune** (truncate events before a seq, checkpoint or baseline
-label — limits how far back travel goes, trivially safe), **baseline**
+event at the next seq → clean file: a `baseline` (§6.9) in a document
+declared 0.6 or later, so reconciliation keeps its origin, and a checkpoint
+below 0.6, so the declared version is never raised; a document without
+history stays without it), **prune** (truncate events before a seq,
+checkpoint or baseline label — limits how far back travel goes, trivially
+safe), **baseline**
 (replace the retained log with one `baseline` event for the current state,
 §6.9), resolve-all-pending on export
 (accept-all / reject-all, caller's choice), **gc** (§9.3), and
@@ -873,7 +876,8 @@ last consistent state, then synthesize `direct_edit` events with
 the tool, and whatever it declares becomes truth going forward — also the
 adoption path for hand-edited files). The reference toolkit implements
 reconcile as `AimDocument.reconcile()` / `aim reconcile`; it requires the
-full retained log, or a log that begins with a baseline (reconciling a pruned
+full retained log, or a log that begins with a baseline, as an import, an
+adoption, `baseline` and a flatten at 0.6 or later leave (reconciling a pruned
 history is an error there — the state below the prune floor is
 unrecoverable; `baseline` accepts such a file as it is). It also refuses a
 baseline whose snapshot does not hash to its `doc_hash` (§6.9): reconcile
@@ -885,6 +889,22 @@ could not be a snapshot entry (H008, §6.9). It also refuses an
 out-of-band first-paint edit that hand-bumped the declared version when the
 old marker cannot be recovered; the file must be restored to that marker so
 reconcile can record the upgrade (§3.7).
+
+The reference toolkit's `baseline` is also the repair for a history it
+cannot read (H002): `AimDocument.baseline(..., discard_history=True)` and
+`aim baseline FILE --discard-history` drop the stored history block without
+parsing it and keep the text and the pending proposals. The new baseline's
+seq is one above the highest positive integer `seq` still readable in the
+dropped lines, or 1 when there is none, so it is never below 1 and never
+goes backwards as far as the file can tell. Units without a usable id get
+fresh ids; every usable id stays, including one a pending proposal names. A
+pending proposal whose target or anchor names an id the repair replaced is
+rejected, and each rejection is recorded after the baseline. The CLI writes
+the dropped lines, byte for byte, to `<OUT>.discarded-history.jsonl` next to
+the document it writes, before it replaces that document. Garbage collection
+(§9.3) runs last, as after every baseline, so an image that only the dropped
+lines referenced is removed: the side file keeps its `use` reference, not
+its bytes.
 
 ### 6.9 Baselines (since v0.6)
 
@@ -921,13 +941,15 @@ snapshot; no `aim:version` event is recorded, because no earlier state is
 retained to record it against (§3.7). Writers that create a document from
 content that did not arrive by editing (importers) SHOULD record a baseline
 rather than one `add` event per construct. A document that needs only a
-hash-anchored origin uses a checkpoint as its first retained event (§6.8,
-prune and flatten).
+hash-anchored origin uses a checkpoint as its first retained event (§6.8:
+prune, and flatten below 0.6).
 
 A log that starts at seq 1 without a baseline claims to explain the document
 from nothing: replaying it backwards MUST reach an empty body and no settings
 block (a theme block nothing recorded is tolerated). A verifier warns when it
-does not (H009) — the shape a flattened-then-edited file had before v0.6.
+does not (H009). That is the shape of a file whose history was dropped and
+then restarted by an edit, such as a page export or a file flattened by a
+toolkit before v0.6, edited afterwards.
 
 Example — a document created from imported content, one history line:
 
@@ -1454,7 +1476,7 @@ Literal paint (`color` `background-color` `border-color`) is since spec 0.3 (S03
 | P016 | error | position proposal anchor is not valid in its container |
 | P017 | error | duplicate pending proposal id |
 | P018 | error | second pending move on one target (§5.4 supersede invariant) |
-| H001 | warning | no history block (flattened document) |
+| H001 | warning | no history block (flattened by an SDK before 0.6 or with no events to keep, a page export, or hand-written) |
 | H002 | error | unparseable history line |
 | H003 | error | event violates its field schema |
 | H004 | warning | history starts above seq 1 (pruned) |
