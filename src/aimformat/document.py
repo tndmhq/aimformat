@@ -28,7 +28,7 @@ from .canonical import canonical_json, serialize, serialize_run
 from .css import generate_aim_css
 from .dom import Comment, Element, Fragment, Text, parse_fragment, parse_html
 from .errors import AimError, HistoryError, InvalidOperation, ParseError, TargetNotFound
-from .events import Actor, Event, snapshot_problems
+from .events import Actor, Event, external, snapshot_problems
 from .note import find_note, is_canonical, render_note
 from .pagesetup import (
     PageSetup,
@@ -4433,7 +4433,12 @@ class AimDocument:
         objects (1 when there is none). Units without a usable id (missing,
         duplicated or invalid) get fresh ids instead of a refusal; every id
         already usable stays, including one a pending payload names, and
-        fresh ids avoid every id the pending lane uses. Ids named only in the
+        fresh ids avoid every id the pending lane uses. A pending card whose
+        target or anchor names an id the repair replaced (an invalid
+        spelling) could never be accepted, so it is rejected, as reconcile
+        rejects a card that no longer applies: the rejections follow the
+        baseline in the new history, in one batch, decided by *author* (an
+        external actor when none is given). Ids named only in the
         dropped text are not burned (it is not parsed). Read
         :meth:`history_text` first to keep what is dropped;
         ``aim baseline FILE --discard-history`` writes it to a file next to
@@ -4498,17 +4503,55 @@ class AimDocument:
         # (a pending modify carries its target's id); only units without a
         # usable id are renamed, and fresh draws avoid the pending lane.
         # Adoption's empty set would rename such a target and dangle the card.
-        _fixup_ids(work, work._state.all_ids())
+        before = work._state.all_ids()
+        _fixup_ids(work, before)
+        replaced = before - work._state.all_ids()  # invalid spellings, all renamed
         work._refuse_unsnapshottable()
         event = work._record_baseline(
             label, seq=seq, author=author, explanation=explanation, source=source, at=at
         )
-        work.gc_assets()  # §9.3: the dropped text may have kept blobs alive
+        decided_by = author if author is not None else external()
+        work._reject_cards_naming(replaced, decided_by=decided_by, at=at)
+        work.gc_assets()  # §9.3: the dropped text and rejected cards may have kept blobs alive
         burned = set(work._get_history_index().burned_ids)
         self._fragment = work._fragment
         self._state = work._state
         self._rebuild_history_index(burned_seed=burned)
         return event
+
+    def _reject_cards_naming(self, gone: set[str], *, decided_by: Actor, at: str | None) -> None:
+        """Reject, in one batch, every pending card whose target or anchor
+        names an id in *gone* (ids the discard repair replaced): such a card
+        could never be accepted (P008, or an anchor that no longer resolves),
+        as reconcile rejects a card that no longer applies. Rejecting an add
+        rebinds the cards chained onto it to its own anchor, so the scan
+        restarts until no card names a gone id. Cards on ids that stayed are
+        untouched, and so is an anchor naming a live pending card (a chained
+        add), even when a unit carried that card's id."""
+
+        def first() -> tuple[Proposal, str] | None:
+            cards = self.proposals
+            live = {p.id for p in cards}
+            for p in cards:
+                for ref in (p.target, p.anchor_after, p.anchor_container):
+                    if ref is not None and ref in gone and ref not in live:
+                        return p, ref
+            return None
+
+        if not gone or first() is None:
+            return
+        with self.batch():
+            while (hit := first()) is not None:
+                card, ref = hit
+                self.reject(
+                    card.id,
+                    decided_by=decided_by,
+                    at=at,
+                    explanation=(
+                        f"discard-history repair: {ref!r} was not a usable id and was "
+                        "replaced, so the proposal no longer applies"
+                    ),
+                )
 
     def _refuse_unsnapshottable(self) -> None:
         """Raise :class:`InvalidOperation` unless the current body can become

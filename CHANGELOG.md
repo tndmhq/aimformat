@@ -45,8 +45,10 @@ tool that reads such files moves to 0.6 with or before this release.
   repaired it. The new seq is one above the highest seq still readable in
   the dropped lines.
   Units without a usable id get fresh ids, and every usable id stays, even
-  one a pending proposal names. The CLI saves the dropped lines byte for byte
-  to `OUT.discarded-history.jsonl`, next to the file it writes (the input
+  one a pending proposal names. A pending proposal that names an id the
+  repair replaced is rejected, the rejection recorded, and the CLI lists it.
+  The CLI saves the dropped lines byte for byte to
+  `OUT.discarded-history.jsonl`, next to the file it writes (the input
   unless `-o` is given), or to the first free `.1`, `.2`, ... name. The
   side file is readable by its owner only and is written before the
   document is replaced. The CLI

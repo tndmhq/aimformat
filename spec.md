@@ -897,9 +897,11 @@ parsing it and keep the text and the pending proposals. The new baseline's
 seq is one above the highest integer `seq` still readable in the dropped
 lines (1 when there is none), so it never goes backwards as far as the file
 can tell. Units without a usable id get fresh ids; every usable id stays,
-including one a pending proposal names. The CLI writes the dropped lines,
-byte for byte, to `<OUT>.discarded-history.jsonl` next to the document
-before it replaces the document.
+including one a pending proposal names. A pending proposal whose target or
+anchor names an id the repair replaced is rejected, and each rejection is
+recorded after the baseline. The CLI writes the dropped lines, byte for
+byte, to `<OUT>.discarded-history.jsonl` next to the document it writes,
+before it replaces that document.
 
 ### 6.9 Baselines (since v0.6)
 

@@ -396,6 +396,14 @@ def _baseline_discarding_history(args: argparse.Namespace, author: Actor | None)
         print(f"aim: wrote {out} but could not sync its directory: {exc}", file=sys.stderr)
         return 2
     print(f"wrote {out} (history now begins with baseline {args.label!r} at seq {event.seq})")
+    # the repair's only other events: cards that named an id it replaced
+    rejected = [str(e.get("proposal")) for e in doc.history if e.kind == "resolution"]
+    if rejected:
+        plural = "s" if len(rejected) != 1 else ""
+        print(
+            f"rejected {len(rejected)} pending proposal{plural} that named a replaced id: "
+            + ", ".join(rejected)
+        )
     if side is not None:
         print(f"kept the dropped history in {side}")
     return 0
@@ -891,7 +899,8 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="repair a history that cannot be read: drop it unparsed, keep the text and "
         "the pending proposals, give units without a usable id fresh ids, and start a "
-        "fresh history from one baseline. The dropped lines go to "
+        "fresh history from one baseline. A pending proposal that names an id the repair "
+        "replaced is rejected, and the rejection recorded. The dropped lines go to "
         "OUT.discarded-history.jsonl (owner-only; never overwritten: .1, .2, ... when "
         "taken), and OUT is replaced atomically",
     )

@@ -3,7 +3,8 @@
 --discard-history``.
 
 The repair keeps the body and the pending lane, drops the stored history
-block without parsing it, and starts a fresh history from one baseline. The
+block without parsing it, and starts a fresh history from one baseline. A
+pending card that names an id the repair replaced is rejected. The
 CLI keeps the dropped text in a side file next to the document (owner-only,
 never overwritten, durable before the document changes) and replaces the
 document atomically, so a failure at any step leaves it as it was.
@@ -77,6 +78,24 @@ def _damaged() -> str:
 def _loose(text: str) -> str:
     """*text* with an unrelated body paragraph that has no id."""
     return text.replace('<p data-aim="term">', '<p>Loose paragraph.</p>\n<p data-aim="term">', 1)
+
+
+def _invalid_id(text: str, old: str) -> str:
+    """*text* with the id *old* respelled in upper case, an invalid id
+    (S015), outside the history block: on the body unit, in pending
+    payloads, and in every card that targets or anchors on it. A hand edit;
+    no SDK write produces it."""
+    cut = text.index(OPEN)
+    head = text[:cut]
+    for attr in (
+        "data-aim",
+        "data-aim-container",
+        "data-for",
+        "data-anchor-after",
+        "data-anchor-container",
+    ):
+        head = head.replace(f'{attr}="{old}"', f'{attr}="{old.upper()}"')
+    return head + text[cut:]
 
 
 def _errors(text: str) -> list:
@@ -233,6 +252,85 @@ class TestDiscardHistory:
         assert "Term: 24 months." in [c.text for c in doc.chunks]
         assert aim.lint_text(doc.dumps()) == []
 
+    @pytest.mark.parametrize("damaged", [True, False], ids=["unreadable", "readable"])
+    def test_a_pending_modify_whose_invalid_target_id_is_replaced_is_rejected(self, damaged):
+        # A hand edit respells a unit's id and the pending modify aimed at
+        # it as an invalid id. The repair replaces
+        # the unit's id, so the card would name an id that no longer exists
+        # (P008, and accept_all() fails). It is rejected and the rejection
+        # recorded, as reconcile rejects a card that no longer applies; a
+        # card on a usable id stays.
+        doc = _contract()
+        doc.propose_modify("fee", '<p data-aim="fee">Fee: CHF 12,000.</p>', author=BOT, at=ts(5))
+        text = _invalid_id(doc.dumps(), "term")
+        doc = aim.loads(_cut_third_line(text) if damaged else text)
+        lost, kept = doc.proposals
+        assert (lost.target, kept.target) == ("TERM", "fee")
+        event = doc.baseline("repair", author=ADA, discard_history=True, at=ts(9))
+        assert event.kind == "baseline" and event.seq == doc.history[0].seq
+        assert [e.kind for e in doc.history] == ["baseline", "resolution"]
+        rejection = doc.history[1]
+        assert (rejection.get("proposal"), rejection.decision, rejection.seq) == (
+            lost.id,
+            "rejected",
+            event.seq + 1,
+        )
+        assert rejection.get("decided_by") == ADA.to_obj()
+        assert "'TERM'" in rejection.get("explanation")
+        assert [p.id for p in doc.proposals] == [kept.id]
+        assert "TERM" not in doc.body_ids and len(doc.body_ids) == 3
+        assert aim.lint_text(doc.dumps()) == [] and doc.verify() == []
+        doc.accept_all(decided_by=ADA, at=ts(10))
+        assert "Fee: CHF 12,000." in [c.text for c in doc.chunks]
+        assert aim.lint_text(doc.dumps()) == []
+
+    def test_pending_adds_anchored_on_a_replaced_id_are_rejected_with_their_chain(self):
+        doc = _contract()
+        doc.reject(doc.proposals[0].id, decided_by=ADA, at=ts(5))
+        first = doc.propose_add('<p data-aim="n1">One.</p>', after="term", author=BOT, at=ts(6))
+        doc.propose_add('<p data-aim="n2">Two.</p>', after=first.id, author=BOT, at=ts(7))
+        kept = doc.propose_add('<p data-aim="n3">Kept.</p>', after="fee", author=BOT, at=ts(8))
+        doc = aim.loads(_cut_third_line(_invalid_id(doc.dumps(), "term")))
+        assert doc.proposals[0].anchor_after == "TERM"
+        doc.baseline("repair", discard_history=True, at=ts(9))
+        # the chained add is rebound onto 'TERM' when its parent is
+        # rejected, so it is rejected next; no actor given: an external one
+        assert [e.kind for e in doc.history] == ["baseline", "resolution", "resolution"]
+        assert {e.get("decided_by", {}).get("type") for e in doc.history[1:]} == {"external"}
+        assert [p.id for p in doc.proposals] == [kept.id]
+        assert aim.lint_text(doc.dumps()) == [] and doc.verify() == []
+        doc.accept_all(decided_by=ADA, at=ts(10))
+        assert [c.text for c in doc.chunks][-2:] == ["Kept.", "Term: 12 months."]
+
+    def test_a_pending_add_into_a_container_whose_invalid_id_is_replaced_is_rejected(self):
+        doc = _contract()
+        doc.add_chunk('<ul data-aim-container="box"><li data-aim="i1">x</li></ul>', author=ADA)
+        doc.propose_add('<li data-aim="i2">y</li>', container="box", after="i1", author=BOT)
+        doc = aim.loads(_cut_third_line(_invalid_id(doc.dumps(), "box")))
+        card = doc.proposals[1]
+        assert card.anchor_container == "BOX"
+        doc.baseline("repair", discard_history=True, at=ts(9))
+        assert [e.get("proposal") for e in doc.history[1:]] == [card.id]
+        assert [p.target for p in doc.proposals] == ["term"]
+        assert aim.lint_text(doc.dumps()) == [] and doc.verify() == []
+
+    def test_an_anchor_naming_a_live_card_is_kept_when_a_unit_had_that_id(self):
+        # A body unit hand-respelled to a pending card's id (p- is reserved,
+        # so the id is invalid) is renamed; a card chained onto that pending
+        # card still names the card, not the unit, and stays.
+        doc = _contract()
+        doc.reject(doc.proposals[0].id, decided_by=ADA, at=ts(5))
+        first = doc.propose_add('<p data-aim="n1">One.</p>', after="title", author=BOT, at=ts(6))
+        doc.propose_add('<p data-aim="n2">Two.</p>', after=first.id, author=BOT, at=ts(7))
+        text = doc.dumps().replace('<p data-aim="fee">', f'<p data-aim="{first.id}">', 1)
+        doc = aim.loads(_cut_third_line(text))
+        doc.baseline("repair", discard_history=True, at=ts(9))
+        assert first.id not in doc.body_ids
+        assert [e.kind for e in doc.history] == ["baseline"] and len(doc.proposals) == 2
+        assert aim.lint_text(doc.dumps()) == [] and doc.verify() == []
+        doc.accept_all(decided_by=ADA, at=ts(10))
+        assert [c.text for c in doc.chunks][:3] == ["Contract", "One.", "Two."]
+
     def test_fresh_ids_avoid_every_id_the_pending_lane_uses(self, monkeypatch):
         pools: list[set[str]] = []
         real = ids.new_id
@@ -376,6 +474,16 @@ class TestCli:
         assert main(["baseline", str(path), "--discard-history"]) == 2
         assert path.read_bytes() == original
         assert sorted(p.name for p in tmp_path.iterdir()) == ["c.aim"]
+
+    def test_it_names_the_pending_proposals_the_repair_rejected(self, tmp_path, capsys):
+        path = tmp_path / "c.aim"
+        self._write(path, _invalid_id(_damaged(), "term"))
+        (card,) = aim.loads(path.read_text()).proposals
+        assert main(["baseline", str(path), "--discard-history"]) == 0
+        out = capsys.readouterr().out
+        assert f"rejected 1 pending proposal that named a replaced id: {card.id}" in out
+        assert aim.load(path).proposals == []
+        assert aim.lint_path(path) == []
 
     def test_no_side_file_when_nothing_is_dropped(self, tmp_path, capsys):
         doc = _contract()

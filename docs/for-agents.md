@@ -141,7 +141,7 @@ checkpoints still verify. If you hand-edit, do not touch
 | `aim accept FILE [PID...] [--all]` | accept pending proposals by id, or all of them |
 | `aim reject FILE [PID...] [--all]` | reject pending proposals by id, or all of them |
 | `aim flatten FILE` | collapse history to one event (and drop embeddings) → clean file: a `baseline` in a document declared 0.6 or later, so a later hand edit still reconciles; a checkpoint below 0.6 |
-| `aim baseline FILE` | make the current state the history's origin (one `baseline` line); discards undo — only when the user asks, e.g. to accept a hand-edited file whose history no longer explains it. With `--discard-history` it repairs a history that cannot be read (lint H002): the text and the pending proposals stay, and the dropped lines go to `OUT.discarded-history.jsonl`, next to the file written (the input unless `-o` is given) |
+| `aim baseline FILE` | make the current state the history's origin (one `baseline` line); discards undo — only when the user asks, e.g. to accept a hand-edited file whose history no longer explains it. With `--discard-history` it repairs a history that cannot be read (lint H002): the text and the pending proposals stay (one that names an id the repair replaced is rejected), and the dropped lines go to `OUT.discarded-history.jsonl`, next to the file written (the input unless `-o` is given) |
 | `aim reconcile FILE` | detect out-of-band edits; append reconcile events to history |
 | `aim diff OLD NEW` | unit-level diff between two versions of a document: added/deleted/modified/moved unit ids plus theme/settings/version flags; `--format json` for machine reads |
 | `aim css` | print the generated `aim.css` for this spec version |
