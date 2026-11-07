@@ -514,6 +514,40 @@ def test_packing_again_leaves_a_hand_cropped_png_symbol():
     assert 'viewBox="0 0 4 2"' in new_ref  # framed like the crop it shows
 
 
+@pytest.mark.parametrize(
+    "box", ["0 0 inf 2", "0 0 Infinity 2", "0 0 1e400 2", "0 0 6_0 2", "0 0 \uff16 2", "0 0 nan 2"]
+)
+def test_a_stored_viewbox_svg_cannot_read_frames_nothing(box):
+    # float() reads these, SVG does not: the new reference falls back to the
+    # image's own size instead of writing viewBox="0 0 inf 2" into the body
+    blob = _png(6, 2, (9, 99, 200))
+    doc = aim.new_document(title="t")
+    doc.add_chunk(f'<p data-aim="p1"><img alt="a" src="{_uri(blob)}"></p>', author=ME)
+    assert doc.pack_assets(author=ME) == 1
+    text = doc.dumps()
+    doc = aim.AimDocument.loads(text.replace('viewBox="0 0 6 2">', f'viewBox="{box}">', 1))
+    doc.add_chunk(f'<p data-aim="p2"><img alt="b" src="{_uri(blob)}"></p>', author=ME)
+    assert doc.pack_assets(author=ME) == 1
+    new_ref = doc.chunk("p2").html
+    assert 'viewBox="0 0 6 2"' in new_ref and 'width="6"' in new_ref
+
+
+def test_a_symbol_nested_in_the_registry_does_not_frame_a_new_reference():
+    # registering and gc see only the registry svg's direct children; a
+    # symbol inside a <g> is not the one a new reference ends up using
+    blob = _png(6, 2, (9, 99, 200))
+    doc = aim.new_document(title="t")
+    doc.add_chunk(f'<p data-aim="p1"><img alt="a" src="{_uri(blob)}"></p>', author=ME)
+    assert doc.pack_assets(author=ME) == 1
+    symbol = _stored_symbol(doc, blob)
+    nested = "<g>" + symbol.replace('viewBox="0 0 6 2"', 'viewBox="0 0 100 100"') + "</g>"
+    doc = aim.AimDocument.loads(doc.dumps().replace(symbol, nested))
+    doc.add_chunk(f'<p data-aim="p2"><img alt="b" src="{_uri(blob)}"></p>', author=ME)
+    assert doc.pack_assets(author=ME) == 1
+    assert 'viewBox="0 0 6 2"' in doc.chunk("p2").html
+    assert _stored_symbol(doc, blob).startswith(f'<symbol id="{_asset(blob)}" viewBox="0 0 6 2">')
+
+
 # -- a tracked DOCX packs both views before alignment (P9) ----------------------
 
 

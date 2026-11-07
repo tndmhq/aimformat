@@ -80,11 +80,12 @@ def _loose(text: str) -> str:
     return text.replace('<p data-aim="term">', '<p>Loose paragraph.</p>\n<p data-aim="term">', 1)
 
 
-def _invalid_id(text: str, old: str) -> str:
-    """*text* with the id *old* respelled in upper case, an invalid id
-    (S015), outside the history block: on the body unit, in pending
-    payloads, and in every card that targets or anchors on it. A hand edit;
-    no SDK write produces it."""
+def _invalid_id(text: str, old: str, new: str | None = None) -> str:
+    """*text* with the id *old* respelled as *new* (default: upper case), an
+    invalid id (S015), outside the history block: on the body unit, in
+    pending payloads, and in every card that targets or anchors on it. A
+    hand edit; no SDK write produces it."""
+    new = new or old.upper()
     cut = text.index(OPEN)
     head = text[:cut]
     for attr in (
@@ -94,7 +95,7 @@ def _invalid_id(text: str, old: str) -> str:
         "data-anchor-after",
         "data-anchor-container",
     ):
-        head = head.replace(f'{attr}="{old}"', f'{attr}="{old.upper()}"')
+        head = head.replace(f'{attr}="{old}"', f'{attr}="{new}"')
     return head + text[cut:]
 
 
@@ -302,44 +303,47 @@ class TestDiscardHistory:
         doc.accept_all(decided_by=ADA, at=ts(10))
         assert [c.text for c in doc.chunks][-2:] == ["Kept.", "Term: 12 months."]
 
-    def test_a_pending_add_into_a_container_whose_invalid_id_is_replaced_is_rejected(self):
+    @pytest.mark.parametrize("spelling", ["BOX", "body"])
+    def test_a_pending_add_into_a_container_whose_invalid_id_is_replaced_is_rejected(
+        self, spelling
+    ):
+        # "body" as a container usually means the root; here it is the list
+        # a hand edit named "body", and the item add would dangle
         doc = _contract()
         doc.add_chunk('<ul data-aim-container="box"><li data-aim="i1">x</li></ul>', author=ADA)
         doc.propose_add('<li data-aim="i2">y</li>', container="box", after="i1", author=BOT)
-        doc = aim.loads(_cut_third_line(_invalid_id(doc.dumps(), "box")))
+        doc = aim.loads(_cut_third_line(_invalid_id(doc.dumps(), "box", spelling)))
         card = doc.proposals[1]
-        assert card.anchor_container == "BOX"
+        assert card.anchor_container == spelling
         doc.baseline("repair", discard_history=True, at=ts(9))
         assert [e.get("proposal") for e in doc.history[1:]] == [card.id]
         assert [p.target for p in doc.proposals] == ["term"]
         assert aim.lint_text(doc.dumps()) == [] and doc.verify() == []
 
-    @pytest.mark.parametrize("reserved", sorted(ids.RESERVED_TARGETS))
-    def test_a_unit_named_with_a_reserved_target_leaves_unrelated_cards_alone(self, reserved):
-        # A hand edit names a paragraph "body" or "aim:theme": a reserved
-        # target, so not a usable id, and the repair renames the unit. The
-        # reserved name is still what every top-level add and move gives as
-        # its container, and what a theme card targets; those cards have
-        # nothing to do with the renamed unit and stay.
-        doc = _contract()
-        doc.add_chunk('<p data-aim="main">Main text.</p>', author=BOT, at=ts(5))
-        doc.add_chunk('<p data-aim="spare">Spare.</p>', author=BOT, at=ts(5))
-        doc.propose_add('<p data-aim="n1">New clause.</p>', after="fee", author=BOT, at=ts(6))
-        doc.propose_move("main", container="body", after="title", author=BOT, at=ts(7))
+    @pytest.mark.parametrize("reserved", ["body", "aim:theme", "aim:doc"])
+    def test_a_reserved_word_means_the_unit_except_where_it_means_the_target(self, reserved):
+        # A hand edit names the unit 'term' with a reserved word, in the body
+        # and in the cards aimed at it, so the repair renames the unit and
+        # rejects those cards. The word keeps its reserved meaning in two
+        # roles, and cards using it that way stay: "body" as the container
+        # of every top-level add, and the theme block as a theme card's target.
+        doc = _contract()  # holds a pending modify of 'term'
+        modify = doc.proposals[0].id
+        doc.add_chunk('<p data-aim="tail">Tail.</p>', author=BOT, at=ts(5))
+        doc.propose_add('<p data-aim="n1">Top level.</p>', after="fee", author=BOT, at=ts(6))
+        after = doc.propose_add('<p data-aim="n2">After.</p>', after="term", author=BOT, at=ts(7))
         doc.propose_theme({"--aim-brand-1": "#ff0000"}, author=BOT, at=ts(8))
-        text = doc.dumps()
-        cut = text.index(OPEN)
-        head = text[:cut].replace('<p data-aim="spare">', f'<p data-aim="{reserved}">', 1)
-        text = head + text[cut:]
-        doc = aim.loads(_cut_third_line(text))
-        cards = [p.id for p in doc.proposals]
+        doc = aim.loads(_cut_third_line(_invalid_id(doc.dumps(), "term", reserved)))
+        aimed = [modify, after.id]
+        assert {p.target or p.anchor_after for p in doc.proposals if p.id in aimed} == {reserved}
+        kept = [p.id for p in doc.proposals if p.id not in aimed]
         doc.baseline("repair", author=ADA, discard_history=True, at=ts(9))
         assert reserved not in doc.body_ids
-        assert [e.kind for e in doc.history] == ["baseline"]
-        assert [p.id for p in doc.proposals] == cards
+        assert sorted(e.get("proposal") for e in doc.history[1:]) == sorted(aimed)
+        assert [p.id for p in doc.proposals] == kept
         assert _errors(doc.dumps()) == [] and doc.verify() == []
         doc.accept_all(decided_by=ADA, at=ts(10))
-        assert "New clause." in [c.text for c in doc.chunks]
+        assert "Top level." in [c.text for c in doc.chunks]
 
     def test_an_anchor_naming_a_live_card_is_kept_when_a_unit_had_that_id(self):
         # A body unit hand-respelled to a pending card's id (p- is reserved,

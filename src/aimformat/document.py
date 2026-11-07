@@ -15,6 +15,7 @@ import contextlib
 import datetime as _dt
 import hashlib
 import json
+import math
 import re
 from collections import Counter
 from collections.abc import Callable, Iterable, Iterator, Sequence
@@ -225,9 +226,25 @@ def _raster_href(symbol: Element) -> str | None:
 # gives None and never raises.
 
 
+#: an SVG number (ASCII digits, optional fraction and exponent): what a
+#: viewBox may hold, unlike Python's float(), which also takes "inf" and "6_0"
+_SVG_NUMBER = re.compile(r"[+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?")
+
+#: the element a whole-block payload for a reserved singleton target opens with
+_SINGLETON_BLOCK = {"aim:theme": "style", "aim:doc": "script"}
+
+
+def _payload_is_block(card: Proposal, target: str) -> bool:
+    """True when *card* is a whole-block card for the singleton *target*
+    (``aim:theme`` or ``aim:doc``): its payload is that block, not a chunk."""
+    tag = _SINGLETON_BLOCK.get(target)
+    return tag is not None and re.match(rf"\s*<{tag}\b", card.payload_html or "") is not None
+
+
 def _grid_number(n: float) -> str:
     """*n* as a viewBox or size attribute writes it: ``6``, not ``6.0``."""
-    return str(int(n)) if float(n).is_integer() else str(n)
+    n = float(n)
+    return str(int(n)) if n.is_integer() and abs(n) < 1e15 else repr(n)
 
 
 def _positive(w: int, h: int) -> tuple[int, int] | None:
@@ -4656,16 +4673,27 @@ class AimDocument:
         # Adoption's empty set would rename such a target and dangle the card.
         before = work._state.all_ids()
         _fixup_ids(work, before)
-        # invalid spellings, all renamed; a reserved target ("body", "aim:theme")
-        # a unit carried is renamed too, but cards naming it mean the target
-        # itself (every top-level add's container, a theme card), not the unit
-        replaced = (before - work._state.all_ids()) - ids.RESERVED_TARGETS
+        replaced = before - work._state.all_ids()  # invalid spellings, all renamed
         work._refuse_unsnapshottable()
         event = work._record_baseline(
             label, seq=seq, author=author, explanation=explanation, source=source, at=at
         )
         decided_by = author if author is not None else external()
         work._reject_cards_naming(replaced, decided_by=decided_by, at=at)
+        if replaced:
+            # a reserved word can be ambiguous ("body" names both the root and
+            # a container hand-named "body"): every card left is replayed, as
+            # reconcile does, and one the renaming broke is rejected too
+            from .reconcile import ReconcileReport, _reject_dangling
+
+            _reject_dangling(
+                work,
+                decided_by,
+                at,
+                ReconcileReport(),
+                cause="discard-history repair: the proposal no longer applies after "
+                "ids without a usable spelling were replaced",
+            )
         work.gc_assets()  # §9.3: the dropped text and rejected cards may have kept blobs alive
         burned = set(work._get_history_index().burned_ids)
         self._fragment = work._fragment
@@ -4687,9 +4715,23 @@ class AimDocument:
             cards = self.proposals
             live = {p.id for p in cards}
             for p in cards:
-                for ref in (p.target, p.anchor_after, p.anchor_container):
-                    if ref is not None and ref in gone and ref not in live:
-                        return p, ref
+                for ref, role in (
+                    (p.target, "target"),
+                    (p.anchor_after, "after"),
+                    (p.anchor_container, "container"),
+                ):
+                    if ref is None or ref not in gone or ref in live:
+                        continue
+                    # a unit hand-named with a reserved word is renamed, but
+                    # the word still means the reserved target in two roles:
+                    # "body" as a container (every top-level add and move),
+                    # and the theme or settings block as the target of a card
+                    # whose payload is that block
+                    if (role == "container" and ref == "body") or (
+                        role == "target" and _payload_is_block(p, ref)
+                    ):
+                        continue
+                    return p, ref
             return None
 
         if not gone or first() is None:
@@ -5209,21 +5251,27 @@ class AimDocument:
 
     def _stored_grid(self, asset_id: str) -> tuple[float, float] | None:
         """The width and height of the stored symbol *asset_id*'s viewBox,
-        or None when there is no such symbol or its viewBox does not give a
-        positive size. A reference packed now is framed by this grid, so it
-        matches the symbol however an earlier SDK or a hand edit set it (an
-        SDK that could not read BMP, WebP or TIFF stored them on 100x100)."""
+        or None when there is no such symbol or its viewBox is not four SVG
+        numbers giving a positive, finite size. A reference packed now is
+        framed by this grid, so it matches the symbol however an earlier SDK
+        or a hand edit set it (an SDK that could not read BMP, WebP or TIFF
+        stored them on 100x100). It looks where registering and gc look: the
+        direct children of the registry's first ``<svg>``."""
         sec = self._state.section("aim-assets")
-        for symbol in sec.iter() if sec is not None else ():
+        holders = sec.elements() if sec is not None else []
+        if not holders:
+            return None
+        for symbol in holders[0].elements():
             if symbol.tag == "symbol" and symbol.get("id") == asset_id:
                 # the parser lowercases attribute names; one built here
                 # spells it "viewBox"
                 box = next((v for k, v in symbol.attrs if k.lower() == "viewbox"), "")
-                try:
-                    _, _, w, h = (float(n) for n in re.split(r"[\s,]+", box.strip()))
-                except ValueError:
+                parts = re.split(r"[ \t\n\r,]+", box.strip())
+                if len(parts) != 4 or not all(_SVG_NUMBER.fullmatch(n) for n in parts):
                     return None
-                return (w, h) if w > 0 and h > 0 else None
+                w, h = float(parts[2]), float(parts[3])
+                ok = math.isfinite(w) and math.isfinite(h) and w > 0 and h > 0
+                return (w, h) if ok else None
         return None
 
     def _raster_assets(self) -> dict[str, str]:

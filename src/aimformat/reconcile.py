@@ -624,7 +624,13 @@ def _drive(S: AimDocument, work: AimDocument, author: Actor, at: str | None) -> 
 
 
 def _reject_dangling(
-    S: AimDocument, author: Actor, at: str | None, report: ReconcileReport
+    S: AimDocument,
+    author: Actor,
+    at: str | None,
+    report: ReconcileReport,
+    *,
+    cause: str = "reconcile: the proposal no longer applies in creation order after an "
+    "out-of-band edit",
 ) -> None:
     """Reject pending cards that fail against the reconciled projection.
 
@@ -661,10 +667,7 @@ def _reject_dangling(
             proposal.id,
             decided_by=author,
             at=at,
-            explanation=(
-                "reconcile: the proposal no longer applies in creation order "
-                f"after an out-of-band edit: {reason}"
-            ),
+            explanation=f"{cause}: {reason}",
         )
         report.rejected_proposals.append(proposal.id)
 
