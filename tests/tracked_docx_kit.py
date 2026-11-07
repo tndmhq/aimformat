@@ -368,6 +368,14 @@ COLUMN_FLAGS_OFF_LOOK = (
     '<w:tblLook w:val="0020" w:firstRow="1" w:lastRow="0" w:firstColumn="0" '
     'w:lastColumn="0" w:noHBand="0" w:noVBand="0"/>'
 )
+#: ``BANDED_LOOK`` with Banded Rows (horizontal banding) off
+BANDING_OFF_LOOK = (
+    '<w:tblLook w:val="06A0" w:firstRow="1" w:lastRow="0" w:firstColumn="1" '
+    'w:lastColumn="0" w:noHBand="1" w:noVBand="1"/>'
+)
+#: "Dark List Accent 1" paints the header row 000000, the first band of body
+#: rows 365F91 and the rest of the table 4F81BD
+DARK_STYLE = "DarkList-Accent1"
 
 
 def table_props(
@@ -376,6 +384,23 @@ def table_props(
     """``w:tblPr`` children in schema order: a table's own properties, or
     the OLD ones a ``w:tblPrChange`` records."""
     return (f'<w:tblStyle w:val="{style}"/>' if style else "") + width + look
+
+
+def banding_off_table(style: str, *, audit: bool) -> bytes:
+    """A priced table whose Banded Rows Bob switched off (a ``tblPrChange``),
+    with or without the row Audit that Alice inserted under its header."""
+    d = Doc()
+    rows = [
+        (["Item", "Price"], None, None),
+        (["Support", "EUR 500"], None, None),
+        (["Training", "EUR 900"], None, None),
+        (["Hosting", "EUR 100"], None, None),
+    ]
+    if audit:
+        rows.insert(1, (["Audit", "EUR 300"], "ins", ALICE))
+    old = table_props(style, BANDED_LOOK)
+    d.body = [d.table(rows, style=style, look=BANDING_OFF_LOOK, tblpr_change=(old, BOB))]
+    return d.build()
 
 
 @dataclass
@@ -1258,6 +1283,27 @@ def shapes() -> list[Shape]:
                 audit_texts,
                 [("add", _label(ALICE))],
                 note="the column flags change has no card",
+            )
+        )
+
+    # Banded Rows switched off while Alice inserts Audit under the header.
+    # Support and Hosting lose their first-band fill either way: the switch
+    # on its own gives them exactly the paint they end with (no band fill
+    # under Medium Shading 1, the whole-table fill under Dark List), and so
+    # would the insertion on its own, which moves them to the second band.
+    # The switch repainted them, though once Audit is in it is not needed.
+    for name, style in [
+        ("table_banding_off_with_row_insertion", SHADED_STYLE),
+        ("dark_table_banding_off_with_row_insertion", DARK_STYLE),
+    ]:
+        out.append(
+            Shape(
+                name,
+                banding_off_table(style, audit=True),
+                priced_texts,
+                [priced_texts[0], "AuditEUR 300", *priced_texts[1:]],
+                [("add", _label(ALICE)), ("modify", _label(BOB)), ("modify", _label(BOB))],
+                note="the switch alone repaints Support and Hosting; so would the insertion",
             )
         )
 

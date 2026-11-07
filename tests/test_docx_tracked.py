@@ -316,6 +316,40 @@ class TestTablePropertyRevisions:
         assert [p.target for p in doc.proposals if p.id in note.cards] == [item.id]
         assert any("converted differently" in w for w in result.report.warnings)
 
+    @pytest.mark.parametrize("style", [kit.SHADED_STYLE, kit.DARK_STYLE])
+    def test_a_row_the_change_alone_repaints_cites_it_though_an_insertion_would_too(
+        self, style, imported
+    ):
+        # Banded Rows off clears Support's and Hosting's first band; Alice's
+        # Audit above them would too, by moving them to the second band. So
+        # without Bob's change the rows would end the same, but Bob's change
+        # on its own gives them exactly that paint: it repainted them.
+        # Uncited, they would keep their old band through accept_all.
+        name = {
+            kit.SHADED_STYLE: "table_banding_off_with_row_insertion",
+            kit.DARK_STYLE: "dark_table_banding_off_with_row_insertion",
+        }[style]
+        result = imported[name]
+        doc = result.document
+        note = self._table_note(result)
+        assert note.reason is None
+        texts = {c.id: c.text for c in doc.chunks}
+        bob = [p for p in doc.proposals if p.id in note.cards]
+        assert [texts[p.target] for p in bob] == ["SupportEUR 500", "HostingEUR 100"]
+        assert {p.explanation for p in bob} == {"Word: Bob Jones changed formatting"}
+        # rejecting Alice's row and accepting the rest is Word with Bob's
+        # change alone: the same table without Audit, accepted
+        from aimformat.convert._docx_tracked import actual_signature
+
+        partial = aim.loads(doc.dumps())
+        (add,) = [p for p in partial.proposals if p.action == "add"]
+        partial.reject(add.id, decided_by=DECIDER)
+        partial.accept_all(decided_by=DECIDER)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", AimImportWarning)
+            bob_alone = import_docx(kit.banding_off_table(style, audit=False), tracked="accept")
+        assert actual_signature(partial) == actual_signature(bob_alone.document)
+
     @pytest.mark.parametrize(
         "name",
         [
@@ -343,6 +377,8 @@ class TestTablePropertyRevisions:
             "table_style_change_with_cell_fill",
             "table_width_change_with_cell_edit",
             "table_style_change_with_row_insertion",
+            "table_banding_off_with_row_insertion",
+            "dark_table_banding_off_with_row_insertion",
             "cell_shading_change",
             "header_row_change",
         ],

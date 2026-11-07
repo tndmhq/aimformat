@@ -42,9 +42,11 @@ O's markup for it, and the report says so. Fabricated attribution would be
 worse than a missing card. One record changes chunks it lies outside of: a
 table's ``tblPrChange``, whose new style or ``tblLook`` flags repaint the
 rows. A row cites it when the change repainted that row: its paint differs
-between the views, and in the accept view it differs from the paint the row
-would carry under the table's old properties. A row an insertion moved to
-another band, or one whose own new fill hides the style, was not repainted.
+between the views, and either the accept view's paint needs the change (the
+row would look different under the table's old properties) or the change
+alone gives it (the reject view's row under the new properties looks just
+so). A row only an insertion moved to another band, or one whose own new
+fill hides the style, was not repainted.
 
 The lane is written through the SDK's batch-propose primitive and validated
 once on the result: accept-all must reproduce the adjusted F view, reject-all
@@ -793,15 +795,26 @@ def _paint(row: Unit) -> list[list[tuple[str, str]]]:
 
 def _repainted(o: Unit, f: Unit, seq: _Seq) -> bool:
     """Whether the property change of *seq*'s table repainted the row *o*
-    becomes in F: the row's paint differs between the views, and in F it
-    differs from the paint F's row would carry under O's table properties
-    (everything else as Accept All leaves it). The rows an inserted or
-    deleted row moved to another band, and a cell whose own fill hides the
-    style either way, are not the change's doing."""
+    becomes in F, whose paint differs between the views. It did if the row's
+    paint in F needs it (under O's table properties, everything else as
+    Accept All leaves it, the row would look different) or if it alone gives
+    the row that paint (under F's properties, everything else as Reject All
+    leaves it, the row would look exactly as in F). An insertion above the
+    row can leave the change unneeded although it alone repaints the row:
+    Banded Rows turned off while the row moves to a band the style leaves
+    bare. A row only an inserted or deleted row moved to another band, and a
+    cell whose own fill hides the style either way, are not the change's
+    doing."""
     if seq.looks is None or f.paint is None or _paint(o) == _paint(f):
         return False
     old, new = seq.looks
-    return table_row_paint(new, f.paint) != table_row_paint(old, f.paint)
+    now = table_row_paint(new, f.paint)
+    if now != table_row_paint(old, f.paint):
+        return True
+    if o.paint is None:
+        return False
+    alone = table_row_paint(new, o.paint)
+    return alone == now and alone != table_row_paint(old, o.paint)
 
 
 def _sig(unit: Unit, seq: _Seq) -> tuple:

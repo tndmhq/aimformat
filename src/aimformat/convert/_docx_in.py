@@ -1602,7 +1602,9 @@ def table_row_paint(look: str, row: str) -> list[tuple[str | None, str | None]]:
     a table's ``data-aim-look`` mark, the row's own table's or another's.
     With the row's own table's look this is the paint its cells carry; with
     the look of the same table in the other view of a tracked document, the
-    paint the row would carry had only the table's properties not changed.
+    paint the row would carry had only the table's properties been the other
+    view's: an accept-view row under the old properties (the change undone),
+    a reject-view row under the new ones (the change alone).
     """
     looks, flags = json.loads(look)
     index, header_row, count, own_fills = json.loads(row)
