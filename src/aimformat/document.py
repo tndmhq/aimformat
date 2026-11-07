@@ -217,35 +217,16 @@ def _raster_href(symbol: Element) -> str | None:
     return None
 
 
-def _written_100x100(symbol: Element) -> bool:
-    """True when *symbol* is exactly what an SDK that could not read its
-    image's size wrote: ``id`` and ``viewBox="0 0 100 100"``, holding one
-    ``<image>`` with ``height="100"``, ``width="100"``, an ``href`` and
-    nothing else. A crop, a stretch, an offset or any other edit makes it a
-    symbol no SDK wrote, and that one is left as it is."""
-    if len(symbol.children) != 1 or _raster_href(symbol) is None:
-        return False
-    image = symbol.elements()[0]
-    # the parser lowercases attribute names ("viewbox"); one built here
-    # spells it "viewBox"
-    attrs = {k.lower(): v for k, v in symbol.attrs}
-    image_attrs = {k.lower(): v for k, v in image.attrs}
-    return (
-        len(attrs) == len(symbol.attrs) == 2
-        and attrs.keys() == {"id", "viewbox"}
-        and attrs["viewbox"] == "0 0 100 100"
-        and not image.children
-        and len(image_attrs) == len(image.attrs) == 3
-        and image_attrs.keys() == {"height", "width", "href"}
-        and image_attrs["height"] == image_attrs["width"] == "100"
-    )
-
-
 # Image size readers, one per format whose size the SDK reads (spec §9.1: a
 # packed reference is framed by its image's intrinsic size). Each checks
 # every offset against the blob's length before it reads, and returns a size
 # only when both sides are positive: a truncated, malformed or hostile header
 # gives None and never raises.
+
+
+def _grid_number(n: float) -> str:
+    """*n* as a viewBox or size attribute writes it: ``6``, not ``6.0``."""
+    return str(int(n)) if float(n).is_integer() else str(n)
 
 
 def _positive(w: int, h: int) -> tuple[int, int] | None:
@@ -4895,7 +4876,7 @@ class AimDocument:
             for img in imgs:
                 blob = self._decode_asset_datauri(img.get("src") or "")
                 asset_id = self._register_asset_datauri(img.get("src") or "", img.get("alt") or "")
-                svg = self._packed_image(img, asset_id, blob)
+                svg = self._packed_image(img, asset_id, blob, self._stored_grid(asset_id))
                 for m in members:
                     self._swap_node(m, img, svg)
             after = serialize_run(members)
@@ -4916,12 +4897,20 @@ class AimDocument:
         return packed
 
     @classmethod
-    def _packed_image(cls, img: Element, asset_id: str, blob: bytes) -> Element:
+    def _packed_image(
+        cls,
+        img: Element,
+        asset_id: str,
+        blob: bytes,
+        frame: tuple[float, float] | None = None,
+    ) -> Element:
         """The packed reference standing in for the data-URI *img* (spec §9.1).
         One builder for ``pack_assets`` and the importers, so a packed image
-        is spelled the same whichever of them wrote it."""
+        is spelled the same whichever of them wrote it. *frame* is the grid
+        of the symbol the reference points to when it is already stored;
+        otherwise the image's intrinsic size frames it."""
         svg = Element("svg", [("role", "img"), ("aria-label", img.get("alt") or "")])
-        w, h = cls._image_dimensions(blob) or (100, 100)
+        w, h = (_grid_number(n) for n in (frame or cls._image_dimensions(blob) or (100, 100)))
         svg.set("viewBox", f"0 0 {w} {h}")  # the intrinsic aspect ratio
         styled = cls._styled_props(img.get("style") or "")
         one_axis = ("width" in styled) != ("height" in styled)
@@ -4995,15 +4984,13 @@ class AimDocument:
         blob = self._decode_asset_datauri(data_uri)
         asset_id = self._asset_id(blob)
         svg = self._assets_section().elements()[0]
-        size = self._image_dimensions(blob)
-        stored = next((s for s in svg.elements() if s.get("id") == asset_id), None)
-        if stored is not None:
-            if size is not None:
-                self._reframe_symbol(stored, *size)
+        if any(s.get("id") == asset_id for s in svg.elements()):
+            # stored content (§7) is never re-gridded: references already
+            # written rely on its grid, and a new one takes it too
             return asset_id
         # the symbol's grid is the image's intrinsic geometry: a hardcoded
         # square viewBox letterboxed every non-square image
-        w, h = size or (100, 100)
+        w, h = self._image_dimensions(blob) or (100, 100)
         symbol = Element("symbol", [("id", asset_id), ("viewBox", f"0 0 {w} {h}")])
         image = Element(
             "image",
@@ -5014,29 +5001,24 @@ class AimDocument:
         svg.children.append(symbol)
         return asset_id
 
-    @staticmethod
-    def _reframe_symbol(symbol: Element, w: int, h: int) -> None:
-        """Give a stored raster *symbol* the grid of its image's real size,
-        when it is exactly the 100x100 symbol an earlier SDK wrote.
-
-        An SDK that could not read a format's size (BMP, WebP and TIFF before
-        0.6.0) stored it on a 100x100 grid. A reference packed now is framed
-        by the real size, and a square symbol inside it would be letterboxed
-        a second time. The registry is outside ``doc_hash``, so this needs no
-        event. A reference already written with the square frame renders the
-        same on either grid. Any other symbol is never touched: a vector
-        one, and a raster one with another grid, an offset, a
-        ``preserveAspectRatio`` or any other attribute. An edited symbol may
-        be a deliberate crop or stretch that references already rely on."""
-        if not _written_100x100(symbol):
-            return
-        image = symbol.elements()[0]
-        # a parsed symbol spells it "viewbox" (the parser lowercases names;
-        # serialization restores the SVG case), one built here "viewBox"
-        symbol.attrs = [(k, v) for k, v in symbol.attrs if k.lower() != "viewbox"]
-        symbol.set("viewBox", f"0 0 {w} {h}")
-        image.set("width", str(w))
-        image.set("height", str(h))
+    def _stored_grid(self, asset_id: str) -> tuple[float, float] | None:
+        """The width and height of the stored symbol *asset_id*'s viewBox,
+        or None when there is no such symbol or its viewBox does not give a
+        positive size. A reference packed now is framed by this grid, so it
+        matches the symbol however an earlier SDK or a hand edit set it (an
+        SDK that could not read BMP, WebP or TIFF stored them on 100x100)."""
+        sec = self._state.section("aim-assets")
+        for symbol in sec.iter() if sec is not None else ():
+            if symbol.tag == "symbol" and symbol.get("id") == asset_id:
+                # the parser lowercases attribute names; one built here
+                # spells it "viewBox"
+                box = next((v for k, v in symbol.attrs if k.lower() == "viewbox"), "")
+                try:
+                    _, _, w, h = (float(n) for n in re.split(r"[\s,]+", box.strip()))
+                except ValueError:
+                    return None
+                return (w, h) if w > 0 and h > 0 else None
+        return None
 
     def _raster_assets(self) -> dict[str, str]:
         """``{asset id: data URI}`` for each raster asset in the registry: a

@@ -403,25 +403,24 @@ def _packed_by_an_sdk_that_cannot_size(blob: bytes, mime: str, monkeypatch) -> a
 
 
 @pytest.mark.parametrize("fmt", sorted(MIME))
-def test_packing_again_reframes_a_symbol_an_earlier_sdk_framed_100x100(fmt, monkeypatch):
-    # an SDK before 0.6.0 packed BMP, WebP and TIFF 100x100; the same bytes
-    # packed again must not get a real-size reference to a 100x100 symbol
+def test_packing_again_takes_the_100x100_frame_an_earlier_sdk_stored(fmt, monkeypatch):
+    # an SDK before 0.6.0 stored BMP, WebP and TIFF on a 100x100 grid. The
+    # same bytes packed again leave that stored symbol as it is (references
+    # already written rely on its grid, a 0.2.0 one with no viewBox of its
+    # own included) and the new reference takes the same frame
     blob = _pillow_image(fmt)
     doc = _packed_by_an_sdk_that_cannot_size(blob, MIME[fmt], monkeypatch)
-    old_ref = doc.chunk("p1").html
-    hash_before = doc.doc_hash
+    old_ref, symbol = doc.chunk("p1").html, _stored_symbol(doc, blob)
     doc.add_chunk(f'<p data-aim="p2"><img alt="new" src="{_uri(blob, MIME[fmt])}"></p>', author=ME)
     assert doc.pack_assets(author=ME) == 1
-    text = doc.dumps()
-    assert f'<symbol id="{_asset(blob)}" viewBox="0 0 6 2">' in text
-    assert '<image height="2" width="6" href="data:' in text
-    assert 'viewBox="0 0 6 2"' in doc.chunk("p2").html
-    # the old reference is body content: it stays as written (a square
-    # frame letterboxes either grid the same way)
-    assert doc.chunk("p1").html == old_ref and 'viewBox="0 0 100 100"' in old_ref
-    assert doc.doc_hash != hash_before  # p2 was added, nothing else
+    assert _stored_symbol(doc, blob) == symbol
+    new_ref = doc.chunk("p2").html
+    assert 'viewBox="0 0 100 100"' in new_ref
+    assert 'height="100"' in new_ref and 'width="100"' in new_ref
+    assert doc.chunk("p1").html == old_ref
     assert _symbols(_parts(doc)["assets"]) == {_asset(blob)}
     assert _codes(doc, "error") == [] and doc.verify() == []
+    text = doc.dumps()
     reloaded = aim.AimDocument.loads(text)
     assert reloaded.verify() == [] and reloaded.dumps() == text
 
@@ -446,10 +445,10 @@ def _stored_symbol(doc: aim.AimDocument, blob: bytes) -> str:
     return match.group(0)
 
 
-def _pack_again_keeps_the_symbol(doc: aim.AimDocument, blob: bytes, mime: str) -> None:
+def _pack_again_keeps_the_symbol(doc: aim.AimDocument, blob: bytes, mime: str) -> str:
     """Packing *blob* again in a new chunk leaves its stored symbol, and the
     reference already written in p1, exactly as they were (and lint finds
-    nothing it did not find before)."""
+    nothing it did not find before). Returns the new reference's markup."""
     before, old_ref = _stored_symbol(doc, blob), doc.chunk("p1").html
     errors = _codes(doc, "error")
     doc.add_chunk(f'<p data-aim="p2"><img alt="new" src="{_uri(blob, mime)}"></p>', author=ME)
@@ -457,24 +456,21 @@ def _pack_again_keeps_the_symbol(doc: aim.AimDocument, blob: bytes, mime: str) -
     assert _stored_symbol(doc, blob) == before
     assert doc.chunk("p1").html == old_ref
     assert _codes(doc, "error") == errors and doc.verify() == []
+    return doc.chunk("p2").html
 
 
-def test_packing_again_reframes_the_100x100_shape_without_pillow(monkeypatch):
+def test_packing_again_keeps_the_100x100_shape_without_pillow(monkeypatch):
     # the exact shape every earlier SDK wrote: symbol id + viewBox
     # "0 0 100 100", one <image height="100" width="100" href>
     blob = _bmp(6, 2, (10, 200, 10))
     doc = _packed_by_an_sdk_that_cannot_size(blob, "image/bmp", monkeypatch)
-    uri = _uri(blob, "image/bmp")
-    doc.add_chunk(f'<p data-aim="p2"><img alt="new" src="{uri}"></p>', author=ME)
-    assert doc.pack_assets(author=ME) == 1
-    head = f'<symbol id="{_asset(blob)}" viewBox="0 0 6 2"><image height="2" width="6" href='
-    assert _stored_symbol(doc, blob).startswith(head)
-    assert doc.verify() == []
+    new_ref = _pack_again_keeps_the_symbol(doc, blob, "image/bmp")
+    assert 'viewBox="0 0 100 100"' in new_ref
 
 
-#: hand edits of the 100x100 symbol an earlier SDK wrote: each makes it a
-#: symbol that SDK never wrote, so re-packing must leave it alone (the
-#: offset and both preserveAspectRatio edits also draw V003 from lint)
+#: hand edits of the 100x100 symbol an earlier SDK wrote: re-packing leaves
+#: every stored symbol alone, edited or not (the offset and both
+#: preserveAspectRatio edits also draw V003 from lint)
 _SYM = 'viewBox="0 0 100 100"'
 _IMG = '<image height="100" width="100"'
 _NOT_THE_OLD_SHAPE = {
@@ -514,7 +510,8 @@ def test_packing_again_leaves_a_hand_cropped_png_symbol():
     assert old in text
     doc = aim.AimDocument.loads(text.replace(old, old.replace("0 0 8 2", "4 0 4 2")))
     assert doc.verify() == []
-    _pack_again_keeps_the_symbol(doc, blob, "image/png")
+    new_ref = _pack_again_keeps_the_symbol(doc, blob, "image/png")
+    assert 'viewBox="0 0 4 2"' in new_ref  # framed like the crop it shows
 
 
 # -- a tracked DOCX packs both views before alignment (P9) ----------------------
