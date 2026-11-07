@@ -23,7 +23,7 @@ path to a good PR is the same:
 git clone https://github.com/tndmhq/aimformat && cd aimformat
 pip install -e '.[dev]'        # pytest + the interop test deps, all pinned
 git config core.hooksPath .githooks   # the pre-commit hook, once per clone
-python3 -m pytest              # the whole suite runs in a few seconds
+python3 -m pytest              # the whole suite, a few minutes
 ```
 
 The pre-commit hook runs what CI's lint job runs on the files you commit:
@@ -69,6 +69,28 @@ Every behavior change comes with tests. The suite is organized by concern
 in the registry, a `nok_` fixture, and a targeted test. Run
 `python3 -m pytest` before pushing. CI runs the same thing across Python
 3.10–3.13.
+
+### The LibreOffice check of the tracked-change shapes
+
+The tracked-change shapes in `tests/tracked_docx_kit.py` each declare what
+Word leaves after Reject All and Accept All. CI's `tracked-oracle` job checks
+those declarations against LibreOffice on every push: it writes the shapes
+with `scripts/gen_docx_tracked.py` and resolves them with
+`scripts/libreoffice_oracle.py` (details in
+`tests/fixtures/docx-tracked/README.md`). The job is not a merge gate yet.
+
+To run it locally:
+
+- **On Linux**, as CI does: install `libreoffice-writer` and `python3-uno`,
+  then run `python3 scripts/gen_docx_tracked.py OUT` and
+  `/usr/bin/python3 scripts/libreoffice_oracle.py OUT`. The oracle needs the
+  system Python that has LibreOffice's `uno` module.
+- **Anywhere Docker runs**, including macOS: build the image once with
+  `docker build -t aim-oracle:24.2.7 scripts/oracle-docker`, then run
+  `scripts/run_oracle_docker.sh . OUT`. It writes the shapes on the host and
+  resolves them in the container, with LibreOffice 24.2.7, as CI had it.
+  On macOS, don't run the oracle with the Python that ships inside
+  LibreOffice.app: macOS stops it when a shell starts it.
 
 ## Releasing (maintainers)
 
