@@ -802,6 +802,140 @@ class TestRoundTrip:
         assert _view_texts(back.read_bytes(), "accept") == want
         assert _view_texts(back.read_bytes(), "reject") == list("ABCDEF")
 
+    @pytest.mark.parametrize(
+        ("names", "lane", "want"),
+        [
+            (
+                "ABCDEF",
+                [("move", "F", None), ("add", "X", "B"), ("add", "Y", "B")],
+                "F A B X Y C D E",
+            ),
+            # Z chains on X and joins C's pool once X is written; a deletion
+            # and a modify elsewhere change nothing for it
+            (
+                "ABCDEF",
+                [
+                    ("add", "X", "C"),
+                    ("move", "A", "E"),
+                    ("add", "Y", "C"),
+                    ("add", "Z", "X"),
+                    ("delete", "D"),
+                    ("modify", "B"),
+                ],
+                "B2 C X Y Z E A F",
+            ),
+            ("ABCD", [("add", "X", None), ("move", "C", "A"), ("add", "Y", None)], "X Y A C B D"),
+        ],
+        ids=["two-adds-on-one-anchor", "with-a-chained-add", "at-the-beginning"],
+    )
+    def test_adds_sharing_an_anchor_replay_nothing_beside_a_move(
+        self, names, lane, want, monkeypatch, tmp_path
+    ):
+        # Adds on one anchor land in card order whatever a move elsewhere
+        # does: accepting one rebinds every later card on its anchor onto its
+        # block. Only a move among them (it may land nothing), a card that
+        # moves or deletes one of their blocks or the block they anchor on,
+        # or a move made before one of them that chains onto it can change
+        # that order. Two adds after one paragraph with a move
+        # pending elsewhere replayed the whole lane anyway, which made the
+        # export quadratic in the number of cards.
+        doc = _lettered_lane(names, lane)
+        assert _texts(_resolved(doc, "accept")) == want.split()
+        replays: list[AimDocument] = []
+        real_projection = export_docx._projected_body_index
+
+        def counting_projection(source):
+            replays.append(source)
+            return real_projection(source)
+
+        monkeypatch.setattr(export_docx, "_projected_body_index", counting_projection)
+        back = tmp_path / "adds.docx"
+        aim.to_docx(doc, back, pending="tracked")
+        assert replays == []
+        assert _view_texts(back.read_bytes(), "accept") == want.split()
+        assert _view_texts(back.read_bytes(), "reject") == list(names)
+
+    @pytest.mark.parametrize(
+        ("build", "want"),
+        [
+            # a hand-written move takes First's block after Second's
+            (lambda: _foreign_move_doc("pooled"), "D A B Second First C"),
+            # B's hand-written move chains on Third, a card made after it, so
+            # it is accepted first: it lands where the chain starts, after C,
+            # and takes Second, a sibling made before Third, behind it
+            (lambda: _backward_chained_move_doc(), "A C First Third B Second D"),
+        ],
+        ids=["a-pooled-block-moved", "a-move-chained-on-a-later-add"],
+    )
+    def test_adds_on_one_anchor_that_a_foreign_move_reorders_land_like_accept_all(
+        self, build, want, tmp_path
+    ):
+        # The adds no longer land in card order though no move waits on
+        # their anchor, so their pool still needs the lane's replay.
+        doc = build()
+        assert _texts(_resolved(doc, "accept")) == want.split()
+        back = tmp_path / "foreign.docx"
+        aim.to_docx(doc, back, pending="tracked")
+        assert _view_texts(back.read_bytes(), "accept") == want.split()
+        assert _view_texts(back.read_bytes(), "reject") == list("ABCD")
+
+    @pytest.mark.parametrize(
+        "build",
+        [
+            lambda: _lettered_lane(
+                "ABCD", [("move", "A", "B"), ("move", "B", None), ("move", "C", None)]
+            ),
+            lambda: _lettered_lane(
+                "ABCDEF",
+                [
+                    ("add", "X", "C"),
+                    ("move", "A", "E"),
+                    ("add", "Y", "C"),
+                    ("add", "Z", "X"),
+                    ("delete", "D"),
+                    ("modify", "B"),
+                ],
+            ),
+            # B's move and deletion: N1 and N2 share an anchor that moves
+            lambda: _lettered_lane(
+                "ABCD",
+                [
+                    ("move", "D", "A"),
+                    ("add", "N1", "B"),
+                    ("move", "B", None),
+                    ("add", "N2", "B"),
+                    ("delete", "B"),
+                ],
+            ),
+            lambda: _foreign_move_doc("pooled"),
+            lambda: _backward_chained_move_doc(),
+            lambda: _foreign_move_doc("chained"),
+        ],
+        ids=[
+            "moves",
+            "adds",
+            "an-anchor-moved",
+            "a-pooled-block-moved",
+            "a-backward-chain",
+            "a-chained-block-moved",
+        ],
+    )
+    def test_skipping_the_replay_never_changes_the_export(self, build, monkeypatch, tmp_path):
+        # The replay is skipped only for a pool whose card order it would
+        # keep, so forcing it on every pool must leave the document as it
+        # was. In the last case First and Later hold no moved block, yet a
+        # hand-written move takes Chained, a card chained on First, in front
+        # of B, and Later, made after that move, follows it: the check must
+        # look down the chains too.
+        doc = build()
+        skipped = tmp_path / "skipped.docx"
+        aim.to_docx(doc, skipped, pending="tracked")
+        monkeypatch.setattr(export_docx._Exporter, "_lands_in_card_order", lambda *_: False)
+        replayed = tmp_path / "replayed.docx"
+        aim.to_docx(doc, replayed, pending="tracked")
+        with zipfile.ZipFile(skipped) as a, zipfile.ZipFile(replayed) as b:
+            assert a.read("word/document.xml") == b.read("word/document.xml")
+
     def test_an_inserted_list_item_round_trips_as_one_card(self, tmp_path):
         # The exported insertion must keep its list's numPr: without it Word
         # shows the item unnumbered and the re-import reads a list split
@@ -897,6 +1031,47 @@ def _lettered_lane(names: str, lane: list[tuple]) -> aim.AimDocument:
             markup = f'<p data-aim="{ids[name]}">{name}2</p>'
             doc.propose_modify(ids[name], markup, author=bot)
     return doc
+
+
+def _foreign_move_doc(moved: str) -> aim.AimDocument:
+    """A B C D with D's move to the beginning pending, and a hand-written
+    move of a pending add's block. ``"pooled"``: First and Second after B,
+    First's block moved after Second's. ``"chained"``: First after B,
+    Chained on First, Chained's block moved after A, then Later after B."""
+    ada = aim.human("ada")
+    doc = aim.new_document(title="Moves")
+    with doc.batch():
+        a, b, c, d = (doc.add_chunk(f"<p>{t}</p>", author=ada).id for t in "ABCD")
+    first = doc.propose_add("<p>First</p>", after=b, author=ada)
+    if moved == "pooled":
+        second = doc.propose_add("<p>Second</p>", after=b, author=ada)
+        target, anchor = first, doc._payload_root_id(second.payload_html or "")
+    else:
+        target, anchor = doc.propose_add("<p>Chained</p>", after=first.id, author=ada), a
+    doc.propose_move(d, container="body", after=None, author=ada)
+    move = doc.propose_move(a, container="body", after=c, author=ada)
+    if moved == "chained":
+        doc.propose_add("<p>Later</p>", after=b, author=ada)
+    card = doc._card_el(move.id)
+    card.set("data-for", doc._payload_root_id(target.payload_html or ""))
+    card.set("data-anchor-after", anchor)
+    return aim.loads(doc.dumps())
+
+
+def _backward_chained_move_doc() -> aim.AimDocument:
+    """A B C D: B's move after D, made first, then First after C, Second and
+    Third chained on First, and the move's anchor rewritten by hand to
+    Third's proposal id (a chain on a card made after it)."""
+    ada = aim.human("ada")
+    doc = aim.new_document(title="Moves")
+    with doc.batch():
+        _, b, c, d = (doc.add_chunk(f"<p>{t}</p>", author=ada).id for t in "ABCD")
+    move = doc.propose_move(b, container="body", after=d, author=ada)
+    first = doc.propose_add("<p>First</p>", after=c, author=ada)
+    doc.propose_add("<p>Second</p>", after=first.id, author=ada)
+    third = doc.propose_add("<p>Third</p>", after=first.id, author=ada)
+    doc._card_el(move.id).set("data-anchor-after", third.id)
+    return aim.loads(doc.dumps())
 
 
 def _damaged_member(data: bytes, prefix: str) -> bytes:

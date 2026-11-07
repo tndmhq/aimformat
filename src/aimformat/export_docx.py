@@ -42,12 +42,14 @@ from __future__ import annotations
 
 import base64
 import io
+import itertools
 import re
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
 from dataclasses import replace
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from . import ids
 from .document import (
     AimDocument,
     Proposal,
@@ -989,6 +991,7 @@ class _Exporter:
         except _ChainedAddCycle:
             ordered = list(doc.proposals)
         self._card_order: dict[str, int] = {p.id: i for i, p in enumerate(ordered)}
+        self._by_id: dict[str, Proposal] = {p.id: p for p in ordered}
         for p in doc.proposals:
             if p.action == "modify" and p.target and p.target not in ("aim:theme", "aim:doc"):
                 self.pending_mod[p.target] = p
@@ -1024,19 +1027,25 @@ class _Exporter:
                 self.adds_by_anchor[("body", target)] = early
             if late:
                 self._after_move[target] = late
-        # Card order is the order a body anchor's arrivals land in only while
-        # every move relocates its block. A move whose block already stands
-        # at its destination once the earlier cards are accepted lands
-        # nothing, so it rebinds no later card on its anchor (accept's
-        # noop_move), and those cards land in front of the block. With a move
-        # pending, body arrivals therefore emit in the order the lane's own
-        # accept-all replay puts them, keyed by proposal id; a lane that does
-        # not replay keeps card order. The replay costs what accept_all's dry
-        # run costs (quadratic in the lane), so it runs only once a body
-        # anchor turns out to hold two or more arrivals, chained and
-        # after-move joins included, and at most once an export
-        # (_landing_index).
+        # Adds waiting on one anchor land in card order: accepting one
+        # rebinds every later card on its anchor onto the block that just
+        # landed. A move among them can break that: once the earlier cards
+        # leave its block at its destination it lands nothing, so it rebinds
+        # no later card on its anchor (accept's noop_move), and those cards
+        # land in front of the block. So can a card that moves or deletes
+        # one of their blocks or the block they anchor on, or a move made
+        # before an add it chains onto, anywhere down their chains
+        # (_unsettled_cards). A body pool that holds, or has held, a move or
+        # such an add (chained and after-move joins included) therefore
+        # emits, while a body move is pending, in the order the lane's own
+        # accept-all replay puts the blocks, keyed by proposal id; a lane
+        # that does not replay keeps card order. The replay costs what
+        # accept_all's dry run costs (quadratic in the lane), so it runs only
+        # on the first sort of such a pool with two or more arrivals, at
+        # most once an export (_landing_index), and every later body pool
+        # sort then uses it too: card order only stands in for it.
         self._landing: dict[str, int] | None = None
+        self._unsettled: set[str] | None = None
 
     # -- top level -----------------------------------------------------------
     def run(self) -> None:
@@ -1121,14 +1130,80 @@ class _Exporter:
                     self._landing[p.id] = where[block]
         return self._landing
 
-    def _sort_arrivals(self, container: str, pool: list[Proposal]) -> None:
-        """Order *pool*, the arrivals waiting on one anchor: where each block
-        lands in the accept-all replay when a body move is pending and that is
-        known (see ``_landing``), then card order. A single arrival has no
-        order to settle and replays nothing."""
+    def _lands_in_card_order(self, prop: Proposal) -> bool:
+        """Whether *prop* is an add that keeps card order among its anchor's
+        arrivals whatever the moves do (see ``_landing``)."""
+        if self._unsettled is None:
+            self._unsettled = self._unsettled_cards()
+        return prop.action == "add" and prop.id not in self._unsettled
+
+    def _unsettled_cards(self) -> set[str]:
+        """Ids of the adds that may land out of card order among their
+        anchor's arrivals, with every card they chain onto: the cards
+        chained on an add join its pool after it, too late for the sorts
+        that already placed it. An add is unsettled when a pending card
+        moves or deletes its block or the block it anchors on (a
+        proposal-id anchor stands for that add's block; any other card's id
+        is unsettled), and when a move made before it chains onto it: that
+        move is accepted first, where the chain starts, and takes the cards
+        it finds there that are not its chain behind its block."""
+        moved = {
+            p.target for p in self._by_id.values() if p.action in ("move", "delete") and p.target
+        }
+
+        def chain(card: Proposal) -> Iterator[Proposal]:
+            # the cards *card* chains onto, nearest first
+            seen: set[str] = set()
+            walk = card.anchor_after
+            while walk is not None and walk in self._by_id and walk not in seen:
+                seen.add(walk)
+                yield self._by_id[walk]
+                walk = self._by_id[walk].anchor_after
+
+        def settled(add: Proposal) -> bool:
+            anchor = add.anchor_after
+            if anchor is not None and ids.is_valid_proposal_id(anchor):
+                parent = self._by_id.get(anchor)
+                if parent is None or parent.action != "add":
+                    return False
+                anchor = self.aim._payload_root_id(parent.payload_html or "")
+            block = self.aim._payload_root_id(add.payload_html or "")
+            return anchor not in moved and block not in moved
+
+        unsettled: set[str] = set()
+        for card in self._by_id.values():
+            if card.action == "move":
+                made = self._card_order[card.id]
+                seeds = [q for q in chain(card) if self._card_order[q.id] > made]
+            elif card.action == "add" and not settled(card):
+                seeds = [card]
+            else:
+                continue
+            for seed in seeds:
+                # a marked card's whole chain is marked already
+                for q in itertools.chain([seed], chain(seed)):
+                    if q.id in unsettled:
+                        break
+                    unsettled.add(q.id)
+        return unsettled
+
+    def _sort_arrivals(
+        self, container: str, pool: list[Proposal], unchecked: list[Proposal]
+    ) -> None:
+        """Order *pool*, the arrivals waiting on one anchor: by where each
+        block lands in the accept-all replay, then card order, when a body
+        move is pending and the pool needs the replay or it is already made
+        (see ``_landing``); by card order otherwise. *unchecked* holds the
+        arrivals the pool has taken in since it was last found to keep card
+        order. A single arrival has no order to settle and checks nothing."""
         if len(pool) < 2:
             return
-        landing = self._landing_index() if container == "body" and self.pending_move else {}
+        landing: dict[str, int] = {}
+        if container == "body" and self.pending_move:
+            if self._landing is None and all(map(self._lands_in_card_order, unchecked)):
+                unchecked.clear()
+            else:
+                landing = self._landing_index()
         last = len(self._card_order)
         pool.sort(key=lambda p: (landing.get(p.id, last), self._card_order.get(p.id, 0)))
 
@@ -1139,15 +1214,18 @@ class _Exporter:
         # made after a move on the moved block, joins the pool once the card
         # it anchors on is emitted, so the pool is re-sorted on every pass
         pool = self._pop_adds(container, anchor)
+        unchecked = list(pool)
         while pool:
-            self._sort_arrivals(container, pool)
+            self._sort_arrivals(container, pool, unchecked)
             prop = pool.pop(0)
             if prop.action == "move":
                 self._emit_move_destination(prop)
-                pool += self._after_move.pop(prop.target or "", [])
-                continue
-            self._emit_add_paragraphs(prop)
-            pool += self._pop_adds(container, prop.id)
+                joined = self._after_move.pop(prop.target or "", [])
+            else:
+                self._emit_add_paragraphs(prop)
+                joined = self._pop_adds(container, prop.id)
+            pool += joined
+            unchecked += joined
 
     def _emit_add_paragraphs(self, prop: Proposal, style: str | None = None) -> None:
         els = self._payload_elements(prop)
