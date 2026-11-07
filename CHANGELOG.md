@@ -95,10 +95,15 @@ tool that reads such files moves to 0.6 with or before this release.
 - **The SDK reads the size of BMP, WebP and TIFF images.** It reads the
   header with the standard library only: BMP's core and info headers (a
   negative height means a top-down image), WebP's `VP8 `, `VP8L` and `VP8X`
-  chunks, and the first IFD of a TIFF in either byte order. `pack_assets()`
-  now frames these images by their real size. Before, each got a 100x100
-  frame, so a non-square image was letterboxed. A truncated or malformed
-  header gives no size and never an error: the image stays inline.
+  chunks, and the first IFD of a TIFF in either byte order. A truncated or
+  malformed header gives no size and never an error. `pack_assets()` now
+  frames these images by their real size. Before, each got a 100x100
+  frame, so a non-square image was letterboxed. When `pack_assets()` packs
+  an image that an earlier SDK already stored on the 100x100 grid, it gives
+  the stored copy the real size too, so the new reference and the stored
+  image agree. References already written keep their 100x100 frame and
+  look the same as before. An image with no readable size is still packed
+  by `pack_assets()`, in a 100x100 frame; an importer leaves it inline.
   `to_docx` embeds a stored BMP or TIFF. python-docx cannot embed WebP, so
   a WebP figure exports as the `[image: label]` placeholder, as an inline
   one already did.

@@ -389,6 +389,57 @@ def test_pack_assets_frames_bmp_tiff_and_webp_by_their_size(fmt):
     assert _codes(doc, "error") == [] and doc.verify() == []
 
 
+def _packed_by_an_sdk_that_cannot_size(blob: bytes, mime: str, monkeypatch) -> aim.AimDocument:
+    """A saved document whose chunk p1 holds *blob* packed the way an SDK
+    that cannot read its size packed it: a 100x100 symbol and reference."""
+    doc = aim.new_document(title="t")
+    doc.add_chunk(f'<p data-aim="p1"><img alt="old" src="{_uri(blob, mime)}"></p>', author=ME)
+    with monkeypatch.context() as patched:
+        patched.setattr(aim.AimDocument, "_image_dimensions", staticmethod(lambda blob: None))
+        assert doc.pack_assets(author=ME) == 1
+    text = doc.dumps()
+    assert f'<symbol id="{_asset(blob)}" viewBox="0 0 100 100">' in text
+    return aim.AimDocument.loads(text)
+
+
+@pytest.mark.parametrize("fmt", sorted(MIME))
+def test_packing_again_reframes_a_symbol_an_earlier_sdk_framed_100x100(fmt, monkeypatch):
+    # an SDK before 0.6.0 packed BMP, WebP and TIFF 100x100; the same bytes
+    # packed again must not get a real-size reference to a 100x100 symbol
+    blob = _pillow_image(fmt)
+    doc = _packed_by_an_sdk_that_cannot_size(blob, MIME[fmt], monkeypatch)
+    old_ref = doc.chunk("p1").html
+    hash_before = doc.doc_hash
+    doc.add_chunk(f'<p data-aim="p2"><img alt="new" src="{_uri(blob, MIME[fmt])}"></p>', author=ME)
+    assert doc.pack_assets(author=ME) == 1
+    text = doc.dumps()
+    assert f'<symbol id="{_asset(blob)}" viewBox="0 0 6 2">' in text
+    assert '<image height="2" width="6" href="data:' in text
+    assert 'viewBox="0 0 6 2"' in doc.chunk("p2").html
+    # the old reference is body content: it stays as written (a square
+    # frame letterboxes either grid the same way)
+    assert doc.chunk("p1").html == old_ref and 'viewBox="0 0 100 100"' in old_ref
+    assert doc.doc_hash != hash_before  # p2 was added, nothing else
+    assert _symbols(_parts(doc)["assets"]) == {_asset(blob)}
+    assert _codes(doc, "error") == [] and doc.verify() == []
+    reloaded = aim.AimDocument.loads(text)
+    assert reloaded.verify() == [] and reloaded.dumps() == text
+
+
+def test_packing_again_leaves_a_symbol_whose_size_it_cannot_read(monkeypatch):
+    # a damaged header gives no size: the stored symbol keeps its grid
+    blob = BMP[:14] + b"\x00" * 4 + BMP[18:]  # an unknown DIB header size
+    assert aim.AimDocument._image_dimensions(blob) is None
+    doc = _packed_by_an_sdk_that_cannot_size(blob, "image/bmp", monkeypatch)
+    uri = _uri(blob, "image/bmp")
+    doc.add_chunk(f'<p data-aim="p2"><img alt="new" src="{uri}"></p>', author=ME)
+    assert doc.pack_assets(author=ME) == 1
+    text = doc.dumps()
+    assert f'<symbol id="{_asset(blob)}" viewBox="0 0 100 100">' in text
+    assert 'viewBox="0 0 100 100"' in doc.chunk("p2").html
+    assert doc.verify() == []
+
+
 # -- a tracked DOCX packs both views before alignment (P9) ----------------------
 
 

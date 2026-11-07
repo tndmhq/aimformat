@@ -4971,11 +4971,15 @@ class AimDocument:
         blob = self._decode_asset_datauri(data_uri)
         asset_id = self._asset_id(blob)
         svg = self._assets_section().elements()[0]
-        if any(s.get("id") == asset_id for s in svg.elements()):
+        size = self._image_dimensions(blob)
+        stored = next((s for s in svg.elements() if s.get("id") == asset_id), None)
+        if stored is not None:
+            if size is not None:
+                self._reframe_symbol(stored, *size)
             return asset_id
         # the symbol's grid is the image's intrinsic geometry: a hardcoded
         # square viewBox letterboxed every non-square image
-        w, h = self._image_dimensions(blob) or (100, 100)
+        w, h = size or (100, 100)
         symbol = Element("symbol", [("id", asset_id), ("viewBox", f"0 0 {w} {h}")])
         image = Element(
             "image",
@@ -4985,6 +4989,26 @@ class AimDocument:
         symbol.children.append(image)
         svg.children.append(symbol)
         return asset_id
+
+    @staticmethod
+    def _reframe_symbol(symbol: Element, w: int, h: int) -> None:
+        """Give a stored raster *symbol* the grid of its image's real size.
+
+        An SDK that could not read a format's size (BMP, WebP and TIFF before
+        0.6.0) stored it on a 100x100 grid. A reference packed now is framed
+        by the real size, and a square symbol inside it would be letterboxed
+        a second time. The registry is outside ``doc_hash``, so this needs no
+        event. A reference already written with the square frame renders the
+        same on either grid. A vector symbol is never touched."""
+        if _raster_href(symbol) is None:
+            return
+        image = symbol.elements()[0]
+        # a parsed symbol spells it "viewbox" (the parser lowercases names;
+        # serialization restores the SVG case), one built here "viewBox"
+        symbol.attrs = [(k, v) for k, v in symbol.attrs if k.lower() != "viewbox"]
+        symbol.set("viewBox", f"0 0 {w} {h}")
+        image.set("width", str(w))
+        image.set("height", str(h))
 
     def _raster_assets(self) -> dict[str, str]:
         """``{asset id: data URI}`` for each raster asset in the registry: a

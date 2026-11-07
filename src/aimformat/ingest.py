@@ -601,7 +601,7 @@ class _ImportAssets:
 
     def register(self, doc: AimDocument) -> None:
         """Store every image packed so far in *doc*'s asset registry (an
-        image already there is left as it is)."""
+        image already there is not stored twice)."""
         for data_uri in self.assets.values():
             doc._register_asset_datauri(data_uri, "")
 
