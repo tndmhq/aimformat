@@ -34,6 +34,7 @@ from hypothesis import HealthCheck, given, settings  # noqa: E402
 from hypothesis import strategies as st  # noqa: E402
 
 import tracked_docx_kit as kit  # noqa: E402
+from aimformat import export_docx  # noqa: E402
 from aimformat.convert import AimImportWarning, import_docx  # noqa: E402
 from aimformat.convert._docx_revisions import AUTHOR_CAP, clean, resolve_view  # noqa: E402
 from aimformat.document import AimDocument  # noqa: E402
@@ -666,6 +667,10 @@ class TestRoundTrip:
                 [("move", "A", "B"), ("move", "B", None), ("modify", "B"), ("move", "C", None)],
                 "C B2 A D",
             ),
+            # C's anchor holds A's move alone; the two cards made after it on
+            # A join that pool only once A's arrival is written, and D's move
+            # is the no-op (D already follows A)
+            ([("move", "A", "C"), ("move", "D", "A"), ("add", "New", "A")], "B C A New D"),
         ],
         ids=[
             "move-on-its-anchor",
@@ -676,6 +681,7 @@ class TestRoundTrip:
             "add-following-a-move",
             "adds-on-both-sides",
             "moved-and-modified",
+            "after-move-join",
         ],
     )
     def test_a_move_earlier_cards_made_a_no_op_lands_like_accept_all(self, lane, want, tmp_path):
@@ -710,6 +716,91 @@ class TestRoundTrip:
         aim.to_docx(doc, back, pending="tracked")
         assert _view_texts(back.read_bytes(), "accept") == want
         assert _view_texts(back.read_bytes(), "reject") == list("ABCD")
+
+    def test_a_foreign_move_chained_on_a_pending_add_lands_like_accept_all(self, tmp_path):
+        # A's anchor holds New alone; B's hand-written move and Chained both
+        # anchor on New's proposal id, so they join the pool once New is
+        # written. Once New lands B already follows it: the move lands
+        # nothing and Chained lands in front of B.
+        ada = aim.human("ada")
+        doc = aim.new_document(title="Moves")
+        with doc.batch():
+            a, b, c, _ = (doc.add_chunk(f"<p>{t}</p>", author=ada).id for t in "ABCD")
+        new = doc.propose_add("<p>New</p>", after=a, author=ada)
+        move = doc.propose_move(b, container="body", after=c, author=ada)
+        doc.propose_add("<p>Chained</p>", after=new.id, author=ada)
+        doc._card_el(move.id).set("data-anchor-after", new.id)  # foreign-authored
+        doc = aim.loads(doc.dumps())
+        want = ["A", "New", "Chained", "B", "C", "D"]
+        assert _texts(_resolved(doc, "accept")) == want
+        back = tmp_path / "chained.docx"
+        aim.to_docx(doc, back, pending="tracked")
+        assert _view_texts(back.read_bytes(), "accept") == want
+        assert _view_texts(back.read_bytes(), "reject") == list("ABCD")
+
+    def test_an_export_whose_anchors_each_hold_one_arrival_replays_nothing(
+        self, monkeypatch, tmp_path
+    ):
+        # Only an anchor that receives two or more arrivals has an order to
+        # settle, so only such an anchor may pay for replaying the lane. A
+        # Word move among inserted paragraphs that each have their own place
+        # (the usual imported document) has none: replaying the lane for it
+        # anyway made every such export quadratic in the number of cards.
+        d = kit.Doc()
+        for i in range(10):
+            d.body.append(d.p(d.t(f"Plain {i}.")))
+            if i == 0:
+                d.body.append(d.moved("moveFrom", "Moved.", "m1"))
+            if i == 4:
+                d.body.append(d.moved("moveTo", "Moved.", "m1"))
+            if i % 2:
+                d.body.append(d.inserted_p(f"Inserted {i}.", kit.BOB))
+        doc = import_docx(d.build()).document
+        assert sorted({p.action for p in doc.proposals}) == ["add", "move"]
+        want = _texts(_resolved(doc, "accept"))
+        accepted: list[str] = []
+        real_accept = AimDocument.accept
+
+        def counting_accept(self, pid, **kwargs):
+            accepted.append(pid)
+            return real_accept(self, pid, **kwargs)
+
+        monkeypatch.setattr(AimDocument, "accept", counting_accept)
+        back = tmp_path / "single.docx"
+        aim.to_docx(doc, back, pending="tracked")
+        assert accepted == []
+        assert _view_texts(back.read_bytes(), "accept") == want
+        assert _view_texts(back.read_bytes(), "reject") == _texts(doc)
+
+    def test_the_lane_replays_once_however_many_anchors_need_ordering(self, monkeypatch, tmp_path):
+        # Two anchors hold several arrivals each (the beginning: B's and C's
+        # moves; E: two adds); the lane's replay is shared, not redone per
+        # anchor.
+        doc = _lettered_lane(
+            "ABCDEF",
+            [
+                ("move", "A", "B"),
+                ("move", "B", None),
+                ("move", "C", None),
+                ("add", "X", "E"),
+                ("add", "Y", "E"),
+            ],
+        )
+        want = "C B A D E X Y F".split()
+        assert _texts(_resolved(doc, "accept")) == want
+        replays: list[AimDocument] = []
+        real_projection = export_docx._projected_body_index
+
+        def counting_projection(source):
+            replays.append(source)
+            return real_projection(source)
+
+        monkeypatch.setattr(export_docx, "_projected_body_index", counting_projection)
+        back = tmp_path / "shared.docx"
+        aim.to_docx(doc, back, pending="tracked")
+        assert len(replays) == 1
+        assert _view_texts(back.read_bytes(), "accept") == want
+        assert _view_texts(back.read_bytes(), "reject") == list("ABCDEF")
 
     def test_an_inserted_list_item_round_trips_as_one_card(self, tmp_path):
         # The exported insertion must keep its list's numPr: without it Word

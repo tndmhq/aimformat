@@ -1031,18 +1031,12 @@ class _Exporter:
         # noop_move), and those cards land in front of the block. With a move
         # pending, body arrivals therefore emit in the order the lane's own
         # accept-all replay puts them, keyed by proposal id; a lane that does
-        # not replay keeps card order.
-        self._landing: dict[str, int] = {}
-        if self.pending_move:
-            where = _projected_body_index(doc)
-            for p in doc.proposals:
-                if (p.anchor_container or "body") != "body":
-                    continue
-                block = p.target if p.action == "move" else None
-                if p.action == "add":
-                    block = doc._payload_root_id(p.payload_html or "")
-                if block and block in where:
-                    self._landing[p.id] = where[block]
+        # not replay keeps card order. The replay costs what accept_all's dry
+        # run costs (quadratic in the lane), so it runs only once a body
+        # anchor turns out to hold two or more arrivals, chained and
+        # after-move joins included, and at most once an export
+        # (_landing_index).
+        self._landing: dict[str, int] | None = None
 
     # -- top level -----------------------------------------------------------
     def run(self) -> None:
@@ -1111,20 +1105,42 @@ class _Exporter:
     def _pop_adds(self, container: str, after: str | None) -> list[Proposal]:
         return self.adds_by_anchor.pop((container, after), [])
 
-    def _arrival_order(self, prop: Proposal) -> tuple[int, int]:
-        """Where *prop*'s block lands in the accept-all replay when that is
-        known (see ``_landing``), then card order."""
-        card = self._card_order.get(prop.id, 0)
-        return (self._landing.get(prop.id, len(self._card_order)), card)
+    def _landing_index(self) -> dict[str, int]:
+        """Each body arrival's proposal id → where its block stands once the
+        lane is accepted (see ``_landing``), replayed on first use only."""
+        if self._landing is None:
+            self._landing = {}
+            where = _projected_body_index(self.aim)
+            for p in self.aim.proposals:
+                if (p.anchor_container or "body") != "body":
+                    continue
+                block = p.target if p.action == "move" else None
+                if p.action == "add":
+                    block = self.aim._payload_root_id(p.payload_html or "")
+                if block and block in where:
+                    self._landing[p.id] = where[block]
+        return self._landing
+
+    def _sort_arrivals(self, container: str, pool: list[Proposal]) -> None:
+        """Order *pool*, the arrivals waiting on one anchor: where each block
+        lands in the accept-all replay when a body move is pending and that is
+        known (see ``_landing``), then card order. A single arrival has no
+        order to settle and replays nothing."""
+        if len(pool) < 2:
+            return
+        landing = self._landing_index() if container == "body" and self.pending_move else {}
+        last = len(self._card_order)
+        pool.sort(key=lambda p: (landing.get(p.id, last), self._card_order.get(p.id, 0)))
 
     def _emit_anchored_adds(self, container: str, anchor: str | None) -> None:
         # creation order: acceptance rebinds every later same-anchor sibling
         # onto the block that just landed, so the lane lands in card order —
-        # unless a move lands nothing (see _landing); a chained add joins the
-        # pool once the add it anchors on is emitted
+        # unless a move lands nothing (see _landing); a chained add, or a card
+        # made after a move on the moved block, joins the pool once the card
+        # it anchors on is emitted, so the pool is re-sorted on every pass
         pool = self._pop_adds(container, anchor)
         while pool:
-            pool.sort(key=self._arrival_order)
+            self._sort_arrivals(container, pool)
             prop = pool.pop(0)
             if prop.action == "move":
                 self._emit_move_destination(prop)
