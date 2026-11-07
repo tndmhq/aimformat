@@ -42,8 +42,8 @@ tool that reads such files moves to 0.6 with or before this release.
   without parsing it, keep the text and the pending proposals, and record one
   baseline. One damaged line (lint H002) makes `verify()`, `baseline()`,
   `flatten()`, `reconcile()` and `prune()` refuse, and until now nothing
-  repaired it. The new seq is one above the highest seq still readable in
-  the dropped lines.
+  repaired it. The new seq is one above the highest positive seq still
+  readable in the dropped lines, or 1 when there is none.
   Units without a usable id get fresh ids, and every usable id stays, even
   one a pending proposal names. A pending proposal that names an id the
   repair replaced is rejected, the rejection recorded, and the CLI lists it.
@@ -53,10 +53,14 @@ tool that reads such files moves to 0.6 with or before this release.
   side file is readable by its owner only and is written before the
   document is replaced. The CLI
   writes the document to a temporary file and renames it over the old one,
-  so a failure at any step leaves the document as it was. Without the flag,
-  `baseline()` on such a file names the flag in its error. New
-  `doc.history_text()` returns the history block as stored, unparsed, so a
-  Python caller can keep what the repair drops.
+  so a failure at any step leaves the document as it was. The final gc pass
+  removes an image that only the dropped lines referenced, so the side file
+  keeps its reference but not its bytes. Without the flag, `baseline()` on
+  such a file names the flag in its error. So do `baseline()` and
+  `flatten()` when the body has a unit without a usable id and `reconcile()`
+  refuses the log (a pruned log, for instance). New `doc.history_text()`
+  returns the history block as stored, unparsed, so a Python caller can keep
+  what the repair drops.
 - **`flatten()` keeps one event instead of deleting the history.** It
   collapses the history to one event at the next seq, so seq never goes
   backwards. In a document declared 0.6 or later that event is a baseline:
@@ -65,8 +69,12 @@ tool that reads such files moves to 0.6 with or before this release.
   unit without a usable id, or a construct H008 rejects) with `baseline()`'s
   messages, before it changes anything. On the five DOCX fixtures a file
   flattened this way is 11% to 85% larger in o200k tokens than one flattened
-  to a checkpoint. Below 0.6 the event is a checkpoint (a pruned log, H004),
-  the declared version stays, and `reconcile()` refuses with the pruned-log
+  to a checkpoint. Those imports store their images in the asset registry.
+  An image kept inline as a data URI is stored twice, in the body and in the
+  snapshot: a document with one 150 KB inline PNG stays about 420 KB after
+  the flatten, where a checkpoint leaves about 220 KB. Run `aim pack` (or
+  `pack_assets()`) first to store it once. Below 0.6 the event is a
+  checkpoint (a pruned log, H004), the declared version stays, and `reconcile()` refuses with the pruned-log
   message. Before, flatten followed by an SDK edit made the next reconcile
   crash, and a hand edit after flatten could not be detected. A document
   without history stays without one. `to_html()` still writes a page with no
@@ -103,9 +111,12 @@ tool that reads such files moves to 0.6 with or before this release.
   declared 0.6 or later. M004 follows the declared version: from 0.6 it fires
   only for a meta block with neither summary nor TOC; below 0.6 a meta block
   still needs a summary. A baseline under a
-  declaration below 0.6 is S034. H001's text no longer calls a file without
-  a history block flattened: flatten keeps one event. New conformance
-  fixtures for each, plus `ok_baseline` and `ok_historyless`.
+  declaration below 0.6 is S034. H001's text names every source of a file
+  without a history block: a flatten by an SDK before 0.6 or of a history
+  with no events, a page export, or a hand-written file (a flatten of a
+  history with events now keeps one). New conformance fixtures for each,
+  plus `ok_baseline`, `ok_historyless` and `ok_pruned` (a log that starts
+  with a checkpoint above seq 1: no error, H004 warns).
 - **Imported images are stored once (§9).** `from_docx`, `from_markdown` and
   `from_docling` move PNG, JPEG and GIF data into the asset registry before
   any history is written, so the body, the baseline snapshot and a tracked
