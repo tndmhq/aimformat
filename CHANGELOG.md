@@ -79,17 +79,29 @@ tool that reads such files moves to 0.6 with or before this release.
   declaration below 0.6 is S034. New conformance fixtures for each, plus
   `ok_baseline` and `ok_historyless`.
 - **Imported images are stored once (§9).** `from_docx`, `from_markdown` and
-  `from_docling` move PNG, JPEG and GIF data into the asset registry before
-  any history is written, so the body, the baseline snapshot and a tracked
-  import's pending cards reference one stored copy, and an image found twice
-  is stored once. A tracked DOCX packs both of its views before aligning
-  them, and an image only Word's Accept All has is stored for the card that
-  brings it. Other formats (BMP, WebP, TIFF) and data URIs that are not
-  strict base64 stay inline, and the import goes on; the DOCX import report
-  counts them. Against the same branch before this change, and with
-  the compact TOC, sample3's import drops from 67,616 to 50,916 bytes (33,934
-  to 22,848 o200k tokens) and legal-addendum's from 63,253 to 58,958 (22,102
-  to 19,027). The image-free fixtures change only by their TOC.
+  `from_docling` move PNG, JPEG, GIF, BMP, WebP and TIFF data into the asset
+  registry before any history is written, so the body, the baseline snapshot
+  and a tracked import's pending cards reference one stored copy, and an
+  image found twice is stored once. A tracked DOCX packs both of its views
+  before aligning them, and an image only Word's Accept All has is stored
+  for the card that brings it. An image whose size the SDK cannot read
+  (another format such as SVG or AVIF, or a damaged header) and a data URI
+  that is not strict base64 stay inline, and the import goes on; the DOCX
+  import report counts them. Against the same branch before this change,
+  and with the compact TOC, sample3's import drops from 67,616 to 50,916
+  bytes (33,934 to 22,848 o200k tokens) and legal-addendum's from 63,253 to
+  58,958 (22,102 to 19,027). The image-free fixtures change only by their
+  TOC.
+- **The SDK reads the size of BMP, WebP and TIFF images.** It reads the
+  header with the standard library only: BMP's core and info headers (a
+  negative height means a top-down image), WebP's `VP8 `, `VP8L` and `VP8X`
+  chunks, and the first IFD of a TIFF in either byte order. `pack_assets()`
+  now frames these images by their real size. Before, each got a 100x100
+  frame, so a non-square image was letterboxed. A truncated or malformed
+  header gives no size and never an error: the image stays inline.
+  `to_docx` embeds a stored BMP or TIFF. python-docx cannot embed WebP, so
+  a WebP figure exports as the `[image: label]` placeholder, as an inline
+  one already did.
 - **The asset registry is content-addressed state, not a cache (§7, §9).**
   It is outside `doc_hash` but cannot be regenerated: after an import it
   holds the only copy of each image. Two new verifier warnings check it
