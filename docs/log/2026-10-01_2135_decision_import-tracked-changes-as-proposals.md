@@ -1,7 +1,7 @@
 ---
 date: 2026-10-01 21:35
 type: decision
-status: todo
+status: active
 related: [2026-10-01_2135_decision_import-tracked-chunk-alignment.md, 2026-10-01_2135_decision_import-tracked-moves.md, 2026-10-01_2135_decision_import-tracked-formatting-changes.md, 2026-10-01_2135_decision_import-tracked-attribution.md, 2026-10-01_2135_decision_import-docx-comments-reported.md, 2026-10-01_2135_decision_import-report-api.md, 2026-10-01_2135_decision_import-batch-propose-and-validate.md, 2026-10-01_2135_decision_import-versioning-and-sequencing.md]
 ---
 

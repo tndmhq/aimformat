@@ -1,7 +1,7 @@
 ---
 date: 2026-10-01 21:35
 type: decision
-status: todo
+status: active
 related: [2026-10-01_2135_decision_history-baseline-event.md, 2026-10-01_2135_decision_toc-on-import-and-freshness.md, 2026-10-01_2135_decision_import-versioning-and-sequencing.md, 2026-10-01_2135_decision_pack-imported-images-deferred.md]
 ---
 

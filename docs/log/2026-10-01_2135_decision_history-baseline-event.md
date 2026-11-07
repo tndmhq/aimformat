@@ -1,7 +1,7 @@
 ---
 date: 2026-10-01 21:35
 type: decision
-status: todo
+status: active
 related: [2026-10-01_2135_decision_importers-record-baseline.md, 2026-10-01_2135_decision_baseline-lifecycle-operation.md, 2026-10-01_2135_decision_flatten-collapses-to-checkpoint.md, 2026-10-01_2135_decision_toc-on-import-and-freshness.md, 2026-10-01_2135_decision_import-versioning-and-sequencing.md, 2026-10-01_2135_decision_reconcile-adopts-as-baseline.md]
 ---
 

@@ -1,7 +1,7 @@
 ---
 date: 2026-11-05 19:31
 type: decision
-status: todo
+status: active
 related: [2026-10-01_2135_decision_import-versioning-and-sequencing.md, 2026-11-05_1816_plan_pr40-rework.md]
 ---
 
