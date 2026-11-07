@@ -144,9 +144,13 @@ never edited and never undone — `undo` right after an import has nothing to
 undo. A global find-and-replace over the raw file that also hits the snapshot
 breaks verification (H008/H006), exactly as one hitting an `add` payload
 would; edit the body, then `aim reconcile`. `aim flatten` collapses history
-to one checkpoint; `aim baseline FILE` accepts a file whose history no longer
-explains its body as the new starting point (it discards undo — only when the
-user asks).
+to one event: a baseline in a document declared 0.6 or later (a later hand
+edit still reconciles), a checkpoint below. `aim baseline FILE` accepts a file
+whose history no longer explains its body as the new starting point (it
+discards undo — only when the user asks). When lint reports H002 (a history
+line that cannot be read), `aim baseline FILE --discard-history` is the
+repair: it keeps the text and the pending proposals, starts a fresh history,
+and saves the dropped lines to `FILE.discarded-history.jsonl`.
 
 The `aim-meta` cache may hold a `toc` without a `summary`: one
 `{chunk_count, id, level, title, word_count}` entry per section (a section

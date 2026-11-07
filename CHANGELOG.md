@@ -36,14 +36,37 @@ tool that reads such files moves to 0.6 with or before this release.
 - **`AimDocument.baseline(label)` and `aim baseline FILE`.** SDK and CLI
   only, never an MCP tool: it discards undo and provenance. It is also the
   recovery for a file whose history no longer explains its body.
-- **`flatten()` keeps one checkpoint.** It now collapses the history to a
-  checkpoint at the next seq instead of deleting it. The file stays valid at
-  any version (a pruned log, H004), seq never goes backwards, `verify()`
-  still catches a later hand edit, and `reconcile()` refuses with the
-  pruned-log message. Before, flatten followed by an SDK edit made the next
-  reconcile crash, and a hand edit after flatten could not be detected. A
-  document without history stays without one. `to_html()` still writes a
-  page with no history.
+- **A history that cannot be read is repaired in one command.**
+  `aim baseline FILE --discard-history` and
+  `baseline(label, discard_history=True)` drop the stored history block
+  without parsing it, keep the text and the pending proposals, and record one
+  baseline. One damaged line (lint H002) makes `verify()`, `baseline()`,
+  `flatten()`, `reconcile()` and `prune()` refuse, and until now nothing
+  repaired it. The new seq is one above the highest seq still readable in
+  the dropped lines.
+  Units without a usable id get fresh ids, and every usable id stays, even
+  one a pending proposal names. The CLI saves the dropped lines byte for byte
+  to `FILE.discarded-history.jsonl` (or the first free `.1`, `.2`, ...
+  name), readable by its owner only, before it replaces the document. It
+  writes the document to a temporary file and renames it over the old one,
+  so a failure at any step leaves the document as it was. Without the flag,
+  `baseline()` on such a file names the flag in its error. New
+  `doc.history_text()` returns the history block as stored, unparsed, so a
+  Python caller can keep what the repair drops.
+- **`flatten()` keeps one event instead of deleting the history.** It
+  collapses the history to one event at the next seq, so seq never goes
+  backwards. In a document declared 0.6 or later that event is a baseline:
+  `verify()` catches a later hand edit, and `reconcile()` adopts it with its
+  true `before`. There, a flatten refuses a body a baseline cannot hold (a
+  unit without a usable id, or a construct H008 rejects) with `baseline()`'s
+  messages, before it changes anything. On the five DOCX fixtures a file
+  flattened this way is 11% to 85% larger in o200k tokens than one flattened
+  to a checkpoint. Below 0.6 the event is a checkpoint (a pruned log, H004),
+  the declared version stays, and `reconcile()` refuses with the pruned-log
+  message. Before, flatten followed by an SDK edit made the next reconcile
+  crash, and a hand edit after flatten could not be detected. A document
+  without history stays without one. `to_html()` still writes a page with no
+  history.
 - **Reconcile adopts a history-less file declared at 0.6 or later as one
   baseline**; below 0.6 it keeps writing one `add` per construct, so no
   declaration is raised as a side effect. Reconcile refuses a baseline whose
@@ -76,8 +99,9 @@ tool that reads such files moves to 0.6 with or before this release.
   declared 0.6 or later. M004 follows the declared version: from 0.6 it fires
   only for a meta block with neither summary nor TOC; below 0.6 a meta block
   still needs a summary. A baseline under a
-  declaration below 0.6 is S034. New conformance fixtures for each, plus
-  `ok_baseline` and `ok_historyless`.
+  declaration below 0.6 is S034. H001's text no longer calls a file without
+  a history block flattened: flatten keeps one event. New conformance
+  fixtures for each, plus `ok_baseline` and `ok_historyless`.
 - **Imported images are stored once (§9).** `from_docx`, `from_markdown` and
   `from_docling` move PNG, JPEG and GIF data into the asset registry before
   any history is written, so the body, the baseline snapshot and a tracked
