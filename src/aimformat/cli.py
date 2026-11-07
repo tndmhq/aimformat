@@ -10,6 +10,7 @@
     aim reject FILE PID...  reject pending proposals (or --all)
     aim flatten FILE        collapse history to one checkpoint (+drop embeddings)
     aim baseline FILE       make the current state the history's origin
+                            (--discard-history: repair an unreadable history)
     aim pack FILE           hoist embedded data images into the asset registry
     aim prune FILE BEFORE   truncate history before a seq/checkpoint label
     aim gc FILE             collect dead asset symbols
@@ -28,6 +29,9 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
+import secrets
+import stat
 import sys
 from pathlib import Path
 
@@ -35,6 +39,7 @@ from . import __version__
 from .css import css_stats, generate_aim_css
 from .document import LAST, AimDocument, AnchorAfter, new_document
 from .errors import AimError
+from .events import Actor
 from .lint import lint_path
 from .registry import REGISTRY
 
@@ -342,16 +347,157 @@ def _cmd_flatten(args: argparse.Namespace) -> int:
 def _cmd_baseline(args: argparse.Namespace) -> int:
     from .events import parse_actor
 
+    author = parse_actor(args.author) if args.author else None
+    if args.discard_history:
+        return _baseline_discarding_history(args, author)
     doc = AimDocument.load(args.file)
-    doc.baseline(
-        args.label,
-        author=parse_actor(args.author) if args.author else None,
-        explanation=args.explanation,
-    )
+    doc.baseline(args.label, author=author, explanation=args.explanation)
     out = Path(args.output or args.file)
     doc.save(out)
     print(f"wrote {out} (history now begins with baseline {args.label!r} at seq {doc.seq})")
     return 0
+
+
+def _baseline_discarding_history(args: argparse.Namespace, author: Actor | None) -> int:
+    """``aim baseline --discard-history``: the repair for a history that
+    cannot be read. The dropped block goes to a side file first, then the
+    document is replaced atomically, so a failure at any step leaves OUT as
+    it was."""
+    raw = Path(args.file).read_bytes().decode("utf-8")
+    # The side file keeps the block's bytes as the input has them, CR
+    # included, so it comes from the untranslated text. The document is
+    # parsed as AimDocument.load() reads it (universal newlines): a CR kept
+    # in body text would be written into the snapshot, and the next load()
+    # would translate the body but not the snapshot's JSON escapes.
+    dropped = AimDocument.loads(raw).history_text()
+    doc = AimDocument.loads(raw.replace("\r\n", "\n").replace("\r", "\n"))
+    event = doc.baseline(
+        args.label, author=author, explanation=args.explanation, discard_history=True
+    )
+    text = doc.dumps()
+    out = Path(args.output or args.file)
+    target = Path(os.path.realpath(out))  # a symlinked document stays a symlink
+    side: Path | None = None
+    try:
+        if target.exists() and not os.access(target, os.W_OK):
+            # a plain write would refuse; a rename would not, so check first
+            raise PermissionError(f"{out} is not writable")
+        if dropped.strip():
+            side = _write_side_file(out, dropped)
+        _replace_atomically(target, text)
+    except OSError as exc:
+        kept = f"; the dropped history is in {side}" if side is not None else ""
+        print(f"aim: could not write {out}: {exc}; {out} is unchanged{kept}", file=sys.stderr)
+        return 2
+    try:
+        _fsync_dir(target.parent)
+    except OSError as exc:
+        print(f"aim: wrote {out} but could not sync its directory: {exc}", file=sys.stderr)
+        return 2
+    print(f"wrote {out} (history now begins with baseline {args.label!r} at seq {event.seq})")
+    if side is not None:
+        print(f"kept the dropped history in {side}")
+    return 0
+
+
+_BINARY = getattr(os, "O_BINARY", 0)  # Windows: no newline translation on os.write
+
+
+def _write_side_file(out: Path, content: str) -> Path:
+    """Write *content* to ``<OUT>.discarded-history.jsonl`` next to *out*,
+    or the first free ``.N`` name: created exclusively and owner-only
+    whatever the umask, so an existing file is never overwritten and a
+    restricted document's text never lands in a readable copy. Fsynced with
+    its directory entry before returning; on failure the partial file is
+    removed and the error raised."""
+    data = content.encode("utf-8")
+    stem = f"{out.name}.discarded-history"
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | _BINARY
+    for n in range(10_000):
+        side = out.with_name(f"{stem}.jsonl" if n == 0 else f"{stem}.{n}.jsonl")
+        try:
+            fd = os.open(side, flags, 0o600)
+        except FileExistsError:
+            continue
+        try:
+            try:
+                _chmod_fd(fd, side, 0o600)
+                _write_all(fd, data)
+                os.fsync(fd)
+            finally:
+                os.close(fd)
+            _fsync_dir(side.parent)
+        except BaseException:
+            _unlink_quietly(side)
+            raise
+        return side
+    raise FileExistsError(f"no free name for {stem}.N.jsonl next to {out}")
+
+
+def _replace_atomically(target: Path, text: str) -> None:
+    """Write *text* to a temporary file next to *target*, fsync it, then move
+    it over *target* with ``os.replace()``, keeping an existing file's
+    permission bits (a new file gets the umask's, as a plain write). Any
+    failure removes the temporary file and leaves *target* as it was. The
+    caller fsyncs the directory after the replace."""
+    try:
+        mode: int | None = stat.S_IMODE(os.stat(target).st_mode)
+    except FileNotFoundError:
+        mode = None
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | _BINARY
+    for _ in range(100):
+        tmp = target.with_name(f".{target.name}.{secrets.token_hex(4)}.tmp")
+        try:
+            fd = os.open(tmp, flags, 0o666)
+        except FileExistsError:
+            continue
+        break
+    else:
+        raise FileExistsError(f"no free temporary name next to {target}")
+    try:
+        try:
+            if mode is not None:
+                _chmod_fd(fd, tmp, mode)
+            _write_all(fd, text.encode("utf-8"))
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+        os.replace(tmp, target)
+    except BaseException:
+        _unlink_quietly(tmp)
+        raise
+
+
+def _write_all(fd: int, data: bytes) -> None:
+    view = memoryview(data)
+    while view:
+        view = view[os.write(fd, view) :]
+
+
+def _chmod_fd(fd: int, path: Path, mode: int) -> None:
+    if hasattr(os, "fchmod"):
+        os.fchmod(fd, mode)
+    else:  # pragma: no cover - Windows
+        os.chmod(path, mode)
+
+
+def _fsync_dir(directory: Path) -> None:
+    """Make a new or renamed directory entry durable (POSIX only: Windows
+    cannot open a directory for fsync)."""
+    if os.name == "nt":  # pragma: no cover
+        return
+    fd = os.open(directory, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+
+def _unlink_quietly(path: Path) -> None:
+    try:
+        os.unlink(path)
+    except OSError:
+        pass
 
 
 def _cmd_pack(args: argparse.Namespace) -> int:
@@ -729,13 +875,23 @@ def build_parser() -> argparse.ArgumentParser:
         "baseline",
         help="replace the history with one baseline event for the current state "
         "(discards undo and provenance; the recovery when the history no longer "
-        "explains the body); modifies the file in place unless -o is given",
+        "explains the body, and with --discard-history when it cannot be read); "
+        "modifies the file in place unless -o is given",
     )
     p.add_argument("file")
     p.add_argument("-o", "--output")
     p.add_argument("--label", default="baseline")
     p.add_argument("--author", help="actor: human:ID | agent:MODEL | external:ID")
     p.add_argument("--explanation")
+    p.add_argument(
+        "--discard-history",
+        action="store_true",
+        help="repair a history that cannot be read: drop it unparsed, keep the text and "
+        "the pending proposals, give units without a usable id fresh ids, and start a "
+        "fresh history from one baseline. The dropped lines go to "
+        "OUT.discarded-history.jsonl (owner-only; never overwritten: .1, .2, ... when "
+        "taken), and OUT is replaced atomically",
+    )
     p.set_defaults(func=_cmd_baseline)
 
     p = sub.add_parser(
