@@ -440,6 +440,83 @@ def test_packing_again_leaves_a_symbol_whose_size_it_cannot_read(monkeypatch):
     assert doc.verify() == []
 
 
+def _stored_symbol(doc: aim.AimDocument, blob: bytes) -> str:
+    match = re.search(rf'<symbol id="{_asset(blob)}".*?</symbol>', doc.dumps(), re.S)
+    assert match is not None
+    return match.group(0)
+
+
+def _pack_again_keeps_the_symbol(doc: aim.AimDocument, blob: bytes, mime: str) -> None:
+    """Packing *blob* again in a new chunk leaves its stored symbol, and the
+    reference already written in p1, exactly as they were (and lint finds
+    nothing it did not find before)."""
+    before, old_ref = _stored_symbol(doc, blob), doc.chunk("p1").html
+    errors = _codes(doc, "error")
+    doc.add_chunk(f'<p data-aim="p2"><img alt="new" src="{_uri(blob, mime)}"></p>', author=ME)
+    assert doc.pack_assets(author=ME) == 1
+    assert _stored_symbol(doc, blob) == before
+    assert doc.chunk("p1").html == old_ref
+    assert _codes(doc, "error") == errors and doc.verify() == []
+
+
+def test_packing_again_reframes_the_100x100_shape_without_pillow(monkeypatch):
+    # the exact shape every earlier SDK wrote: symbol id + viewBox
+    # "0 0 100 100", one <image height="100" width="100" href>
+    blob = _bmp(6, 2, (10, 200, 10))
+    doc = _packed_by_an_sdk_that_cannot_size(blob, "image/bmp", monkeypatch)
+    uri = _uri(blob, "image/bmp")
+    doc.add_chunk(f'<p data-aim="p2"><img alt="new" src="{uri}"></p>', author=ME)
+    assert doc.pack_assets(author=ME) == 1
+    head = f'<symbol id="{_asset(blob)}" viewBox="0 0 6 2"><image height="2" width="6" href='
+    assert _stored_symbol(doc, blob).startswith(head)
+    assert doc.verify() == []
+
+
+#: hand edits of the 100x100 symbol an earlier SDK wrote: each makes it a
+#: symbol that SDK never wrote, so re-packing must leave it alone (the
+#: offset and both preserveAspectRatio edits also draw V003 from lint)
+_SYM = 'viewBox="0 0 100 100"'
+_IMG = '<image height="100" width="100"'
+_NOT_THE_OLD_SHAPE = {
+    "class": (_SYM, f'{_SYM} class="logo"'),
+    "crop": (_SYM, 'viewBox="0 0 50 100"'),
+    "stretch": (_IMG, f'{_IMG} preserveAspectRatio="none"'),
+    "offset": (_IMG, f'{_IMG} x="10" y="0"'),
+    "symbol aspect": (_SYM, f'{_SYM} preserveAspectRatio="xMinYMin slice"'),
+    "image size": (_IMG, '<image height="40" width="100"'),
+    "viewBox spelling": (_SYM, 'viewBox="0,0,100,100"'),
+}
+
+
+@pytest.mark.parametrize("edit", sorted(_NOT_THE_OLD_SHAPE))
+def test_packing_again_leaves_any_other_100x100_symbol(edit, monkeypatch):
+    blob = _bmp(6, 2, (10, 200, 10))
+    doc = _packed_by_an_sdk_that_cannot_size(blob, "image/bmp", monkeypatch)
+    old, new = _NOT_THE_OLD_SHAPE[edit]
+    symbol = _stored_symbol(doc, blob)
+    edited = symbol.replace(old, new, 1)
+    assert edited != symbol
+    doc = aim.AimDocument.loads(doc.dumps().replace(symbol, edited))
+    # canonical form may reorder the attributes; the edit is still there
+    assert _stored_symbol(doc, blob) != symbol and doc.verify() == []
+    _pack_again_keeps_the_symbol(doc, blob, "image/bmp")
+
+
+def test_packing_again_leaves_a_hand_cropped_png_symbol():
+    # the registry was edited to show the right half of an 8x2 PNG; packing
+    # the same bytes in a new chunk must not re-grid it to the whole image
+    blob = _png(8, 2, (9, 99, 200))
+    doc = aim.new_document(title="t")
+    doc.add_chunk(f'<p data-aim="p1"><img alt="a" src="{_uri(blob)}"></p>', author=ME)
+    assert doc.pack_assets(author=ME) == 1
+    text = doc.dumps()
+    old = f'<symbol id="{_asset(blob)}" viewBox="0 0 8 2">'
+    assert old in text
+    doc = aim.AimDocument.loads(text.replace(old, old.replace("0 0 8 2", "4 0 4 2")))
+    assert doc.verify() == []
+    _pack_again_keeps_the_symbol(doc, blob, "image/png")
+
+
 # -- a tracked DOCX packs both views before alignment (P9) ----------------------
 
 

@@ -102,7 +102,10 @@ tool that reads such files moves to 0.6 with or before this release.
   an image that an earlier SDK already stored on the 100x100 grid, it gives
   the stored copy the real size too, so the new reference and the stored
   image agree. References already written keep their 100x100 frame and
-  look the same as before. An image with no readable size is still packed
+  look the same as before. This applies only to a stored symbol exactly as
+  the SDK wrote it: `viewBox="0 0 100 100"` and one `<image>` with width and
+  height 100 and no other attribute. A symbol edited since, such as a crop,
+  is left as it is. An image with no readable size is still packed
   by `pack_assets()`, in a 100x100 frame; an importer leaves it inline.
   `to_docx` embeds a stored BMP or TIFF. python-docx cannot embed WebP, so
   a WebP figure exports as the `[image: label]` placeholder, as an inline

@@ -217,6 +217,30 @@ def _raster_href(symbol: Element) -> str | None:
     return None
 
 
+def _written_100x100(symbol: Element) -> bool:
+    """True when *symbol* is exactly what an SDK that could not read its
+    image's size wrote: ``id`` and ``viewBox="0 0 100 100"``, holding one
+    ``<image>`` with ``height="100"``, ``width="100"``, an ``href`` and
+    nothing else. A crop, a stretch, an offset or any other edit makes it a
+    symbol no SDK wrote, and that one is left as it is."""
+    if len(symbol.children) != 1 or _raster_href(symbol) is None:
+        return False
+    image = symbol.elements()[0]
+    # the parser lowercases attribute names ("viewbox"); one built here
+    # spells it "viewBox"
+    attrs = {k.lower(): v for k, v in symbol.attrs}
+    image_attrs = {k.lower(): v for k, v in image.attrs}
+    return (
+        len(attrs) == len(symbol.attrs) == 2
+        and attrs.keys() == {"id", "viewbox"}
+        and attrs["viewbox"] == "0 0 100 100"
+        and not image.children
+        and len(image_attrs) == len(image.attrs) == 3
+        and image_attrs.keys() == {"height", "width", "href"}
+        and image_attrs["height"] == image_attrs["width"] == "100"
+    )
+
+
 # Image size readers, one per format whose size the SDK reads (spec §9.1: a
 # packed reference is framed by its image's intrinsic size). Each checks
 # every offset against the blob's length before it reads, and returns a size
@@ -4992,15 +5016,19 @@ class AimDocument:
 
     @staticmethod
     def _reframe_symbol(symbol: Element, w: int, h: int) -> None:
-        """Give a stored raster *symbol* the grid of its image's real size.
+        """Give a stored raster *symbol* the grid of its image's real size,
+        when it is exactly the 100x100 symbol an earlier SDK wrote.
 
         An SDK that could not read a format's size (BMP, WebP and TIFF before
         0.6.0) stored it on a 100x100 grid. A reference packed now is framed
         by the real size, and a square symbol inside it would be letterboxed
         a second time. The registry is outside ``doc_hash``, so this needs no
         event. A reference already written with the square frame renders the
-        same on either grid. A vector symbol is never touched."""
-        if _raster_href(symbol) is None:
+        same on either grid. Any other symbol is never touched: a vector
+        one, and a raster one with another grid, an offset, a
+        ``preserveAspectRatio`` or any other attribute. An edited symbol may
+        be a deliberate crop or stretch that references already rely on."""
+        if not _written_100x100(symbol):
             return
         image = symbol.elements()[0]
         # a parsed symbol spells it "viewbox" (the parser lowercases names;
