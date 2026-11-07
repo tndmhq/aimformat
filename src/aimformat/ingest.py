@@ -51,9 +51,10 @@ Mapping (docling label → .aim):
                       kept — cells belong to the row where they *start*);
                       a table caption follows as an ``<em>`` paragraph
 ``picture``           ``<figure>`` chunk: the embedded image when the
-                      conversion embedded one — PNG/JPEG/GIF stored once
-                      in ``<aim-assets>`` and referenced by a packed
-                      ``<svg role="img">`` (spec §9), other data as an
+                      conversion embedded one — stored once in
+                      ``<aim-assets>`` and referenced by a packed
+                      ``<svg role="img">`` (spec §9) when the SDK reads its
+                      size (PNG, JPEG, GIF, BMP, WebP, TIFF), else an
                       attribute-escaped data-URI ``<img>`` — else an
                       alt-text placeholder; attached text becomes ``<p>``
 ``caption``           ``<figcaption>`` inside the owning figure
@@ -547,10 +548,12 @@ class _ImportAssets:
     addressed: the same bytes met twice — or in both views of a tracked
     DOCX — are one asset. :func:`finish_import` registers it.
 
-    Only PNG, JPEG and GIF are packed, the formats whose size the SDK reads
-    for the packed reference's viewBox. Any other image, and a data URI that
-    is not strict base64, stays an inline ``<img>`` and the import goes on;
-    :meth:`warnings` says so for an import report.
+    An image is packed when the SDK reads its size for the packed
+    reference's viewBox: PNG, JPEG, GIF, BMP, WebP and TIFF
+    (``AimDocument._image_dimensions``). An image whose size it cannot read
+    (another format such as SVG or AVIF, or a damaged header), and a data
+    URI that is not strict base64, stays an inline ``<img>`` and the import
+    goes on; :meth:`warnings` says so for an import report.
     """
 
     def __init__(self) -> None:
@@ -588,7 +591,8 @@ class _ImportAssets:
             self.kept_inline.setdefault(src, "undecodable")
             return None
         if AimDocument._image_dimensions(blob) is None:
-            # not PNG/JPEG/GIF: a packed reference would size it 100×100
+            # a format whose size the SDK does not read, or a damaged
+            # header: a packed reference would frame it 100×100
             self.kept_inline.setdefault(src, "format")
             return None
         asset_id = AimDocument._asset_id(blob)
@@ -607,8 +611,8 @@ class _ImportAssets:
         out = []
         if reasons["format"]:
             out.append(
-                f"{reasons['format']} image(s) stay inline in the body: only PNG, JPEG and "
-                "GIF images are stored once in the asset registry"
+                f"{reasons['format']} image(s) stay inline in the body: the SDK cannot read "
+                "their size (a format such as SVG or AVIF, or a damaged header)"
             )
         if reasons["undecodable"]:
             out.append(

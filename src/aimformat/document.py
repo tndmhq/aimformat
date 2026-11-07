@@ -20,7 +20,7 @@ from collections.abc import Callable, Iterable, Iterator, Sequence
 from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, TypeVar
+from typing import TYPE_CHECKING, Literal, TypeVar
 
 from . import canonical, ids, toc
 from .canonical import canonical_json, serialize, serialize_run
@@ -215,6 +215,145 @@ def _raster_href(symbol: Element) -> str | None:
     if len(kids) == 1 and kids[0].tag == "image":
         return kids[0].get("href") or None
     return None
+
+
+# Image size readers, one per format whose size the SDK reads (spec §9.1: a
+# packed reference is framed by its image's intrinsic size). Each checks
+# every offset against the blob's length before it reads, and returns a size
+# only when both sides are positive: a truncated, malformed or hostile header
+# gives None and never raises.
+
+
+def _positive(w: int, h: int) -> tuple[int, int] | None:
+    return (w, h) if w > 0 and h > 0 else None
+
+
+def _png_size(blob: bytes) -> tuple[int, int] | None:
+    """PNG: the IHDR chunk, first after the signature."""
+    if len(blob) < 24 or blob[12:16] != b"IHDR":
+        return None
+    return _positive(int.from_bytes(blob[16:20], "big"), int.from_bytes(blob[20:24], "big"))
+
+
+def _gif_size(blob: bytes) -> tuple[int, int] | None:
+    """GIF: the logical screen size after the signature."""
+    if len(blob) < 10:
+        return None
+    return _positive(int.from_bytes(blob[6:8], "little"), int.from_bytes(blob[8:10], "little"))
+
+
+def _jpeg_size(blob: bytes) -> tuple[int, int] | None:
+    """JPEG: the markers walked to the first start-of-frame."""
+    i = 2
+    while i + 9 < len(blob):
+        if blob[i] != 0xFF:
+            i += 1
+            continue
+        marker = blob[i + 1]
+        if marker in (0xFF, 0x01) or 0xD0 <= marker <= 0xD9:
+            i += 2
+            continue
+        length = int.from_bytes(blob[i + 2 : i + 4], "big")
+        if 0xC0 <= marker <= 0xCF and marker not in (0xC4, 0xC8, 0xCC):
+            h = int.from_bytes(blob[i + 5 : i + 7], "big")
+            w = int.from_bytes(blob[i + 7 : i + 9], "big")
+            return _positive(w, h)
+        i += 2 + length
+    return None
+
+
+#: DIB header sizes laid out like BITMAPINFOHEADER (int32 width and height
+#: at the same offsets): BITMAPINFOHEADER, its V2 and V3 extensions, the
+#: OS/2 2.x header, BITMAPV4HEADER and BITMAPV5HEADER
+_BMP_INFO_HEADERS = frozenset({40, 52, 56, 64, 108, 124})
+
+
+def _bmp_size(blob: bytes) -> tuple[int, int] | None:
+    """BMP: the DIB header after the 14-byte file header. A 12-byte
+    BITMAPCOREHEADER holds uint16 sizes; BITMAPINFOHEADER and the headers
+    after it hold int32 ones, where a negative height means top-down rows."""
+    if len(blob) < 18:
+        return None
+    header = int.from_bytes(blob[14:18], "little")
+    if header == 12 and len(blob) >= 22:
+        w = int.from_bytes(blob[18:20], "little")
+        h = int.from_bytes(blob[20:22], "little")
+        return _positive(w, h)
+    if header in _BMP_INFO_HEADERS and len(blob) >= 26:
+        w = int.from_bytes(blob[18:22], "little", signed=True)
+        h = int.from_bytes(blob[22:26], "little", signed=True)
+        return _positive(w, abs(h))
+    return None
+
+
+#: the bytes each WebP image chunk must hold for its size to be read
+_WEBP_SIZE_BYTES = {b"VP8 ": 10, b"VP8L": 5, b"VP8X": 10}
+
+
+def _webp_size(blob: bytes) -> tuple[int, int] | None:
+    """WebP: the first chunk after ``RIFF....WEBP``. ``VP8 `` (lossy): a key
+    frame's start code, then 14-bit sizes whose top two bits are a scaling
+    hint. ``VP8L`` (lossless): signature 0x2F, then width-1 and height-1 in
+    14 bits each and a 3-bit version that must be 0. ``VP8X`` (extended):
+    the canvas width-1 and height-1 in 24 bits each."""
+    if len(blob) < 20 or blob[8:12] != b"WEBP":
+        return None
+    fourcc = blob[12:16]
+    need = _WEBP_SIZE_BYTES.get(fourcc)
+    if need is None or len(blob) < 20 + need or int.from_bytes(blob[16:20], "little") < need:
+        return None
+    data = blob[20 : 20 + need]
+    if fourcc == b"VP8 ":
+        if data[0] & 1 or data[3:6] != b"\x9d\x01\x2a":  # an interframe, or no start code
+            return None
+        w = int.from_bytes(data[6:8], "little") & 0x3FFF
+        h = int.from_bytes(data[8:10], "little") & 0x3FFF
+        return _positive(w, h)
+    if fourcc == b"VP8L":
+        bits = int.from_bytes(data[1:5], "little")
+        if data[0] != 0x2F or bits >> 29:
+            return None
+        return (bits & 0x3FFF) + 1, (bits >> 14 & 0x3FFF) + 1
+    return int.from_bytes(data[4:7], "little") + 1, int.from_bytes(data[7:10], "little") + 1
+
+
+def _tiff_size(blob: bytes) -> tuple[int, int] | None:
+    """TIFF: ImageWidth (tag 256) and ImageLength (257) in the first IFD,
+    each one SHORT or LONG value. Only the first IFD is read, and of it only
+    the entries that fit in the blob, whatever count it declares."""
+    if len(blob) < 8:
+        return None
+    order: Literal["little", "big"] = "little" if blob[:2] == b"II" else "big"
+    start = int.from_bytes(blob[4:8], order)
+    if start < 8 or start + 2 > len(blob):
+        return None
+    entries = min(int.from_bytes(blob[start : start + 2], order), (len(blob) - start - 2) // 12)
+    size: dict[int, int] = {}
+    for at in range(start + 2, start + 2 + 12 * entries, 12):
+        tag = int.from_bytes(blob[at : at + 2], order)
+        if tag not in (256, 257) or tag in size:
+            continue  # the first occurrence of a tag counts
+        kind = int.from_bytes(blob[at + 2 : at + 4], order)
+        count = int.from_bytes(blob[at + 4 : at + 8], order)
+        if count != 1 or kind not in (3, 4):  # one SHORT or one LONG
+            return None
+        size[tag] = int.from_bytes(blob[at + 8 : at + (10 if kind == 3 else 12)], order)
+        if len(size) == 2:
+            break
+    return _positive(size.get(256, 0), size.get(257, 0))
+
+
+#: (signature, reader) for each format whose size the SDK reads
+_SIZE_READERS: tuple[tuple[bytes, Callable[[bytes], tuple[int, int] | None]], ...] = (
+    (b"\x89PNG\r\n\x1a\n", _png_size),
+    (b"GIF87a", _gif_size),
+    (b"GIF89a", _gif_size),
+    (b"\xff\xd8", _jpeg_size),
+    (b"BM", _bmp_size),
+    (b"RIFF", _webp_size),
+    (b"II*\x00", _tiff_size),
+    (b"MM\x00*", _tiff_size),
+)
 
 
 @dataclass(frozen=True)
@@ -4788,31 +4927,13 @@ class AimDocument:
 
     @staticmethod
     def _image_dimensions(blob: bytes) -> tuple[int, int] | None:
-        """Intrinsic (width, height) of a PNG/GIF/JPEG blob, stdlib-only."""
-        if blob.startswith(b"\x89PNG\r\n\x1a\n") and len(blob) >= 24 and blob[12:16] == b"IHDR":
-            w = int.from_bytes(blob[16:20], "big")
-            h = int.from_bytes(blob[20:24], "big")
-            return (w, h) if w and h else None
-        if blob[:6] in (b"GIF87a", b"GIF89a") and len(blob) >= 10:
-            w = int.from_bytes(blob[6:8], "little")
-            h = int.from_bytes(blob[8:10], "little")
-            return (w, h) if w and h else None
-        if blob[:2] == b"\xff\xd8":  # JPEG: walk the markers to the first SOF
-            i = 2
-            while i + 9 < len(blob):
-                if blob[i] != 0xFF:
-                    i += 1
-                    continue
-                marker = blob[i + 1]
-                if marker in (0xFF, 0x01) or 0xD0 <= marker <= 0xD9:
-                    i += 2
-                    continue
-                length = int.from_bytes(blob[i + 2 : i + 4], "big")
-                if 0xC0 <= marker <= 0xCF and marker not in (0xC4, 0xC8, 0xCC):
-                    h = int.from_bytes(blob[i + 5 : i + 7], "big")
-                    w = int.from_bytes(blob[i + 7 : i + 9], "big")
-                    return (w, h) if w and h else None
-                i += 2 + length
+        """Intrinsic (width, height) of a PNG, JPEG, GIF, BMP, WebP or TIFF
+        blob, read from its header with the standard library only. None for
+        any other format, and for a header that is truncated, malformed or
+        gives a zero size; no input makes it raise."""
+        for signature, reader in _SIZE_READERS:
+            if blob.startswith(signature):
+                return reader(blob)
         return None
 
     @staticmethod

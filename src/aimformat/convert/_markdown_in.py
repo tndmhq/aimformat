@@ -14,9 +14,11 @@ Mapping notes:
 - Links keep ``href`` only for registry-allowed schemes (http/https/
   mailto/#); anything else degrades to the link text.
 - Images keep ``src`` for http/https/``data:image/``; anything else
-  degrades to the alt text. PNG, JPEG and GIF data is stored once in the
-  asset registry and referenced from the chunk (spec §9); other data stays
-  an inline ``<img>``.
+  degrades to the alt text. Image data whose size the SDK reads (PNG,
+  JPEG, GIF, BMP, WebP, TIFF) is stored once in the asset registry and
+  referenced from the chunk (spec §9); other data stays an inline
+  ``<img>``. markdown-it itself refuses any other ``data:image/`` source
+  than PNG, JPEG, GIF and WebP: a BMP or TIFF link stays literal text.
 - Fence info strings (language tags) are dropped: the class vocabulary has
   no per-language classes in v0.1.
 - Top-level lists and tables become .aim containers with item chunks

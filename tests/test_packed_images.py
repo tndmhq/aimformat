@@ -1,10 +1,12 @@
 """Imported images are stored once (spec §9; plan items P9-P15).
 
-Every importer moves PNG, JPEG and GIF data out of the body into the asset
-registry BEFORE any history is written: the body, the baseline snapshot, a
-tracked import's pending payloads and the ``add`` events kept on the H008
-fallback path all point at one stored image. Other formats, and data URIs
-that do not decode as strict base64, stay inline and the import goes on.
+Every importer moves PNG, JPEG, GIF, BMP, WebP and TIFF data out of the body
+into the asset registry BEFORE any history is written: the body, the
+baseline snapshot, a tracked import's pending payloads and the ``add``
+events kept on the H008 fallback path all point at one stored image, framed
+by its true size. An image whose size the SDK cannot read (another format,
+a damaged header), and a data URI that does not decode as strict base64,
+stay inline and the import goes on.
 Around that: asset gc counts baseline snapshots, lint warns about a reference
 that resolves to nothing (S036) and an asset whose id is not the hash of its
 bytes (S037), and the DOCX and Markdown exporters resolve packed images.
@@ -56,10 +58,35 @@ PNG_B = _png(3, 3, (20, 120, 200))
 #: the classic 1×1 GIF
 GIF = base64.b64decode("R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7")
 BMP = _bmp(5, 2, (10, 10, 200))
+#: an image format the SDK does not size: it stays inline
+SVG = b'<svg xmlns="http://www.w3.org/2000/svg" width="3" height="2"/>'
+MIME = {"BMP": "image/bmp", "WEBP": "image/webp", "TIFF": "image/tiff"}
+
+
+def _pillow_image(fmt: str, size: tuple[int, int] = (6, 2)) -> bytes:
+    """A real *fmt* file written by Pillow (skipped without it)."""
+    image = pytest.importorskip("PIL.Image")
+    buf = io.BytesIO()
+    try:
+        image.new("RGB", size, (1, 2, 3)).save(buf, fmt)
+    except (KeyError, OSError):  # pragma: no cover - a Pillow built without it
+        pytest.skip(f"Pillow cannot write {fmt}")
+    return buf.getvalue()
 
 
 def _uri(blob: bytes, mime: str = "image/png") -> str:
     return f"data:{mime};base64," + base64.b64encode(blob).decode()
+
+
+def _assert_sized(doc: aim.AimDocument, blob: bytes, size: tuple[int, int]) -> None:
+    """*blob* is stored framed by its true size, and so is every reference."""
+    w, h = size
+    text = doc.dumps()
+    assert f'<symbol id="{_asset(blob)}" viewBox="0 0 {w} {h}">' in text
+    assert f'<image height="{h}" width="{w}" href="data:' in text
+    refs = re.findall(rf'<svg [^>]*><use href="#{_asset(blob)}"/>', text)
+    assert refs and all(f'viewBox="0 0 {w} {h}"' in ref for ref in refs)
+    assert "0 0 100 100" not in text
 
 
 def _asset(blob: bytes) -> str:
@@ -159,6 +186,41 @@ def _docx_doc() -> aim.AimDocument:
     return aim.from_docx(_docx_bytes(PNG_A, PNG_A, PNG_B))
 
 
+def _swap_media(data: bytes, swaps: dict[bytes, tuple[bytes, str]]) -> bytes:
+    """*data*, a DOCX, with each media part whose bytes are a key of *swaps*
+    replaced by ``(bytes, extension)``: how a test holds a picture
+    python-docx cannot embed (WebP) or a damaged one."""
+    import zipfile
+
+    src = zipfile.ZipFile(io.BytesIO(data))
+    renamed: dict[str, tuple[str, bytes]] = {}
+    for name in src.namelist():
+        if name.startswith("word/media/") and src.read(name) in swaps:
+            blob, ext = swaps[src.read(name)]
+            renamed[name] = (f"{name.rsplit('.', 1)[0]}.{ext}", blob)
+    assert len(renamed) == len(swaps)
+    out = io.BytesIO()
+    with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as dst:
+        for name in src.namelist():
+            payload = src.read(name)
+            if name in renamed:
+                name, payload = renamed[name]
+            elif name == "word/_rels/document.xml.rels":
+                text = payload.decode()
+                for old, (new, _) in renamed.items():
+                    text = text.replace(f'"{old[len("word/") :]}"', f'"{new[len("word/") :]}"')
+                payload = text.encode()
+            elif name == "[Content_Types].xml":
+                text = payload.decode()
+                for ext in sorted({ext for _, ext in swaps.values()}):
+                    if f'Extension="{ext}"' not in text:
+                        default = f'<Default Extension="{ext}" ContentType="image/{ext}"/>'
+                        text = text.replace("<Default ", default + "<Default ", 1)
+                payload = text.encode()
+            dst.writestr(name, payload)
+    return out.getvalue()
+
+
 class TestImportersStoreImagesOnce:
     @pytest.mark.parametrize(
         "make", [_markdown_doc, _docling_doc, _docx_doc], ids=["markdown", "docling", "docx"]
@@ -191,8 +253,42 @@ class TestImportersStoreImagesOnce:
         assert 'viewBox="0 0 1 1"' in doc.chunks[0].html
         _assert_stored_once(doc, GIF)
 
+    @pytest.mark.parametrize("fmt", sorted(MIME))
+    def test_docling_bmp_tiff_and_webp_are_stored_once_with_their_size(self, fmt):
+        # docling embeds any data:image/* (markdown-it itself refuses
+        # data:image/bmp and data:image/tiff links)
+        blob = _pillow_image(fmt)
+        doc = aim.from_docling(_docling_dict(_uri(blob, MIME[fmt]), _uri(PNG_A)))
+        figures = [c.html for c in doc.chunks if c.tag == "figure"]
+        assert f'<use href="#{_asset(blob)}"/>' in figures[0]
+        assert f'<use href="#{_asset(PNG_A)}"/>' in figures[1]
+        _assert_stored_once(doc, blob, PNG_A)
+        _assert_sized(doc, blob, (6, 2))
 
-# -- formats and data the SDK does not pack stay inline (P10, P11) --------------
+    def test_markdown_webp_is_stored_once_with_its_size(self):
+        pytest.importorskip("markdown_it")
+        webp = _pillow_image("WEBP")
+        doc = aim.from_markdown(f"![photo]({_uri(webp, 'image/webp')})\n")
+        assert f'<use href="#{_asset(webp)}"/>' in doc.chunks[0].html
+        _assert_stored_once(doc, webp)
+        _assert_sized(doc, webp, (6, 2))
+
+    def test_docx_bmp_tiff_and_webp_are_stored_once_with_their_size(self):
+        # python-docx embeds BMP and TIFF itself; WebP goes in as a stand-in
+        # PNG whose media part is then swapped
+        tiff, webp = _pillow_image("TIFF", (7, 3)), _pillow_image("WEBP", (9, 4))
+        stand_in = _png(1, 5, (7, 7, 7))
+        data = _swap_media(_docx_bytes(BMP, tiff, stand_in), {stand_in: (webp, "webp")})
+        result = aim.import_docx(data)
+        doc = result.document
+        assert not [w for w in result.report.warnings if "image" in w]
+        assert _parts(doc)["body"].count("<use href=") == 3
+        _assert_stored_once(doc, BMP, tiff, webp)
+        for blob, size in ((BMP, (5, 2)), (tiff, (7, 3)), (webp, (9, 4))):
+            _assert_sized(doc, blob, size)
+
+
+# -- images the SDK cannot size, and bad data, stay inline (P10, P11) -----------
 
 
 class TestKeptInline:
@@ -216,17 +312,14 @@ class TestKeptInline:
         assert f'<use href="#{_asset(PNG_A)}"/>' in figures[1]
         assert _symbols(doc.dumps()) == {_asset(PNG_A)}
 
-    @pytest.mark.parametrize("fmt", ["BMP", "TIFF", "WEBP"])
-    def test_formats_the_sdk_cannot_size_stay_inline(self, fmt):
-        # through docling, which embeds any data:image/* (markdown-it itself
-        # refuses data:image/bmp and data:image/tiff links)
-        image = pytest.importorskip("PIL.Image")
-        buf = io.BytesIO()
-        try:
-            image.new("RGB", (6, 2), (1, 2, 3)).save(buf, fmt)
-        except (KeyError, OSError):  # pragma: no cover - a Pillow built without it
-            pytest.skip(f"Pillow cannot write {fmt}")
-        uri = _uri(buf.getvalue(), f"image/{fmt.lower()}")
+    @pytest.mark.parametrize(
+        ("blob", "mime"),
+        [(SVG, "image/svg+xml"), (BMP[:14] + b"\x00" * 4 + BMP[18:], "image/bmp")],
+        ids=["svg", "damaged-bmp"],
+    )
+    def test_an_image_the_sdk_cannot_size_stays_inline(self, blob, mime):
+        # through docling, which embeds any data:image/*
+        uri = _uri(blob, mime)
         doc = aim.from_docling(_docling_dict(uri, _uri(PNG_A)))
         figures = [c.html for c in doc.chunks if c.tag == "figure"]
         assert f'src="{uri}"' in figures[0]
@@ -243,8 +336,13 @@ class TestKeptInline:
         assert 'viewBox="0 0 6 2"' in doc.chunks[0].html
         _assert_stored_once(doc, buf.getvalue())
 
-    def test_a_docx_bmp_stays_inline_and_the_report_says_so(self):
-        result = aim.import_docx(_docx_bytes(PNG_A, BMP))
+    def test_a_damaged_docx_image_stays_inline_and_the_report_says_so(self):
+        # a DOCX only yields the six packed formats, so what stays inline is
+        # an image whose header gives no size
+        damaged = BMP[:14] + b"\x00" * 4 + BMP[18:]  # no DIB header
+        stand_in = _png(1, 5, (7, 7, 7))
+        data = _swap_media(_docx_bytes(PNG_A, stand_in), {stand_in: (damaged, "bmp")})
+        result = aim.import_docx(data)
         body = _parts(result.document)["body"]
         assert 'src="data:image/bmp;base64,' in body
         assert body.count("<use href=") == 1
@@ -265,11 +363,30 @@ class TestKeptInline:
         bad = '<p><img alt="x" src="data:image/png;base64,AAA"></p>'
         assert images.pack(plain) is plain and images.pack(bad) is bad
         for _ in range(2):  # the same data twice is one image
-            images.pack(f'<p><img alt="b" src="{_uri(BMP, "image/bmp")}"></p>')
+            images.pack(f'<p><img alt="b" src="{_uri(SVG, "image/svg+xml")}"></p>')
         assert images.assets == {}
         format_line, data_line = images.warnings()
-        assert format_line.startswith("1 image(s) stay inline") and "PNG, JPEG" in format_line
+        assert format_line.startswith("1 image(s) stay inline") and "size" in format_line
+        # the line names what stays inline, never a format that is packed
+        packed = ("PNG", "JPEG", "GIF", "BMP", "WebP", "TIFF")
+        assert not [fmt for fmt in packed if fmt in format_line]
         assert data_line.startswith("1 image(s) stay inline") and "base64" in data_line
+
+
+@pytest.mark.parametrize("fmt", sorted(MIME))
+def test_pack_assets_frames_bmp_tiff_and_webp_by_their_size(fmt):
+    # these got a 100x100 frame before the SDK read their size
+    blob = _pillow_image(fmt)
+    doc = aim.new_document(title="t")
+    doc.add_chunk(
+        f'<p data-aim="p1">Logo: <img alt="logo" src="{_uri(blob, MIME[fmt])}"></p>', author=ME
+    )
+    assert doc.pack_assets(author=ME) == 1
+    html = doc.chunk("p1").html
+    assert 'height="2"' in html and 'width="6"' in html
+    _assert_sized(doc, blob, (6, 2))
+    assert _symbols(_parts(doc)["assets"]) == {_asset(blob)}
+    assert _codes(doc, "error") == [] and doc.verify() == []
 
 
 # -- a tracked DOCX packs both views before alignment (P9) ----------------------
@@ -658,6 +775,47 @@ class TestExportersResolvePackedImages:
         assert "[image: dot]" in text and "The chart." in text
         again = aim.from_docx(out)
         assert _asset(PNG_A) in _symbols(again.dumps())  # the same bytes came back
+
+    def test_to_docx_embeds_stored_bmp_and_tiff(self, tmp_path):
+        docx = pytest.importorskip("docx")
+        tiff = _pillow_image("TIFF")
+        doc = aim.new_document(title="t")
+        for name, blob, mime in (("bmp", BMP, "image/bmp"), ("tiff", tiff, "image/tiff")):
+            doc.add_chunk(
+                f'<figure data-aim="{name}"><img alt="{name}" src="{_uri(blob, mime)}"></figure>',
+                author=ME,
+            )
+        doc.pack_assets(author=ME)
+        assert "data:image/" not in _parts(doc)["body"]
+        word = docx.Document(str(aim.to_docx(doc, tmp_path / "raster.docx")))
+        assert len(word.inline_shapes) == 2
+
+    def test_to_docx_gives_a_stored_webp_the_placeholder_an_inline_one_gets(self, tmp_path):
+        # python-docx cannot embed WebP: the export goes on with the
+        # placeholder, for a stored image exactly as for an inline one
+        docx = pytest.importorskip("docx")
+        webp = _pillow_image("WEBP")
+
+        def figure() -> aim.AimDocument:
+            doc = aim.new_document(title="t")
+            doc.add_chunk(
+                f'<figure data-aim="fig"><img alt="Logo" src="{_uri(webp, "image/webp")}">'
+                "<figcaption>The logo.</figcaption></figure>",
+                author=ME,
+                at=ts(0),
+            )
+            return doc
+
+        inline, stored = figure(), figure()
+        stored.pack_assets(author=ME, at=ts(1))
+        assert f'<use href="#{_asset(webp)}"/>' in stored.chunk("fig").html
+        texts = []
+        for name, doc in (("inline", inline), ("stored", stored)):
+            word = docx.Document(str(aim.to_docx(doc, tmp_path / f"{name}.docx")))
+            assert not word.inline_shapes
+            texts.append([p.text for p in word.paragraphs])
+        assert "[image: Logo]" in texts[0] and "The logo." in texts[0]
+        assert texts[1] == texts[0]
 
     def test_to_docx_tracked_payload_names_a_packed_image(self, tmp_path):
         pytest.importorskip("docx")
