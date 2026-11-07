@@ -4512,7 +4512,10 @@ class AimDocument:
         # Adoption's empty set would rename such a target and dangle the card.
         before = work._state.all_ids()
         _fixup_ids(work, before)
-        replaced = before - work._state.all_ids()  # invalid spellings, all renamed
+        # invalid spellings, all renamed; a reserved target ("body", "aim:theme")
+        # a unit carried is renamed too, but cards naming it mean the target
+        # itself (every top-level add's container, a theme card), not the unit
+        replaced = (before - work._state.all_ids()) - ids.RESERVED_TARGETS
         work._refuse_unsnapshottable()
         event = work._record_baseline(
             label, seq=seq, author=author, explanation=explanation, source=source, at=at

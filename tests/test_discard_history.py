@@ -314,6 +314,33 @@ class TestDiscardHistory:
         assert [p.target for p in doc.proposals] == ["term"]
         assert aim.lint_text(doc.dumps()) == [] and doc.verify() == []
 
+    @pytest.mark.parametrize("reserved", sorted(ids.RESERVED_TARGETS))
+    def test_a_unit_named_with_a_reserved_target_leaves_unrelated_cards_alone(self, reserved):
+        # A hand edit names a paragraph "body" or "aim:theme": a reserved
+        # target, so not a usable id, and the repair renames the unit. The
+        # reserved name is still what every top-level add and move gives as
+        # its container, and what a theme card targets; those cards have
+        # nothing to do with the renamed unit and stay.
+        doc = _contract()
+        doc.add_chunk('<p data-aim="main">Main text.</p>', author=BOT, at=ts(5))
+        doc.add_chunk('<p data-aim="spare">Spare.</p>', author=BOT, at=ts(5))
+        doc.propose_add('<p data-aim="n1">New clause.</p>', after="fee", author=BOT, at=ts(6))
+        doc.propose_move("main", container="body", after="title", author=BOT, at=ts(7))
+        doc.propose_theme({"--aim-brand-1": "#ff0000"}, author=BOT, at=ts(8))
+        text = doc.dumps()
+        cut = text.index(OPEN)
+        head = text[:cut].replace('<p data-aim="spare">', f'<p data-aim="{reserved}">', 1)
+        text = head + text[cut:]
+        doc = aim.loads(_cut_third_line(text))
+        cards = [p.id for p in doc.proposals]
+        doc.baseline("repair", author=ADA, discard_history=True, at=ts(9))
+        assert reserved not in doc.body_ids
+        assert [e.kind for e in doc.history] == ["baseline"]
+        assert [p.id for p in doc.proposals] == cards
+        assert _errors(doc.dumps()) == [] and doc.verify() == []
+        doc.accept_all(decided_by=ADA, at=ts(10))
+        assert "New clause." in [c.text for c in doc.chunks]
+
     def test_an_anchor_naming_a_live_card_is_kept_when_a_unit_had_that_id(self):
         # A body unit hand-respelled to a pending card's id (p- is reserved,
         # so the id is invalid) is renamed; a card chained onto that pending
