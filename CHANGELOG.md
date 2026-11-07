@@ -46,8 +46,10 @@ tool that reads such files moves to 0.6 with or before this release.
   the dropped lines.
   Units without a usable id get fresh ids, and every usable id stays, even
   one a pending proposal names. The CLI saves the dropped lines byte for byte
-  to `FILE.discarded-history.jsonl` (or the first free `.1`, `.2`, ...
-  name), readable by its owner only, before it replaces the document. It
+  to `OUT.discarded-history.jsonl`, next to the file it writes (the input
+  unless `-o` is given), or to the first free `.1`, `.2`, ... name. The
+  side file is readable by its owner only and is written before the
+  document is replaced. The CLI
   writes the document to a temporary file and renames it over the old one,
   so a failure at any step leaves the document as it was. Without the flag,
   `baseline()` on such a file names the flag in its error. New

@@ -33,7 +33,7 @@ def to_html(doc: AimDocument, *, pending: str = "keep") -> str:
         raise InvalidOperation(
             f"pending must be 'keep', 'accept-all', or 'reject-all', got {pending!r}"
         )
-    # a page to share carries no history at all (not even flatten()'s
-    # anchoring checkpoint) and no embeddings
+    # a page to share carries no history at all (not even the one event
+    # flatten() keeps) and no embeddings
     copy._drop_history(drop_embeddings=True)
     return copy.dumps()

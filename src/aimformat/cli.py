@@ -8,7 +8,8 @@
     aim propose ACTION ...  append a proposal card to the pending lane
     aim accept FILE PID...  accept pending proposals (or --all)
     aim reject FILE PID...  reject pending proposals (or --all)
-    aim flatten FILE        collapse history to one checkpoint (+drop embeddings)
+    aim flatten FILE        collapse history to one event (+drop embeddings):
+                            a baseline at 0.6 or later, a checkpoint below
     aim baseline FILE       make the current state the history's origin
                             (--discard-history: repair an unreadable history)
     aim pack FILE           hoist embedded data images into the asset registry
@@ -863,8 +864,10 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser(
         "flatten",
-        help="collapse history to one checkpoint (and drop embeddings); modifies the "
-        "file in place unless -o is given",
+        help="collapse history to one event (a baseline in documents declared 0.6 or "
+        "later, a checkpoint below) and drop embeddings; at 0.6 or later it refuses a "
+        "body a baseline cannot hold, before it changes anything; modifies the file in "
+        "place unless -o is given",
     )
     p.add_argument("file")
     p.add_argument("-o", "--output")
