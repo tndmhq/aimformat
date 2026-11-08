@@ -1465,6 +1465,54 @@ class TestRoundTrip:
         assert _view_texts(back.read_bytes(), "accept") == want
         assert _view_texts(back.read_bytes(), "reject") == _texts(_resolved(doc, "reject"))
 
+    @pytest.mark.parametrize("kind", ["table", "list"])
+    @pytest.mark.parametrize("lane", ["captured", "plain", "skipped", "unmoved"])
+    @pytest.mark.parametrize("extra", ["", "a-container-modify"])
+    def test_a_container_whose_members_all_go_brings_none_back_when_one_is_added(
+        self, kind, lane, extra, tmp_path
+    ):
+        # As above, with a row (or item) added to A as well, so accept_all()
+        # leaves A just that one. Neither A's arrival nor its modify's payload
+        # writes the new row (it surfaces at the end of the document, a
+        # tracked bug), yet it kept A from counting as emptied: A was written
+        # whole and its deleted rows came back. Captured, A2 and A1 came back
+        # only once the leftover was written as a move (aimformat 34e9557).
+        # A ends last here, where the new row's place is right.
+        ada, rev = aim.human("ada"), aim.human("reviewer")
+        doc = aim.new_document(title="Added")
+        container = _two_member_container(kind)
+        # a plain move takes A from the top to the end
+        order = ["<p>B</p>", "<p>C</p>"]
+        order = [container, *order] if lane == "plain" else [*order, container]
+        with doc.batch():
+            ids = [doc.add_chunk(html, author=ada).id for html in order]
+        a, c = ids[order.index(container)], ids[order.index("<p>C</p>")]
+        members = [ch.id for ch in doc.chunks if ch.container == a]
+        if lane in ("captured", "skipped"):
+            n = doc.propose_add("<p>N</p>", after=a, author=ada)
+            if lane == "captured":
+                doc.propose_add("<p>E</p>", after=a, author=ada)
+            n_block = doc._payload_root_id(n.payload_html or "")
+            doc.propose_move(a, container="body", after=n_block, author=ada)
+            doc.reject(n.id, decided_by=rev)
+            assert any(p.action == "move" and p.anchor_after == a for p in doc.proposals)
+        elif lane == "plain":
+            doc.propose_move(a, container="body", after=c, author=ada)
+        if extra == "a-container-modify":
+            edited = doc._state.serial(a).replace(">A1<", ">A1x<").replace(">A2<", ">A2x<")
+            doc.propose_modify(a, edited, author=ada)
+        for member in members:
+            doc.propose_delete(member, author=ada)
+        row = '<tr data-aim=""><td>A3</td></tr>' if kind == "table" else '<li data-aim="">A3</li>'
+        doc.propose_add(row, container=a, after=None, author=ada)
+        assert not aim.lint(doc)
+        want = _texts(_resolved(doc, "accept"))
+        assert want == (["B", "C", "E", "A3"] if lane == "captured" else ["B", "C", "A3"])
+        back = tmp_path / "added.docx"
+        aim.to_docx(doc, back, pending="tracked")
+        assert _view_texts(back.read_bytes(), "accept") == want
+        assert _view_texts(back.read_bytes(), "reject") == _texts(_resolved(doc, "reject"))
+
     def test_a_moved_container_is_exported_without_scanning_the_document(
         self, monkeypatch, tmp_path
     ):

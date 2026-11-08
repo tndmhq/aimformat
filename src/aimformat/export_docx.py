@@ -1441,7 +1441,8 @@ class _Exporter:
             and el.container_id
             and self._arrives_empty(el, prop)
         ):
-            # accept_all() leaves it no member: only the old container goes
+            # accept_all() removes every member it would write: only the old
+            # container goes
             prop = replace(prop, action="delete", payload_html=None)
         if el.container_id and el.tag in ("ul", "ol"):
             if prop is not None:
@@ -1524,7 +1525,7 @@ class _Exporter:
             # content when a modify is pending too, else the current content
             content = modify.payload_html if modify is not None else None
             if el.container_id and self._arrives_empty(el, modify):
-                return  # accept_all() leaves it no member: nothing arrives
+                return  # accept_all() removes every member it would bring
             arrival = replace(
                 prop,
                 action="add",
@@ -1551,13 +1552,16 @@ class _Exporter:
                 self.rev.close_move_range(para, "moveTo", range_id)
 
     def _arrives_empty(self, el: Element, modify: Proposal | None) -> bool:
-        """Whether accepting the lane leaves the container *el* with no
-        member, so that writing it whole would bring back the rows or items
-        pending deletes remove. Its members are the ones it holds, or, with
-        *modify* pending, the ones that card's payload brings; each must have
-        a pending delete accepted after that (one made before the modify
-        goes first, and the payload brings its member back), and no card may
-        add or move another member in: reordering one of its own adds none."""
+        """Whether accepting the lane removes every member that writing the
+        container *el* whole would bring, so that writing it would bring
+        back the rows or items pending deletes remove. Its members are the
+        ones it holds, or, with *modify* pending, the ones that card's
+        payload brings; each must have a pending delete accepted after that
+        (one made before the modify goes first, and the payload brings its
+        member back). A card that adds or moves another member in changes
+        nothing: neither a moved container's arrival nor a modify's payload
+        writes that member (an add surfaces at the end of the document), so
+        the deleted members would still come back for nothing."""
         if modify is None:
             roots, since = [el], -1
         else:
@@ -1566,19 +1570,9 @@ class _Exporter:
         # chunks never nest and no container sits in a chunk (lint S024):
         # every chunk under the container is one of its members
         members = {x.chunk_id for root in roots for x in root.iter() if x.chunk_id}
-        container = el.container_id
-        return (
-            bool(members)
-            and all(
-                m in self.pending_del and self._card_order.get(self.pending_del[m].id, 0) > since
-                for m in members
-            )
-            and not any(
-                p.action in ("add", "move")
-                and p.anchor_container == container
-                and p.target not in members
-                for p in self._by_id.values()
-            )
+        return bool(members) and all(
+            m in self.pending_del and self._card_order.get(self.pending_del[m].id, 0) > since
+            for m in members
         )
 
     def _emit_moved_replacement(

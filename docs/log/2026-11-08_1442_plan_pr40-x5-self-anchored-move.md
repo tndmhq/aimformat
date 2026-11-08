@@ -209,3 +209,43 @@ deletes others still writes the payload whole, so Word's Accept All keeps the de
 
 No separate plan review, for the reason given in the first revision. The PR's ready round
 reviews it.
+
+## Third revision, after Codex round 6 (2026-11-08 and 09)
+
+Codex's ready round on `f922b00` found two bugs, both in older code and both tracked. The agents
+checking them found lanes this round's change made wrong: right at round 5's head (`f45b506`),
+wrong at `f922b00`, all of one shape. A table or list has a pending delete on every row and
+another card adds a row to it, while it carries a leftover move (captured, or alone with a
+container modify) or a container modify. Of 32 minimal variants, 6 went from right to wrong and
+6 more brought rows back where both heads were already wrong. The second revision had counted
+14 such lanes among 3,946 and left them to the tracked list, because round 5's head got them
+right only by dropping the table; under the rule that a regression of the PR's own latest change
+is fixed in the PR, that was wrong.
+
+Cause: `_arrives_empty` refused when a card adds or moves another member into the container, so
+the container, or its modify's payload, was written whole and Word's Accept All brought the
+deleted rows back. No such card is ever written inside a moved container's arrival or a
+modify's payload: an add into the container surfaces at the end of the document (tracked: "an
+item added to a moved list or table comes out outside it"), and a move into it is not exported
+as a move. So the clause could only bring the rows back.
+
+The change: `_arrives_empty` no longer looks at cards adding or moving a member in. Tests: a row
+added to the container in the captured, plain, skipped and unmoved lanes, with or without a
+container modify, for a table and a list (16 cases; the 12 with a move written or a modify
+pending failed before the change). The container ends last in each, where the added row's place
+is right.
+
+Checks: five agents and a completeness critic re-ran every corpus of round 6's checks, and two
+new ones, on the change: about 75,000 lint-clean lanes. No lane is worse than at `f922b00`, and
+every lane the change touches gets better (the 14 above are right again). The change only stops
+writing deleted members: added and moved-in members land as before. Pasting the clause back
+reproduces `f922b00` in every lane.
+
+Left for the tracked list, by the maintainer's decision of 2026-11-09: the older bugs X5 now
+shows where round 5's head lost the table or list. A nested list under a deleted item stays in
+Word's Accept All (round 5 got that view right only by dropping the list, and got Reject All
+wrong; now Reject All is right). A table or list written whole while one member is kept brings
+the deleted rows back or shows an item's old text (wrong on both heads). Also left: the added
+row's place when the container does not end last, the same at `f45b506`.
+
+No separate plan review, for the reason given in the first revision; Codex's round 7 reviews it.

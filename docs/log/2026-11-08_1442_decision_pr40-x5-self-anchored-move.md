@@ -69,3 +69,13 @@ also reordered inside the container, or when the container had a pending modify.
 fixed now, and so is the same table or list written in place with a modify pending. Two
 hand-written copies of the leftover write one arrival, but three still arrive more than once
 (tracked). Details in the plan's second revision.
+
+## Third revision (2026-11-08 and 09)
+
+The table and list fix still let the deleted rows come back when another card adds a row to the
+table or list: that row is never written inside it, but it kept the container from counting as
+emptied. Lanes that round 5's head got right went wrong; they are right again. One shape stays
+traded, by the maintainer's choice (2026-11-09, "Track it, merge"): a nested list under a
+deleted item, in a leftover that moves nothing, keeps its nested items in Word's Accept All, as
+every unmoved list does (older, tracked); round 5's head got that view right only by dropping
+the list. Details in the plan's third revision.
