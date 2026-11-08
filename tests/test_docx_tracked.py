@@ -1200,6 +1200,20 @@ class TestRoundTrip:
                 "A X B C D",
                 [],
             ),
+            # the same with a move: rejecting N hands C's move, chained on
+            # N's block, to the leftover card, so C lands after A
+            (
+                [
+                    ("add", "M", "A"),
+                    ("move", "A", "M"),
+                    ("reject", "add M"),
+                    ("add", "N", "A"),
+                    ("move", "C", "N"),
+                    ("reject", "add N"),
+                ],
+                "A C B D",
+                ["C"],
+            ),
         ],
         ids=[
             "alone",
@@ -1208,6 +1222,7 @@ class TestRoundTrip:
             "beside-a-move-onto-it",
             "two",
             "a-card-chained-on-the-leftover",
+            "a-move-chained-on-the-leftover",
         ],
     )
     def test_a_move_left_anchored_on_its_own_target_keeps_its_block(
@@ -1255,7 +1270,8 @@ class TestRoundTrip:
     ):
         # The "A after A" leftover moves nothing only while no position card
         # made before it waits in A's zone: accept_all() lands such a card
-        # first and rebinds the move onto its block, so A moves after it.
+        # first and, when it lands something, rebinds the move onto its
+        # block, so A moves after it.
         doc = _lettered_lane("ABCD", lane)
         assert any(p.action == "move" and p.anchor_after == p.target for p in doc.proposals)
         assert _texts(_resolved(doc, "accept")) == want.split()
@@ -1289,6 +1305,153 @@ class TestRoundTrip:
         assert _view_texts(back.read_bytes(), "accept") == want
         assert _view_texts(back.read_bytes(), "reject") == list("ABCD")
 
+    @pytest.mark.parametrize(
+        ("lane", "want", "stays"),
+        [
+            # rejecting N leaves B's move after A, where B already stands:
+            # accepted first, it lands nothing and rebinds nothing
+            (
+                [("add", "N", "A"), ("move", "B", "N"), ("move", "A", "N"), ("reject", "add N")],
+                "A B C D",
+                "A",
+            ),
+            # rejecting Q then hands K, chained on Q, to A's leftover card
+            (
+                [
+                    ("add", "N", "A"),
+                    ("move", "B", "N"),
+                    ("move", "A", "N"),
+                    ("reject", "add N"),
+                    ("add", "Q", "A"),
+                    ("add", "K", "Q"),
+                    ("reject", "add Q"),
+                ],
+                "A K B C D",
+                "A",
+            ),
+            # accepting the delete of B leaves D's move after A
+            (
+                [
+                    ("move", "D", "B"),
+                    ("delete", "B"),
+                    ("add", "N", "A"),
+                    ("move", "A", "N"),
+                    ("reject", "add N"),
+                    ("accept", "delete B"),
+                ],
+                "A D C",
+                "A",
+            ),
+            # C's move, left after B where C stands, waits in B's zone
+            (
+                [
+                    ("add", "N", "B"),
+                    ("move", "C", "N"),
+                    ("move", "B", "N"),
+                    ("reject", "add N"),
+                    ("add", "N2", "B"),
+                    ("add", "X", "N2"),
+                    ("reject", "add N2"),
+                ],
+                "A B X C D",
+                "B",
+            ),
+        ],
+        ids=[
+            "a-move-made-before-that-lands-nothing",
+            "and-a-card-chained-on-the-leftover",
+            "a-move-left-by-an-accepted-delete",
+            "a-capture-by-a-move-that-lands-nothing",
+        ],
+    )
+    def test_a_move_left_on_its_own_target_stays_when_the_card_before_it_moves_nothing(
+        self, lane, want, stays, tmp_path
+    ):
+        # A card made before the leftover waits in its block's zone, but
+        # accepting it does not move the block: the replay decides. The
+        # export wrote a Word move of the block to where it stands, and a
+        # card chained on the leftover landed at the end of the document.
+        doc = _lettered_lane("ABCD", lane)
+        assert any(p.action == "move" and p.anchor_after == p.target for p in doc.proposals)
+        assert _texts(_resolved(doc, "accept")) == want.split()
+        back = tmp_path / "stays.docx"
+        aim.to_docx(doc, back, pending="tracked")
+        data = back.read_bytes()
+        assert _view_texts(data, "accept") == want.split()
+        assert _view_texts(data, "reject") == _texts(_resolved(doc, "reject"))
+        assert stays not in _moved_paragraph_texts(data)
+
+    @pytest.mark.parametrize("kind", ["table", "list"])
+    @pytest.mark.parametrize("lane", ["captured", "plain"])
+    def test_a_moved_container_whose_members_all_go_brings_none_back(self, kind, lane, tmp_path):
+        # Every row (or item) of A has a pending delete, so accept_all()
+        # leaves no A. Its arrival wrote the current rows back. Captured: the
+        # "A after A" leftover with E made before it, which moves A after E.
+        ada, rev = aim.human("ada"), aim.human("reviewer")
+        doc = aim.new_document(title="Gone")
+        if kind == "table":
+            rows = "".join(f'<tr data-aim=""><td>A{i}</td></tr>' for i in (1, 2))
+            first = f'<table data-aim-container=""><tbody>{rows}</tbody></table>'
+        else:
+            first = '<ul data-aim-container=""><li data-aim="">A1</li><li data-aim="">A2</li></ul>'
+        with doc.batch():
+            a = doc.add_chunk(first, author=ada).id
+            _, c, _ = (doc.add_chunk(f"<p>{t}</p>", author=ada).id for t in "BCD")
+        if lane == "captured":
+            n = doc.propose_add("<p>N</p>", after=a, author=ada)
+            doc.propose_add("<p>E</p>", after=a, author=ada)
+            n_block = doc._payload_root_id(n.payload_html or "")
+            doc.propose_move(a, container="body", after=n_block, author=ada)
+            doc.reject(n.id, decided_by=rev)
+            assert any(p.action == "move" and p.anchor_after == a for p in doc.proposals)
+        else:
+            doc.propose_move(a, container="body", after=c, author=ada)
+        for member in [ch.id for ch in doc.chunks if ch.container == a]:
+            doc.propose_delete(member, author=ada)
+        want = _texts(_resolved(doc, "accept"))
+        assert want == (["E", "B", "C", "D"] if lane == "captured" else ["B", "C", "D"])
+        back = tmp_path / "gone.docx"
+        aim.to_docx(doc, back, pending="tracked")
+        assert _view_texts(back.read_bytes(), "accept") == want
+        assert _view_texts(back.read_bytes(), "reject") == _texts(_resolved(doc, "reject"))
+
+    @pytest.mark.parametrize("replays", [True, False], ids=["replayed", "not-replayable"])
+    def test_two_moves_of_one_block_anchored_on_it_write_it_once(self, replays, tmp_path):
+        # A hand edit copies the "A after A" leftover, captured by E, as a
+        # second card (lint P018). Each joined the cards made before the
+        # move, so A arrived twice. The replay finds the copy lands nothing;
+        # in a lane that does not replay (two adds chained on each other,
+        # lint P015) both moves are written, with one arrival.
+        steps = [("add", "N", "A"), ("add", "E", "A"), ("move", "A", "N"), ("reject", "add N")]
+        if not replays:
+            steps += [("add", "X", "C"), ("add", "Y", "X")]
+        doc = _lettered_lane("ABCD", steps)
+        move = next(p for p in doc.proposals if p.action == "move")
+        assert move.anchor_after == move.target
+        if not replays:
+            x = next(p for p in doc.proposals if p.payload_html and ">X<" in p.payload_html)
+            y = next(p for p in doc.proposals if p.payload_html and ">Y<" in p.payload_html)
+            doc._card_el(x.id).set("data-anchor-after", y.id)  # foreign-authored
+        text = doc.dumps()
+        card = re.search(f'<aim-proposal id="{re.escape(move.id)}"[^>]*></aim-proposal>', text)
+        assert card is not None
+        copy = card.group(0).replace(f'id="{move.id}"', 'id="p-handcopy1"', 1)
+        doc = aim.loads(text.replace("</aim-proposals>", copy + "\n</aim-proposals>", 1))
+        assert [p.id for p in doc.proposals if p.action == "move"] == [move.id, "p-handcopy1"]
+        back = tmp_path / "twice.docx"
+        _export_within(doc, back)
+        data = back.read_bytes()
+        assert _moved_paragraph_texts(data) == ["A"]
+        assert _view_texts(data, "reject") == list("ABCD")
+        if replays:
+            want = _texts(_resolved(doc, "accept"))
+            assert want == ["E", "A", "B", "C", "D"]
+            assert _view_texts(data, "accept") == want
+        else:
+            with pytest.raises(AimError):
+                doc.accept_all(decided_by=DECIDER)
+            assert _view_texts(data, "accept").count("A") == 1
+
     def test_a_foreign_move_chained_on_a_pending_add_lands_like_accept_all(self, tmp_path):
         # A's anchor holds New alone; B's hand-written move and Chained both
         # anchor on New's proposal id, so they join the pool once New is
@@ -1314,14 +1477,12 @@ class TestRoundTrip:
         # A hand-written file can chain two adds on each other (lint P015).
         # With a move chained into that cycle and a body move pending, the
         # check that decides whether to replay walks the chain and must stop
-        # where it started. An alarm interrupts a loop, so a regression fails
-        # here and leaves nothing running to slow the tests after it.
-        if not hasattr(signal, "setitimer"):
-            pytest.skip("needs SIGALRM")
-        ada = aim.human("ada")
+        # where it started; so must the check of a move left anchored on its
+        # own target, which walks every earlier card's chain.
+        ada, rev = aim.human("ada"), aim.human("reviewer")
         doc = aim.new_document(title="Cycle")
         with doc.batch():
-            _, b, c, d = (doc.add_chunk(f"<p>{t}</p>", author=ada).id for t in "ABCD")
+            a, b, c, d = (doc.add_chunk(f"<p>{t}</p>", author=ada).id for t in "ABCD")
         x = doc.propose_add("<p>X</p>", after=b, author=ada)
         y = doc.propose_add("<p>Y</p>", after=x.id, author=ada)
         doc.propose_add("<p>Z</p>", after=b, author=ada)
@@ -1329,20 +1490,16 @@ class TestRoundTrip:
         x_block = doc._payload_root_id(x.payload_html or "")
         doc.propose_move(c, container="body", after=x_block, author=ada)
         doc.propose_move(d, container="body", after=None, author=ada)
+        # rejecting N leaves A's move anchored on A
+        n = doc.propose_add("<p>N</p>", after=a, author=ada)
+        n_block = doc._payload_root_id(n.payload_html or "")
+        doc.propose_move(a, container="body", after=n_block, author=ada)
+        doc.reject(n.id, decided_by=rev)
         doc._card_el(x.id).set("data-anchor-after", y.id)  # foreign-authored
         doc = aim.loads(doc.dumps())
+        assert any(p.action == "move" and p.anchor_after == p.target for p in doc.proposals)
         back = tmp_path / "cycle.docx"
-
-        def stop(signum, frame):
-            raise TimeoutError("the export did not finish: the chain walk loops")
-
-        previous = signal.signal(signal.SIGALRM, stop)
-        signal.setitimer(signal.ITIMER_REAL, 60)
-        try:
-            aim.to_docx(doc, back, pending="tracked")
-        finally:
-            signal.setitimer(signal.ITIMER_REAL, 0)
-            signal.signal(signal.SIGALRM, previous)
+        _export_within(doc, back)
         assert _view_texts(back.read_bytes(), "reject") == list("ABCD")
 
     def test_an_export_whose_anchors_each_hold_one_arrival_replays_nothing(
@@ -1716,6 +1873,25 @@ def _view_paragraphs_rejecting(data: bytes, author: str) -> list[str]:
             text.tag = f"{w}delText" if holder.tag == f"{w}del" else f"{w}t"
     view_root = resolve_view(root, "accept")
     return ["".join(t.text or "" for t in p.iter(f"{w}t")) for p in view_root.iter(f"{w}p")]
+
+
+def _export_within(doc: aim.AimDocument, path: pathlib.Path, seconds: int = 60) -> None:
+    """The tracked export of a lane whose cards chain into a cycle: an alarm
+    interrupts a chain walk that loops, so a regression fails its test and
+    leaves nothing running to slow the tests after it."""
+    if not hasattr(signal, "setitimer"):
+        pytest.skip("needs SIGALRM")
+
+    def stop(signum, frame):
+        raise TimeoutError("the export did not finish: a chain walk loops")
+
+    previous = signal.signal(signal.SIGALRM, stop)
+    signal.setitimer(signal.ITIMER_REAL, seconds)
+    try:
+        aim.to_docx(doc, path, pending="tracked")
+    finally:
+        signal.setitimer(signal.ITIMER_REAL, 0)
+        signal.signal(signal.SIGALRM, previous)
 
 
 def _moved_paragraph_texts(data: bytes) -> list[str]:

@@ -100,3 +100,50 @@ Codex `gpt-6-astra` at xhigh, 2026-11-08 14:43 UTC: **APPROVE-WITH-CHANGES**, on
   repro: the leftover plus First and Second after B, Second naming a table shell;
   `accept_all()` gives `A B Second First C D`, the plan as drafted `A B First Second C D`.
   Applied: change step 5 (a skipped move keeps the switch on) and test 3 (that lane).
+
+## Revision after the pre-push review (2026-11-08)
+
+Before the PR's ready round, four reviewers read the pushed change from four angles (agreement
+with `accept_all()`, effects on other exports, test strength, docs), and an agent tried to
+refute each finding. Seven held, all in this change; none loses text against 82d466f:
+
+1. [P2] The walk in `_lands_nothing` over-counts. An earlier card in the target's zone moves
+   the target only when it really lands there at its turn: not a move that is itself a no-op,
+   not a card chained through the leftover, not one ranked after it, and only on the same
+   shell. There the leftover is written as a Word move of a paragraph to where it stands, and
+   a card chained on its id lands at the end of the document (fuzz: 351 of 56,747 lanes write
+   the spurious move, 11 give wrong text).
+2. [P2] A captured leftover of a table or list whose every row or item has a pending delete
+   now writes its arrival, which puts the deleted rows back in Accept All. 82d466f was right
+   there only because it lost the container.
+3. [P3] Two pending moves of one block anchored on it (hand-written, lint P018) write the block
+   twice where 82d466f wrote it once.
+4. [P3] No test covers the walk's seen-set, or a move re-keyed from a skipped leftover onto
+   its target.
+5. [P3] `architecture.md` says cards chained on such a move land after the target, also when
+   the move is written; the index row says nine tests, not ten.
+
+The change:
+
+1. `_lands_nothing` keeps the walk as its quick answer: with no position card made before the
+   move waiting in the target's zone, the move lands nothing. Otherwise the lane's own
+   accept-all replay decides: the move lands nothing when accepting it at its turn leaves its
+   block where it stood. A lane that does not replay keeps the walk's answer (the move is
+   written). The replay watches only the moves anchored on their own target; it runs in such
+   lanes only, so the replay-counting tests keep `_projected_body_index` as theirs.
+2. A container's arrival is not written when it has no pending modify and accepting the lane
+   leaves it no member: every member has a pending delete and no card adds or moves one into
+   it. This also fixes a plain move of such a container, the every-member case of the older
+   family "a moved list loses its items' pending edits".
+3. A registered move anchored on its own target joins the early cards only when it is its
+   block's only registered move.
+4. Tests: the lanes the walk over-counts (a no-op move made before; a card chained on the
+   leftover then; an accepted delete's dissolve; a capture by a move that lands nothing); a
+   table and a list with every member deleted; a hand-written duplicate; a move chained on the
+   leftover; the leftover in the cyclic lane.
+5. Docs: `_lands_nothing`'s docstring, the tests' comment, `architecture.md`, the index row.
+
+No separate plan review: the change answers verified findings on the reviewed plan, the
+reviewers tried each fix on scratch copies against their own corpora, and the PR's ready round
+reviews it. Checks: the new tests fail before the change; the whole suite; the reviewers'
+corpora re-run on the change, with no lane worse than at df3713d.

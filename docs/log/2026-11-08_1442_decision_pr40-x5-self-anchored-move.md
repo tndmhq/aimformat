@@ -47,3 +47,17 @@ move card that the export does write still land at the end of the document (an o
 the SDK's side of the card (its outcome depends on decision order when an earlier card shares
 the zone, and while it is pending, accepting a later card on its target is refused); and
 whether a lane should keep such a card at all, a format question for the maintainer.
+
+## Revision after the pre-push review (2026-11-08)
+
+"What the export must match" above overstates one point. An earlier card waiting in the
+target's zone moves the target only when it lands something at its turn. It does not when the
+card itself lands nothing (a move left where its block already stands, which rebinds nothing),
+when it chains through the leftover, when it ranks after it, or when it names another shell.
+In those lanes `accept_all()` takes the leftover as a no-op too. The export now asks the lane's
+own accept-all replay whenever a card made before the leftover waits in its zone, and writes
+no move when accepting the leftover there leaves its block where it stood. The same review
+found two lanes this change had broken, both fixed in it: a captured leftover of a table or
+list whose every row or item has a pending delete brought the rows back in Accept All, and two
+hand-written copies of the leftover (lint P018) wrote the block twice. Details in the plan's
+revision section.

@@ -984,6 +984,11 @@ class _Exporter:
         # pending moves left anchored on their own target that land nothing
         # (_lands_nothing): written as no move, but still pending
         self._noop_moves: list[Proposal] = []
+        # such moves the lane's replay saw leave their block where it stood;
+        # None until _lands_nothing first needs the replay
+        self._still_moves: set[str] | None = None
+        # blocks with two registered body moves (hand-written, lint P018)
+        self._moved_twice: set[str] = set()
         # adds keyed by (container, after) — every container, not just body
         self.adds_by_anchor: dict[tuple[str, str | None], list[Proposal]] = {}
         # dependency-adjusted creation order — the order the accepted lane
@@ -1017,6 +1022,8 @@ class _Exporter:
                 if self._lands_nothing(p):
                     self._noop_moves.append(p)
                     continue
+                if p.target in self.pending_move:
+                    self._moved_twice.add(p.target)
                 self.pending_move[p.target] = p
                 self._move_names[p.target] = f"aim-move-{len(self._move_names) + 1}"
                 self.adds_by_anchor.setdefault(("body", p.anchor_after), []).append(p)
@@ -1030,12 +1037,16 @@ class _Exporter:
         # made before the move lands at the chunk's old place, one made after
         # it follows the chunk to its new place (accept order is card order).
         # A move anchored on its own target lands among the cards made before
-        # it (_lands_nothing), so it joins them.
+        # it (_lands_nothing), so it joins them, unless a second move of its
+        # block is registered too: one arrival is written either way.
         self._after_move: dict[str, list[Proposal]] = {}
         for target, move in self.pending_move.items():
             here = self.adds_by_anchor.pop(("body", target), [])
             cut = self._card_order.get(move.id, 0)
-            early = [q for q in here if self._card_order.get(q.id, 0) < cut or q is move]
+            joins = target not in self._moved_twice
+            early = [
+                q for q in here if self._card_order.get(q.id, 0) < cut or (q is move and joins)
+            ]
             late = [q for q in here if self._card_order.get(q.id, 0) > cut]
             if early:
                 self.adds_by_anchor[("body", target)] = early
@@ -1126,15 +1137,34 @@ class _Exporter:
         section.left_margin = Mm(m["left"])
 
     def _lands_nothing(self, move: Proposal) -> bool:
-        """Whether *move*, a pending body move, is a no-op once the lane is
-        accepted. propose_move refuses a block anchored after itself, but a
-        reject can leave one (section 5.4 rebinds a card anchored on a
-        rejected card to that card's own anchor), and accept() takes it as a
-        no-op. accept_all() does too unless a position card made before the
-        move waits in its target's zone: it lands that card first, and the
-        same-anchor rebind then moves the target behind it."""
+        """Whether *move*, a pending body move, lands nothing once the lane
+        is accepted, so that no Word move is written for it. propose_move
+        refuses a block anchored after itself, but a reject can leave one
+        (section 5.4 rebinds a card anchored on a rejected card to that
+        card's own anchor), and accept() takes it as a no-op. So does
+        accept_all() when no position card made before the move waits in
+        its target's zone. When one does, the lane's own replay decides:
+        accept_all() usually lands that card first and the same-anchor
+        rebind moves the target behind it, but not when the card itself
+        lands nothing, chains through the move, ranks after it or names
+        another shell. A lane that does not replay writes the move."""
         if move.anchor_after != move.target:
             return False
+        if not self._waits_in_zone(move):
+            return True
+        if self._still_moves is None:
+            watch = {
+                p.id: p.target
+                for p in self._by_id.values()
+                if p.action == "move" and p.target and p.anchor_after == p.target
+            }
+            self._still_moves = _replay_lane(self.aim, watch)[1]
+        return move.id in self._still_moves
+
+    def _waits_in_zone(self, move: Proposal) -> bool:
+        """Whether a position card made before *move* waits in its target's
+        zone: an add or a move in the body whose anchor chain bottoms out at
+        the target."""
         made = self._card_order.get(move.id, 0)
         for card in self._by_id.values():
             if (
@@ -1149,8 +1179,8 @@ class _Exporter:
                 seen.add(walk)
                 walk = self._by_id[walk].anchor_after
             if walk == move.target:
-                return False
-        return True
+                return True
+        return False
 
     def _pop_adds(self, container: str, after: str | None) -> list[Proposal]:
         return self.adds_by_anchor.pop((container, after), [])
@@ -1476,6 +1506,8 @@ class _Exporter:
             # what arrives is what accepting both cards leaves: the modified
             # content when a modify is pending too, else the current content
             content = modify.payload_html if modify is not None else None
+            if content is None and el.container_id and self._arrives_empty(el.container_id):
+                return  # accept_all() leaves it no member: nothing arrives
             arrival = replace(
                 prop,
                 action="add",
@@ -1500,6 +1532,21 @@ class _Exporter:
             self.rev.wrap(para, "w:moveTo", runs, label, date, deleted=False)
             if i == len(blocks) - 1:
                 self.rev.close_move_range(para, "moveTo", range_id)
+
+    def _arrives_empty(self, container: str) -> bool:
+        """Whether accepting the lane leaves *container* with no member:
+        every member has a pending delete and no card adds or moves one in.
+        The arrival of such a container would bring back the rows or items
+        those deletes remove."""
+        members = [c.id for c in self.aim.chunks if c.container == container]
+        return (
+            bool(members)
+            and all(m in self.pending_del for m in members)
+            and not any(
+                p.action in ("add", "move") and p.anchor_container == container
+                for p in self._by_id.values()
+            )
+        )
 
     def _emit_moved_replacement(
         self, prop: Proposal, blocks: list[Element], modify: Proposal
@@ -2314,19 +2361,34 @@ def _projected_body_index(doc: AimDocument) -> dict[str, int]:
     """Each body-level block's index once the pending lane is accepted in
     creation order, replayed on a copy exactly as ``accept_all()`` replays
     it; empty when the lane does not replay."""
+    return _replay_lane(doc, {})[0]
+
+
+def _replay_lane(doc: AimDocument, watch: Mapping[str, str]) -> tuple[dict[str, int], set[str]]:
+    """The pending lane accepted in creation order on a copy, exactly as
+    ``accept_all()`` replays it: each body-level block's index once it is
+    accepted, and the ids of the moves in *watch* (move id to its target)
+    whose own accept left their target where it stood. Both are empty when
+    the lane does not replay."""
+    still: set[str] = set()
     try:
         projection = doc._clone()
         decider = external("docx-export")
         for proposal in resolution_order(projection.proposals):
+            target = watch.get(proposal.id)
+            before = projection._state.top_index(target) if target is not None else None
             projection.accept(proposal.id, decided_by=decider)
+            if target is not None and before is not None:
+                if projection._state.top_index(target) == before:
+                    still.add(proposal.id)
     except Exception:  # foreign cards may fail outside AimError, as in accept_all
-        return {}
+        return {}, set()
     index: dict[str, int] = {}
     for i, el in enumerate(projection._state.constructs()):
         cid = el.chunk_id or el.container_id
         if cid:
             index.setdefault(cid, i)
-    return index
+    return index, still
 
 
 def _resolve_copy(doc: AimDocument, decision: str) -> AimDocument:
