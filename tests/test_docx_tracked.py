@@ -1382,38 +1382,144 @@ class TestRoundTrip:
         assert stays not in _moved_paragraph_texts(data)
 
     @pytest.mark.parametrize("kind", ["table", "list"])
-    @pytest.mark.parametrize("lane", ["captured", "plain"])
-    def test_a_moved_container_whose_members_all_go_brings_none_back(self, kind, lane, tmp_path):
+    @pytest.mark.parametrize("lane", ["captured", "plain", "skipped", "unmoved"])
+    @pytest.mark.parametrize("extra", ["", "a-member-reordered", "a-container-modify"])
+    def test_a_container_whose_members_all_go_brings_none_back(self, kind, lane, extra, tmp_path):
         # Every row (or item) of A has a pending delete, so accept_all()
-        # leaves no A. Its arrival wrote the current rows back. Captured: the
-        # "A after A" leftover with E made before it, which moves A after E.
+        # leaves A no member. Written whole, as a moved container's arrival
+        # or as a container modify's payload, A brought the deleted rows
+        # back. Captured: the "A after A" leftover with E made before it,
+        # which moves A after E; skipped: that leftover alone, which moves
+        # nothing. Reordering a row inside A adds none, and a modify made
+        # before the deletes keeps the rows they remove.
         ada, rev = aim.human("ada"), aim.human("reviewer")
         doc = aim.new_document(title="Gone")
-        if kind == "table":
-            rows = "".join(f'<tr data-aim=""><td>A{i}</td></tr>' for i in (1, 2))
-            first = f'<table data-aim-container=""><tbody>{rows}</tbody></table>'
-        else:
-            first = '<ul data-aim-container=""><li data-aim="">A1</li><li data-aim="">A2</li></ul>'
         with doc.batch():
-            a = doc.add_chunk(first, author=ada).id
+            a = doc.add_chunk(_two_member_container(kind), author=ada).id
             _, c, _ = (doc.add_chunk(f"<p>{t}</p>", author=ada).id for t in "BCD")
-        if lane == "captured":
+        members = [ch.id for ch in doc.chunks if ch.container == a]
+        if extra == "a-member-reordered":
+            doc.propose_move(members[1], container=a, after=None, author=ada)
+        if lane in ("captured", "skipped"):
             n = doc.propose_add("<p>N</p>", after=a, author=ada)
-            doc.propose_add("<p>E</p>", after=a, author=ada)
+            if lane == "captured":
+                doc.propose_add("<p>E</p>", after=a, author=ada)
             n_block = doc._payload_root_id(n.payload_html or "")
             doc.propose_move(a, container="body", after=n_block, author=ada)
             doc.reject(n.id, decided_by=rev)
             assert any(p.action == "move" and p.anchor_after == a for p in doc.proposals)
-        else:
+        elif lane == "plain":
             doc.propose_move(a, container="body", after=c, author=ada)
-        for member in [ch.id for ch in doc.chunks if ch.container == a]:
+        if extra == "a-container-modify":
+            edited = doc._state.serial(a).replace(">A1<", ">A1x<").replace(">A2<", ">A2x<")
+            doc.propose_modify(a, edited, author=ada)
+        for member in members:
             doc.propose_delete(member, author=ada)
+        assert not aim.lint(doc)
         want = _texts(_resolved(doc, "accept"))
         assert want == (["E", "B", "C", "D"] if lane == "captured" else ["B", "C", "D"])
         back = tmp_path / "gone.docx"
         aim.to_docx(doc, back, pending="tracked")
         assert _view_texts(back.read_bytes(), "accept") == want
         assert _view_texts(back.read_bytes(), "reject") == _texts(_resolved(doc, "reject"))
+
+    @pytest.mark.parametrize("kind", ["table", "list"])
+    @pytest.mark.parametrize("lane", ["captured", "plain", "unmoved"])
+    def test_a_container_modify_brings_back_the_rows_deleted_before_it(self, kind, lane, tmp_path):
+        # The deletes come first and the modify's payload keeps their rows'
+        # ids (a hand edit: propose_modify gives such rows new ids).
+        # accept_all() takes the deletes first, then the payload brings the
+        # rows back, so it is written whole.
+        ada, rev = aim.human("ada"), aim.human("reviewer")
+        doc = aim.new_document(title="Back")
+        with doc.batch():
+            a = doc.add_chunk(_two_member_container(kind), author=ada).id
+            _, c, _ = (doc.add_chunk(f"<p>{t}</p>", author=ada).id for t in "BCD")
+        members = [ch.id for ch in doc.chunks if ch.container == a]
+        if lane == "captured":
+            n = doc.propose_add("<p>N</p>", after=a, author=ada)
+            doc.propose_add("<p>E</p>", after=a, author=ada)
+            n_block = doc._payload_root_id(n.payload_html or "")
+            doc.propose_move(a, container="body", after=n_block, author=ada)
+            doc.reject(n.id, decided_by=rev)
+        elif lane == "plain":
+            doc.propose_move(a, container="body", after=c, author=ada)
+        for member in members:
+            doc.propose_delete(member, author=ada)
+        edited = doc._state.serial(a).replace(">A1<", ">A1x<").replace(">A2<", ">A2x<")
+        modify = doc.propose_modify(a, edited, author=ada)
+        fresh = re.findall(r'data-aim="([^"]+)"', modify.payload_html or "")
+        assert len(fresh) == 2 and not set(fresh) & set(members)
+        text = doc.dumps()
+        for new, old in zip(fresh, members, strict=True):
+            text = text.replace(new, old)
+        doc = aim.loads(text)
+        assert not aim.lint(doc)
+        want = _texts(_resolved(doc, "accept"))
+        lead = ["E"] if lane == "captured" else []
+        assert want == lead + (
+            ["B", "C", "A1x", "A2x", "D"] if lane == "plain" else ["A1x", "A2x", "B", "C", "D"]
+        )
+        back = tmp_path / "back.docx"
+        aim.to_docx(doc, back, pending="tracked")
+        assert _view_texts(back.read_bytes(), "accept") == want
+        assert _view_texts(back.read_bytes(), "reject") == _texts(_resolved(doc, "reject"))
+
+    def test_a_moved_container_is_exported_without_scanning_the_document(
+        self, monkeypatch, tmp_path
+    ):
+        # Whether a moved table arrives empty depends on its own rows only.
+        # Reading them off doc.chunks, which walks the whole document for
+        # every chunk, made each moved table or list cost the square of the
+        # document's length (eight in 4,000 blocks took a minute).
+        ada = aim.human("ada")
+        doc = aim.new_document(title="Scan")
+        with doc.batch():
+            a = doc.add_chunk(_two_member_container("table"), author=ada).id
+            c = [doc.add_chunk(f"<p>P{i}</p>", author=ada).id for i in range(3)][-1]
+        doc.propose_move(a, container="body", after=c, author=ada)
+        scans: list[AimDocument] = []
+        real_chunks = AimDocument.chunks
+
+        def counting_chunks(source):
+            scans.append(source)
+            return real_chunks.fget(source)
+
+        monkeypatch.setattr(AimDocument, "chunks", property(counting_chunks))
+        back = tmp_path / "scan.docx"
+        aim.to_docx(doc, back, pending="tracked")
+        assert scans == []
+        monkeypatch.undo()
+        assert _view_texts(back.read_bytes(), "accept") == ["P0", "P1", "P2", "A1", "A2"]
+
+    @pytest.mark.parametrize(
+        ("lane", "replays"),
+        [
+            ([("add", "N", "A"), ("add", "E", "A"), ("move", "A", "N"), ("reject", "add N")], 1),
+            ([("add", "N", "A"), ("move", "A", "N"), ("reject", "add N")], 0),
+        ],
+        ids=["captured", "alone"],
+    )
+    def test_a_move_left_on_its_own_target_replays_the_lane_at_most_once(
+        self, lane, replays, monkeypatch, tmp_path
+    ):
+        # With E made before it in A's zone, whether the leftover lands
+        # anything and where A's pool lands both need the lane's replay: one
+        # serves both (each replay accepts every card on a copy). Alone, the
+        # walk of A's zone answers and nothing replays.
+        doc = _lettered_lane("ABCD", lane)
+        assert any(p.action == "move" and p.anchor_after == p.target for p in doc.proposals)
+        accepted: list[str] = []
+        real_accept = AimDocument.accept
+
+        def counting_accept(self, pid, **kwargs):
+            accepted.append(pid)
+            return real_accept(self, pid, **kwargs)
+
+        monkeypatch.setattr(AimDocument, "accept", counting_accept)
+        back = tmp_path / "once.docx"
+        aim.to_docx(doc, back, pending="tracked")
+        assert len(accepted) == replays * len(doc.proposals)
 
     @pytest.mark.parametrize("replays", [True, False], ids=["replayed", "not-replayable"])
     def test_two_moves_of_one_block_anchored_on_it_write_it_once(self, replays, tmp_path):
@@ -1944,6 +2050,14 @@ def _lettered_lane(names: str, lane: list[tuple]) -> aim.AimDocument:
             continue
         cards[f"{action} {name}"] = card
     return doc
+
+
+def _two_member_container(kind: str) -> str:
+    """A two-row table, or a two-item list, rows A1 and A2, for add_chunk."""
+    if kind == "table":
+        rows = "".join(f'<tr data-aim=""><td>A{i}</td></tr>' for i in (1, 2))
+        return f'<table data-aim-container=""><tbody>{rows}</tbody></table>'
+    return '<ul data-aim-container=""><li data-aim="">A1</li><li data-aim="">A2</li></ul>'
 
 
 def _foreign_move_doc(moved: str) -> aim.AimDocument:

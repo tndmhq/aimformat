@@ -147,3 +147,65 @@ No separate plan review: the change answers verified findings on the reviewed pl
 reviewers tried each fix on scratch copies against their own corpora, and the PR's ready round
 reviews it. Checks: the new tests fail before the change; the whole suite; the reviewers'
 corpora re-run on the change, with no lane worse than at df3713d.
+
+Outcome: pushed as b38b1ad. The whole suite passed (2,415 tests on macOS; on CI all four
+Python versions, 2,414 on 3.12, plus lint, converters, TS, and the LibreOffice check with 94
+resolutions and 0 disagreements). The reviewers' corpora, re-run on b38b1ad (57,226 lanes for
+agreement with `accept_all()`, 23,430 X5 fuzz lanes, 69,523 lanes for effects on other
+exports, 3,600 fresh lanes), found no lane worse than at df3713d in either view: the 351
+spurious moves are gone and seven lanes improve. One claim above is loose: the test of a move
+chained on the leftover passes before the change too, since it pins the re-keying. A fresh
+review of the new code, with an agent trying to refute each finding, confirmed five, all in
+b38b1ad's own code or in what its docs claim; the next section answers them.
+
+## Second revision, after the checks of b38b1ad (2026-11-08)
+
+The five findings:
+
+1. [P2] A row reordered inside the container stops the emptied-container rule. The rule took
+   every add or move into the container as bringing a member in, and a row moved within it
+   brings none. With a captured leftover, right at 82d466f and wrong since 34e9557 (21 of
+   3,946 lanes in a fresh corpus of container lanes); with a plain move, wrong on every tree.
+2. [P2] The rule never ran when the container itself has a pending modify. The arrival of a
+   moved container, and a table or list written in place (a skipped leftover, or no move at
+   all), wrote the modify's payload whole, deleted rows included. The captured and skipped
+   lanes were right at 82d466f, which lost the container; the plain-move and unmoved ones are
+   wrong on every tree.
+3. [P2, cost] The rule read the members off `doc.chunks`, which walks the whole document for
+   every chunk, so each moved table or list cost the square of the document's length: eight
+   moved tables in 4,000 blocks took 0.3 s at df3713d and 63 s at b38b1ad. Output unchanged.
+4. [P3, cost] A lane whose leftover needs the replay replayed twice: `_landing_index` ran it
+   again, though the first run's body index was the same.
+5. [P3] Change 3's wording, above and in the code comment, holds only for the block's last
+   registered move: an earlier copy still joins by card order. Two copies write one arrival;
+   three copies, or a copy and another move of the block, still arrive more than once. These
+   are lint P018 files, wrong on every tree, and go to the tracked list.
+
+The change:
+
+1. `_arrives_empty` reads the members off the container's own node (chunks never nest, lint
+   S024) and does not count a move of one of them inside the container.
+2. With a modify pending, the members are those its payload brings, and a member's delete
+   counts only when made after the modify. A delete made before it is accepted first, and the
+   payload then brings the member back: in a lint-clean file whose payload keeps that row's id,
+   `accept_all()` keeps the row. The patch the review proposed counted every delete and would
+   have lost those rows in Word's Accept All. `propose_modify` gives such rows new ids, so only
+   a hand edit makes this lane.
+3. The arrival of a moved container consults the rule whether or not a modify is pending, and
+   a table or list written in place turns a pending modify that the rule matches into a delete
+   of the old container. That also fixes the plain-move and unmoved lanes, and a plain move
+   with a row reordered.
+4. `_landing_index` reuses the body index of the replay `_lands_nothing` ran.
+5. The code comment on change 3 says what the code does.
+6. Tests: the emptied-container test covers four lanes (captured, plain, skipped, unmoved) with
+   nothing more, a row reordered, or a container modify, for a table and a list (24 cases);
+   deletes made before a modify that keeps their rows' ids (6); a moved table exported without
+   reading `doc.chunks`; the replay count with a captured and with a lone leftover (2).
+   Removing any one part of the change fails its own cases and only those.
+
+Left for the tracked list: a container modify that keeps some members while a later card
+deletes others still writes the payload whole, so Word's Accept All keeps the deleted rows
+(wrong on every tree, moved or not); and the P018 shapes in finding 5.
+
+No separate plan review, for the reason given in the first revision. The PR's ready round
+reviews it.

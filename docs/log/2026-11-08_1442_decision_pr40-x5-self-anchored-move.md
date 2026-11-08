@@ -61,3 +61,11 @@ found two lanes this change had broken, both fixed in it: a captured leftover of
 list whose every row or item has a pending delete brought the rows back in Accept All, and two
 hand-written copies of the leftover (lint P018) wrote the block twice. Details in the plan's
 revision section.
+
+## Second revision (2026-11-08)
+
+The table and list fix above was incomplete. The deleted rows still came back when a row was
+also reordered inside the container, or when the container had a pending modify. Both are
+fixed now, and so is the same table or list written in place with a modify pending. Two
+hand-written copies of the leftover write one arrival, but three still arrive more than once
+(tracked). Details in the plan's second revision.

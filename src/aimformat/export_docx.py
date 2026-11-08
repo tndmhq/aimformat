@@ -987,6 +987,8 @@ class _Exporter:
         # such moves the lane's replay saw leave their block where it stood;
         # None until _lands_nothing first needs the replay
         self._still_moves: set[str] | None = None
+        # the body index that replay leaves, kept for _landing_index
+        self._replayed: dict[str, int] | None = None
         # blocks with two registered body moves (hand-written, lint P018)
         self._moved_twice: set[str] = set()
         # adds keyed by (container, after) — every container, not just body
@@ -1037,8 +1039,11 @@ class _Exporter:
         # made before the move lands at the chunk's old place, one made after
         # it follows the chunk to its new place (accept order is card order).
         # A move anchored on its own target lands among the cards made before
-        # it (_lands_nothing), so it joins them, unless a second move of its
-        # block is registered too: one arrival is written either way.
+        # it (_lands_nothing), so it joins them. A hand-written copy of it
+        # (lint P018) registers its block twice: the earlier copy is then
+        # among those cards already and the last one stays out, so two copies
+        # write one arrival. More copies, or a copy and another move of the
+        # block, still arrive more than once.
         self._after_move: dict[str, list[Proposal]] = {}
         for target, move in self.pending_move.items():
             here = self.adds_by_anchor.pop(("body", target), [])
@@ -1067,8 +1072,9 @@ class _Exporter:
         # that does not replay keeps card order. The replay costs what
         # accept_all's dry run costs (quadratic in the lane), so it runs only
         # on the first sort of such a pool with two or more arrivals, at
-        # most once an export (_landing_index), and every later body pool
-        # sort then uses it too: card order only stands in for it.
+        # most once an export (_landing_index, which reuses the replay
+        # _lands_nothing ran, if it ran one), and every later body pool sort
+        # then uses it too: card order only stands in for it.
         self._landing: dict[str, int] | None = None
         self._unsettled: set[str] | None = None
 
@@ -1158,7 +1164,7 @@ class _Exporter:
                 for p in self._by_id.values()
                 if p.action == "move" and p.target and p.anchor_after == p.target
             }
-            self._still_moves = _replay_lane(self.aim, watch)[1]
+            self._replayed, self._still_moves = _replay_lane(self.aim, watch)
         return move.id in self._still_moves
 
     def _waits_in_zone(self, move: Proposal) -> bool:
@@ -1190,7 +1196,9 @@ class _Exporter:
         lane is accepted (see ``_landing``), replayed on first use only."""
         if self._landing is None:
             self._landing = {}
-            where = _projected_body_index(self.aim)
+            where = self._replayed
+            if where is None:
+                where = _projected_body_index(self.aim)
             for p in self.aim.proposals:
                 if (p.anchor_container or "body") != "body":
                     continue
@@ -1426,6 +1434,15 @@ class _Exporter:
             self._emit_move_source(el, self.pending_move[cid])
             return
         prop = self.pending_del.get(cid) or self.pending_mod.get(cid)
+        if (
+            prop is not None
+            and prop.action == "modify"
+            and el.tag in ("ul", "ol", "table")
+            and el.container_id
+            and self._arrives_empty(el, prop)
+        ):
+            # accept_all() leaves it no member: only the old container goes
+            prop = replace(prop, action="delete", payload_html=None)
         if el.container_id and el.tag in ("ul", "ol"):
             if prop is not None:
                 self.emit_tracked_list_container(el, prop)
@@ -1506,7 +1523,7 @@ class _Exporter:
             # what arrives is what accepting both cards leaves: the modified
             # content when a modify is pending too, else the current content
             content = modify.payload_html if modify is not None else None
-            if content is None and el.container_id and self._arrives_empty(el.container_id):
+            if el.container_id and self._arrives_empty(el, modify):
                 return  # accept_all() leaves it no member: nothing arrives
             arrival = replace(
                 prop,
@@ -1533,17 +1550,33 @@ class _Exporter:
             if i == len(blocks) - 1:
                 self.rev.close_move_range(para, "moveTo", range_id)
 
-    def _arrives_empty(self, container: str) -> bool:
-        """Whether accepting the lane leaves *container* with no member:
-        every member has a pending delete and no card adds or moves one in.
-        The arrival of such a container would bring back the rows or items
-        those deletes remove."""
-        members = [c.id for c in self.aim.chunks if c.container == container]
+    def _arrives_empty(self, el: Element, modify: Proposal | None) -> bool:
+        """Whether accepting the lane leaves the container *el* with no
+        member, so that writing it whole would bring back the rows or items
+        pending deletes remove. Its members are the ones it holds, or, with
+        *modify* pending, the ones that card's payload brings; each must have
+        a pending delete accepted after that (one made before the modify
+        goes first, and the payload brings its member back), and no card may
+        add or move another member in: reordering one of its own adds none."""
+        if modify is None:
+            roots, since = [el], -1
+        else:
+            roots = [n for n in parse_fragment(modify.payload_html or "") if isinstance(n, Element)]
+            since = self._card_order.get(modify.id, 0)
+        # chunks never nest and no container sits in a chunk (lint S024):
+        # every chunk under the container is one of its members
+        members = {x.chunk_id for root in roots for x in root.iter() if x.chunk_id}
+        container = el.container_id
         return (
             bool(members)
-            and all(m in self.pending_del for m in members)
+            and all(
+                m in self.pending_del and self._card_order.get(self.pending_del[m].id, 0) > since
+                for m in members
+            )
             and not any(
-                p.action in ("add", "move") and p.anchor_container == container
+                p.action in ("add", "move")
+                and p.anchor_container == container
+                and p.target not in members
                 for p in self._by_id.values()
             )
         )
