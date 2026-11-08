@@ -15,6 +15,8 @@ A stdlib chunk walker over the canonical document tree. Fidelity notes:
   inside code spans in tables); ``<br>`` in a cell becomes a space; only
   the first ``thead`` row is the header row (extra head rows demote to
   body — Markdown has single-row headers).
+- A packed image (spec §9.1) is written as the image it references, with
+  the data URI the asset registry holds.
 - Classes, inline geometry, and the theme are presentation: dropped.
 - Slides render as thematic breaks followed by their chunks in reading
   order. Hard page breaks render as thematic breaks.
@@ -30,7 +32,13 @@ from __future__ import annotations
 
 import re
 
-from ..document import AimDocument, Proposal, _ChainedAddCycle, resolution_order
+from ..document import (
+    AimDocument,
+    Proposal,
+    _ChainedAddCycle,
+    _packed_asset_ref,
+    resolution_order,
+)
 from ..dom import Element, Text, parse_html
 from ..errors import InvalidOperation
 
@@ -125,6 +133,21 @@ def _neutralize_critic(text: str) -> str:
     return text
 
 
+def _unpack_images(root: Element, assets: dict[str, str]) -> None:
+    """Replace each packed image (spec §9.1) under *root* by the ``<img>`` it
+    stands for, its data taken from the asset registry, so the walker writes
+    it like any other image. A reference to a missing asset stays as it is
+    (the verifier reports it, S036)."""
+    for el in list(root.iter()):
+        for i, child in enumerate(el.children):
+            if not isinstance(child, Element):
+                continue
+            ref = _packed_asset_ref(child)
+            if ref is not None and ref in assets:
+                label = child.get("aria-label") or ""
+                el.children[i] = Element("img", [("alt", label), ("src", assets[ref])])
+
+
 def _proposal_row_width(proposal: Proposal) -> int:
     if not proposal.payload_html:
         return 0
@@ -181,12 +204,15 @@ class _Renderer:
         mods: dict[str, Proposal],
         critic: bool,
         card_order: dict[str, int] | None = None,
+        assets: dict[str, str] | None = None,
     ):
         self.adds = adds_by_anchor
         self.mods = mods
         self.critic = critic
         # card creation order, the order the accepted lane lands in
         self.card_order = card_order or {}
+        # the asset registry, for packed images in pending payloads
+        self.assets = assets or {}
 
     # ------------------------------------------------------------------
     def block(self, el: Element) -> list[str]:
@@ -410,6 +436,7 @@ class _Renderer:
         frag = parse_html(proposal.payload_html)
         blocks: list[str] = []
         for node in frag.elements():
+            _unpack_images(node, self.assets)
             if node.tag == "tr":  # keep cell boundaries: accepting the
                 cells = [  # suggestion must not fuse the row into one word
                     _inline(td, in_table=True) for td in node.elements() if td.tag in ("td", "th")
@@ -515,8 +542,10 @@ def to_markdown(doc: AimDocument, *, pending: str = "drop") -> str:
     frag = parse_html(doc.dumps())
     html = next(e for e in frag.elements() if e.tag == "html")
     body = next(e for e in html.elements() if e.tag == "body")
+    assets = doc._raster_assets()
+    _unpack_images(body, assets)
 
-    renderer = _Renderer(adds_by_anchor, mods, critic, card_order)
+    renderer = _Renderer(adds_by_anchor, mods, critic, card_order, assets)
     blocks: list[str] = []
     if critic:  # adds anchored at the very top of the body
         blocks.extend(renderer._critic_adds(("body", None)))

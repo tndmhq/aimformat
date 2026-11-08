@@ -388,6 +388,18 @@ class Registry:
         return self.raw["events"]["fields"]
 
     @cached_property
+    def event_since(self) -> dict[str, str]:
+        """Event kind → the spec version that introduced it (absent: since
+        the beginning). A retained event of a newer kind is markup from a
+        newer spec era, gated like any construct (S034)."""
+        return dict(self.raw["events"].get("since", {}))
+
+    @property
+    def baseline_since(self) -> str:
+        """The first spec version that defines the ``baseline`` event (§6.9)."""
+        return self.event_since["baseline"]
+
+    @cached_property
     def proposal_actions(self) -> dict[str, dict]:
         return self.raw["proposal_actions"]
 

@@ -1,7 +1,7 @@
 # .aim format reference (condensed)
 
 Normative source: [spec.md](https://github.com/tndmhq/aimformat/blob/main/spec.md)
-(v0.5). This is the working subset an agent needs while editing.
+(v0.6). This is the working subset an agent needs while editing.
 
 ## Anatomy
 
@@ -10,20 +10,20 @@ current document before any blob:
 
 ```
 <!doctype html>
-<html data-aim-version="0.5" lang="en">
+<html data-aim-version="0.6" lang="en">
 <head>
   <meta charset="utf-8">
   <!--\naim-note: … -->                        ← agent note (§2.5)
   <title>…</title>
-  <script type="application/aim-meta+json">…   ← summary + toc cache
+  <script type="application/aim-meta+json">…   ← summary and/or toc cache
   <script type="application/aim-doc+json">…    ← page setup (aim:doc)
-  <style data-aim-css="0.5">…                  ← machine-managed stylesheet
+  <style data-aim-css="0.6">…                  ← machine-managed stylesheet
   <style data-aim-theme>:root{--aim-brand-1:…} ← theme slots
 </head>
 <body>
   …content chunks and containers…
   <aim-proposals>…</aim-proposals>             ← pending lane (≤1)
-  <aim-assets>…</aim-assets>                   ← packed assets (≤1)
+  <aim-assets>…</aim-assets>                   ← packed assets (≤1; the only copy of imported images)
   <script type="application/aim-history+jsonl">… ← append-only history (≤1)
   <script type="application/aim-embeddings+jsonl">… (≤1)
 </body></html>
@@ -131,11 +131,41 @@ history event so earlier checkpoints still verify. Never edit
 
 `application/aim-history+jsonl`: one canonical-JSON event per line,
 append-only, seq strictly increasing. Kinds: `direct_edit`, `resolution`,
-`checkpoint`, plus `reconcile` (adopted out-of-band edits). Events carry
-whole payloads (`before`/`after`/`proposed`/`applied`), so `doc.verify()`
-replays the chain by byte-equality — hand-rewriting history breaks H006.
-Never edit this lane by hand; `aim reconcile` records your text edits
-properly.
+`checkpoint`, `baseline`, plus `reconcile` (adopted out-of-band edits).
+Events carry whole payloads (`before`/`after`/`proposed`/`applied`), so
+`doc.verify()` replays the chain by byte-equality — hand-rewriting history
+breaks H006. Never edit this lane by hand; `aim reconcile` records your text
+edits properly.
+
+An imported (or adopted) document's history may begin with ONE `baseline`
+line (v0.6): the origin state written out as a `snapshot` (the hashed lines:
+`html`, optional `doc`/`theme`, and `body` construct serializations). It is
+never edited and never undone — `undo` right after an import has nothing to
+undo. A global find-and-replace over the raw file that also hits the snapshot
+breaks verification (H008/H006), exactly as one hitting an `add` payload
+would; edit the body, then `aim reconcile`. `aim flatten` collapses history
+to one event: a baseline in a document declared 0.6 or later (a later hand
+edit still reconciles), a checkpoint below. The baseline repeats the body, so
+run `aim pack` first when the body holds inline images, or each is stored
+twice. `aim baseline FILE` accepts a file
+whose history no longer explains its body as the new starting point (it
+discards undo — only when the user asks). When lint reports H002 (a history
+line that cannot be read), `aim baseline FILE --discard-history` is the
+repair: it keeps the text and the pending proposals, starts a fresh history,
+and saves the dropped lines to `OUT.discarded-history.jsonl`, next to the
+file it writes (the input unless `-o` is given). A pending proposal that
+names an id the repair replaced is rejected, and the command lists it. An
+image only the dropped lines referenced is removed with them; the side file
+keeps the reference, not the image. When `aim baseline` or `aim flatten`
+refuses a unit without a usable id and `aim reconcile` refuses the log
+(pruned, for instance), `--discard-history` is also the way out.
+
+The `aim-meta` cache may hold a `toc` without a `summary`: one
+`{chunk_count, id, level, title, word_count}` entry per section (a section
+opens at a top-level heading or a slide and includes its subsections).
+`toc_doc_hash` says which `doc_hash` the TOC was derived from. A stale or
+missing TOC is re-derived from the headings — do not trust one whose hash
+differs.
 
 ## Hashing and canonical form
 

@@ -295,7 +295,7 @@ class TestGroupedArtwork:
     def test_every_logo_is_recovered(self, legal):
         figures = [c for c in legal.chunks if c.tag == "figure"]
         assert len(figures) == 1, "the group should stay one visual unit"
-        assert figures[0].html.count("<img") == 3
+        assert figures[0].html.count('<use href="#asset-') == 3  # packed (spec §9)
 
     def test_each_logo_is_sized_as_the_group_draws_it(self, legal):
         figure = next(c for c in legal.chunks if c.tag == "figure")
@@ -305,9 +305,14 @@ class TestGroupedArtwork:
         assert all(40 <= w <= 320 for w in widths), widths
         assert sum(widths) <= 560, widths
 
-    def test_images_are_embedded_not_referenced(self, legal):
+    def test_images_are_embedded_not_referenced(self, legal, legal_body):
+        # embedded in the file, never an external URL: the figure references
+        # three packed assets whose bytes the registry holds once (spec §9)
         figure = next(c for c in legal.chunks if c.tag == "figure")
-        assert figure.html.count("data:image/") == 3
+        refs = re.findall(r'<use href="#(asset-[0-9a-f]{12})"/>', figure.html)
+        assert len(set(refs)) == 3 and "data:image/" not in figure.html
+        for ref in refs:
+            assert re.search(rf'<symbol id="{ref}"[^>]*><image [^>]*href="data:image/', legal_body)
 
 
 class TestStylingSurvives:
@@ -360,9 +365,11 @@ class TestSampleDocumentStructure:
         assert any(c.tag == "tr" for c in sample.chunks)
 
     def test_images_keep_their_alt_text(self, sample):
+        # packed on import (spec §9): the alt text rides the reference's
+        # aria-label, the bytes the asset registry
         body = sample.dumps()
-        assert body.count("data:image/") >= 2
-        assert 'alt="' in body
+        assert body.count('href="data:image/') >= 2
+        assert body.count('role="img"') >= 2 and 'aria-label="' in body
 
 
 class TestTableStylesCarryTheLook:

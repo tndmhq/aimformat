@@ -534,21 +534,28 @@ class TestAdoption:
             },
         ]
 
-    def test_flattened_document_readopts(self, rich_doc):
+    def test_a_clean_flattened_document_verifies(self, rich_doc):
+        # flatten collapses a 0.6 log to one baseline (IMPORT-D12b): verify()
+        # vouches for the body and reconcile finds nothing to record
         rich_doc.flatten()
         doc = aim.loads(rich_doc.dumps())
-        h = doc.doc_hash
-        report = reconciled(doc)
-        # one add per top construct; items ride inside container payloads
-        assert [(e.action, e.target) for e in report.events] == [
-            ("add", "h1"),
-            ("add", "intro"),
-            ("add", "scope"),
-            ("add", "list"),
-            ("add", "tbl"),
-            ("add", "s1"),
-        ]
-        assert doc.doc_hash == h  # adoption changed nothing visible
+        assert doc.verify() == []
+        assert not doc.reconcile(at=ts(60)).changed
+
+    def test_a_hand_edited_flattened_document_is_reconciled(self, rich_doc):
+        # under IMPORT-D12 the one event was a checkpoint: verify saw the
+        # edit, reconcile refused it as a pruned log, and only baseline()
+        # could accept the file. The baseline's snapshot is the origin now,
+        # so the edit is adopted with its true before.
+        rich_doc.flatten()
+        # ">…</p>" hits the body line only: the snapshot spells it "<\/p>"
+        text = rich_doc.dumps().replace(">We looked at the numbers.</p>", ">We looked again.</p>")
+        doc = aim.loads(text)
+        assert doc.verify()  # the snapshot no longer matches the body
+        (event,) = doc.reconcile(at=ts(60)).events
+        assert event.action == "modify" and "We looked at the numbers." in event.get("before")
+        assert doc.verify() == []
+        assert [f for f in aim.lint(doc) if f.level == "error"] == []
 
     def test_adoption_is_idempotent(self):
         doc = aim.loads(self.HAND_WRITTEN)

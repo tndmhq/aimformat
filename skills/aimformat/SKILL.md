@@ -93,7 +93,7 @@ aim accept FILE PID... | --all     # resolve (human decision)
 aim reject FILE PID... | --all
 aim note FILE [--check|--remove]   # the agent-note header (spec §2.5)
 aim reconcile FILE                 # adopt out-of-band (hand) edits into history
-aim import IN -o FILE.aim          # md/txt/docx/pdf → .aim
+aim import IN -o FILE.aim          # md/txt/docx/pdf → .aim (Word redlines → pending proposals)
 aim export FILE.aim -o OUT.docx    # or .md/.html/.pdf; --pending tracked|accept-all|…
 ```
 

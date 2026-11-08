@@ -14,7 +14,11 @@ Mapping notes:
 - Links keep ``href`` only for registry-allowed schemes (http/https/
   mailto/#); anything else degrades to the link text.
 - Images keep ``src`` for http/https/``data:image/``; anything else
-  degrades to the alt text.
+  degrades to the alt text. Image data whose size the SDK reads (PNG,
+  JPEG, GIF, BMP, WebP, TIFF) is stored once in the asset registry and
+  referenced from the chunk (spec §9); other data stays an inline
+  ``<img>``. markdown-it itself refuses any other ``data:image/`` source
+  than PNG, JPEG, GIF and WebP: a BMP or TIFF link stays literal text.
 - Fence info strings (language tags) are dropped: the class vocabulary has
   no per-language classes in v0.1.
 - Top-level lists and tables become .aim containers with item chunks
@@ -29,7 +33,7 @@ from typing import Any
 from ..canonical import escape_attr, escape_text
 from ..document import AimDocument, new_document
 from ..events import Actor, external
-from ..ingest import _containerize
+from ..ingest import _containerize, _ImportAssets, finish_import
 from ..registry import REGISTRY
 
 __all__ = ["from_markdown"]
@@ -294,7 +298,8 @@ def from_markdown(
     doc = new_document(
         title=title or walker.first_heading or "Imported document", lang=lang, theme=theme
     )
+    images = _ImportAssets()
     with doc.batch():
         for markup in blocks:
-            doc.add_chunk(_containerize(markup), author=who, explanation="Imported from markdown")
-    return doc
+            doc.add_chunk(_containerize(images.pack(markup)), author=who)
+    return finish_import(doc, author=who, explanation="Imported from markdown", assets=images)

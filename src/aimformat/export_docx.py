@@ -24,22 +24,39 @@ structure, marks, and the per-chunk pending lane survive. The same
 degradation contract as the Markdown exporter, on pages instead of ``---``.
 A faithful canvas export is the PDF's job (and a future PPTX exporter's).
 
-Not represented in v0.1: ``move`` proposals, ``aim:theme``/``aim:doc``
-proposals, and proposals targeting a *whole slide* (all export as unchanged
-current content), plus hyperlink relationships (links render as text with
-the URL in parentheses). These are deliberate scope cuts, not oversights.
+Pending ``move`` proposals of body-level blocks export as Word's own move
+revisions (``w:moveFrom``/``w:moveTo`` with a named range) when the block is
+paragraph text; a moved container, figure, rule or page break — which Word
+cannot track as a move — exports as a tracked deletion at the source plus a
+tracked insertion at the destination. A move with a pending modify of the
+same target lands as ``moveTo(del(old))`` followed by ``ins(new)``.
+
+Not represented: moves of list items, table rows and chunks inside slides,
+``aim:theme``/``aim:doc`` proposals, and proposals targeting a *whole slide*
+(all export as unchanged current content), plus hyperlink relationships
+(links render as text with the URL in parentheses). These are deliberate
+scope cuts, not oversights.
 """
 
 from __future__ import annotations
 
 import base64
 import io
+import itertools
 import re
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
+from dataclasses import replace
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from .document import AimDocument, Proposal, _ChainedAddCycle, resolution_order
+from . import ids
+from .document import (
+    AimDocument,
+    Proposal,
+    _ChainedAddCycle,
+    _packed_asset_ref,
+    resolution_order,
+)
 from .dom import Element, Text, parse_fragment
 from .errors import InvalidOperation
 from .events import external
@@ -248,6 +265,11 @@ def _runs_of(
                 if src and not src.startswith("data:"):
                     label += f" ({src})"
                 runs.append({"text": label, **fmt, "italic": True})
+            elif _packed_asset_ref(child) is not None:
+                # a packed image (§9.1) exports as the embedded <img> it
+                # stands for: the same placeholder, named by its aria-label
+                label = f"[image: {child.get('aria-label') or 'image'}]"
+                runs.append({"text": label, **fmt, "italic": True})
             else:
                 runs += _runs_of(child, fmt, paint, inline=True)
     return runs
@@ -399,6 +421,39 @@ _SUCCESSORS = {
         "w:shd": ("w:fitText", "w:vertAlign", "w:rtl", "w:cs", "w:em", "w:lang"),
     },
     "w:pPr": {
+        # CT_PPr: numPr precedes everything from suppressLineNumbers on,
+        # the mark's rPr among them (Word refuses an out-of-order pPr)
+        "w:numPr": (
+            "w:suppressLineNumbers",
+            "w:pBdr",
+            "w:shd",
+            "w:tabs",
+            "w:suppressAutoHyphens",
+            "w:kinsoku",
+            "w:wordWrap",
+            "w:overflowPunct",
+            "w:topLinePunct",
+            "w:autoSpaceDE",
+            "w:autoSpaceDN",
+            "w:bidi",
+            "w:adjustRightInd",
+            "w:snapToGrid",
+            "w:spacing",
+            "w:ind",
+            "w:contextualSpacing",
+            "w:mirrorIndents",
+            "w:suppressOverlap",
+            "w:jc",
+            "w:textDirection",
+            "w:textAlignment",
+            "w:textboxTightWrap",
+            "w:outlineLvl",
+            "w:divId",
+            "w:cnfStyle",
+            "w:rPr",
+            "w:sectPr",
+            "w:pPrChange",
+        ),
         "w:pBdr": ("w:shd", "w:tabs", "w:spacing", "w:ind", "w:jc", "w:rPr", "w:sectPr"),
         "w:shd": ("w:tabs", "w:spacing", "w:ind", "w:jc", "w:rPr", "w:sectPr"),
     },
@@ -521,8 +576,10 @@ class _Revisions:
         r_pr = p_pr.find(qn("w:rPr"))
         if r_pr is None:
             r_pr = OxmlElement("w:rPr")
-            # w:rPr is the first child of w:pPr in the OOXML content model
-            p_pr.insert(0, r_pr)
+            # CT_PPr puts the mark's rPr LAST but for sectPr/pPrChange — not
+            # first: before pStyle/numPr it is a schema violation Word
+            # reports as unreadable content
+            p_pr.insert_element_before(r_pr, "w:sectPr", "w:pPrChange")
         revision = OxmlElement(tag)
         self._attrs(revision, author, date)
         r_pr.append(revision)
@@ -568,6 +625,50 @@ class _Revisions:
         removed.append(prior)
         paragraph._p.append(removed)
         self.ins(paragraph, runs, author, date)
+
+    def wrap(self, paragraph, tag: str, runs: list[dict], author: str, date: str, *, deleted: bool):
+        """Append one revision wrapper (``w:moveFrom``/``w:moveTo``/…) holding
+        *runs*; returns it so a caller can nest a further revision inside."""
+        from docx.oxml import OxmlElement
+
+        wrap = OxmlElement(tag)
+        self._attrs(wrap, author, date)
+        for spec in runs:
+            wrap.append(self._make_run(paragraph, spec, deleted=deleted))
+        paragraph._p.append(wrap)
+        return wrap
+
+    def nested(self, outer, tag: str, paragraph, runs, author: str, date: str, *, deleted: bool):
+        """A revision inside another one (``moveTo(del(…))``): the inner
+        content goes when EITHER revision would remove it."""
+        from docx.oxml import OxmlElement
+
+        inner = OxmlElement(tag)
+        self._attrs(inner, author, date)
+        for spec in runs:
+            inner.append(self._make_run(paragraph, spec, deleted=deleted))
+        outer.append(inner)
+
+    def move_range(self, paragraph, kind: str, name: str, author: str, date: str) -> str:
+        """Open a named move range (``w:moveFromRangeStart``/``moveToRangeStart``)
+        in *paragraph*; returns its id for :meth:`close_move_range`."""
+        from docx.oxml import OxmlElement
+        from docx.oxml.ns import qn
+
+        start = OxmlElement(f"w:{kind}RangeStart")
+        self._attrs(start, author, date)
+        start.set(qn("w:name"), name)
+        paragraph._p.append(start)
+        return start.get(qn("w:id"))
+
+    @staticmethod
+    def close_move_range(paragraph, kind: str, range_id: str) -> None:
+        from docx.oxml import OxmlElement
+        from docx.oxml.ns import qn
+
+        end = OxmlElement(f"w:{kind}RangeEnd")
+        end.set(qn("w:id"), range_id)
+        paragraph._p.append(end)
 
     def row_ins(self, tr, author: str, date: str) -> None:
         self._row_change(tr, "w:ins", author, date)
@@ -857,6 +958,8 @@ class _Exporter:
         self.paint = PaintResolver(self.palette)
         for construct in doc._state.constructs():
             self.paint.resolve(construct)
+        # packed images (§9.1) resolve through the registry: asset id → data URI
+        self.assets = doc._raster_assets()
         self.out = docx_mod.Document()
         self.rev = _Revisions()
         # numbering definitions created on demand: per-level literal prefixes
@@ -874,6 +977,20 @@ class _Exporter:
         self._break_before_next: bool | Proposal = False
         self.pending_mod: dict[str, Proposal] = {}
         self.pending_del: dict[str, Proposal] = {}
+        # pending moves of body-level constructs within the body: the source
+        # position emits the removal, the destination anchor the arrival
+        self.pending_move: dict[str, Proposal] = {}
+        self._move_names: dict[str, str] = {}
+        # pending moves left anchored on their own target that land nothing
+        # (_lands_nothing): written as no move, but still pending
+        self._noop_moves: list[Proposal] = []
+        # such moves the lane's replay saw leave their block where it stood;
+        # None until _lands_nothing first needs the replay
+        self._still_moves: set[str] | None = None
+        # the body index that replay leaves, kept for _landing_index
+        self._replayed: dict[str, int] | None = None
+        # blocks with two registered body moves (hand-written, lint P018)
+        self._moved_twice: set[str] = set()
         # adds keyed by (container, after) — every container, not just body
         self.adds_by_anchor: dict[tuple[str, str | None], list[Proposal]] = {}
         # dependency-adjusted creation order — the order the accepted lane
@@ -884,6 +1001,7 @@ class _Exporter:
         except _ChainedAddCycle:
             ordered = list(doc.proposals)
         self._card_order: dict[str, int] = {p.id: i for i, p in enumerate(ordered)}
+        self._by_id: dict[str, Proposal] = {p.id: p for p in ordered}
         for p in doc.proposals:
             if p.action == "modify" and p.target and p.target not in ("aim:theme", "aim:doc"):
                 self.pending_mod[p.target] = p
@@ -892,6 +1010,73 @@ class _Exporter:
             elif p.action == "add":
                 key = (p.anchor_container or "body", p.anchor_after)
                 self.adds_by_anchor.setdefault(key, []).append(p)
+        for p in doc.proposals:
+            if (
+                p.action == "move"
+                and p.target
+                and (p.anchor_container or "body") == "body"
+                and doc._state.top_index(p.target) is not None
+                and p.target not in self.pending_del
+            ):
+                el = doc._state.constructs()[doc._state.top_index(p.target) or 0]
+                if el.tag == "aim-slide":
+                    continue  # whole-slide proposals export as current content
+                if self._lands_nothing(p):
+                    self._noop_moves.append(p)
+                    continue
+                if p.target in self.pending_move:
+                    self._moved_twice.add(p.target)
+                self.pending_move[p.target] = p
+                self._move_names[p.target] = f"aim-move-{len(self._move_names) + 1}"
+                self.adds_by_anchor.setdefault(("body", p.anchor_after), []).append(p)
+        # A card chained on a move written as no move follows its block,
+        # which stays where it is: it lands after it, with its other cards.
+        for move in self._noop_moves:
+            chained = self.adds_by_anchor.pop(("body", move.id), [])
+            if chained:
+                self.adds_by_anchor.setdefault(("body", move.target), []).extend(chained)
+        # Cards anchored after a moving chunk split by creation order: one
+        # made before the move lands at the chunk's old place, one made after
+        # it follows the chunk to its new place (accept order is card order).
+        # A move anchored on its own target lands among the cards made before
+        # it (_lands_nothing), so it joins them. A hand-written copy of it
+        # (lint P018) registers its block twice: the earlier copy is then
+        # among those cards already and the last one stays out, so two copies
+        # write one arrival. More copies, or a copy and another move of the
+        # block, still arrive more than once.
+        self._after_move: dict[str, list[Proposal]] = {}
+        for target, move in self.pending_move.items():
+            here = self.adds_by_anchor.pop(("body", target), [])
+            cut = self._card_order.get(move.id, 0)
+            joins = target not in self._moved_twice
+            early = [
+                q for q in here if self._card_order.get(q.id, 0) < cut or (q is move and joins)
+            ]
+            late = [q for q in here if self._card_order.get(q.id, 0) > cut]
+            if early:
+                self.adds_by_anchor[("body", target)] = early
+            if late:
+                self._after_move[target] = late
+        # Adds waiting on one anchor land in card order: accepting one
+        # rebinds every later card on its anchor onto the block that just
+        # landed. A move among them can break that: once the earlier cards
+        # leave its block at its destination it lands nothing, so it rebinds
+        # no later card on its anchor (accept's noop_move), and those cards
+        # land in front of the block. So can a card that moves or deletes
+        # one of their blocks or the block they anchor on, or a move made
+        # before an add it chains onto, anywhere down their chains
+        # (_unsettled_cards). A body pool that holds, or has held, a move or
+        # such an add (chained and after-move joins included) therefore
+        # emits, while a body move is pending, in the order the lane's own
+        # accept-all replay puts the blocks, keyed by proposal id; a lane
+        # that does not replay keeps card order. The replay costs what
+        # accept_all's dry run costs (quadratic in the lane), so it runs only
+        # on the first sort of such a pool with two or more arrivals, at
+        # most once an export (_landing_index, which reuses the replay
+        # _lands_nothing ran, if it ran one), and every later body pool sort
+        # then uses it too: card order only stands in for it.
+        self._landing: dict[str, int] | None = None
+        self._unsettled: set[str] | None = None
 
     # -- top level -----------------------------------------------------------
     def run(self) -> None:
@@ -957,19 +1142,174 @@ class _Exporter:
         section.bottom_margin = Mm(m["bottom"])
         section.left_margin = Mm(m["left"])
 
+    def _lands_nothing(self, move: Proposal) -> bool:
+        """Whether *move*, a pending body move, lands nothing once the lane
+        is accepted, so that no Word move is written for it. propose_move
+        refuses a block anchored after itself, but a reject can leave one
+        (section 5.4 rebinds a card anchored on a rejected card to that
+        card's own anchor), and accept() takes it as a no-op. So does
+        accept_all() when no position card made before the move waits in
+        its target's zone. When one does, the lane's own replay decides:
+        accept_all() usually lands that card first and the same-anchor
+        rebind moves the target behind it, but not when the card itself
+        lands nothing, chains through the move, ranks after it or names
+        another shell. A lane that does not replay writes the move."""
+        if move.anchor_after != move.target:
+            return False
+        if not self._waits_in_zone(move):
+            return True
+        if self._still_moves is None:
+            watch = {
+                p.id: p.target
+                for p in self._by_id.values()
+                if p.action == "move" and p.target and p.anchor_after == p.target
+            }
+            self._replayed, self._still_moves = _replay_lane(self.aim, watch)
+        return move.id in self._still_moves
+
+    def _waits_in_zone(self, move: Proposal) -> bool:
+        """Whether a position card made before *move* waits in its target's
+        zone: an add or a move in the body whose anchor chain bottoms out at
+        the target."""
+        made = self._card_order.get(move.id, 0)
+        for card in self._by_id.values():
+            if (
+                card.action not in ("add", "move")
+                or card.id == move.id
+                or (card.anchor_container or "body") != "body"
+                or self._card_order.get(card.id, 0) > made
+            ):
+                continue
+            walk, seen = card.anchor_after, set()
+            while walk is not None and walk in self._by_id and walk not in seen:
+                seen.add(walk)
+                walk = self._by_id[walk].anchor_after
+            if walk == move.target:
+                return True
+        return False
+
     def _pop_adds(self, container: str, after: str | None) -> list[Proposal]:
         return self.adds_by_anchor.pop((container, after), [])
 
+    def _landing_index(self) -> dict[str, int]:
+        """Each body arrival's proposal id → where its block stands once the
+        lane is accepted (see ``_landing``), replayed on first use only."""
+        if self._landing is None:
+            self._landing = {}
+            where = self._replayed
+            if where is None:
+                where = _projected_body_index(self.aim)
+            for p in self.aim.proposals:
+                if (p.anchor_container or "body") != "body":
+                    continue
+                block = p.target if p.action == "move" else None
+                if p.action == "add":
+                    block = self.aim._payload_root_id(p.payload_html or "")
+                if block and block in where:
+                    self._landing[p.id] = where[block]
+        return self._landing
+
+    def _lands_in_card_order(self, prop: Proposal) -> bool:
+        """Whether *prop* is an add that keeps card order among its anchor's
+        arrivals whatever the moves do (see ``_landing``)."""
+        if self._unsettled is None:
+            self._unsettled = self._unsettled_cards()
+        return prop.action == "add" and prop.id not in self._unsettled
+
+    def _unsettled_cards(self) -> set[str]:
+        """Ids of the adds that may land out of card order among their
+        anchor's arrivals, with every card they chain onto: the cards
+        chained on an add join its pool after it, too late for the sorts
+        that already placed it. An add is unsettled when a pending card
+        moves or deletes its block or the block it anchors on (a
+        proposal-id anchor stands for that add's block; any other card's id
+        is unsettled), and when a move made before it chains onto it: that
+        move is accepted first, where the chain starts, and takes the cards
+        it finds there that are not its chain behind its block."""
+        moved = {
+            p.target for p in self._by_id.values() if p.action in ("move", "delete") and p.target
+        }
+
+        def chain(card: Proposal) -> Iterator[Proposal]:
+            # the cards *card* chains onto, nearest first
+            seen: set[str] = set()
+            walk = card.anchor_after
+            while walk is not None and walk in self._by_id and walk not in seen:
+                seen.add(walk)
+                yield self._by_id[walk]
+                walk = self._by_id[walk].anchor_after
+
+        def settled(add: Proposal) -> bool:
+            # accept() keys a zone by container, anchor and shell, so a body
+            # add naming a shell (only a hand-written card can) is not rebound
+            # like its pool's other arrivals: the replay decides its place
+            if add.anchor_shell is not None:
+                return False
+            anchor = add.anchor_after
+            if anchor is not None and ids.is_valid_proposal_id(anchor):
+                parent = self._by_id.get(anchor)
+                if parent is None or parent.action != "add" or parent.anchor_shell is not None:
+                    return False
+                anchor = self.aim._payload_root_id(parent.payload_html or "")
+            block = self.aim._payload_root_id(add.payload_html or "")
+            return anchor not in moved and block not in moved
+
+        unsettled: set[str] = set()
+        for card in self._by_id.values():
+            if card.action == "move":
+                made = self._card_order[card.id]
+                seeds = [q for q in chain(card) if self._card_order[q.id] > made]
+            elif card.action == "add" and not settled(card):
+                seeds = [card]
+            else:
+                continue
+            for seed in seeds:
+                # a marked card's whole chain is marked already
+                for q in itertools.chain([seed], chain(seed)):
+                    if q.id in unsettled:
+                        break
+                    unsettled.add(q.id)
+        return unsettled
+
+    def _sort_arrivals(
+        self, container: str, pool: list[Proposal], unchecked: list[Proposal]
+    ) -> None:
+        """Order *pool*, the arrivals waiting on one anchor: by where each
+        block lands in the accept-all replay, then card order, when a body
+        move is pending and the pool needs the replay or it is already made
+        (see ``_landing``); by card order otherwise. *unchecked* holds the
+        arrivals the pool has taken in since it was last found to keep card
+        order. A single arrival has no order to settle and checks nothing."""
+        if len(pool) < 2:
+            return
+        landing: dict[str, int] = {}
+        if container == "body" and (self.pending_move or self._noop_moves):
+            if self._landing is None and all(map(self._lands_in_card_order, unchecked)):
+                unchecked.clear()
+            else:
+                landing = self._landing_index()
+        last = len(self._card_order)
+        pool.sort(key=lambda p: (landing.get(p.id, last), self._card_order.get(p.id, 0)))
+
     def _emit_anchored_adds(self, container: str, anchor: str | None) -> None:
         # creation order: acceptance rebinds every later same-anchor sibling
-        # onto the block that just landed, so the lane lands in card order; a
-        # chained add joins the pool once the add it anchors on is emitted
+        # onto the block that just landed, so the lane lands in card order —
+        # unless a move lands nothing (see _landing); a chained add, or a card
+        # made after a move on the moved block, joins the pool once the card
+        # it anchors on is emitted, so the pool is re-sorted on every pass
         pool = self._pop_adds(container, anchor)
+        unchecked = list(pool)
         while pool:
-            pool.sort(key=lambda p: self._card_order.get(p.id, 0))
+            self._sort_arrivals(container, pool, unchecked)
             prop = pool.pop(0)
-            self._emit_add_paragraphs(prop)
-            pool += self._pop_adds(container, prop.id)
+            if prop.action == "move":
+                self._emit_move_destination(prop)
+                joined = self._after_move.pop(prop.target or "", [])
+            else:
+                self._emit_add_paragraphs(prop)
+                joined = self._pop_adds(container, prop.id)
+            pool += joined
+            unchecked += joined
 
     def _emit_add_paragraphs(self, prop: Proposal, style: str | None = None) -> None:
         els = self._payload_elements(prop)
@@ -1090,7 +1430,20 @@ class _Exporter:
             self._break_before_next = False
             self._page_break(owner if isinstance(owner, Proposal) else None)
         cid = el.chunk_id or el.container_id or ""
+        if cid in self.pending_move:
+            self._emit_move_source(el, self.pending_move[cid])
+            return
         prop = self.pending_del.get(cid) or self.pending_mod.get(cid)
+        if (
+            prop is not None
+            and prop.action == "modify"
+            and el.tag in ("ul", "ol", "table")
+            and el.container_id
+            and self._arrives_empty(el, prop)
+        ):
+            # accept_all() removes every member it would write: only the old
+            # container goes
+            prop = replace(prop, action="delete", payload_html=None)
         if el.container_id and el.tag in ("ul", "ol"):
             if prop is not None:
                 self.emit_tracked_list_container(el, prop)
@@ -1112,6 +1465,161 @@ class _Exporter:
             for block in _block_children(el, self.paint):
                 self.emit_block(block, cid)
 
+    # -- tracked moves ------------------------------------------------------------
+    #: blocks Word can carry as tracked moves of paragraph text
+    _MOVABLE = frozenset({"p", "h1", "h2", "h3", "h4", "h5", "h6", "blockquote", "li"})
+
+    def _move_is_paragraphs(self, el: Element) -> bool:
+        """Word tracks moves of paragraph text only; a container, figure,
+        rule or page break moves as a tracked deletion plus insertion."""
+        if el.container_id is not None:
+            return False
+        blocks = _block_children(el, self.paint)
+        return bool(blocks) and all(b.tag in self._MOVABLE for b in blocks)
+
+    def _emit_move_source(self, el: Element, prop: Proposal) -> None:
+        cid = el.chunk_id or el.container_id or ""
+        label, date = _actor_label(prop.author), prop.at
+        if not self._move_is_paragraphs(el):
+            removal = replace(prop, action="delete", payload_html=None)
+            if el.container_id and el.tag in ("ul", "ol"):
+                self.emit_tracked_list_container(el, removal)
+            elif el.container_id and el.tag == "table":
+                self.emit_table(el, force="del", prop=removal)
+            else:
+                self.emit_tracked_chunk(el, removal, payload=False)
+            return
+        blocks = _block_children(el, self.paint)
+        name = self._move_names[cid]
+        range_id = ""
+        for i, block in enumerate(blocks):
+            para = self.out.add_paragraph(style=self._safe_style(_style_for(block.tag)))
+            self._number_paragraph(para, block)
+            self.rev.mark_paragraph(para, "w:moveFrom", label, date)
+            if i == 0:
+                range_id = self.rev.move_range(para, "moveFrom", name, label, date)
+            self.rev.wrap(
+                para,
+                "w:moveFrom",
+                _tracked_block_runs(block, self.paint),
+                label,
+                date,
+                deleted=False,
+            )
+            if i == len(blocks) - 1:
+                self.rev.close_move_range(para, "moveFrom", range_id)
+
+    def _emit_move_destination(self, prop: Proposal) -> None:
+        """The arrival half of a pending move: one moved paragraph per block.
+        A pending modify of the same target lands here too (see
+        :meth:`_emit_moved_replacement`)."""
+        target = prop.target or ""
+        index = self.aim._state.top_index(target)
+        if index is None:  # pragma: no cover - guarded at registration
+            return
+        el = self.aim._state.constructs()[index]
+        label, date = _actor_label(prop.author), prop.at
+        modify = self.pending_mod.get(target)
+        if not self._move_is_paragraphs(el):
+            # what arrives is what accepting both cards leaves: the modified
+            # content when a modify is pending too, else the current content
+            content = modify.payload_html if modify is not None else None
+            if el.container_id and self._arrives_empty(el, modify):
+                return  # accept_all() removes every member it would bring
+            arrival = replace(
+                prop,
+                action="add",
+                payload_html=content or self.aim._state.serial(target),
+                target=None,
+            )
+            self._emit_add_paragraphs(arrival)
+            return
+        blocks = _block_children(el, self.paint)
+        if modify is not None:
+            self._emit_moved_replacement(prop, blocks, modify)
+            return
+        name = self._move_names[target]
+        range_id = ""
+        for i, block in enumerate(blocks):
+            para = self.out.add_paragraph(style=self._safe_style(_style_for(block.tag)))
+            self._number_paragraph(para, block)
+            self.rev.mark_paragraph(para, "w:moveTo", label, date)
+            if i == 0:
+                range_id = self.rev.move_range(para, "moveTo", name, label, date)
+            runs = _tracked_block_runs(block, self.paint)
+            self.rev.wrap(para, "w:moveTo", runs, label, date, deleted=False)
+            if i == len(blocks) - 1:
+                self.rev.close_move_range(para, "moveTo", range_id)
+
+    def _arrives_empty(self, el: Element, modify: Proposal | None) -> bool:
+        """Whether accepting the lane removes every member that writing the
+        container *el* whole would bring, so that writing it would bring
+        back the rows or items pending deletes remove. Its members are the
+        ones it holds, or, with *modify* pending, the ones that card's
+        payload brings; each must have a pending delete accepted after that
+        (one made before the modify goes first, and the payload brings its
+        member back). A card that adds or moves another member in changes
+        nothing: neither a moved container's arrival nor a modify's payload
+        writes that member (an add surfaces at the end of the document), so
+        the deleted members would still come back for nothing."""
+        if modify is None:
+            roots, since = [el], -1
+        else:
+            roots = [n for n in parse_fragment(modify.payload_html or "") if isinstance(n, Element)]
+            since = self._card_order.get(modify.id, 0)
+        # chunks never nest and no container sits in a chunk (lint S024):
+        # every chunk under the container is one of its members
+        members = {x.chunk_id for root in roots for x in root.iter() if x.chunk_id}
+        return bool(members) and all(
+            m in self.pending_del and self._card_order.get(self.pending_del[m].id, 0) > since
+            for m in members
+        )
+
+    def _emit_moved_replacement(
+        self, prop: Proposal, blocks: list[Element], modify: Proposal
+    ) -> None:
+        """A pending move and a pending modify of the same paragraphs, nested
+        as ``moveTo(del(old))`` + ``ins(new)``: rejecting the move removes
+        both, accepting both keeps only the new text — the outcomes of
+        resolving the two cards.
+
+        One moved paragraph per old block, holding that block's text. Word
+        gives a rejected move's old paragraphs back as the destination splits
+        them: with all the old blocks in one moved paragraph, its Reject All,
+        and accepting the move while rejecting the modify, ran them together.
+        The mark of every moved paragraph but the last is tracked as deleted
+        as well (``del`` + ``moveTo``), so Accept All keeps no empty paragraph
+        for it. The first new block takes the last mark over, and each
+        further new block is an inserted paragraph of its own, as in a modify
+        that did not move; with no new block, the last mark is tracked as
+        deleted too. The price: LibreOffice's Reject All keeps a mark tracked
+        as both deleted and moved as an empty paragraph."""
+        label, date = _actor_label(prop.author), prop.at
+        by, at = _actor_label(modify.author), modify.at
+        new_blocks: list[Element] = []
+        for new_el in self._payload_elements(modify):
+            new_blocks += _block_children(new_el, self.paint)
+        name = self._move_names[prop.target or ""]
+        range_id = ""
+        last = len(blocks) - 1
+        for i, block in enumerate(blocks):
+            takes_over = i == last and bool(new_blocks)
+            para = self.out.add_paragraph(style=self._safe_style(_style_for(block.tag)))
+            self._number_paragraph(para, block)
+            if not takes_over:
+                self.rev.mark_paragraph(para, "w:del", by, at)  # CT_ParaRPr: del before moveTo
+            self.rev.mark_paragraph(para, "w:moveTo", label, date)
+            if i == 0:
+                range_id = self.rev.move_range(para, "moveTo", name, label, date)
+            old = _tracked_block_runs(block, self.paint)
+            outer = self.rev.wrap(para, "w:moveTo", [], label, date, deleted=False)
+            self.rev.nested(outer, "w:del", para, old, by, at, deleted=True)
+            if takes_over:
+                self.rev.ins(para, _tracked_block_runs(new_blocks[0], self.paint), by, at)
+            if i == last:
+                self.rev.close_move_range(para, "moveTo", range_id)
+        self._emit_inserted_blocks(new_blocks[1:], modify)
+
     # -- tracked replacements (exactly once per chunk, never per child) -------
     def emit_tracked_chunk(
         self, el: Element, prop: Proposal, style: str | None = None, *, payload: bool = True
@@ -1131,13 +1639,20 @@ class _Exporter:
             self.rev.dele(para, _tracked_block_runs(block, self.paint), label, date)
         if payload and prop.action == "modify":
             for new_el in self._payload_elements(prop):
-                for block in _block_children(new_el, self.paint):
-                    para = self.out.add_paragraph(
-                        style=style or self._safe_style(_style_for(block.tag))
-                    )
-                    self._number_paragraph(para, block)
-                    self.rev.mark_paragraph(para, "w:ins", label, date)
-                    self.rev.ins(para, _tracked_block_runs(block, self.paint), label, date)
+                self._emit_inserted_blocks(_block_children(new_el, self.paint), prop, style)
+
+    def _emit_inserted_blocks(
+        self, blocks: list[Element], prop: Proposal, style: str | None = None
+    ) -> None:
+        """One inserted paragraph per block of *prop*'s replacement, its mark
+        tracked as well as its runs: Accept All keeps each block's paragraph,
+        Reject All leaves no empty one behind."""
+        label, date = _actor_label(prop.author), prop.at
+        for block in blocks:
+            para = self.out.add_paragraph(style=style or self._safe_style(_style_for(block.tag)))
+            self._number_paragraph(para, block)
+            self.rev.mark_paragraph(para, "w:ins", label, date)
+            self.rev.ins(para, _tracked_block_runs(block, self.paint), label, date)
 
     def emit_tracked_list_container(self, el: Element, prop: Proposal) -> None:
         label, date = _actor_label(prop.author), prop.at
@@ -1326,7 +1841,7 @@ class _Exporter:
         from docx.oxml.ns import qn
 
         props = para._p.get_or_add_pPr()
-        num_pr = _fresh_child(props, "w:numPr", ordered_in="pPr")
+        num_pr = _fresh_child(props, "w:numPr", ordered_in="w:pPr")
         _fresh_child(num_pr, "w:ilvl").set(qn("w:val"), str(ilvl))
         _fresh_child(num_pr, "w:numId").set(qn("w:val"), str(num_id))
 
@@ -1426,10 +1941,14 @@ class _Exporter:
         # emit_block routes figures here before its generic alignment code,
         # so the figure's own alignment class lands on the picture paragraph
         align = _alignment_of(el)
-        img = el.find(lambda e: e.tag == "img")
+        img = el.find(lambda e: e.tag == "img" or _packed_asset_ref(e) is not None)
         emitted = False
         if img is not None:
-            src = img.get("src") or ""
+            if img.tag == "img":
+                src, alt = img.get("src") or "", img.get("alt")
+            else:  # a packed image (§9.1): its bytes live in the asset registry
+                src = self.assets.get(_packed_asset_ref(img) or "", "")
+                alt = img.get("aria-label")
             m = re.match(r"^data:image/[a-z+.-]+;base64,(.*)$", src, re.S)
             if m:
                 try:
@@ -1441,7 +1960,7 @@ class _Exporter:
                 except Exception:
                     emitted = False
             if not emitted:
-                alt = img.get("alt") or "image"
+                alt = alt or "image"
                 para = self.out.add_paragraph()
                 if align is not None:
                     para.alignment = align
@@ -1538,8 +2057,12 @@ class _Exporter:
         if level == 0:
             num_id = self._list_num_id(el)
         container_id = el.container_id
+        # an added item draws from the same list definition as its siblings:
+        # without the numPr Word shows it unnumbered, and Accept All splits
+        # the list in two around it
+        num = (num_id, level) if num_id is not None else None
         if container_id:
-            self._emit_list_adds(container_id, None, style)
+            self._emit_list_adds(container_id, None, style, num)
         items = el.elements()
         i = 0
         while i < len(items):
@@ -1579,15 +2102,25 @@ class _Exporter:
                 for sub in nested:
                     self.emit_list(sub, level + 1, num_id)
             if container_id and cid:
-                self._emit_list_adds(container_id, cid, style)
+                self._emit_list_adds(container_id, cid, style, num)
 
-    def _emit_list_adds(self, container: str, after: str | None, style: str | None) -> None:
+    def _emit_list_adds(
+        self,
+        container: str,
+        after: str | None,
+        style: str | None,
+        num: tuple[int, int] | None = None,
+    ) -> None:
         # creation-order pool, for the same reason as _emit_anchored_adds
         pool = self._pop_adds(container, after)
         while pool:
             pool.sort(key=lambda p: self._card_order.get(p.id, 0))
             prop = pool.pop(0)
-            self._emit_add_paragraphs(prop, style=style)
+            self._list_item_num = num
+            try:
+                self._emit_add_paragraphs(prop, style=style)
+            finally:
+                self._list_item_num = None
             pool += self._pop_adds(container, prop.id)
 
     # -- tables ----------------------------------------------------------------------
@@ -1715,6 +2248,13 @@ class _Exporter:
         for ri in sorted(structural_del):
             prop_mod = self.pending_mod[rows[ri].chunk_id or ""]
             self.rev.row_dele(orig_trs[ri], _actor_label(prop_mod.author), prop_mod.at)
+        if not force:
+            # a pending row DELETE removes the row itself, not only its text:
+            # without the trPr marker Word's Accept All leaves an empty row
+            for ri, row in enumerate(rows):
+                prop_del = self.pending_del.get(row.chunk_id or "")
+                if prop_del is not None:
+                    self.rev.row_dele(orig_trs[ri], _actor_label(prop_del.author), prop_del.at)
         if container_id and not force:
             self._emit_row_adds(table, None, container_id, None, ncols, first=True)
             for ri, row in enumerate(rows):
@@ -1830,6 +2370,9 @@ class _Exporter:
                     _actor_label(prop.author),
                     prop.at,
                 )
+            # the row itself is the insertion: without the trPr marker Word's
+            # Reject All strands an empty row where the add was
+            self.rev.row_ins(new_row._tr, _actor_label(prop.author), prop.at)
             if first:
                 table.rows[0]._tr.addprevious(new_row._tr)
                 first = False  # later siblings chain after this row
@@ -1841,6 +2384,40 @@ class _Exporter:
 
 
 # --------------------------------------------------------------------------
+def _projected_body_index(doc: AimDocument) -> dict[str, int]:
+    """Each body-level block's index once the pending lane is accepted in
+    creation order, replayed on a copy exactly as ``accept_all()`` replays
+    it; empty when the lane does not replay."""
+    return _replay_lane(doc, {})[0]
+
+
+def _replay_lane(doc: AimDocument, watch: Mapping[str, str]) -> tuple[dict[str, int], set[str]]:
+    """The pending lane accepted in creation order on a copy, exactly as
+    ``accept_all()`` replays it: each body-level block's index once it is
+    accepted, and the ids of the moves in *watch* (move id to its target)
+    whose own accept left their target where it stood. Both are empty when
+    the lane does not replay."""
+    still: set[str] = set()
+    try:
+        projection = doc._clone()
+        decider = external("docx-export")
+        for proposal in resolution_order(projection.proposals):
+            target = watch.get(proposal.id)
+            before = projection._state.top_index(target) if target is not None else None
+            projection.accept(proposal.id, decided_by=decider)
+            if target is not None and before is not None:
+                if projection._state.top_index(target) == before:
+                    still.add(proposal.id)
+    except Exception:  # foreign cards may fail outside AimError, as in accept_all
+        return {}, set()
+    index: dict[str, int] = {}
+    for i, el in enumerate(projection._state.constructs()):
+        cid = el.chunk_id or el.container_id
+        if cid:
+            index.setdefault(cid, i)
+    return index, still
+
+
 def _resolve_copy(doc: AimDocument, decision: str) -> AimDocument:
     clone = AimDocument.loads(doc.dumps())
     decider = external("docx-export")

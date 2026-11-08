@@ -29,11 +29,17 @@ The format specification lives in ``spec.md`` at the repository root.
 
 from .canonical import canonical_json, sha256_prefixed
 from .convert import (
+    AimImportWarning,
+    CommentNote,
+    ImportReport,
+    ImportResult,
+    RevisionNote,
     from_docx,
     from_markdown,
     from_path,
     from_pdf,
     from_text,
+    import_docx,
     to_html,
     to_markdown,
     to_pdf,
@@ -51,8 +57,9 @@ from .note import render_note
 from .pagesetup import PageSetup, default_page_setup, page_css
 from .reconcile import ReconcileReport
 from .registry import REGISTRY
+from .toc import Section
 
-__version__ = "0.5.3"
+__version__ = "0.6.0"
 SPEC_VERSION = REGISTRY.spec_version
 
 __all__ = [
@@ -60,6 +67,7 @@ __all__ = [
     "Anchor",
     "Chunk",
     "Proposal",
+    "Section",
     "Event",
     "Actor",
     "Divergence",
@@ -89,6 +97,12 @@ __all__ = [
     "from_text",
     "from_markdown",
     "from_docx",
+    "import_docx",
+    "ImportResult",
+    "ImportReport",
+    "RevisionNote",
+    "CommentNote",
+    "AimImportWarning",
     "from_pdf",
     "to_markdown",
     "to_html",
