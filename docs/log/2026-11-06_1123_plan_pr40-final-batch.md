@@ -257,3 +257,39 @@ three findings, all applied.
 3. [P3] `docs/knowledge/architecture.md` states the old flatten, reconcile and packing
    behaviour. **Applied:** added to WP5.
 
+
+## Status, 2026-11-08
+
+Built on a shared Linux machine, nothing merged. Every package was built in its own worktree
+with failing-first tests, then checked by two independent reviewers (does it hold, what
+does it break), with up to three repair rounds; the integrated head then passed the gates.
+
+- **WP0.** Both round-3 fixes were checked from two angles; 19 findings, 13 survived an
+  attempt to refute each. Four were regressions of the fixes themselves, repaired here:
+  the table fix credited a restyle to rows it did not repaint (one card lost its author),
+  and the move fix replayed the whole lane on every tracked export with a pending move
+  (about 30x slower, output right). The rest were older code and went to the tracked list.
+- **WP1, WP2.** As planned, plus: the repair rejects (with an explanation) a pending card
+  that names an id it had to replace, as reconcile does, and replays the cards left when
+  it replaced any id; a reserved word keeps its meaning only as "body" in the container
+  role and as a theme or settings card's target. A read-only output is refused, a symlink
+  stays a link. H001's text names the files that really have no history block.
+- **WP3.** As planned. Stored symbols are never re-gridded: a reference packed now takes
+  the frame of the symbol it points to.
+- **WP4, WP5.** Done; the container runner was not run here (no image builds on this
+  machine).
+- **Not done here:** the check in Word itself of the export layouts (P20 and the move-order
+  fix), which needs a machine with Word.
+
+Decisions made without the maintainer, added during the build (convention 9):
+
+| Decision | Why | Where |
+|---|---|---|
+| A restyle's tblPrChange is cited by a row when it was needed for the row's final paint or gives that paint on its own | Rows with no revision of their own come out the same either way; this rule credits the restyle's author least where another author's card already carries the row | `_repainted`, `convert/_docx_tracked.py` |
+| The tracked export replays the lane only for a pool whose order a move, a moved or deleted block, a hand-written shell or a backward chain can change | The full replay on every export with a pending move cost up to 30x; probes over about 30,000 lanes found no difference from the full replay | `_unsettled_cards`, `export_docx.py` |
+| The discard repair rejects cards naming a replaced id instead of refusing the body | Reconcile cannot run on an unreadable log, so a refusal would leave only a hand edit | `_reject_cards_naming` |
+| The repaired document is parsed from newline-translated text; the side file takes the raw bytes | A CR kept in the body ends up escaped in the snapshot and the next load fails verification | `cli.py` |
+| A read-only output is refused; a symlinked output is replaced at its real path | A rename would get past a write permission a plain save respects; the link stays a link | `cli.py` |
+| A stored symbol is never re-gridded; a new reference takes its frame | The registry is content (P14); re-gridding changed how SDK 0.2.0 references draw | `_stored_grid`, `document.py` |
+| A flatten at 0.6 keeps inline data-URI images twice (body and snapshot); documented, with `aim pack` as the remedy, not packed automatically | Packing in flatten changes what flatten writes; a proposal for the maintainer | `flatten()` docstring, CHANGELOG |
+| The side file keeps the dropped lines' image references, not the images | One byte-for-byte side file as planned; a second file of symbols is a proposal for the maintainer | spec §6.8, CHANGELOG |
