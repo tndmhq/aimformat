@@ -723,13 +723,14 @@ class TestRoundTrip:
     @pytest.mark.parametrize(
         ("old", "new"),
         [
+            (["Old"], ["New"]),
             (["Old"], ["New1", "New2"]),
             (["Old"], ["New1", "New2", "New3"]),
             (["Old1", "Old2"], ["New"]),
             (["Old1", "Old2", "Old3"], ["New1", "New2"]),
             (["Old1", "Old2"], []),
         ],
-        ids=["1-to-2", "1-to-3", "2-to-1", "3-to-2", "2-to-none"],
+        ids=["1-to-1", "1-to-2", "1-to-3", "2-to-1", "3-to-2", "2-to-none"],
     )
     def test_a_moved_and_modified_chunk_resolves_like_its_two_cards(self, old, new, tmp_path):
         # Every block of the replacement went into the moved paragraph, so
@@ -738,15 +739,22 @@ class TestRoundTrip:
         # standing, so Accept All kept an empty paragraph for each old block
         # but the last, and for the last one too when the replacement has no
         # block at all. Accepting the two cards gives none of these.
+        #
+        # Then all the old blocks went into ONE moved paragraph, and Word
+        # gives a rejected move's old paragraphs back as the destination
+        # splits them: its Reject All, and accepting the move while rejecting
+        # the modify, ran them together ("Old1Old2"). The resolver restores a
+        # rejected move from its source and cannot see that, so the layout is
+        # pinned too: one moved paragraph per old block.
         ada, bot = aim.human("ada"), aim.agent("model-x")
         doc = aim.new_document(title="Moved and rewritten")
         before = "".join(f"<p>{text}</p>" for text in old)
         markups = ("<p>Alpha</p>", f"<div>{before}</div>", "<p>Beta</p>", "<p>Gamma</p>")
         with doc.batch():
             _, moved, beta, _ = (doc.add_chunk(m, author=ada).id for m in markups)
-        doc.propose_move(moved, container="body", after=beta, author=ada)
+        move = doc.propose_move(moved, container="body", after=beta, author=ada)
         after = "".join(f"<p>{text}</p>" for text in new)
-        doc.propose_modify(moved, f'<div data-aim="{moved}">{after}</div>', author=bot)
+        rewrite = doc.propose_modify(moved, f'<div data-aim="{moved}">{after}</div>', author=bot)
         tracked = tmp_path / "tracked.docx"
         aim.to_docx(doc, tracked, pending="tracked")
         want = {
@@ -758,6 +766,16 @@ class TestRoundTrip:
             aim.to_docx(doc, resolved, pending=f"{view}-all")  # the SDK's own outcome
             assert _view_paragraphs(resolved.read_bytes(), view) == paragraphs
             assert _view_paragraphs(tracked.read_bytes(), view) == paragraphs
+        assert _moved_paragraph_texts(tracked.read_bytes()) == old
+        mixed = aim.loads(doc.dumps())
+        mixed.accept(move.id, decided_by=DECIDER)
+        mixed.reject(rewrite.id, decided_by=DECIDER)
+        resolved = tmp_path / "mixed.docx"
+        aim.to_docx(mixed, resolved, pending="accept-all")  # nothing is left pending
+        paragraphs = ["Alpha", "Beta", *old, "Gamma"]
+        assert _view_paragraphs(resolved.read_bytes(), "accept") == paragraphs
+        rewriter = export_docx._actor_label(bot)
+        assert _view_paragraphs_rejecting(tracked.read_bytes(), rewriter) == paragraphs
 
     @pytest.mark.parametrize("forward", [True, False], ids=["later", "earlier"])
     @pytest.mark.parametrize(
@@ -1203,6 +1221,44 @@ def _view_paragraphs(data: bytes, view: str) -> list[str]:
         root = etree.fromstring(z.read("word/document.xml"))
     view_root = resolve_view(root, view)
     return ["".join(t.text or "" for t in p.iter(f"{w}t")) for p in view_root.iter(f"{w}p")]
+
+
+def _view_paragraphs_rejecting(data: bytes, author: str) -> list[str]:
+    """Every paragraph of a .docx with *author*'s insertions and deletions
+    rejected and every other revision accepted. The resolver has no such
+    view, so that author's revisions are swapped for their inverses (an
+    insertion for a deletion, text for deleted text) and it accepts all."""
+    from lxml import etree
+
+    w = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
+    with zipfile.ZipFile(io.BytesIO(data)) as z:
+        root = etree.fromstring(z.read("word/document.xml"))
+    inverse = {f"{w}ins": f"{w}del", f"{w}del": f"{w}ins"}
+    for el in [e for e in root.iter(*inverse) if e.get(f"{w}author") == author]:
+        el.tag = inverse[el.tag]
+    for text in list(root.iter(f"{w}t", f"{w}delText")):
+        holder = next(text.iterancestors(*inverse), None)
+        if holder is not None and holder.get(f"{w}author") == author:
+            text.tag = f"{w}delText" if holder.tag == f"{w}del" else f"{w}t"
+    view_root = resolve_view(root, "accept")
+    return ["".join(t.text or "" for t in p.iter(f"{w}t")) for p in view_root.iter(f"{w}p")]
+
+
+def _moved_paragraph_texts(data: bytes) -> list[str]:
+    """The text each paragraph of a .docx holds as moved (``w:moveTo``), for
+    the paragraphs that hold any: Word restores a rejected move's old
+    paragraphs as these split them."""
+    from lxml import etree
+
+    w = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
+    with zipfile.ZipFile(io.BytesIO(data)) as z:
+        root = etree.fromstring(z.read("word/document.xml"))
+    out = []
+    for p in root.iter(f"{w}p"):
+        moved = [child for child in p if child.tag == f"{w}moveTo"]
+        if moved:
+            out.append("".join(t.text or "" for m in moved for t in m.iter(f"{w}t", f"{w}delText")))
+    return out
 
 
 def _lettered_lane(names: str, lane: list[tuple]) -> aim.AimDocument:

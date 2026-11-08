@@ -215,7 +215,9 @@ Decisions IMPORT-D1 to IMPORT-D8 in `docs/log/` (2026-10-01).
   Word reviewer sees them; before, a pending move exported as unchanged
   text. A moved container, figure or rule exports as a tracked deletion plus
   insertion, and a move with a pending modify of the same block lands as
-  `moveTo(del(old))` plus `ins(new)`.
+  `moveTo(del(old))` plus `ins(new)`, one moved paragraph per old block, so
+  that in Word Accept All, Reject All and accepting the move while rejecting
+  the modify each give the expected paragraphs.
 - **Pending row adds and row deletes now mark the row itself** (`w:trPr`).
   Without the marker, Word's Reject All left an empty row where a pending
   add had been, and Accept All left an empty row where a pending delete had
