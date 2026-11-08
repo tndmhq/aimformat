@@ -1,7 +1,7 @@
 ---
 date: 2026-11-08 14:42
 type: plan
-status: active
+status: done
 related: [2026-11-08_1442_decision_pr40-x5-self-anchored-move.md, 2026-11-06_1123_plan_pr40-final-batch.md]
 ---
 

@@ -1,7 +1,7 @@
 ---
 date: 2026-11-06 11:23
 type: plan
-status: active
+status: done
 related: [2026-11-05_1816_plan_pr40-rework.md, 2026-10-01_2135_decision_flatten-collapses-to-checkpoint.md, 2026-10-01_2135_decision_baseline-lifecycle-operation.md, 2026-11-05_1931_decision_import-packs-images-before-baseline.md]
 ---
 
@@ -293,3 +293,27 @@ Decisions made without the maintainer, added during the build (convention 9):
 | A stored symbol is never re-gridded; a new reference takes its frame | The registry is content (P14); re-gridding changed how SDK 0.2.0 references draw | `_stored_grid`, `document.py` |
 | A flatten at 0.6 keeps inline data-URI images twice (body and snapshot); documented, with `aim pack` as the remedy, not packed automatically | Packing in flatten changes what flatten writes; a proposal for the maintainer | `flatten()` docstring, CHANGELOG |
 | The side file keeps the dropped lines' image references, not the images | One byte-for-byte side file as planned; a second file of symbols is a proposal for the maintainer | spec §6.8, CHANGELOG |
+
+## The maintainer's review (2026-11-08)
+
+Every call made without the maintainer in this batch was put to the maintainer on 2026-11-08,
+and the choices the batch left open were answered:
+
+| Call or choice | Answer |
+|---|---|
+| Which round-3 repairs stay: these, or the parallel run's on `tmp/aim40-r3-noopmove` and `tmp/aim40-r3-tblprchange` | Kept as merged. The maintainer asked for a swap only if the parallel run's were better; a comparison found them not better |
+| Who is credited for a table restyle (`w:tblPrChange`) | Confirmed |
+| When the tracked export replays the lane | Confirmed: the shortcut stays (no difference from the full replay over about 150,000 fuzzed lanes) |
+| The repair and ids (`discard_history=True`) | Confirmed |
+| Reserved words as ids | Confirmed |
+| `flatten()` refuses a 0.6+ body that cannot be a snapshot | Confirmed |
+| A stored symbol is never re-gridded; a new reference takes its frame | Confirmed |
+| The repair's file handling: newline-translated parse, raw side file, atomic replace, read-only and symlinked outputs, only the repair writes atomically | Confirmed |
+| The smaller calls: `history_text()`, the side file's name, seq after a discard, `baseline()`'s message, H001's text, a history-less flatten, the container's LibreOffice pin, the plan-order change | Confirmed, one by one |
+| `flatten()` storing inline images once | Yes, at 0.6 and above, in the pass over the tracked list after the format work; this PR keeps the documented behaviour |
+| The side file keeping the images it drops | Not now; the docs say so |
+| A move left anchored on its own target by §5.4's reject fallback loses its block in Word's Accept All | Fixed in this PR: [decision](2026-11-08_1442_decision_pr40-x5-self-anchored-move.md), [plan](2026-11-08_1442_plan_pr40-x5-self-anchored-move.md) |
+| Merging | Into `next`, where the 0.6 work collects until its release, on a clean ready round |
+
+The P20 layout was revisited separately after the check in Word itself:
+[W1](2026-11-08_0918_decision_pr40-p20-paragraph-per-block.md).

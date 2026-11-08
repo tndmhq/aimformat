@@ -1,7 +1,7 @@
 ---
 date: 2026-11-08 09:18
 type: plan
-status: active
+status: done
 related: [2026-11-08_0918_decision_pr40-p20-paragraph-per-block.md, 2026-11-07_1741_decision_pr40-choices-decided.md, 2026-11-05_1816_plan_pr40-rework.md]
 ---
 
