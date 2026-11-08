@@ -981,6 +981,9 @@ class _Exporter:
         # position emits the removal, the destination anchor the arrival
         self.pending_move: dict[str, Proposal] = {}
         self._move_names: dict[str, str] = {}
+        # pending moves left anchored on their own target that land nothing
+        # (_lands_nothing): written as no move, but still pending
+        self._noop_moves: list[Proposal] = []
         # adds keyed by (container, after) — every container, not just body
         self.adds_by_anchor: dict[tuple[str, str | None], list[Proposal]] = {}
         # dependency-adjusted creation order — the order the accepted lane
@@ -1011,17 +1014,28 @@ class _Exporter:
                 el = doc._state.constructs()[doc._state.top_index(p.target) or 0]
                 if el.tag == "aim-slide":
                     continue  # whole-slide proposals export as current content
+                if self._lands_nothing(p):
+                    self._noop_moves.append(p)
+                    continue
                 self.pending_move[p.target] = p
                 self._move_names[p.target] = f"aim-move-{len(self._move_names) + 1}"
                 self.adds_by_anchor.setdefault(("body", p.anchor_after), []).append(p)
+        # A card chained on a move written as no move follows its block,
+        # which stays where it is: it lands after it, with its other cards.
+        for move in self._noop_moves:
+            chained = self.adds_by_anchor.pop(("body", move.id), [])
+            if chained:
+                self.adds_by_anchor.setdefault(("body", move.target), []).extend(chained)
         # Cards anchored after a moving chunk split by creation order: one
         # made before the move lands at the chunk's old place, one made after
         # it follows the chunk to its new place (accept order is card order).
+        # A move anchored on its own target lands among the cards made before
+        # it (_lands_nothing), so it joins them.
         self._after_move: dict[str, list[Proposal]] = {}
         for target, move in self.pending_move.items():
             here = self.adds_by_anchor.pop(("body", target), [])
             cut = self._card_order.get(move.id, 0)
-            early = [q for q in here if self._card_order.get(q.id, 0) < cut]
+            early = [q for q in here if self._card_order.get(q.id, 0) < cut or q is move]
             late = [q for q in here if self._card_order.get(q.id, 0) > cut]
             if early:
                 self.adds_by_anchor[("body", target)] = early
@@ -1110,6 +1124,33 @@ class _Exporter:
         section.right_margin = Mm(m["right"])
         section.bottom_margin = Mm(m["bottom"])
         section.left_margin = Mm(m["left"])
+
+    def _lands_nothing(self, move: Proposal) -> bool:
+        """Whether *move*, a pending body move, is a no-op once the lane is
+        accepted. propose_move refuses a block anchored after itself, but a
+        reject can leave one (section 5.4 rebinds a card anchored on a
+        rejected card to that card's own anchor), and accept() takes it as a
+        no-op. accept_all() does too unless a position card made before the
+        move waits in its target's zone: it lands that card first, and the
+        same-anchor rebind then moves the target behind it."""
+        if move.anchor_after != move.target:
+            return False
+        made = self._card_order.get(move.id, 0)
+        for card in self._by_id.values():
+            if (
+                card.action not in ("add", "move")
+                or card.id == move.id
+                or (card.anchor_container or "body") != "body"
+                or self._card_order.get(card.id, 0) > made
+            ):
+                continue
+            walk, seen = card.anchor_after, set()
+            while walk is not None and walk in self._by_id and walk not in seen:
+                seen.add(walk)
+                walk = self._by_id[walk].anchor_after
+            if walk == move.target:
+                return False
+        return True
 
     def _pop_adds(self, container: str, after: str | None) -> list[Proposal]:
         return self.adds_by_anchor.pop((container, after), [])
@@ -1204,7 +1245,7 @@ class _Exporter:
         if len(pool) < 2:
             return
         landing: dict[str, int] = {}
-        if container == "body" and self.pending_move:
+        if container == "body" and (self.pending_move or self._noop_moves):
             if self._landing is None and all(map(self._lands_in_card_order, unchecked)):
                 unchecked.clear()
             else:

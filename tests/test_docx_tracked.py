@@ -1128,6 +1128,167 @@ class TestRoundTrip:
         assert _view_texts(back.read_bytes(), "accept") == want
         assert _view_texts(back.read_bytes(), "reject") == list("ABCD")
 
+    @pytest.mark.parametrize(
+        ("lane", "want", "moved"),
+        [
+            # rejecting N hands A's move, chained on N, N's own anchor: the
+            # card now says "A after A", which accept() takes as a no-op
+            ([("add", "N", "A"), ("move", "A", "N"), ("reject", "add N")], "A B C D", []),
+            # cards made after the move on A land right after A, a card
+            # chained on them after that
+            (
+                [
+                    ("add", "N", "A"),
+                    ("move", "A", "N"),
+                    ("reject", "add N"),
+                    ("add", "Later", "A"),
+                    ("add", "Chained", "Later"),
+                ],
+                "A Later Chained B C D",
+                [],
+            ),
+            # A rewritten too
+            (
+                [
+                    ("add", "N", "A"),
+                    ("move", "A", "N"),
+                    ("reject", "add N"),
+                    ("modify", "A"),
+                    ("add", "Later", "A"),
+                ],
+                "A2 Later B C D",
+                [],
+            ),
+            # beside a real move onto A, in a pool the replay orders
+            (
+                [
+                    ("add", "N", "A"),
+                    ("move", "A", "N"),
+                    ("reject", "add N"),
+                    ("move", "D", "A"),
+                    ("add", "Later", "A"),
+                ],
+                "A D Later B C",
+                ["D"],
+            ),
+            # two leftovers, on neighbouring blocks
+            (
+                [
+                    ("add", "N", "A"),
+                    ("move", "A", "N"),
+                    ("add", "M", "B"),
+                    ("move", "B", "M"),
+                    ("reject", "add N"),
+                    ("reject", "add M"),
+                    ("add", "L1", "A"),
+                    ("add", "L2", "B"),
+                ],
+                "A L1 B L2 C D",
+                [],
+            ),
+            # rejecting N hands X, chained on N, to the last card made before
+            # N on A: the leftover move card itself, so X follows A
+            (
+                [
+                    ("add", "M", "A"),
+                    ("move", "A", "M"),
+                    ("reject", "add M"),
+                    ("add", "N", "A"),
+                    ("add", "X", "N"),
+                    ("reject", "add N"),
+                ],
+                "A X B C D",
+                [],
+            ),
+        ],
+        ids=[
+            "alone",
+            "a-later-add-and-its-chain",
+            "modified",
+            "beside-a-move-onto-it",
+            "two",
+            "a-card-chained-on-the-leftover",
+        ],
+    )
+    def test_a_move_left_anchored_on_its_own_target_keeps_its_block(
+        self, lane, want, moved, tmp_path
+    ):
+        # propose_move refuses "A after A", but a reject leaves it: A's move,
+        # chained on N, falls back to N's anchor, A itself (spec section 5.4).
+        # With no card made before it in A's zone it moves nothing. The
+        # export wrote it as a Word move whose arrival never came out, so
+        # Accept All lost A and every card made after the move on A; it now
+        # writes no move.
+        doc = _lettered_lane("ABCD", lane)
+        assert any(p.action == "move" and p.anchor_after == p.target for p in doc.proposals)
+        assert _texts(_resolved(doc, "accept")) == want.split()
+        back = tmp_path / "self.docx"
+        aim.to_docx(doc, back, pending="tracked")
+        data = back.read_bytes()
+        assert _view_texts(data, "accept") == want.split()
+        assert _view_texts(data, "reject") == list("ABCD")
+        assert _moved_paragraph_texts(data) == moved
+
+    @pytest.mark.parametrize(
+        ("lane", "want"),
+        [
+            # E1, made after N but before A's move, waits in A's zone too
+            (
+                [("add", "N", "A"), ("add", "E1", "A"), ("move", "A", "N"), ("reject", "add N")],
+                "E1 A B C D",
+            ),
+            # X1, chained on N, falls back to A as well
+            (
+                [("add", "N", "A"), ("add", "X1", "N"), ("move", "A", "N"), ("reject", "add N")],
+                "X1 A B C D",
+            ),
+            # D's move onto N, made before A's: D lands first, A after it
+            (
+                [("add", "N", "A"), ("move", "D", "N"), ("move", "A", "N"), ("reject", "add N")],
+                "D A B C",
+            ),
+        ],
+        ids=["an-add-made-before-the-move", "a-card-chained-on-n", "a-move-made-before-it"],
+    )
+    def test_a_move_left_on_its_own_target_lands_after_the_cards_made_before_it(
+        self, lane, want, tmp_path
+    ):
+        # The "A after A" leftover moves nothing only while no position card
+        # made before it waits in A's zone: accept_all() lands such a card
+        # first and rebinds the move onto its block, so A moves after it.
+        doc = _lettered_lane("ABCD", lane)
+        assert any(p.action == "move" and p.anchor_after == p.target for p in doc.proposals)
+        assert _texts(_resolved(doc, "accept")) == want.split()
+        back = tmp_path / "captured.docx"
+        aim.to_docx(doc, back, pending="tracked")
+        assert _view_texts(back.read_bytes(), "accept") == want.split()
+        assert _view_texts(back.read_bytes(), "reject") == list("ABCD")
+
+    def test_a_move_written_as_no_move_keeps_the_replay_for_other_pools(self, tmp_path):
+        # The leftover "A after A" is the lane's only move. Written as no
+        # move, it must still count as a pending move, or the pool on B,
+        # where a hand-written shell on Second keeps accepting First from
+        # rebinding it (see the shell test above), would fall back to card
+        # order.
+        ada, rev = aim.human("ada"), aim.human("reviewer")
+        doc = aim.new_document(title="Shell")
+        with doc.batch():
+            a, b, _, _ = (doc.add_chunk(f"<p>{t}</p>", author=ada).id for t in "ABCD")
+        n = doc.propose_add("<p>N</p>", after=a, author=ada)
+        n_block = doc._payload_root_id(n.payload_html or "")
+        doc.propose_move(a, container="body", after=n_block, author=ada)
+        doc.reject(n.id, decided_by=rev)
+        doc.propose_add("<p>First</p>", after=b, author=ada)
+        second = doc.propose_add("<p>Second</p>", after=b, author=ada)
+        doc._card_el(second.id).set("data-anchor-shell", "tbody")  # foreign-authored
+        doc = aim.loads(doc.dumps())
+        want = _texts(_resolved(doc, "accept"))
+        assert want == ["A", "B", "Second", "First", "C", "D"]
+        back = tmp_path / "noop.docx"
+        aim.to_docx(doc, back, pending="tracked")
+        assert _view_texts(back.read_bytes(), "accept") == want
+        assert _view_texts(back.read_bytes(), "reject") == list("ABCD")
+
     def test_a_foreign_move_chained_on_a_pending_add_lands_like_accept_all(self, tmp_path):
         # A's anchor holds New alone; B's hand-written move and Chained both
         # anchor on New's proposal id, so they join the pool once New is
