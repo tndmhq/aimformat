@@ -697,6 +697,28 @@ class TestRoundTrip:
         assert _view_texts(back.read_bytes(), "accept") == want.split()
         assert _view_texts(back.read_bytes(), "reject") == list("ABCD")
 
+    def test_a_hand_written_shell_on_a_body_add_keeps_the_replay_order(self, tmp_path):
+        # accept() keys a zone by container, anchor AND shell, so accepting
+        # First does not rebind a Second whose card names a shell (only a
+        # hand-written file can: the SDK refuses a shell outside a table);
+        # Second lands right after B, in front of First. The export pools both
+        # on B, and with a body move pending it must order them by the replay.
+        ada = aim.human("ada")
+        doc = aim.new_document(title="Shell")
+        with doc.batch():
+            _, b, _, d = (doc.add_chunk(f"<p>{t}</p>", author=ada).id for t in "ABCD")
+        doc.propose_add("<p>First</p>", after=b, author=ada)
+        second = doc.propose_add("<p>Second</p>", after=b, author=ada)
+        doc.propose_move(d, container="body", after=None, author=ada)
+        doc._card_el(second.id).set("data-anchor-shell", "tbody")  # foreign-authored
+        doc = aim.loads(doc.dumps())
+        want = _texts(_resolved(doc, "accept"))
+        assert want == ["D", "A", "B", "Second", "First", "C"]
+        back = tmp_path / "shell.docx"
+        aim.to_docx(doc, back, pending="tracked")
+        assert _view_texts(back.read_bytes(), "accept") == want
+        assert _view_texts(back.read_bytes(), "reject") == list("ABCD")
+
     def test_a_foreign_move_to_where_its_block_stands_lands_nothing(self, tmp_path):
         # propose_move refuses a move that changes nothing in the current
         # body, but a hand-written card can still say "B after A" with B

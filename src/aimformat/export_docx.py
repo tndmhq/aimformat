@@ -1161,10 +1161,15 @@ class _Exporter:
                 walk = self._by_id[walk].anchor_after
 
         def settled(add: Proposal) -> bool:
+            # accept() keys a zone by container, anchor and shell, so a body
+            # add naming a shell (only a hand-written card can) is not rebound
+            # like its pool's other arrivals: the replay decides its place
+            if add.anchor_shell is not None:
+                return False
             anchor = add.anchor_after
             if anchor is not None and ids.is_valid_proposal_id(anchor):
                 parent = self._by_id.get(anchor)
-                if parent is None or parent.action != "add":
+                if parent is None or parent.action != "add" or parent.anchor_shell is not None:
                     return False
                 anchor = self.aim._payload_root_id(parent.payload_html or "")
             block = self.aim._payload_root_id(add.payload_html or "")
