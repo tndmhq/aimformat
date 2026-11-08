@@ -20,6 +20,7 @@ import io
 import pathlib
 import random
 import re
+import signal
 import time
 import warnings
 import zipfile
@@ -863,6 +864,13 @@ class TestRoundTrip:
             # A join that pool only once A's arrival is written, and D's move
             # is the no-op (D already follows A)
             ([("move", "A", "C"), ("move", "D", "A"), ("add", "New", "A")], "B C A New D"),
+            # the pool at the start (C's move, N1) makes the replay; B's pool,
+            # sorted later, must use it too: D's move lands nothing once C has
+            # left, so A lands in front of D
+            (
+                [("move", "C", None), ("add", "N1", None), ("move", "D", "B"), ("move", "A", "B")],
+                "C N1 B A D",
+            ),
         ],
         ids=[
             "move-on-its-anchor",
@@ -874,6 +882,7 @@ class TestRoundTrip:
             "adds-on-both-sides",
             "moved-and-modified",
             "after-move-join",
+            "a-later-pool-reuses-the-replay",
         ],
     )
     def test_a_move_earlier_cards_made_a_no_op_lands_like_accept_all(self, lane, want, tmp_path):
@@ -888,6 +897,163 @@ class TestRoundTrip:
         aim.to_docx(doc, back, pending="tracked")
         assert _view_texts(back.read_bytes(), "accept") == want.split()
         assert _view_texts(back.read_bytes(), "reject") == list("ABCD")
+
+    @pytest.mark.parametrize(
+        ("names", "lane", "want"),
+        [
+            # accepting Y's deletion chains A's move on E's move, made after
+            # it. accept_all() still takes A's move first (only an add waits
+            # for the card it chains onto): it lands after P, where the chain
+            # starts, and takes N3 behind A's block, so E, after N2, lands in
+            # front of N3. A's deletion keeps the move out of the export.
+            # Deciding every card in creation order gives P N2 N3 E Q.
+            (
+                "PYQEA",
+                [
+                    ("move", "A", "Y"),
+                    ("add", "N2", "P"),
+                    ("add", "N3", "P"),
+                    ("move", "E", "N2"),
+                    ("delete", "Y"),
+                    ("delete", "A"),
+                    ("accept", "delete Y"),
+                ],
+                "P N2 E N3 Q",
+            ),
+            # the same pending cards, reached through a reject: A's move
+            # chained on T, then handed to E's move, the zone's remaining last
+            # card, when T is rejected
+            (
+                "PYQEAF",
+                [
+                    ("move", "A", "Y"),
+                    ("add", "N2", "P"),
+                    ("add", "N3", "P"),
+                    ("move", "E", "N2"),
+                    ("add", "T", "P"),
+                    ("delete", "Y"),
+                    ("delete", "A"),
+                    ("accept", "delete Y"),
+                    ("reject", "add T"),
+                ],
+                "P N2 E N3 Q F",
+            ),
+            # the same pending cards, reached through a move's accept: A's
+            # move, made before Y's, handed to E's move when Y's move is
+            # accepted
+            (
+                "PYQEAFG",
+                [
+                    ("move", "A", "Y"),
+                    ("add", "N2", "P"),
+                    ("add", "N3", "P"),
+                    ("move", "E", "N2"),
+                    ("move", "Y", "G"),
+                    ("delete", "A"),
+                    ("accept", "move Y"),
+                ],
+                "P N2 E N3 Q F G Y",
+            ),
+            # the same with A's move chained on N4, an add chained on N2 and
+            # made after the move: A's move takes N3 behind A's block, so N4
+            # lands in front of N3. A's move is hidden by A's deletion, and a
+            # hidden move alone does not make the export replay (a known gap:
+            # it then writes card order), so F's move keeps a body move shown
+            (
+                "PYQEAF",
+                [
+                    ("move", "A", "Y"),
+                    ("add", "N2", "P"),
+                    ("add", "N3", "P"),
+                    ("add", "N4", "N2"),
+                    ("delete", "Y"),
+                    ("delete", "A"),
+                    ("move", "F", None),
+                    ("accept", "delete Y"),
+                ],
+                "F P N2 N4 N3 Q E",
+            ),
+            # and with Q's move after E as the shown move instead of F's
+            (
+                "PYQEAF",
+                [
+                    ("move", "A", "Y"),
+                    ("add", "N2", "P"),
+                    ("add", "N3", "P"),
+                    ("add", "N4", "N2"),
+                    ("delete", "Y"),
+                    ("delete", "A"),
+                    ("move", "Q", "E"),
+                    ("accept", "delete Y"),
+                ],
+                "P N2 N4 N3 E Q F",
+            ),
+            # accepting B's move hands D's move, made before it, to N2, the
+            # last card on A, chained on N1 and made after D's move (D's
+            # deletion keeps the move out of the export): taken first, D's
+            # move lands after A and takes S behind D's block, so N2 lands in
+            # front of S. G's move keeps a body move shown, as F's does above.
+            (
+                "ABCDEFG",
+                [
+                    ("move", "D", "B"),
+                    ("add", "N1", "A"),
+                    ("add", "S", "A"),
+                    ("add", "N2", "N1"),
+                    ("move", "B", "F"),
+                    ("move", "G", None),
+                    ("delete", "D"),
+                    ("accept", "move B"),
+                ],
+                "G A N1 N2 S C E F B",
+            ),
+            # rejecting N1, the lane's first card (so in creation order),
+            # hands N2 and N4 to G, and accepting G's deletion re-anchors them
+            # on E. E's move, made between them, splits E's zone: accepting N2
+            # does not rebind N4 onto N2's block, so N4 lands right after E,
+            # in front of N2 (E's move lands nothing once Y is gone).
+            (
+                "AXYEGH",
+                [
+                    ("add", "N1", "G"),
+                    ("delete", "G"),
+                    ("add", "N2", "N1"),
+                    ("delete", "Y"),
+                    ("move", "E", "X"),
+                    ("add", "N4", "N1"),
+                    ("reject", "add N1"),
+                ],
+                "A X E N4 N2 H",
+            ),
+        ],
+        ids=[
+            "accept-a-deletion",
+            "reject-the-zone-tail",
+            "accept-a-move",
+            "chained-on-a-later-add",
+            "chained-on-a-later-add-q-moved",
+            "accept-a-move-on-a-later-add",
+            "a-zone-split-after-a-reject",
+        ],
+    )
+    def test_a_lane_after_a_decision_lands_like_accept_all(self, names, lane, want, tmp_path):
+        # An accept or reject re-anchors cards still pending: a block that
+        # leaves (its deletion, or a move made after them, accepted) hands
+        # the cards anchored on it to the last card on its own anchor, which
+        # may be a card made after them, and a rejected card hands its
+        # dependents to the remaining last card of its zone, or to its
+        # anchor. Plain SDK calls and one or two decisions, all but the last
+        # made out of creation order, reach lanes whose arrivals card order
+        # misplaces. The export must agree with accept_all(). In the first
+        # six lanes that is not what deciding every card in creation order
+        # gives: spec section 5.4 lets out-of-order decisions around moves
+        # diverge from it.
+        doc = _lettered_lane(names, lane)
+        assert _texts(_resolved(doc, "accept")) == want.split()
+        back = tmp_path / "decided.docx"
+        aim.to_docx(doc, back, pending="tracked")
+        assert _view_texts(back.read_bytes(), "accept") == want.split()
+        assert _view_texts(back.read_bytes(), "reject") == _texts(_resolved(doc, "reject"))
 
     def test_a_hand_written_shell_on_a_body_add_keeps_the_replay_order(self, tmp_path):
         # accept() keys a zone by container, anchor AND shell, so accepting
@@ -910,6 +1076,37 @@ class TestRoundTrip:
         aim.to_docx(doc, back, pending="tracked")
         assert _view_texts(back.read_bytes(), "accept") == want
         assert _view_texts(back.read_bytes(), "reject") == list("ABCD")
+
+    @pytest.mark.parametrize(
+        ("lane", "shelled", "want"),
+        [
+            ([("add", "New", "A"), ("move", "D", "A")], 1, "A D New B C E"),
+            ([("move", "D", "A"), ("add", "New", "A")], 0, "A New D B C E"),
+            ([("add", "New", "A"), ("move", "D", "A")], 0, "A D New B C E"),
+            ([("move", "D", "A"), ("move", "E", "A")], 1, "A E D B C"),
+        ],
+        ids=["on-a-later-move", "on-an-earlier-move", "on-an-earlier-add", "on-one-of-two-moves"],
+    )
+    def test_two_arrivals_one_naming_a_shell_land_like_accept_all(
+        self, lane, shelled, want, tmp_path
+    ):
+        # accept() keys a zone by container, anchor AND shell, so when one of
+        # two arrivals on A names a shell (the card *shelled*), accepting the
+        # earlier does not rebind the later onto its block: the later lands
+        # right after A, in front of it. The export pools both on A, and with
+        # a move among them it must order them by the replay. The format
+        # defines a shell only for table rows, and the SDK refuses one in the
+        # body, so this pins how accept() reads a stray one in a hand-written
+        # file.
+        doc = _lettered_lane("ABCDE", lane)
+        card = doc.proposals[shelled]
+        doc._card_el(card.id).set("data-anchor-shell", "tbody")  # foreign-authored
+        doc = aim.loads(doc.dumps())
+        assert _texts(_resolved(doc, "accept")) == want.split()
+        back = tmp_path / "shell.docx"
+        aim.to_docx(doc, back, pending="tracked")
+        assert _view_texts(back.read_bytes(), "accept") == want.split()
+        assert _view_texts(back.read_bytes(), "reject") == list("ABCDE")
 
     def test_a_foreign_move_to_where_its_block_stands_lands_nothing(self, tmp_path):
         # propose_move refuses a move that changes nothing in the current
@@ -950,6 +1147,41 @@ class TestRoundTrip:
         back = tmp_path / "chained.docx"
         aim.to_docx(doc, back, pending="tracked")
         assert _view_texts(back.read_bytes(), "accept") == want
+        assert _view_texts(back.read_bytes(), "reject") == list("ABCD")
+
+    def test_a_cyclic_lane_with_a_pending_move_still_exports(self, tmp_path):
+        # A hand-written file can chain two adds on each other (lint P015).
+        # With a move chained into that cycle and a body move pending, the
+        # check that decides whether to replay walks the chain and must stop
+        # where it started. An alarm interrupts a loop, so a regression fails
+        # here and leaves nothing running to slow the tests after it.
+        if not hasattr(signal, "setitimer"):
+            pytest.skip("needs SIGALRM")
+        ada = aim.human("ada")
+        doc = aim.new_document(title="Cycle")
+        with doc.batch():
+            _, b, c, d = (doc.add_chunk(f"<p>{t}</p>", author=ada).id for t in "ABCD")
+        x = doc.propose_add("<p>X</p>", after=b, author=ada)
+        y = doc.propose_add("<p>Y</p>", after=x.id, author=ada)
+        doc.propose_add("<p>Z</p>", after=b, author=ada)
+        doc.propose_add("<p>W</p>", after=b, author=ada)
+        x_block = doc._payload_root_id(x.payload_html or "")
+        doc.propose_move(c, container="body", after=x_block, author=ada)
+        doc.propose_move(d, container="body", after=None, author=ada)
+        doc._card_el(x.id).set("data-anchor-after", y.id)  # foreign-authored
+        doc = aim.loads(doc.dumps())
+        back = tmp_path / "cycle.docx"
+
+        def stop(signum, frame):
+            raise TimeoutError("the export did not finish: the chain walk loops")
+
+        previous = signal.signal(signal.SIGALRM, stop)
+        signal.setitimer(signal.ITIMER_REAL, 60)
+        try:
+            aim.to_docx(doc, back, pending="tracked")
+        finally:
+            signal.setitimer(signal.ITIMER_REAL, 0)
+            signal.signal(signal.SIGALRM, previous)
         assert _view_texts(back.read_bytes(), "reject") == list("ABCD")
 
     def test_an_export_whose_anchors_each_hold_one_arrival_replays_nothing(
@@ -1094,36 +1326,96 @@ class TestRoundTrip:
         assert _view_texts(back.read_bytes(), "reject") == list("ABCD")
 
     @pytest.mark.parametrize(
-        "build",
+        ("build", "skips"),
         [
-            lambda: _lettered_lane(
-                "ABCD", [("move", "A", "B"), ("move", "B", None), ("move", "C", None)]
+            (
+                lambda: _lettered_lane(
+                    "ABCD", [("move", "A", "B"), ("move", "B", None), ("move", "C", None)]
+                ),
+                False,
             ),
-            lambda: _lettered_lane(
-                "ABCDEF",
-                [
-                    ("add", "X", "C"),
-                    ("move", "A", "E"),
-                    ("add", "Y", "C"),
-                    ("add", "Z", "X"),
-                    ("delete", "D"),
-                    ("modify", "B"),
-                ],
+            (
+                lambda: _lettered_lane(
+                    "ABCDEF",
+                    [
+                        ("add", "X", "C"),
+                        ("move", "A", "E"),
+                        ("add", "Y", "C"),
+                        ("add", "Z", "X"),
+                        ("delete", "D"),
+                        ("modify", "B"),
+                    ],
+                ),
+                True,
             ),
             # B's move and deletion: N1 and N2 share an anchor that moves
-            lambda: _lettered_lane(
-                "ABCD",
-                [
-                    ("move", "D", "A"),
-                    ("add", "N1", "B"),
-                    ("move", "B", None),
-                    ("add", "N2", "B"),
-                    ("delete", "B"),
-                ],
+            (
+                lambda: _lettered_lane(
+                    "ABCD",
+                    [
+                        ("move", "D", "A"),
+                        ("add", "N1", "B"),
+                        ("move", "B", None),
+                        ("add", "N2", "B"),
+                        ("delete", "B"),
+                    ],
+                ),
+                False,
             ),
-            lambda: _foreign_move_doc("pooled"),
-            lambda: _backward_chained_move_doc(),
-            lambda: _foreign_move_doc("chained"),
+            (lambda: _foreign_move_doc("pooled"), False),
+            (lambda: _backward_chained_move_doc(), False),
+            (lambda: _foreign_move_doc("chained"), False),
+            (
+                lambda: _lettered_lane(
+                    "ABCDEF", [("move", "F", None), ("add", "X", "B"), ("add", "Y", "B")]
+                ),
+                True,
+            ),
+            # W, chained on X, joins the pool once X is written and lands
+            # after Z, chained on Y but made before W
+            (
+                lambda: _lettered_lane(
+                    "ABCDEF",
+                    [
+                        ("add", "X", "B"),
+                        ("add", "Y", "B"),
+                        ("move", "F", None),
+                        ("add", "Z", "Y"),
+                        ("add", "W", "X"),
+                    ],
+                ),
+                True,
+            ),
+            (
+                lambda: _lettered_lane(
+                    "ABCDEF",
+                    [
+                        ("move", "E", "A"),
+                        ("add", "X", "B"),
+                        ("add", "Y", "B"),
+                        ("add", "Z", "D"),
+                        ("add", "W", "D"),
+                        ("add", "V", None),
+                        ("add", "U", None),
+                    ],
+                ),
+                True,
+            ),
+            # C, the block after B, moves away between the two adds
+            (
+                lambda: _lettered_lane(
+                    "ABCDEF", [("add", "X", "B"), ("move", "C", "F"), ("add", "Y", "B")]
+                ),
+                True,
+            ),
+            # E's move chains on Y, made before it, so it marks no card for
+            # the replay
+            (
+                lambda: _lettered_lane(
+                    "ABCDEF", [("add", "X", "B"), ("add", "Y", "B"), ("move", "E", "Y")]
+                ),
+                True,
+            ),
         ],
         ids=[
             "moves",
@@ -1132,21 +1424,42 @@ class TestRoundTrip:
             "a-pooled-block-moved",
             "a-backward-chain",
             "a-chained-block-moved",
+            "two-adds-beside-a-move",
+            "adds-chained-on-both",
+            "adds-on-three-anchors",
+            "the-next-block-moved-away",
+            "a-move-chained-on-an-earlier-add",
         ],
     )
-    def test_skipping_the_replay_never_changes_the_export(self, build, monkeypatch, tmp_path):
+    def test_skipping_the_replay_never_changes_the_export(
+        self, build, skips, monkeypatch, tmp_path
+    ):
         # The replay is skipped only for a pool whose card order it would
         # keep, so forcing it on every pool must leave the document as it
-        # was. In the last case First and Later hold no moved block, yet a
-        # hand-written move takes Chained, a card chained on First, in front
-        # of B, and Later, made after that move, follows it: the check must
-        # look down the chains too.
+        # was. A lane marked *skips* must skip it on every pool, and every
+        # lane must replay once forced, or both exports take the same path
+        # and the check holds trivially. In a-chained-block-moved First and
+        # Later hold no moved block, yet a hand-written move takes Chained, a
+        # card chained on First, in front of B, and Later, made after that
+        # move, follows it: the check must look down the chains too.
         doc = build()
+        replays: list[AimDocument] = []
+        real_projection = export_docx._projected_body_index
+
+        def counting_projection(source):
+            replays.append(source)
+            return real_projection(source)
+
+        monkeypatch.setattr(export_docx, "_projected_body_index", counting_projection)
         skipped = tmp_path / "skipped.docx"
         aim.to_docx(doc, skipped, pending="tracked")
+        if skips:
+            assert replays == []
+        replays.clear()
         monkeypatch.setattr(export_docx._Exporter, "_lands_in_card_order", lambda *_: False)
         replayed = tmp_path / "replayed.docx"
         aim.to_docx(doc, replayed, pending="tracked")
+        assert len(replays) == 1
         with zipfile.ZipFile(skipped) as a, zipfile.ZipFile(replayed) as b:
             assert a.read("word/document.xml") == b.read("word/document.xml")
 
@@ -1262,26 +1575,37 @@ def _moved_paragraph_texts(data: bytes) -> list[str]:
 
 
 def _lettered_lane(names: str, lane: list[tuple]) -> aim.AimDocument:
-    """One paragraph per letter of *names*, then *lane*'s cards in order:
-    ``("move", X, after)``, ``("add", text, after)``, ``("delete", X)`` and
-    ``("modify", X)`` (X's text becomes X2, proposed by another author). An
-    anchor is a letter, an earlier add's text, or None for the first
-    position."""
+    """One paragraph per letter of *names*, then *lane*'s steps in order:
+    the cards ``("move", X, after)``, ``("add", text, after)``,
+    ``("delete", X)`` and ``("modify", X)`` (X's text becomes X2, proposed
+    by another author), and ``("accept", card)`` or ``("reject", card)`` on
+    an earlier card, named ``"<action> <X or text>"``. An anchor is a
+    letter, an earlier add's text (a move after it chains on that add), or
+    None for the first position."""
     ada, bot = aim.human("ada"), aim.agent("model-x")
     doc = aim.new_document(title="Lane")
     with doc.batch():
         ids = {name: doc.add_chunk(f"<p>{name}</p>", author=ada).id for name in names}
+    blocks: dict[str, str] = {}  # each add's block: propose_move chains on it
+    cards: dict[str, aim.Proposal] = {}
     for action, name, *after in lane:
         anchor = ids[after[0]] if after and after[0] is not None else None
         if action == "move":
-            doc.propose_move(ids[name], container="body", after=anchor, author=ada)
+            anchor = blocks.get(after[0], anchor)
+            card = doc.propose_move(ids[name], container="body", after=anchor, author=ada)
         elif action == "add":
-            ids[name] = doc.propose_add(f"<p>{name}</p>", after=anchor, author=ada).id
+            card = doc.propose_add(f"<p>{name}</p>", after=anchor, author=ada)
+            ids[name], blocks[name] = card.id, doc._payload_root_id(card.payload_html or "")
         elif action == "delete":
-            doc.propose_delete(ids[name], author=ada)
-        else:
+            card = doc.propose_delete(ids[name], author=ada)
+        elif action == "modify":
             markup = f'<p data-aim="{ids[name]}">{name}2</p>'
-            doc.propose_modify(ids[name], markup, author=bot)
+            card = doc.propose_modify(ids[name], markup, author=bot)
+        else:
+            decide = doc.accept if action == "accept" else doc.reject
+            decide(cards[name].id, decided_by=DECIDER)
+            continue
+        cards[f"{action} {name}"] = card
     return doc
 
 
